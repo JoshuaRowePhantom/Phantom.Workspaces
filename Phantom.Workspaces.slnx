@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="Phantom.Workspaces.Dal.Core/Phantom.Workspaces.Dal.Core.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.CosmosDB/Phantom.Workspaces.Dal.CosmosDB.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Offline/Phantom.Workspaces.Dal.Offline.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Sql/Phantom.Workspaces.Dal.Sql.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Web.Client/Phantom.Workspaces.Dal.Web.Client.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Web.Server/Phantom.Workspaces.Dal.Web.Server.csproj" />
+  <Project Path="Phantom.Workspaces.Docs/Phantom.Workspaces.Docs.csproj" />
+</Solution>
