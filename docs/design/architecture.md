@@ -38,7 +38,9 @@ The system separates UI, agent execution, data access, and external integrations
      - `Phantom.Workspaces.Dal.Web.Client`
        - web client DAL
      - `Phantom.Workspaces.Dal.Web.Server`
-       - web server DAL/API surface
+       - web server DAL/API surface as a class library
+     - `Phantom.Workspaces.Web.Server`
+       - web server host and web GUI hosting entrypoint
    - The web server is expected to be hosted alongside or within the web version of the GUI.
 4. **LLM agent host**
    - Dedicated project for agent hosting, orchestration, and execution policy.

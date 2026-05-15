@@ -6,4 +6,5 @@
   <Project Path="Phantom.Workspaces.Dal.Web.Client/Phantom.Workspaces.Dal.Web.Client.csproj" />
   <Project Path="Phantom.Workspaces.Dal.Web.Server/Phantom.Workspaces.Dal.Web.Server.csproj" />
   <Project Path="Phantom.Workspaces.Docs/Phantom.Workspaces.Docs.csproj" />
+  <Project Path="Phantom.Workspaces.Web.Server/Phantom.Workspaces.Web.Server.csproj" />
 </Solution>

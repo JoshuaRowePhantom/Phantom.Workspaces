@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Dal.Core\Phantom.Workspaces.Dal.Core.csproj" />
