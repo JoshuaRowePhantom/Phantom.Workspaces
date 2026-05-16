@@ -15,6 +15,8 @@
   <Project Path="Phantom.Workspaces.Docs/Phantom.Workspaces.Docs.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core.Tests/Phantom.Workspaces.Llm.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core/Phantom.Workspaces.Llm.Core.csproj" />
+  <Project Path="Phantom.Workspaces.Llm.Tools.Tests/Phantom.Workspaces.Llm.Tools.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Llm.Tools/Phantom.Workspaces.Llm.Tools.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server.Tests/Phantom.Workspaces.Web.Server.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server/Phantom.Workspaces.Web.Server.csproj" />
 </Solution>
