@@ -140,10 +140,13 @@ The system separates UI, agent execution, data access, and external integrations
    - returns all entities that have changed since an optional snapshot time,
    - returns the entities as of each change,
    - returns a final snapshot time.
-10. `Update` must succeed or fail as a single transaction.
-11. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
-12. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
-13. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
+10. `GetChangedEntities`:
+   - accepts a set of entity-id/timestamp pairs,
+   - returns only entities with changes later than the provided timestamp.
+11. `Update` must succeed or fail as a single transaction.
+12. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
+13. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
+14. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
 
 ## Filesystem and Git Data Access
 
@@ -214,27 +217,66 @@ The system separates UI, agent execution, data access, and external integrations
 
 ## Core and Predefined Types
 
-1. Core system-provided entity types include:
+0. Core system-provided schema types include:
+   - `entity-id` - a guid. Entity ids maintain referential integrity across relationships and other references.
+   - `timestamp` - a data-access-layer timestamp + value (Timestamp in IDataAccessLayer)
+   - `localized-string` - a string with localization metadata as a dictionary from locale to string, with a required `default` locale and a required `id` locale and thematic styling information (color, etc)
+1. Core system-provided entity types include (with associated fields below and derivation in ":", all entities derive from `entity`):
+   - `entity`
+     - `last-modified` timestamp,
+     - `created` timestamp,
    - `view`
-   - `entityType`
+   - `jsonSchema`
+     - `definition` JSON schema definition,
+   - `entityType` : `jsonSchema`
    - `relationshipType`
    - `interest`
+     - `relationship-type-id` referencing a `relationshipType` entity that defines the interest relationship type,
+     - `badge-enabled` localized-string for the enabled state of the interest badge,
+     - `badge-disabled` localized-string for the disabled state of the interest badge,
    - `entityTypeView`
    - `shortcutType`
-   - `namingScheme`
    - `note`
+     - `markdown` - Markdown content,
+   - `json`
+     - `json` - JSON content,
+     - `schema-id` - reference to a `jsonSchema` entity defining the schema for the JSON content,
    - `task`
    - `workspace`
    - `external`
+     - `url` - the external URL,
    - `user`
    - `computer`
    - `userProfile`
    - `workspaces-llm-session`
    - `workspaces-llm-conversation`
-   - `workspaces-llm-turn`
-   - `workspaces-llm-tool-use`
-   - `workspaces-llm-tool-result`
-   - `workspaces-llm-environment-change`
+   - `workspaces-llm-conversation-event` (: `workspaces-llm-conversation-turn`, `note`, `json` as applicable)
+     - `sequence` - the order of the event within the conversation,
+     - `timestamp` - when the turn occurred,
+     - `type` - the type of conversation event (e.g., user turn, llm turn, tool use, tool result, interruption, etc.)
+   - `workspaces-llm-conversation-turn` (: `note`, `json` as applicable)
+     - `speaker` - user or LLM,
+   - `workspaces-llm-conversation-tool-use` (: `note`, `json` as applicable)
+     - `tool-use-id`
+     - `tool-server-name`
+     - `tool-name`
+   - `workspaces-llm-conversation-tool-result` (: `note`, `json` as applicable)
+     - `tool-use-id`
+     - `tool-server-name`
+     - `tool-name`
+   - `workspaces-llm-conversation-snapshot` : `note`, `workspaces-llm-conversation-event`
+   - `workspaces-llm-conversation-environment-change` : `workspaces-llm-conversation-event`
+     - `update-tool-server`
+       - []
+         - `tool-server-id`
+         - `tool-server-name`
+         - `configuration` - JSON blob with tool-server configuration details, or null to remove the tool server
+     - `rights-change`
+       - []
+         - `add`
+           - a set of `right` items to add
+         - `remove`
+           - a set of `right` items to remove
 2. The system will provide a predefined set of relationship types and interest types.
 3. One predefined relationship type is `ai-instructions`:
    - relates a set of target entities to a set of note entities.
@@ -252,7 +294,6 @@ The system separates UI, agent execution, data access, and external integrations
    - a target entity set,
    - a context entity set.
 7. All relationships can include a set of `note` participants.
-8. A `note` entity can store Markdown (`.md`) content.
 
 ## Testing and Interface Strategy
 
