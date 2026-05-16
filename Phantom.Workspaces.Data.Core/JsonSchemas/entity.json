@@ -3,7 +3,8 @@
   "$id": "https://schemas.phantom.app/workspaces/data/core/entity.json",
   "entity-id": "{6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e002}",
   "entity-types": [
-    "json-schema"
+    "json-schema",
+    "entity-type"
   ],
   "names": [
     "https://schemas.phantom.app/workspaces/data/core/entity.json"
@@ -28,6 +29,18 @@
     },
     "display-name": {
       "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+    },
+    "interest-badges": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+      }
+    },
+    "shortcuts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "unevaluatedProperties": false

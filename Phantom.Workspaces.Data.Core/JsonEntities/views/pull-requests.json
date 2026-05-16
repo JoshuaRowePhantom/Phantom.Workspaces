@@ -1,0 +1,16 @@
+{
+  "entity-id": "{ec1b5a84-1528-4715-b9df-4e203f73b4f9}",
+  "entity-types": [
+    "view"
+  ],
+  "names": [
+    [
+      "views",
+      "pull-requests"
+    ]
+  ],
+  "title": {
+    "default": "Pull Requests"
+  },
+  "sub-views": []
+}

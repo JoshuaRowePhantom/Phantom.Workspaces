@@ -74,6 +74,33 @@
           "additionalProperties": true
         }
       ]
+    },
+    "field-path": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "sort-field": {
+      "type": "object",
+      "properties": {
+        "field-path": {
+          "$ref": "#/$defs/field-path"
+        },
+        "sort-direction": {
+          "type": "string",
+          "enum": [
+            "ascending",
+            "descending"
+          ]
+        }
+      },
+      "required": [
+        "field-path",
+        "sort-direction"
+      ],
+      "unevaluatedProperties": false
     }
   }
 }

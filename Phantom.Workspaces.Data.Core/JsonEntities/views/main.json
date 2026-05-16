@@ -1,0 +1,37 @@
+{
+  "entity-id": "{2f3e4ca1-bef6-4dc5-b10f-4ed2bbdb8f5f}",
+  "entity-types": [
+    "view"
+  ],
+  "names": [
+    [
+      "views",
+      "main"
+    ]
+  ],
+  "title": {
+    "default": "Main"
+  },
+  "sub-views": [
+    {
+      "view-entity-id": "{6fb49878-7905-4fb8-9032-ec9fd53d6b84}",
+      "disposition": "expanded"
+    },
+    {
+      "view-entity-id": "{f62a0e43-b374-4f58-8703-1bcba4f4e874}",
+      "disposition": "expanded"
+    },
+    {
+      "view-entity-id": "{ec1b5a84-1528-4715-b9df-4e203f73b4f9}",
+      "disposition": "expanded"
+    },
+    {
+      "view-entity-id": "{441f53e1-9a08-422b-bf09-675985d8dfe8}",
+      "disposition": "expanded"
+    },
+    {
+      "view-entity-id": "{92df3b73-99c5-4cdb-a310-9f63f5f33f4d}",
+      "disposition": "expanded"
+    }
+  ]
+}

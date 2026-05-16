@@ -1,0 +1,16 @@
+{
+  "entity-id": "{f62a0e43-b374-4f58-8703-1bcba4f4e874}",
+  "entity-types": [
+    "view"
+  ],
+  "names": [
+    [
+      "views",
+      "workstreams"
+    ]
+  ],
+  "title": {
+    "default": "Workstreams"
+  },
+  "sub-views": []
+}

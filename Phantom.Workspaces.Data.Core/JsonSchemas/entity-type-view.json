@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json",
+  "entity-id": "{e6d55787-764a-4cb4-8862-1bb10bb21390}",
+  "entity-types": [
+    "json-schema",
+    "entity-type"
+  ],
+  "names": [
+    "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json"
+  ],
+  "allOf": [
+    {
+      "$ref": "https://schemas.phantom.app/workspaces/data/core/entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "base-entity-type-field-entity-id": {
+      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity-field-view"
+      }
+    },
+    "sort-order": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/sort-field"
+      }
+    },
+    "traverse-relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relationship-traversal"
+      }
+    },
+    "traversed-entity-display-disposition": {
+      "type": "string",
+      "enum": [
+        "collapsed",
+        "expanded"
+      ]
+    },
+    "parent-hierarchy-relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relationship-traversal"
+      }
+    }
+  },
+  "$defs": {
+    "entity-field-view": {
+      "type": "object",
+      "properties": {
+        "field-path": {
+          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/field-path"
+        },
+        "display-format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field-path"
+      ],
+      "unevaluatedProperties": false
+    },
+    "relationship-traversal": {
+      "type": "object",
+      "properties": {
+        "relationship-type-ids": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-type-id",
+            "x-entity-type": "entity-type"
+          }
+        },
+        "relationship-role-names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max-depth": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  },
+  "unevaluatedProperties": false
+}
