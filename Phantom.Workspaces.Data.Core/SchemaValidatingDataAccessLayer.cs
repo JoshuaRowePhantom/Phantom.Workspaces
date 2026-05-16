@@ -84,6 +84,13 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             if (applicableSchema.SchemaEntity is null)
             {
+                // Entity-type-derived schema references are optional extension points.
+                // If no schema entity exists for a given type name, skip it.
+                if (this.IsEntityTypeSchemaReference(applicableSchema.SchemaReference))
+                {
+                    continue;
+                }
+
                 errors.Add(
                     new UpdateError
                     {
@@ -114,6 +121,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 new EvaluationOptions
                 {
                     OutputFormat = OutputFormat.Hierarchical,
+                    PreserveDroppedAnnotations = true,
                 });
             if (!evaluation.IsValid)
             {
@@ -522,5 +530,36 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         public required string SchemaReference { get; init; }
 
         public JsonElement? SchemaEntity { get; init; }
+    }
+
+    private bool IsEntityTypeSchemaReference(
+        string schemaReference)
+    {
+        if (string.IsNullOrWhiteSpace(schemaReference)
+            || !schemaReference.StartsWith("[", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(schemaReference);
+            if (document.RootElement.ValueKind != JsonValueKind.Array
+                || document.RootElement.GetArrayLength() != 2)
+            {
+                return false;
+            }
+
+            var first = document.RootElement[0];
+            var second = document.RootElement[1];
+            return first.ValueKind == JsonValueKind.String
+                && second.ValueKind == JsonValueKind.String
+                && string.Equals(first.GetString(), "entity-types", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(second.GetString());
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

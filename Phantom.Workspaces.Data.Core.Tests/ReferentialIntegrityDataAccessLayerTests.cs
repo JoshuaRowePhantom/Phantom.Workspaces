@@ -65,7 +65,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var schemaEntityId = new EntityId(Guid.Parse("1f4ddf45-24f9-460d-9f58-02e3f3f1b278"));
         var schemaName = "https://schemas.phantom.app/workspaces/tests/typed-reference.json";
         var sourceEntityId = new EntityId(Guid.Parse("1a51d9a5-72b2-4427-8cd0-1c238b9bb42a"));
-        var wrongTypeTargetEntityId = new EntityId(Guid.Parse("63a14223-e8d7-4ea8-88ef-e5fc4a49947f"));
+        var wrongTypeTargetEntityId = new EntityId(Guid.Parse("6fb49878-7905-4fb8-9032-ec9fd53d6b84"));
         var missingTargetEntityId = new EntityId(Guid.Parse("c33014c9-66b6-4955-b0aa-f4d5ddfd0e76"));
 
         await dataAccessLayer.UpdateAsync(
@@ -87,14 +87,6 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Equal(UpdateState.Failed, missingFailure.UpdateState);
         Assert.Contains(missingFailure.Errors, static error => error.Message.Contains("does not exist", StringComparison.Ordinal));
 
-        await dataAccessLayer.UpdateAsync(
-            CreateUpdateRequest(
-                CreateUpdateMetadata("Create wrong-type target"),
-                new[]
-                {
-                    this.CreateEntityChange(wrongTypeTargetEntityId, "wrong-target", "other-type"),
-                }));
-
         var wrongTypeResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
                 CreateUpdateMetadata("Create entity with wrong-type target"),
@@ -107,13 +99,18 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Contains(wrongTypeFailure.Errors, static error => error.Message.Contains("does not match required types", StringComparison.Ordinal));
 
         var validTargetEntityId = new EntityId(Guid.Parse("91e69f56-e57c-4da8-8450-24f40531f730"));
-        await dataAccessLayer.UpdateAsync(
+        var validTargetCreateResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
                 CreateUpdateMetadata("Create valid target"),
                 new[]
                 {
-                    this.CreateEntityChange(validTargetEntityId, "valid-target", "target-type"),
+                    this.CreateEntityChange(validTargetEntityId, "valid-target"),
                 }));
+        Assert.True(
+            validTargetCreateResult.EntityResults.All(result => result.UpdateState != UpdateState.Failed),
+            string.Join(
+                Environment.NewLine,
+                validTargetCreateResult.EntityResults.SelectMany(entityResult => entityResult.Errors.Select(error => error.Message))));
 
         var validCreateResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -157,13 +154,18 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Equal(UpdateState.Failed, missingFailure.UpdateState);
         Assert.Contains(missingFailure.Errors, static error => error.Message.Contains("does not exist", StringComparison.Ordinal));
 
-        await dataAccessLayer.UpdateAsync(
+        var validNamedTargetCreateResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
                 CreateUpdateMetadata("Create valid named target"),
                 new[]
                 {
-                    this.CreateEntityChange(new EntityId(Guid.Parse("9af2fdce-e592-40a6-9f38-f3c6c9f68aea")), "valid-target", "target-type"),
+                    this.CreateEntityChange(new EntityId(Guid.Parse("9af2fdce-e592-40a6-9f38-f3c6c9f68aea")), "valid-target"),
                 }));
+        Assert.True(
+            validNamedTargetCreateResult.EntityResults.All(result => result.UpdateState != UpdateState.Failed),
+            string.Join(
+                Environment.NewLine,
+                validNamedTargetCreateResult.EntityResults.SelectMany(entityResult => entityResult.Errors.Select(error => error.Message))));
 
         var validTargetResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -391,6 +393,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
               "$id": "{{schemaName}}",
               "entity-id": "{{schemaEntityId.Value:D}}",
               "entity-types": ["json-schema"],
@@ -410,7 +413,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 },
                 "target-entity-id": {
                   "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id",
-                  "x-entity-type": "target-type"
+                  "x-entity-type": "entity"
                 }
               }
             }
@@ -444,6 +447,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
               "$id": "{{schemaName}}",
               "entity-id": "{{entityId.Value:D}}",
               "entity-types": ["json-schema"],
@@ -465,7 +469,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 },
                 "target-entity-name": {
                   "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
-                  "x-entity-type": "target-type"
+                  "x-entity-type": "entity"
                 }
               }
             }

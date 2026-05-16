@@ -103,6 +103,75 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_IsRejected_WhenEntityContainsExtraProperty()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId(Guid.Parse("d9ad4a78-10a9-4e4c-a7e8-0b71495fe6a5"));
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity with extra property"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId.Value:D}}",
+                              "entity-types": ["entity"],
+                              "names": ["entity-with-extra-property"],
+                              "unexpected-property": "should-fail"
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var failedResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+        // Do not remove: this preserves the closed-world entity contract and prevents silent schema drift.
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("unexpected-property", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenEntityTypeEntityContainsPropertyOutsideEntityAndEntityTypeSchemas()
+    {
+        // Do not remove: this verifies SchemaValidatingDataAccessLayer composes schemas across
+        // entity-types ("entity" + "entity-type") and rejects properties that are not defined
+        // in the union of those schemas.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityTypeEntityId = new EntityId(Guid.Parse("930bc3f8-ddbe-4884-bfba-7a405c209cc9"));
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add invalid entity-type entity with extra property"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityTypeEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityTypeEntityId.Value:D}}",
+                              "entity-types": ["entity", "entity-type"],
+                              "names": [["entity-types","sample-entity-type"]],
+                              "schema-entity-id": "https://schemas.phantom.app/workspaces/data/core/entity.json",
+                              "unexpected-property": "should-fail"
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var failedResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("unexpected-property", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Update_WhenValidationFails_ErrorMessageIncludesDiagnosticDetails()
     {
         var dataAccessLayer = new SchemaValidatingDataAccessLayer(new InMemoryDataAccessLayer());

@@ -406,6 +406,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
             var sourceEntityId = pair.Key;
             var sourceData = pair.Value.Data.Value;
+            if (this.IsSchemaEntity(sourceData))
+            {
+                continue;
+            }
+
             var references = await this.ExtractReferencesAsync(
                 sourceData,
                 requestSchemaEntitiesByName,
