@@ -1,11 +1,22 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace Phantom.Workspaces.Data
+namespace Phantom.Workspaces.Data.Offline
 {
-    public class InMemoryDataAccessLayer : IDataAccessLayer
+    /// <summary>
+    /// This IDataAccessLayer implementation uses the filesystem as its underlying data store.
+    /// </summary>
+    public class FilesystemDataAccessLayer : IDataAccessLayer
     {
+        public FilesystemDataAccessLayer(
+            string path)
+        {
+            this.Path = path;
+        }
+        
+        public string Path { get; }
+
         public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException();

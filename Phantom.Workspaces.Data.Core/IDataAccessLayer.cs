@@ -48,7 +48,14 @@ public interface IDataAccessLayer
 }
 
 public sealed record UpdateRequest(
+    UpdateMetadata UpdateMetadata,
     IReadOnlyCollection<EntityChange> Changes);
+
+public sealed record Markdown(
+    string Text);
+
+public sealed record UpdateMetadata(
+    Markdown Comment);
 
 public sealed record EntityChange(
     EntityId? EntityId,
@@ -136,15 +143,13 @@ public sealed record QueryEntitySnapshot(
     Timestamp ModifiedTime,
     Timestamp? ClassifiedTime,
     JsonNode? Data,
-    JsonNode? UserData,
     IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers,
     IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores)
     : EntitySnapshot(
         EntityId,
         ConcurrencyTag,
         ModifiedTime,
-        Data,
-        UserData);
+        Data);
 
 /// <summary>
 /// When an entity matches a FullText query, the FullTextQueryScore
@@ -190,16 +195,11 @@ public sealed record ChangedEntitySnapshot(
 /// <param name="Data">
 /// The data of the entity. This can be null if the entity has been deleted or if the data is not available.
 /// </param>
-/// <param name="UserData">
-/// The user data of the entity. This is separate from the main entity data, and can be used to store overridden data about the entity. 
-/// This can be null if there is no user data or if it is not available.
-/// </param>
 public record EntitySnapshot(
     EntityId EntityId,
     ConcurrencyTag? ConcurrencyTag,
     Timestamp ModifiedTime,
-    JsonNode? Data,
-    JsonNode? UserData);
+    JsonNode? Data);
 
 public readonly record struct EntityId(Guid Value);
 

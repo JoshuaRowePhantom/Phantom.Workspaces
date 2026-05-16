@@ -1,10 +1,15 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace Phantom.Workspaces.Data
+namespace Phantom.Workspaces.Data.Offline
 {
-    public class InMemoryDataAccessLayer : IDataAccessLayer
+    /// <summary>
+    /// This IDataAccessLayer implementation applies thread and process safe measures
+    /// to accessing an underlying IDataAccessLayer.
+    /// </summary>
+    class MultipleAccessorSafeDataAccessLayer :
+        IDataAccessLayer
     {
         public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
         {
