@@ -1,10 +1,20 @@
 <Solution>
+  <Project Path="Phantom.Workspaces.Dal.Core.Tests/Phantom.Workspaces.Dal.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Dal.Core/Phantom.Workspaces.Dal.Core.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.CosmosDB.Tests/Phantom.Workspaces.Dal.CosmosDB.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Dal.CosmosDB/Phantom.Workspaces.Dal.CosmosDB.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Offline.Tests/Phantom.Workspaces.Dal.Offline.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Dal.Offline/Phantom.Workspaces.Dal.Offline.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Sql.Tests/Phantom.Workspaces.Dal.Sql.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Dal.Sql/Phantom.Workspaces.Dal.Sql.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Web.Client.Tests/Phantom.Workspaces.Dal.Web.Client.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Dal.Web.Client/Phantom.Workspaces.Dal.Web.Client.csproj" />
+  <Project Path="Phantom.Workspaces.Dal.Web.Server.Tests/Phantom.Workspaces.Dal.Web.Server.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Dal.Web.Server/Phantom.Workspaces.Dal.Web.Server.csproj" />
+  <Project Path="Phantom.Workspaces.Docs.Tests/Phantom.Workspaces.Docs.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Docs/Phantom.Workspaces.Docs.csproj" />
+  <Project Path="Phantom.Workspaces.Llm.Core.Tests/Phantom.Workspaces.Llm.Core.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Llm.Core/Phantom.Workspaces.Llm.Core.csproj" />
+  <Project Path="Phantom.Workspaces.Web.Server.Tests/Phantom.Workspaces.Web.Server.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server/Phantom.Workspaces.Web.Server.csproj" />
 </Solution>

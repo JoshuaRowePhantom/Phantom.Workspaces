@@ -101,9 +101,34 @@ The system separates UI, agent execution, data access, and external integrations
    - accepts a set of timestamps and returns results for each timestamp,
    - `now` is the latest timestamp when requested.
 6. `Query`:
-   - performs a query,
+   - performs a recursive clause-based query,
    - accepts a set of timestamps and returns results for each timestamp,
    - `now` is the latest timestamp when requested.
+   - query input consists only of top-level clauses.
+   - each top-level clause may include an optional clause identifier and contains a single recursive clause.
+   - clauses are recursive and may be:
+     - `and` over clauses,
+     - `or` over clauses,
+     - `not` over a clause,
+     - `top(n)` over a clause,
+     - an entity query,
+     - a transit query.
+   - entity queries may be:
+     - field queries with equals, greater-than, less-than, greater-than-or-equal-to, less-than-or-equal-to, regular-expression match, or array contains,
+     - full-text queries for approximate matching with a required identifier and optional minimum score threshold,
+     - participation queries by relationship type name and optional participation role name.
+   - participation queries may include a must-have requirement with an optional role name and a clause that target objects must also satisfy.
+   - transit queries:
+     - specify a relationship type name,
+     - reference a source top-level clause identifier,
+     - optionally constrain source and destination participation role names,
+     - match the destination entities with a clause,
+     - begin from the entities produced by the preceding entity query and traverse related entities.
+   - each returned entity must indicate which clauses caused it to be returned.
+   - each full-text query must include an identifier.
+   - `top(n)` is a separate clause that limits the results of the nested clause.
+   - full-text queries may specify a minimum score threshold.
+   - entities that match a full-text query after other filtering must include a score associated with the full-text query identifier.
 7. `Render`:
    - renders a view into the set of entities needed to satisfy that view,
    - when provided with a time index, returns the entities modified for the view since the previous render and a new time index,
@@ -111,10 +136,14 @@ The system separates UI, agent execution, data access, and external integrations
 8. `GetHistory`:
    - returns the update timestamps for a set of entities,
    - supports history-aware access to entity versions.
-9. `Update` must succeed or fail as a single transaction.
-10. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
-11. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
-12. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
+9. `Export`:
+   - returns all entities that have changed since an optional snapshot time,
+   - returns the entities as of each change,
+   - returns a final snapshot time.
+10. `Update` must succeed or fail as a single transaction.
+11. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
+12. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
+13. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
 
 ## Filesystem and Git Data Access
 
@@ -200,6 +229,12 @@ The system separates UI, agent execution, data access, and external integrations
    - `user`
    - `computer`
    - `userProfile`
+   - `workspaces-llm-session`
+   - `workspaces-llm-conversation`
+   - `workspaces-llm-turn`
+   - `workspaces-llm-tool-use`
+   - `workspaces-llm-tool-result`
+   - `workspaces-llm-environment-change`
 2. The system will provide a predefined set of relationship types and interest types.
 3. One predefined relationship type is `ai-instructions`:
    - relates a set of target entities to a set of note entities.
