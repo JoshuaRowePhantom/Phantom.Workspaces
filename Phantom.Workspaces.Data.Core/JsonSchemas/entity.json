@@ -4,23 +4,23 @@
   "type": "object",
   "properties": {
     "entity-id": {
-      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/defs/entity-id"
+      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
     },
     "entity-types": {
       "type": "array",
       "items": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/defs/entity-type-id",
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-type-id",
         "x-entity-type": "entity-type"
       }
     },
     "names": {
       "type": "array",
       "items": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/defs/entity-name"
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
       }
     },
     "display-name": {
-      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/defs/local-string"
+      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
     }
   },
   "unevaluatedProperties": false

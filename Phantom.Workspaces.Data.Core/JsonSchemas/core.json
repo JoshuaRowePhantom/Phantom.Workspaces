@@ -29,12 +29,12 @@
           "type": "string"
         },
         {
-          "array": {
-            "$comment": "An array of strings, used when the name consists of multiple parts that need to be kept separate (e.g. a pull request id in a specific repository)",
-            "items": {
-              "type": "string"
-            }
+          "$comment": "An array of strings, used when the name consists of multiple parts that need to be kept separate (e.g. a pull request id in a specific repository)",
+          "type": "array",
+          "items": {
+            "type": "string"
           }
+        }
       ]
     },
     "local-string": {

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Data.Offline
 {
