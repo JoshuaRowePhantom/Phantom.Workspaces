@@ -7,6 +7,9 @@ namespace Phantom.Workspaces.Data
     /// <summary>
     /// Performs schema validation on data being updated on an underlying IDataAccessLayer.
     /// </summary>
+    /// <remarks>
+    /// This data access layer expects UpdateRequests to have had merge processing already performed.
+    /// </remarks>
     public class SchemaValidatingDataAccessLayer : IDataAccessLayer
     {
         public SchemaValidatingDataAccessLayer(

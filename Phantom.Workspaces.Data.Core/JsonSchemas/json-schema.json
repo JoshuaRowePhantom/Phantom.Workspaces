@@ -4,7 +4,17 @@
   "type": "object",
   "properties": {
     "schema": {
-      "$ref": "https://json-schema.org/draft/2020-12/schema"
+      "anyOf": [
+        {
+          "$comment": "A reference to a known or external schema",
+          "type": "string",
+          "format": "uri-reference"
+        },
+        {
+          "$comment": "An inline definition of a schema.",
+          "$ref": "https://json-schema.org/draft/2020-12/schema"
+        }
+      ]
     }
   }
 }
