@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Phantom.Workspaces.Dal.Sql\Phantom.Workspaces.Dal.Sql.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Server\Phantom.Workspaces.Data.Web.Server.csproj" />
   </ItemGroup>
 
 </Project>

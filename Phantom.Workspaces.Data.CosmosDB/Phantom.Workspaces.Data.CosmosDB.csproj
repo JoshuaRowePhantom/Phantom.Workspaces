@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Phantom.Workspaces.Dal.Core\Phantom.Workspaces.Dal.Core.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
 </Project>

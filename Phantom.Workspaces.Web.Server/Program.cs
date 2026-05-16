@@ -1,4 +1,4 @@
-using Phantom.Workspaces.Dal.Web.Server;
+using Phantom.Workspaces.Data.Web.Server;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();

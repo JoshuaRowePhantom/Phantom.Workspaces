@@ -27,17 +27,17 @@ The system separates UI, agent execution, data access, and external integrations
    - Exposes MCP-compatible tool endpoints and coordinates tool execution.
 3. **Client data access layer**
    - Multi-assembly design:
-     - `Phantom.Workspaces.Dal.Core`
+     - `Phantom.Workspaces.Data.Core`
        - merging, security, and shared DAL behaviors
-     - `Phantom.Workspaces.Dal.Offline`
+     - `Phantom.Workspaces.Data.Offline`
        - `InMemory`, filesystem, and git-backed DALs
-     - `Phantom.Workspaces.Dal.CosmosDB`
+     - `Phantom.Workspaces.Data.CosmosDB`
        - Cosmos DB DAL
-     - `Phantom.Workspaces.Dal.Sql`
+     - `Phantom.Workspaces.Data.Sql`
        - SQL DAL
-     - `Phantom.Workspaces.Dal.Web.Client`
+     - `Phantom.Workspaces.Data.Web.Client`
        - web client DAL
-     - `Phantom.Workspaces.Dal.Web.Server`
+     - `Phantom.Workspaces.Data.Web.Server`
        - web server DAL/API surface as a class library
      - `Phantom.Workspaces.Web.Server`
        - web server host and web GUI hosting entrypoint

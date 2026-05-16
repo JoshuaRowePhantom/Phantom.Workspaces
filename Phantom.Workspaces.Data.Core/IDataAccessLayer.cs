@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Phantom.Workspaces.Dal.Core;
+namespace Phantom.Workspaces.Data;
 
 public interface IDataAccessLayer
 {
