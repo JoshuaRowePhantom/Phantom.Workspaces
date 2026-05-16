@@ -6,6 +6,16 @@ namespace Phantom.Workspaces.Data
 {
     public class InMemoryDataAccessLayer : IDataAccessLayer
     {
+        class State
+        { }
+
+        State _state;
+
+        State AtomicallyReplaceState(State previousState, State newState)
+        {
+            throw new NotImplementedException();
+        }
+
         public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException();

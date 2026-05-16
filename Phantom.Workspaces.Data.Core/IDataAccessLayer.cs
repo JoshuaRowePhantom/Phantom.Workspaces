@@ -68,11 +68,17 @@ public sealed record UpdateResult(
     IReadOnlyCollection<EntityUpdateResult> EntityResults);
 
 public sealed record EntityUpdateResult(
+    UpdateState UpdateState,
     EntityId RequestedEntityId,
     EntityId ResultingEntityId,
     ConcurrencyTag? ConcurrencyTag,
     ConcurrencyMatchState ConcurrencyMatchState,
-    RemovalState RemovalState);
+    IReadOnlyCollection<UpdateError> Errors);
+
+public sealed record UpdateError(
+    string Message,
+    // This is set if there is a related entity id causing the failure.
+    EntityId? RelatedEntityId);
 
 public sealed record GetRequest(
     IReadOnlyCollection<EntityId> EntityIds,
@@ -315,8 +321,10 @@ public enum ConcurrencyMatchState
     NotMatched = 1,
 }
 
-public enum RemovalState
+public enum UpdateState
 {
-    Retained = 0,
-    Removed = 1,
+    Added = 0,
+    Updated = 1,
+    Removed = 2,
+    Failed = 3,
 }

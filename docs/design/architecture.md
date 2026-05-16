@@ -229,7 +229,11 @@ The system separates UI, agent execution, data access, and external integrations
    - `jsonSchema`
      - `definition` JSON schema definition,
    - `entityType` : `jsonSchema`
-   - `relationshipType`
+   - `relationshipType` : `jsonSchema`
+   - `relationship`
+   - `reference` : `relationship`
+     - A referential-integrity relationship that relates a referring entity to a referred entity.
+     - These relationships are generated automatically by the data access layer.
    - `interest`
      - `relationship-type-id` referencing a `relationshipType` entity that defines the interest relationship type,
      - `badge-enabled` localized-string for the enabled state of the interest badge,
