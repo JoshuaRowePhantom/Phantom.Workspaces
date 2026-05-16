@@ -3,7 +3,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Tests;
 
-namespace Phantom.Workspaces.Data.Offline.Tests;
+namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQueryTests
 {
@@ -88,8 +88,14 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
 
         var getResult = await dataAccessLayer.GetAsync(
             new GetRequest(
-                new[] { ValidatedEntityId },
-                null,
+                new[]
+                {
+                    new GetEntityRequest(
+                        ValidatedEntityId,
+                        null,
+                        null,
+                        null),
+                },
                 null,
                 new Timestamp?[] { null }));
         Assert.Empty(Assert.Single(getResult.Batches).Entities);

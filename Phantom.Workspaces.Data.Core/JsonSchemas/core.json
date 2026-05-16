@@ -17,6 +17,19 @@
       "$comment": "Either the entity type name or the entity type's entity id.",
       "type": "string"
     },
+    "x-entity-type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/entity-type-id"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entity-type-id"
+          }
+        }
+      ]
+    },
     "timestamp": {
       "type": "object",
       "properties": {

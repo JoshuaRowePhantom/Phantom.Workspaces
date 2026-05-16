@@ -3,7 +3,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Tests;
 
-namespace Phantom.Workspaces.Data.Offline.Tests;
+namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQueryTests
 {
@@ -187,6 +187,110 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
         Assert.Contains(failed.Errors, error => error.Message.Contains("entity-id", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task MultipleReplaceChanges_ForSameEntity_AreCoalescedIntoSingleUpdate()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var createResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest(
+                new UpdateMetadata(new Markdown("Create entity")),
+                new[]
+                {
+                    new EntityChange(
+                        SampleEntityId,
+                        null,
+                        this.CreateEntityWithTitle("one", "initial"),
+                        EntityChangeMode.Replace),
+                }));
+        var tag = Assert.Single(createResult.EntityResults).ConcurrencyTag!.Value;
+        var createTime = (await this.GetSingleHistoryAsync(dataAccessLayer)).UpdateTimes.Single();
+
+        var coalescedResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest(
+                new UpdateMetadata(new Markdown("Two replaces same entity")),
+                new[]
+                {
+                    new EntityChange(
+                        SampleEntityId,
+                        tag,
+                        this.CreateEntityWithTitle("one", "intermediate"),
+                        EntityChangeMode.Replace),
+                    new EntityChange(
+                        SampleEntityId,
+                        tag,
+                        this.CreateEntityWithTitle("one", "final"),
+                        EntityChangeMode.Replace),
+                }));
+
+        var entityResult = Assert.Single(coalescedResult.EntityResults);
+        Assert.Equal(UpdateState.Updated, entityResult.UpdateState);
+
+        var latest = await this.GetLatestSnapshotAsync(dataAccessLayer);
+        Assert.Equal("final", this.GetTitle(latest.Data));
+
+        var history = await this.GetSingleHistoryAsync(dataAccessLayer);
+        var updateTimes = history.UpdateTimes.ToArray();
+        Assert.Equal(2, updateTimes.Length);
+        Assert.Equal(createTime, updateTimes[0]);
+    }
+
+    [Fact]
+    public async Task MultipleJsonPatchChanges_ForSameEntity_AreCoalescedIntoSingleUpdate()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var createResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest(
+                new UpdateMetadata(new Markdown("Create entity")),
+                new[]
+                {
+                    new EntityChange(
+                        SampleEntityId,
+                        null,
+                        this.CreateEntityWithTitle("one", "initial"),
+                        EntityChangeMode.Replace),
+                }));
+        var tag = Assert.Single(createResult.EntityResults).ConcurrencyTag!.Value;
+        var createTime = (await this.GetSingleHistoryAsync(dataAccessLayer)).UpdateTimes.Single();
+
+        var coalescedPatchResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest(
+                new UpdateMetadata(new Markdown("Two patches same entity")),
+                new[]
+                {
+                    new EntityChange(
+                        SampleEntityId,
+                        tag,
+                        this.CreatePatch(
+                            """
+                            { "op": "replace", "path": "/title", "value": "updated" }
+                            """),
+                        EntityChangeMode.JsonPatch),
+                    new EntityChange(
+                        SampleEntityId,
+                        tag,
+                        this.CreatePatch(
+                            """
+                            { "op": "add", "path": "/tags", "value": ["a"] }
+                            """),
+                        EntityChangeMode.JsonPatch),
+                }));
+
+        var entityResult = Assert.Single(coalescedPatchResult.EntityResults);
+        Assert.Equal(UpdateState.Updated, entityResult.UpdateState);
+
+        var latest = await this.GetLatestSnapshotAsync(dataAccessLayer);
+        Assert.Equal("updated", this.GetTitle(latest.Data));
+        var tags = latest.Data!.Value.GetProperty("tags").EnumerateArray().Select(static item => item.GetString()).ToArray();
+        Assert.Equal(new[] { "a" }, tags);
+
+        var history = await this.GetSingleHistoryAsync(dataAccessLayer);
+        var updateTimes = history.UpdateTimes.ToArray();
+        Assert.Equal(2, updateTimes.Length);
+        Assert.Equal(createTime, updateTimes[0]);
+    }
+
     private JsonElement CreateEntityWithTitle(
         string name,
         string title)
@@ -255,11 +359,26 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
             Assert.Single(
                 (await dataAccessLayer.GetAsync(
                     new GetRequest(
-                        new[] { SampleEntityId },
-                        null,
+                        new[]
+                        {
+                            new GetEntityRequest(
+                                SampleEntityId,
+                                null,
+                                null,
+                                null),
+                        },
                         null,
                         new Timestamp?[] { null })))
                 .Batches)
             .Entities);
+    }
+
+    private async Task<EntityHistoryEntry> GetSingleHistoryAsync(
+        IDataAccessLayer dataAccessLayer)
+    {
+        return Assert.Single(
+            (await dataAccessLayer.GetHistoryAsync(
+                new GetHistoryRequest(new[] { SampleEntityId })))
+            .History);
     }
 }

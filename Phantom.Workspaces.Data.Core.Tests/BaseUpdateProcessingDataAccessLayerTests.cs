@@ -8,8 +8,14 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
     public async Task GetAsync_PassesRequestThroughUnchanged()
     {
         var request = new GetRequest(
-            new[] { new EntityId(Guid.Parse("5d1d7fa5-7a74-4b0d-8aef-6b6e8d8f9d8d")) },
-            null,
+            new[]
+            {
+                new GetEntityRequest(
+                    new EntityId(Guid.Parse("5d1d7fa5-7a74-4b0d-8aef-6b6e8d8f9d8d")),
+                    null,
+                    null,
+                    null),
+            },
             null,
             new Timestamp?[] { null });
         var underlyingDataAccessLayer = new RecordingDataAccessLayer();

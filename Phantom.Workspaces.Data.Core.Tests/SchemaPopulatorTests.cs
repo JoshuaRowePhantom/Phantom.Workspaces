@@ -1,7 +1,7 @@
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 
-namespace Phantom.Workspaces.Data.Offline.Tests;
+namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class SchemaPopulatorTests
 {

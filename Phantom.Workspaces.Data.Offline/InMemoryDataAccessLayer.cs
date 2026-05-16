@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 
@@ -75,6 +76,15 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         IReadOnlyCollection<EntityName> EntityNames,
         IReadOnlyCollection<string> EntityTypeNames);
 
+    private sealed record EntityState(
+        ImmutableList<EntityVersion> Versions,
+        ImmutableHashSet<EntityId> ParticipatingRelationshipIds)
+    {
+        public static EntityState Empty { get; } = new(
+            ImmutableList<EntityVersion>.Empty,
+            ImmutableHashSet<EntityId>.Empty);
+    }
+
     private sealed record UpdateOutcome(
         State NextState,
         UpdateResult UpdateResult);
@@ -95,7 +105,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         public static State CreateInitial()
         {
             return new State(
-                new StateSnapshot(new Dictionary<EntityId, List<EntityVersion>>()),
+                new StateSnapshot(ImmutableDictionary<EntityId, EntityState>.Empty),
                 0);
         }
 
@@ -140,7 +150,8 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var nextEntities = this.snapshot.CloneEntities();
+            var nextEntities = this.snapshot.CreateEntitiesBuilder();
+            var entityBuilders = new Dictionary<EntityId, EntityBuilder>();
             var updateResults = new List<EntityUpdateResult>();
             var nextSequenceNumber = this.nextSequenceNumber;
 
@@ -164,9 +175,8 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     continue;
                 }
 
-                nextEntities.TryGetValue(entityId.Value, out var versions);
-                versions ??= new List<EntityVersion>();
-                var currentVersion = versions.Count > 0 ? versions[^1] : null;
+                var entityBuilder = this.GetOrCreateEntityBuilder(entityId.Value, nextEntities, entityBuilders);
+                var currentVersion = entityBuilder.CurrentVersion;
 
                 if (currentVersion is not null
                     && change.ConcurrencyTag is null)
@@ -182,7 +192,8 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                 entityId.Value,
                                 currentVersion.ConcurrencyTag,
                                 currentVersion.Timestamp,
-                                currentVersion.Data?.RootElement),
+                                currentVersion.Data?.RootElement,
+                                Array.Empty<EntitySnapshot>()),
                             new[]
                             {
                                 new UpdateError("Concurrency tag is required.", entityId.Value),
@@ -205,7 +216,8 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                 entityId.Value,
                                 currentVersion.ConcurrencyTag,
                                 currentVersion.Timestamp,
-                                currentVersion.Data?.RootElement),
+                                currentVersion.Data?.RootElement,
+                                Array.Empty<EntitySnapshot>()),
                             new[]
                             {
                                 new UpdateError("Concurrency tag does not match.", entityId.Value),
@@ -221,15 +233,25 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 var entityNames = ExtractEntityNames(change.Data);
                 var entityTypeNames = ExtractEntityTypeNames(change.Data);
                 var data = change.Data is null ? null : JsonDocument.Parse(change.Data.Value.GetRawText());
+                var previousRelatedEntityIds = ExtractRelatedEntityIds(currentVersion?.Data?.RootElement);
+                var newRelatedEntityIds = ExtractRelatedEntityIds(data?.RootElement);
 
-                versions.Add(
+                entityBuilder.AddVersion(
                     new EntityVersion(
                         timestamp,
                         concurrencyTag,
                         data,
                         entityNames,
                         entityTypeNames));
-                nextEntities[entityId.Value] = versions;
+
+                if (newRelatedEntityIds.Count > 0 || previousRelatedEntityIds.Count > 0)
+                {
+                    foreach (var relatedEntityId in previousRelatedEntityIds.Concat(newRelatedEntityIds).Distinct())
+                    {
+                        var relatedEntityBuilder = this.GetOrCreateEntityBuilder(relatedEntityId, nextEntities, entityBuilders);
+                        relatedEntityBuilder.AddParticipatingRelationship(entityId.Value);
+                    }
+                }
 
                 updateResults.Add(
                     new EntityUpdateResult(
@@ -242,15 +264,37 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             entityId.Value,
                             concurrencyTag,
                             timestamp,
-                            data?.RootElement),
+                            data?.RootElement,
+                            Array.Empty<EntitySnapshot>()),
                         Array.Empty<UpdateError>()));
+            }
+
+            foreach (var entityBuilder in entityBuilders.Values)
+            {
+                nextEntities[entityBuilder.EntityId] = entityBuilder.Build();
             }
 
             return new UpdateOutcome(
                 new State(
-                    new StateSnapshot(nextEntities),
+                    new StateSnapshot(nextEntities.ToImmutable()),
                     nextSequenceNumber),
                 new UpdateResult(updateResults));
+        }
+
+        private EntityBuilder GetOrCreateEntityBuilder(
+            EntityId entityId,
+            ImmutableDictionary<EntityId, EntityState>.Builder entities,
+            Dictionary<EntityId, EntityBuilder> entityBuilders)
+        {
+            if (entityBuilders.TryGetValue(entityId, out var existingBuilder))
+            {
+                return existingBuilder;
+            }
+
+            entities.TryGetValue(entityId, out var existingEntity);
+            var entityBuilder = new EntityBuilder(entityId, existingEntity);
+            entityBuilders[entityId] = entityBuilder;
+            return entityBuilder;
         }
 
         private static EntityId? GetEntityId(
@@ -324,23 +368,103 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
             return entityTypeNames;
         }
+
+        private static IReadOnlyCollection<EntityId> ExtractRelatedEntityIds(
+            JsonElement? data)
+        {
+            if (data is null
+                || data.Value.ValueKind != JsonValueKind.Object
+                || !data.Value.TryGetProperty("related-entity-ids", out var relatedEntityIdsElement)
+                || relatedEntityIdsElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<EntityId>();
+            }
+
+            var relatedEntityIds = new List<EntityId>();
+            foreach (var relatedEntityIdElement in relatedEntityIdsElement.EnumerateArray())
+            {
+                if (relatedEntityIdElement.ValueKind != JsonValueKind.String
+                    || !Guid.TryParse(relatedEntityIdElement.GetString(), out var relatedEntityId))
+                {
+                    continue;
+                }
+
+                relatedEntityIds.Add(new EntityId(relatedEntityId));
+            }
+
+            return relatedEntityIds;
+        }
+
+        private sealed class EntityBuilder
+        {
+            private readonly EntityState state;
+            private ImmutableList<EntityVersion>.Builder? versionsBuilder;
+            private ImmutableHashSet<EntityId>.Builder? participatingRelationshipIdsBuilder;
+
+            public EntityBuilder(
+                EntityId entityId,
+                EntityState? existingEntity)
+            {
+                this.EntityId = entityId;
+                this.state = existingEntity ?? EntityState.Empty;
+            }
+
+            public EntityId EntityId { get; }
+
+            public EntityVersion? CurrentVersion
+            {
+                get
+                {
+                    IReadOnlyList<EntityVersion> versions;
+                    if (this.versionsBuilder is not null)
+                    {
+                        versions = this.versionsBuilder;
+                    }
+                    else
+                    {
+                        versions = this.state.Versions;
+                    }
+
+                    return versions.Count == 0 ? null : versions[^1];
+                }
+            }
+
+            public void AddVersion(
+                EntityVersion version)
+            {
+                this.versionsBuilder ??= this.state.Versions.ToBuilder();
+                this.versionsBuilder.Add(version);
+            }
+
+            public void AddParticipatingRelationship(
+                EntityId relationshipEntityId)
+            {
+                this.participatingRelationshipIdsBuilder ??= this.state.ParticipatingRelationshipIds.ToBuilder();
+                this.participatingRelationshipIdsBuilder.Add(relationshipEntityId);
+            }
+
+            public EntityState Build()
+            {
+                return new EntityState(
+                    this.versionsBuilder?.ToImmutable() ?? this.state.Versions,
+                    this.participatingRelationshipIdsBuilder?.ToImmutable() ?? this.state.ParticipatingRelationshipIds);
+            }
+        }
     }
 
     private sealed class StateSnapshot
     {
-        private readonly Dictionary<EntityId, List<EntityVersion>> entities;
+        private readonly ImmutableDictionary<EntityId, EntityState> entities;
 
         public StateSnapshot(
-            Dictionary<EntityId, List<EntityVersion>> entities)
+            ImmutableDictionary<EntityId, EntityState> entities)
         {
             this.entities = entities;
         }
 
-        public Dictionary<EntityId, List<EntityVersion>> CloneEntities()
+        public ImmutableDictionary<EntityId, EntityState>.Builder CreateEntitiesBuilder()
         {
-            return this.entities.ToDictionary(
-                entry => entry.Key,
-                entry => new List<EntityVersion>(entry.Value));
+            return this.entities.ToBuilder();
         }
 
         public Task<ExportResult> ExportAsync(
@@ -353,7 +477,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
             foreach (var entityEntry in this.entities)
             {
-                foreach (var version in entityEntry.Value)
+                foreach (var version in entityEntry.Value.Versions)
                 {
                     if (request.SnapshotTime is not null
                         && CompareTimestamp(version.Timestamp, request.SnapshotTime.Value) <= 0)
@@ -381,15 +505,12 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             changeBatches.Sort(
                 static (left, right) => CompareTimestamp(left.ChangeTime, right.ChangeTime));
 
-            var finalSnapshotTime = this.entities.Count == 0
-                ? new Timestamp(DateTimeOffset.UnixEpoch, "0")
-                : this.entities.Values
-                    .SelectMany(static versions => versions)
-                    .Aggregate(
-                        static (current, next) => CompareTimestamp(current.Timestamp, next.Timestamp) >= 0
-                            ? current
-                            : next)
-                    .Timestamp;
+            var latestVersion = this.entities.Values
+                .SelectMany(static entity => entity.Versions)
+                .OrderByDescending(static version => version.Timestamp.DateTime)
+                .ThenByDescending(static version => version.Timestamp.ChangeId, StringComparer.Ordinal)
+                .FirstOrDefault();
+            var finalSnapshotTime = latestVersion?.Timestamp ?? new Timestamp(DateTimeOffset.UnixEpoch, "0");
 
             return Task.FromResult(
                 new ExportResult(
@@ -407,51 +528,38 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 ? request.Timestamps.ToArray()
                 : new Timestamp?[] { null };
             var batches = new List<TimestampedEntityBatch>();
-            var requestedEntityIds = request.EntityIds ?? Array.Empty<EntityId>();
-            var requestedEntityNames = request.EntityNames ?? Array.Empty<EntityName>();
-            var requestedEntityTypeAndNames = request.EntityTypeAndNames ?? Array.Empty<EntityTypeAndName>();
+            var requestedEntities = request.Entities;
 
             foreach (var timestamp in timestamps)
             {
-                var entityIds = new HashSet<EntityId>();
-
-                foreach (var entityId in requestedEntityIds)
-                {
-                    entityIds.Add(entityId);
-                }
-
-                foreach (var entityName in requestedEntityNames)
-                {
-                    foreach (var matchingEntityId in this.FindEntityIdsByName(entityName.Components, timestamp))
-                    {
-                        entityIds.Add(matchingEntityId);
-                    }
-                }
-
-                foreach (var entityTypeAndName in requestedEntityTypeAndNames)
-                {
-                    foreach (var matchingEntityId in this.FindEntityIdsByTypeAndName(entityTypeAndName, timestamp))
-                    {
-                        entityIds.Add(matchingEntityId);
-                    }
-                }
-
                 var entities = new List<EntitySnapshot>();
-
-                foreach (var entityId in entityIds)
+                var includedEntityIds = new HashSet<EntityId>();
+                foreach (var requestedEntity in requestedEntities)
                 {
-                    var version = this.FindVersion(entityId, timestamp);
-                    if (version is null)
+                    foreach (var entityId in this.FindEntityIds(requestedEntity, timestamp))
                     {
-                        continue;
-                    }
+                        if (!includedEntityIds.Add(entityId))
+                        {
+                            continue;
+                        }
 
-                    entities.Add(
-                        new EntitySnapshot(
-                            entityId,
-                            version.ConcurrencyTag,
-                            version.Timestamp,
-                            version.Data?.RootElement));
+                        var version = this.FindVersion(entityId, timestamp);
+                        if (version is null)
+                        {
+                            continue;
+                        }
+
+                        var relationshipFilter = requestedEntity.RelationshipsToReturn ?? request.RelationshipsToReturn;
+                        var relationships = this.GetRelationshipsForEntity(entityId, timestamp, relationshipFilter);
+
+                        entities.Add(
+                            new EntitySnapshot(
+                                entityId,
+                                version.ConcurrencyTag,
+                                version.Timestamp,
+                                version.Data?.RootElement,
+                                relationships));
+                    }
                 }
 
                 batches.Add(new TimestampedEntityBatch(timestamp, entities));
@@ -484,7 +592,8 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                 requestedEntity.EntityId,
                                 currentVersion.ConcurrencyTag,
                                 currentVersion.Timestamp,
-                                currentVersion.Data?.RootElement)));
+                                currentVersion.Data?.RootElement,
+                                Array.Empty<EntitySnapshot>())));
                 }
             }
 
@@ -501,7 +610,8 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
             foreach (var entityId in request.EntityIds)
             {
-                if (!this.entities.TryGetValue(entityId, out var versions))
+                if (!this.entities.TryGetValue(entityId, out var entityState)
+                    || entityState.Versions.Count == 0)
                 {
                     continue;
                 }
@@ -509,7 +619,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 history.Add(
                     new EntityHistoryEntry(
                         entityId,
-                        versions.Select(static version => version.Timestamp).ToArray()));
+                        entityState.Versions.Select(static version => version.Timestamp).ToArray()));
             }
 
             return Task.FromResult(new GetHistoryResult(history));
@@ -558,11 +668,12 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             EntityId entityId,
             Timestamp? timestamp)
         {
-            if (!this.entities.TryGetValue(entityId, out var versions) || versions.Count == 0)
+            if (!this.entities.TryGetValue(entityId, out var entityState) || entityState.Versions.Count == 0)
             {
                 return null;
             }
 
+            var versions = entityState.Versions;
             if (timestamp is null)
             {
                 return versions[^1];
@@ -579,10 +690,21 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             return null;
         }
 
-        private IEnumerable<EntityId> FindEntityIdsByName(
-            string name,
+        private IEnumerable<EntityId> FindEntityIds(
+            GetEntityRequest request,
             Timestamp? timestamp)
         {
+            if (request.EntityId is not null)
+            {
+                var entityVersion = this.FindVersion(request.EntityId.Value, timestamp);
+                if (entityVersion is not null && this.MatchesEntityCriteria(entityVersion, request))
+                {
+                    yield return request.EntityId.Value;
+                }
+
+                yield break;
+            }
+
             foreach (var entityEntry in this.entities)
             {
                 var version = this.FindVersion(entityEntry.Key, timestamp);
@@ -591,32 +713,117 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     continue;
                 }
 
-                if (version.EntityNames.Any(entityName => string.Equals(entityName.Components, name, StringComparison.Ordinal)))
+                if (this.MatchesEntityCriteria(version, request))
                 {
                     yield return entityEntry.Key;
                 }
             }
         }
 
-        private IEnumerable<EntityId> FindEntityIdsByTypeAndName(
-            EntityTypeAndName entityTypeAndName,
-            Timestamp? timestamp)
+        private bool MatchesEntityCriteria(
+            EntityVersion version,
+            GetEntityRequest request)
         {
-            foreach (var entityEntry in this.entities)
+            if (request.EntityName is not null
+                && !version.EntityNames.Any(entityName => string.Equals(entityName.Components, request.EntityName.Value.Components, StringComparison.Ordinal)))
             {
-                var version = this.FindVersion(entityEntry.Key, timestamp);
-                if (version is null)
+                return false;
+            }
+
+            if (request.EntityTypeNames is not null
+                && !request.EntityTypeNames.Value.Values.All(typeName => version.EntityTypeNames.Contains(typeName, StringComparer.Ordinal)))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private IReadOnlyCollection<EntitySnapshot> GetRelationshipsForEntity(
+            EntityId entityId,
+            Timestamp? timestamp,
+            IReadOnlyCollection<GetRelationshipRequest>? relationshipFilters)
+        {
+            if (relationshipFilters is null
+                || !this.entities.TryGetValue(entityId, out var entityState)
+                || entityState.ParticipatingRelationshipIds.Count == 0)
+            {
+                return Array.Empty<EntitySnapshot>();
+            }
+
+            var relationships = new List<EntitySnapshot>();
+            foreach (var relationshipId in entityState.ParticipatingRelationshipIds)
+            {
+                var relationshipVersion = this.FindVersion(relationshipId, timestamp);
+                if (relationshipVersion is null
+                    || relationshipVersion.Data is null
+                    || !this.IsRelationshipForEntity(relationshipVersion.Data.RootElement, entityId))
                 {
                     continue;
                 }
 
-                var hasName = version.EntityNames.Any(entityName => string.Equals(entityName.Components, entityTypeAndName.EntityName.Components, StringComparison.Ordinal));
-                var hasTypes = entityTypeAndName.TypeNames.Values.All(typeName => version.EntityTypeNames.Contains(typeName, StringComparer.Ordinal));
-                if (hasName && hasTypes)
+                if (relationshipFilters.Count > 0
+                    && !relationshipFilters.Any(filter => this.MatchesRelationshipFilter(relationshipVersion, filter)))
                 {
-                    yield return entityEntry.Key;
+                    continue;
                 }
+
+                relationships.Add(
+                    new EntitySnapshot(
+                        relationshipId,
+                        relationshipVersion.ConcurrencyTag,
+                        relationshipVersion.Timestamp,
+                        relationshipVersion.Data.RootElement,
+                        Array.Empty<EntitySnapshot>()));
             }
+
+            return relationships;
+        }
+
+        private bool IsRelationshipForEntity(
+            JsonElement relationshipData,
+            EntityId entityId)
+        {
+            if (relationshipData.ValueKind != JsonValueKind.Object
+                || !relationshipData.TryGetProperty("related-entity-ids", out var relatedEntityIds)
+                || relatedEntityIds.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            var entityIdText = entityId.Value.ToString("D");
+            return relatedEntityIds.EnumerateArray().Any(relatedEntityId =>
+                relatedEntityId.ValueKind == JsonValueKind.String
+                && string.Equals(relatedEntityId.GetString(), entityIdText, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private bool MatchesRelationshipFilter(
+            EntityVersion relationshipVersion,
+            GetRelationshipRequest filter)
+        {
+            if (filter.RelationshipTypeNames is not null
+                && !filter.RelationshipTypeNames.Value.Values.All(typeName => relationshipVersion.EntityTypeNames.Contains(typeName, StringComparer.Ordinal)))
+            {
+                return false;
+            }
+
+            if (filter.RelationshipRoleNames is null)
+            {
+                return true;
+            }
+
+            if (relationshipVersion.Data is null
+                || !relationshipVersion.Data.RootElement.TryGetProperty("relationship-roles", out var rolesElement)
+                || rolesElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            var availableRoles = rolesElement.EnumerateArray()
+                .Where(static role => role.ValueKind == JsonValueKind.String)
+                .Select(static role => role.GetString()!)
+                .ToHashSet(StringComparer.Ordinal);
+            return filter.RelationshipRoleNames.Value.Values.All(availableRoles.Contains);
         }
     }
 

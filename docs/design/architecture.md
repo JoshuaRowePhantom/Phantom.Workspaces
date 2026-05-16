@@ -188,6 +188,10 @@ The system separates UI, agent execution, data access, and external integrations
    - participants are assigned into roles defined by the relationship type.
 13. Referential integrity:
    - the DAL includes special logic to enforce referential integrity for relationships and their participants.
+   - relationship entities are automatically removed when any participant is removed.
+   - object-property entity-id references are validated so referenced entities exist.
+   - schema-driven entity-id references may constrain allowed target types via `x-entity-type`.
+   - synthetic `reference` relationships are managed by the DAL and duplicate relationships are coalesced.
 14. Interest relationships:
    - define a special class of relationships called **interests**,
    - include an **interest relationship type**,

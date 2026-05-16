@@ -127,8 +127,14 @@ public abstract class DataAccessLayerNonQueryTests
 
         var latestByName = await dataAccessLayer.GetAsync(
             new GetRequest(
-                null,
-                new[] { new EntityName("two") },
+                new[]
+                {
+                    new GetEntityRequest(
+                        null,
+                        new EntityName("two"),
+                        null,
+                        null),
+                },
                 null,
                 new Timestamp?[] { null }));
         Assert.Empty(Assert.Single(latestByName.Batches).Entities);
@@ -241,6 +247,114 @@ public abstract class DataAccessLayerNonQueryTests
         Assert.Equal(2, history.UpdateTimes.Count);
     }
 
+    [Fact]
+    public async Task Populate_GetEntityRelationships_RespectsRequestAndEntityRelationshipFilters()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var createEntityResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        AssertSuccessfulResult(createEntityResult, UpdateState.Added);
+        var additionalParticipantId = new EntityId(Guid.Parse("5ab56174-f4b0-4f64-bbf7-c96bc5cfe419"));
+        using var additionalParticipantDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{additionalParticipantId.Value:D}}",
+              "entity-types": ["entity"],
+              "names": ["two"]
+            }
+            """);
+        var createAdditionalParticipantResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest(
+                new UpdateMetadata(new Markdown("Create additional participant")),
+                new[]
+                {
+                    new EntityChange(
+                        additionalParticipantId,
+                        null,
+                        additionalParticipantDocument.RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+        var additionalParticipantEntityResult = Assert.Single(createAdditionalParticipantResult.EntityResults);
+        Assert.Equal(UpdateState.Added, additionalParticipantEntityResult.UpdateState);
+
+        using var relationshipDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69",
+              "entity-types": ["relationship", "related-to"],
+              "names": ["one-related"],
+              "related-entity-ids": ["{{SampleEntityId.Value:D}}", "{{additionalParticipantId.Value:D}}"],
+              "relationship-roles": ["source", "target"]
+            }
+            """);
+        var relationshipEntityId = new EntityId(Guid.Parse("8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69"));
+        var createRelationshipResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest(
+                new UpdateMetadata(new Markdown("Create relationship")),
+                new[]
+                {
+                    new EntityChange(
+                        relationshipEntityId,
+                        null,
+                        relationshipDocument.RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+        var relationshipCreateEntityResult = Assert.Single(createRelationshipResult.EntityResults);
+        Assert.Equal(UpdateState.Added, relationshipCreateEntityResult.UpdateState);
+        Assert.Equal(ConcurrencyMatchState.Matched, relationshipCreateEntityResult.ConcurrencyMatchState);
+        Assert.Equal(relationshipEntityId, relationshipCreateEntityResult.RequestedEntityId);
+        Assert.Equal(relationshipEntityId, relationshipCreateEntityResult.ResultingEntityId);
+        Assert.Empty(relationshipCreateEntityResult.Errors);
+
+        var noRelationships = await dataAccessLayer.GetAsync(
+            new GetRequest(
+                new[] { new GetEntityRequest(SampleEntityId, null, null, null) },
+                null,
+                new Timestamp?[] { null }));
+        Assert.Empty(Assert.Single(Assert.Single(noRelationships.Batches).Entities).Relationships);
+
+        var allRelationships = await dataAccessLayer.GetAsync(
+            new GetRequest(
+                new[] { new GetEntityRequest(SampleEntityId, null, null, null) },
+                Array.Empty<GetRelationshipRequest>(),
+                new Timestamp?[] { null }));
+        var allRelationshipsSnapshot = Assert.Single(Assert.Single(allRelationships.Batches).Entities);
+        var relationship = Assert.Single(allRelationshipsSnapshot.Relationships);
+        Assert.Equal(relationshipEntityId, relationship.EntityId);
+        Assert.NotNull(relationship.Data);
+        Assert.Equal("one-related", this.GetName(relationship.Data));
+
+        var filteredOutByEntityRequest = await dataAccessLayer.GetAsync(
+            new GetRequest(
+                new[]
+                {
+                    new GetEntityRequest(
+                        SampleEntityId,
+                        null,
+                        null,
+                        new[]
+                        {
+                            new GetRelationshipRequest(
+                                new RelationshipTypeNames(new[] { "unrelated-type" }),
+                                null),
+                        }),
+                },
+                Array.Empty<GetRelationshipRequest>(),
+                new Timestamp?[] { null }));
+        Assert.Empty(Assert.Single(Assert.Single(filteredOutByEntityRequest.Batches).Entities).Relationships);
+
+        var filteredByTypeAndRole = await dataAccessLayer.GetAsync(
+            new GetRequest(
+                new[] { new GetEntityRequest(SampleEntityId, null, null, null) },
+                new[]
+                {
+                    new GetRelationshipRequest(
+                        new RelationshipTypeNames(new[] { "related-to" }),
+                        new RoleNames(new[] { "source" })),
+                },
+                new Timestamp?[] { null }));
+        Assert.Single(Assert.Single(Assert.Single(filteredByTypeAndRole.Batches).Entities).Relationships);
+    }
+
     protected async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
     {
         var dataAccessLayer = this.CreateDataAccessLayer();
@@ -316,11 +430,13 @@ public abstract class DataAccessLayerNonQueryTests
     {
         return this.GetSingleSnapshotAsync(
             await dataAccessLayer.GetAsync(
-                new GetRequest(
-                    new[] { SampleEntityId },
-                    null,
-                    null,
-                    new Timestamp?[] { timestamp })));
+                CreateGetRequest(
+                    new GetEntityRequest(
+                        SampleEntityId,
+                        null,
+                        null,
+                        null),
+                    timestamp)));
     }
 
     private async Task<EntitySnapshot> GetSingleSnapshotByNameAsync(
@@ -330,11 +446,13 @@ public abstract class DataAccessLayerNonQueryTests
     {
         return this.GetSingleSnapshotAsync(
             await dataAccessLayer.GetAsync(
-                new GetRequest(
-                    null,
-                    new[] { new EntityName(name) },
-                    null,
-                    new Timestamp?[] { timestamp })));
+                CreateGetRequest(
+                    new GetEntityRequest(
+                        null,
+                        new EntityName(name),
+                        null,
+                        null),
+                    timestamp)));
     }
 
     private async Task<EntitySnapshot> GetSingleSnapshotByTypeAndNameAsync(
@@ -345,11 +463,23 @@ public abstract class DataAccessLayerNonQueryTests
     {
         return this.GetSingleSnapshotAsync(
             await dataAccessLayer.GetAsync(
-                new GetRequest(
-                    null,
-                    null,
-                    new[] { new EntityTypeAndName(new EntityTypeNames(new[] { typeName }), new EntityName(name)) },
-                    new Timestamp?[] { timestamp })));
+                CreateGetRequest(
+                    new GetEntityRequest(
+                        null,
+                        new EntityName(name),
+                        new EntityTypeNames(new[] { typeName }),
+                        null),
+                    timestamp)));
+    }
+
+    private static GetRequest CreateGetRequest(
+        GetEntityRequest entity,
+        Timestamp? timestamp)
+    {
+        return new GetRequest(
+            new[] { entity },
+            null,
+            new Timestamp?[] { timestamp });
     }
 
     private EntitySnapshot GetSingleSnapshotAsync(

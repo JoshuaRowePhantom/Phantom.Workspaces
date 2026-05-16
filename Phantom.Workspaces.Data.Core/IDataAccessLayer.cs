@@ -83,10 +83,21 @@ public sealed record UpdateError(
     EntityId? RelatedEntityId);
 
 public sealed record GetRequest(
-    IReadOnlyCollection<EntityId>? EntityIds,
-    IReadOnlyCollection<EntityName>? EntityNames,
-    IReadOnlyCollection<EntityTypeAndName>? EntityTypeAndNames,
+    IReadOnlyCollection<GetEntityRequest> Entities,
+    // null means do not return relationships, empty means return all, non-empty means return matching relationships.
+    IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn,
     IReadOnlyCollection<Timestamp?>? Timestamps);
+
+public sealed record GetEntityRequest(
+    EntityId? EntityId,
+    EntityName? EntityName,
+    EntityTypeNames? EntityTypeNames,
+    // null means inherit request-level value; empty means return all; non-empty means return matching relationships.
+    IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn);
+
+public sealed record GetRelationshipRequest(
+    RelationshipTypeNames? RelationshipTypeNames,
+    RoleNames? RelationshipRoleNames);
 
 public sealed record GetResult(
     IReadOnlyCollection<TimestampedEntityBatch> Batches);
@@ -167,7 +178,8 @@ public sealed record QueryEntitySnapshot(
         EntityId,
         ConcurrencyTag,
         ModifiedTime,
-        Data);
+        Data,
+        Array.Empty<EntitySnapshot>());
 
 /// <summary>
 /// When an entity matches a FullText query, the FullTextQueryScore
@@ -217,7 +229,8 @@ public record EntitySnapshot(
     EntityId EntityId,
     ConcurrencyTag? ConcurrencyTag,
     Timestamp ModifiedTime,
-    JsonElement? Data);
+    JsonElement? Data,
+    IReadOnlyCollection<EntitySnapshot> Relationships);
 
 public readonly record struct EntityId(Guid Value);
 

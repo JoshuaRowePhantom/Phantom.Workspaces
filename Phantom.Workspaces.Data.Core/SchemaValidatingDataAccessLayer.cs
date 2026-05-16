@@ -153,8 +153,14 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
 
         var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
             new GetRequest(
-                null,
-                new[] { new EntityName(schemaReference) },
+                new[]
+                {
+                    new GetEntityRequest(
+                        null,
+                        new EntityName(schemaReference),
+                        null,
+                        null),
+                },
                 null,
                 new Timestamp?[] { null }),
             cancellationToken);
