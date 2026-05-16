@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace Phantom.Workspaces.Data;
 
@@ -30,6 +30,7 @@ public interface IDataAccessLayer
         GetHistoryRequest request,
         CancellationToken cancellationToken = default);
 
+    [Obsolete("ExportAsync is very expensive and should only be used for full enumeration in rare cases.")]
     Task<ExportResult> ExportAsync(
         ExportRequest request,
         CancellationToken cancellationToken = default);
@@ -61,7 +62,7 @@ public sealed record EntityChange(
     EntityId? EntityId,
     ConcurrencyTag? ConcurrencyTag,
     // null to remove the entity,
-    JsonNode? Data,
+    JsonElement? Data,
     MergeMode MergeMode);
 
 public sealed record UpdateResult(
@@ -73,6 +74,7 @@ public sealed record EntityUpdateResult(
     EntityId ResultingEntityId,
     ConcurrencyTag? ConcurrencyTag,
     ConcurrencyMatchState ConcurrencyMatchState,
+    EntitySnapshot? CurrentEntity,
     IReadOnlyCollection<UpdateError> Errors);
 
 public sealed record UpdateError(
@@ -81,8 +83,10 @@ public sealed record UpdateError(
     EntityId? RelatedEntityId);
 
 public sealed record GetRequest(
-    IReadOnlyCollection<EntityId> EntityIds,
-    IReadOnlyCollection<Timestamp?> Timestamps);
+    IReadOnlyCollection<EntityId>? EntityIds,
+    IReadOnlyCollection<EntityName>? EntityNames,
+    IReadOnlyCollection<EntityTypeAndName>? EntityTypeAndNames,
+    IReadOnlyCollection<Timestamp?>? Timestamps);
 
 public sealed record GetResult(
     IReadOnlyCollection<TimestampedEntityBatch> Batches);
@@ -109,9 +113,17 @@ public sealed record GetHistoryRequest(
 public sealed record GetHistoryResult(
     IReadOnlyCollection<EntityHistoryEntry> History);
 
+/// <summary>
+/// Requests a full export of all entities at or after an optional snapshot time.
+/// This API is intentionally expensive and should only be used when enumerating everything is unavoidable.
+/// </summary>
 public sealed record ExportRequest(
     Timestamp? SnapshotTime);
 
+/// <summary>
+/// A full export of all entities.
+/// This result is intentionally expensive to produce and should only be consumed in rare enumeration scenarios.
+/// </summary>
 public sealed record ExportResult(
     IReadOnlyCollection<ExportChangeBatch> ChangeBatches,
     Timestamp FinalSnapshotTime);
@@ -148,7 +160,7 @@ public sealed record QueryEntitySnapshot(
     ConcurrencyTag? ConcurrencyTag,
     Timestamp ModifiedTime,
     Timestamp? ClassifiedTime,
-    JsonNode? Data,
+    JsonElement? Data,
     IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers,
     IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores)
     : EntitySnapshot(
@@ -205,9 +217,16 @@ public record EntitySnapshot(
     EntityId EntityId,
     ConcurrencyTag? ConcurrencyTag,
     Timestamp ModifiedTime,
-    JsonNode? Data);
+    JsonElement? Data);
 
 public readonly record struct EntityId(Guid Value);
+
+public readonly record struct EntityTypeAndName(
+    EntityTypeNames TypeNames,
+    EntityName EntityName);
+
+public readonly record struct EntityName(
+    string Components);
 
 public readonly record struct ConcurrencyTag(string Value);
 
@@ -267,7 +286,7 @@ public sealed record EntityTypeQueryClause(
 public sealed record EntityFieldQueryClause(
     FieldPath FieldPath,
     FieldComparisonOperator ComparisonOperator,
-    JsonNode? Value) : EntityQueryClause;
+    JsonElement? Value) : EntityQueryClause;
 
 public sealed record EntityFullTextQueryClause(
     QueryClauseIdentifier FullTextQueryIdentifier,

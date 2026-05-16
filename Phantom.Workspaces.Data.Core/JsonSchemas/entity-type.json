@@ -1,10 +1,12 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "https://schemas.phantom.app/workspaces/data/core/json-schema-reference.json",
   "$id": "https://schemas.phantom.app/workspaces/data/core/entity-type.json",
-  "type": "object",
-  "allOf": [
-    {
-      "$ref": "json-schema.json"
-    }
-  ]
+  "entity-id": "{739d0469-4ad8-4ae0-b2b5-3c3be996f264}",
+  "entity-types": [
+    "entity"
+  ],
+  "names": [
+    "https://schemas.phantom.app/workspaces/data/core/entity-type.json"
+  ],
+  "schema-entity-id": "https://schemas.phantom.app/workspaces/data/core/json-schema-reference.json"
 }

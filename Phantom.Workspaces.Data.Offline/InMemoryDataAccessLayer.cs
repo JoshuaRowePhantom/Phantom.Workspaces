@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Data.Offline;
@@ -71,7 +71,9 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
     private sealed record EntityVersion(
         Timestamp Timestamp,
         ConcurrencyTag ConcurrencyTag,
-        JsonNode? Data);
+        JsonDocument? Data,
+        IReadOnlyCollection<EntityName> EntityNames,
+        IReadOnlyCollection<string> EntityTypeNames);
 
     private sealed record UpdateOutcome(
         State NextState,
@@ -154,11 +156,10 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             default,
                             null,
                             ConcurrencyMatchState.NotMatched,
+                            null,
                             new[]
                             {
-                                new UpdateError(
-                                    "Entity data must include an entity-id.",
-                                    null),
+                                new UpdateError("Entity data must include an entity-id.", null),
                             }));
                     continue;
                 }
@@ -166,6 +167,28 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 nextEntities.TryGetValue(entityId.Value, out var versions);
                 versions ??= new List<EntityVersion>();
                 var currentVersion = versions.Count > 0 ? versions[^1] : null;
+
+                if (currentVersion is not null
+                    && change.ConcurrencyTag is null)
+                {
+                    updateResults.Add(
+                        new EntityUpdateResult(
+                            UpdateState.Failed,
+                            entityId.Value,
+                            entityId.Value,
+                            currentVersion.ConcurrencyTag,
+                            ConcurrencyMatchState.NotMatched,
+                            new EntitySnapshot(
+                                entityId.Value,
+                                currentVersion.ConcurrencyTag,
+                                currentVersion.Timestamp,
+                                currentVersion.Data?.RootElement),
+                            new[]
+                            {
+                                new UpdateError("Concurrency tag is required.", entityId.Value),
+                            }));
+                    continue;
+                }
 
                 if (change.ConcurrencyTag is not null
                     && currentVersion is not null
@@ -178,11 +201,14 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             entityId.Value,
                             currentVersion.ConcurrencyTag,
                             ConcurrencyMatchState.NotMatched,
+                            new EntitySnapshot(
+                                entityId.Value,
+                                currentVersion.ConcurrencyTag,
+                                currentVersion.Timestamp,
+                                currentVersion.Data?.RootElement),
                             new[]
                             {
-                                new UpdateError(
-                                    "Concurrency tag does not match.",
-                                    entityId.Value),
+                                new UpdateError("Concurrency tag does not match.", entityId.Value),
                             }));
                     continue;
                 }
@@ -192,8 +218,17 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     DateTimeOffset.UtcNow,
                     nextSequenceNumber.ToString());
                 var concurrencyTag = new ConcurrencyTag(Guid.NewGuid().ToString("D"));
+                var entityNames = ExtractEntityNames(change.Data);
+                var entityTypeNames = ExtractEntityTypeNames(change.Data);
+                var data = change.Data is null ? null : JsonDocument.Parse(change.Data.Value.GetRawText());
 
-                versions.Add(new EntityVersion(timestamp, concurrencyTag, change.Data?.DeepClone()));
+                versions.Add(
+                    new EntityVersion(
+                        timestamp,
+                        concurrencyTag,
+                        data,
+                        entityNames,
+                        entityTypeNames));
                 nextEntities[entityId.Value] = versions;
 
                 updateResults.Add(
@@ -203,6 +238,11 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                         entityId.Value,
                         concurrencyTag,
                         ConcurrencyMatchState.Matched,
+                        new EntitySnapshot(
+                            entityId.Value,
+                            concurrencyTag,
+                            timestamp,
+                            data?.RootElement),
                         Array.Empty<UpdateError>()));
             }
 
@@ -214,22 +254,75 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         }
 
         private static EntityId? GetEntityId(
-            JsonNode? data)
+            JsonElement? data)
         {
-            if (data is not JsonObject jsonObject)
+            if (data is null || data.Value.ValueKind != JsonValueKind.Object)
             {
                 return null;
             }
 
-            if (!jsonObject.TryGetPropertyValue("entity-id", out var entityIdNode)
-                || entityIdNode is not JsonValue entityIdValue
-                || !entityIdValue.TryGetValue<string>(out var entityIdText)
-                || !Guid.TryParse(entityIdText, out var entityGuid))
+            if (!data.Value.TryGetProperty("entity-id", out var entityIdElement)
+                || entityIdElement.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(entityIdElement.GetString(), out var entityGuid))
             {
                 return null;
             }
 
             return new EntityId(entityGuid);
+        }
+
+        private static IReadOnlyCollection<EntityName> ExtractEntityNames(
+            JsonElement? data)
+        {
+            if (data is null
+                || data.Value.ValueKind != JsonValueKind.Object
+                || !data.Value.TryGetProperty("names", out var namesElement)
+                || namesElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<EntityName>();
+            }
+
+            var names = new List<EntityName>();
+            foreach (var nameElement in namesElement.EnumerateArray())
+            {
+                if (nameElement.ValueKind == JsonValueKind.String)
+                {
+                    var name = nameElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        names.Add(new EntityName(name));
+                    }
+                }
+            }
+
+            return names;
+        }
+
+        private static IReadOnlyCollection<string> ExtractEntityTypeNames(
+            JsonElement? data)
+        {
+            if (data is null
+                || data.Value.ValueKind != JsonValueKind.Object
+                || !data.Value.TryGetProperty("entity-types", out var entityTypesElement)
+                || entityTypesElement.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<string>();
+            }
+
+            var entityTypeNames = new List<string>();
+            foreach (var entityTypeElement in entityTypesElement.EnumerateArray())
+            {
+                if (entityTypeElement.ValueKind == JsonValueKind.String)
+                {
+                    var entityTypeName = entityTypeElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(entityTypeName))
+                    {
+                        entityTypeNames.Add(entityTypeName);
+                    }
+                }
+            }
+
+            return entityTypeNames;
         }
     }
 
@@ -278,7 +371,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                     version.ConcurrencyTag,
                                     version.Timestamp,
                                     null,
-                                    version.Data?.DeepClone(),
+                                    version.Data?.RootElement,
                                     Array.Empty<QueryClauseIdentifier>(),
                                     Array.Empty<FullTextQueryScore>()),
                             }));
@@ -310,29 +403,58 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            var timestamps = request.Timestamps is { Count: > 0 }
+                ? request.Timestamps.ToArray()
+                : new Timestamp?[] { null };
             var batches = new List<TimestampedEntityBatch>();
-            var timestamps = request.Timestamps.Count == 0
-                ? new Timestamp?[] { null }
-                : request.Timestamps.ToArray();
-            var entityIds = request.EntityIds.ToArray();
+            var requestedEntityIds = request.EntityIds ?? Array.Empty<EntityId>();
+            var requestedEntityNames = request.EntityNames ?? Array.Empty<EntityName>();
+            var requestedEntityTypeAndNames = request.EntityTypeAndNames ?? Array.Empty<EntityTypeAndName>();
 
-            for (var index = 0; index < entityIds.Length; index++)
+            foreach (var timestamp in timestamps)
             {
-                var entityId = entityIds[index];
-                var timestamp = index < timestamps.Length ? timestamps[index] : null;
-                var version = this.FindVersion(entityId, timestamp);
-                var entity = version is null
-                    ? Array.Empty<EntitySnapshot>()
-                    : new[]
+                var entityIds = new HashSet<EntityId>();
+
+                foreach (var entityId in requestedEntityIds)
+                {
+                    entityIds.Add(entityId);
+                }
+
+                foreach (var entityName in requestedEntityNames)
+                {
+                    foreach (var matchingEntityId in this.FindEntityIdsByName(entityName.Components, timestamp))
                     {
+                        entityIds.Add(matchingEntityId);
+                    }
+                }
+
+                foreach (var entityTypeAndName in requestedEntityTypeAndNames)
+                {
+                    foreach (var matchingEntityId in this.FindEntityIdsByTypeAndName(entityTypeAndName, timestamp))
+                    {
+                        entityIds.Add(matchingEntityId);
+                    }
+                }
+
+                var entities = new List<EntitySnapshot>();
+
+                foreach (var entityId in entityIds)
+                {
+                    var version = this.FindVersion(entityId, timestamp);
+                    if (version is null)
+                    {
+                        continue;
+                    }
+
+                    entities.Add(
                         new EntitySnapshot(
                             entityId,
                             version.ConcurrencyTag,
                             version.Timestamp,
-                            version.Data?.DeepClone()),
-                    };
+                            version.Data?.RootElement));
+                }
 
-                batches.Add(new TimestampedEntityBatch(timestamp, entity));
+                batches.Add(new TimestampedEntityBatch(timestamp, entities));
             }
 
             return Task.FromResult(new GetResult(batches));
@@ -362,7 +484,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                 requestedEntity.EntityId,
                                 currentVersion.ConcurrencyTag,
                                 currentVersion.Timestamp,
-                                currentVersion.Data?.DeepClone())));
+                                currentVersion.Data?.RootElement)));
                 }
             }
 
@@ -418,7 +540,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                     version.ConcurrencyTag,
                                     version.Timestamp,
                                     null,
-                                    version.Data?.DeepClone(),
+                                    version.Data?.RootElement,
                                     request.Clauses.Select(clause => clause.ClauseIdentifier).ToArray(),
                                     Array.Empty<FullTextQueryScore>());
                         })
@@ -455,6 +577,46 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             }
 
             return null;
+        }
+
+        private IEnumerable<EntityId> FindEntityIdsByName(
+            string name,
+            Timestamp? timestamp)
+        {
+            foreach (var entityEntry in this.entities)
+            {
+                var version = this.FindVersion(entityEntry.Key, timestamp);
+                if (version is null)
+                {
+                    continue;
+                }
+
+                if (version.EntityNames.Any(entityName => string.Equals(entityName.Components, name, StringComparison.Ordinal)))
+                {
+                    yield return entityEntry.Key;
+                }
+            }
+        }
+
+        private IEnumerable<EntityId> FindEntityIdsByTypeAndName(
+            EntityTypeAndName entityTypeAndName,
+            Timestamp? timestamp)
+        {
+            foreach (var entityEntry in this.entities)
+            {
+                var version = this.FindVersion(entityEntry.Key, timestamp);
+                if (version is null)
+                {
+                    continue;
+                }
+
+                var hasName = version.EntityNames.Any(entityName => string.Equals(entityName.Components, entityTypeAndName.EntityName.Components, StringComparison.Ordinal));
+                var hasTypes = entityTypeAndName.TypeNames.Values.All(typeName => version.EntityTypeNames.Contains(typeName, StringComparer.Ordinal));
+                if (hasName && hasTypes)
+                {
+                    yield return entityEntry.Key;
+                }
+            }
         }
     }
 

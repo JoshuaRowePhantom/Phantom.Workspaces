@@ -1,6 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Json.Schema;
 
 namespace Phantom.Workspaces.Data;
 
@@ -12,39 +10,21 @@ namespace Phantom.Workspaces.Data;
 /// </remarks>
 public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
 {
-    private readonly BuiltinSchemaResolver builtinSchemaResolver;
-
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
-        : this(
-            underlyingDataAccessLayer,
-            new BuiltinSchemaResolver())
-    {
-    }
-
-    public SchemaValidatingDataAccessLayer(
-        IDataAccessLayer underlyingDataAccessLayer,
-        BuiltinSchemaResolver builtinSchemaResolver)
         : base(underlyingDataAccessLayer)
     {
-        this.builtinSchemaResolver = builtinSchemaResolver;
     }
 
-    public async Task<UpdateResult> UpdateAsync(
+    public override async Task<UpdateResult> UpdateAsync(
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        var availableSchemas = await this.LoadAvailableSchemasAsync(cancellationToken);
-        foreach (var change in request.Changes)
-        {
-            this.RegisterSchemaFromEntity(change.Data, availableSchemas);
-        }
-
         var validationResults = new List<EntityUpdateResult>();
 
         foreach (var change in request.Changes)
         {
-            var validationErrors = this.ValidateChange(change, availableSchemas);
+            var validationErrors = await this.ValidateChangeAsync(change, cancellationToken);
             if (validationErrors.Count == 0)
             {
                 continue;
@@ -58,6 +38,7 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
                     entityId ?? default,
                     null,
                     ConcurrencyMatchState.NotMatched,
+                    null,
                     validationErrors));
         }
 
@@ -69,129 +50,82 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
         return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
     }
 
-    private async Task<Dictionary<string, JsonObject>> LoadAvailableSchemasAsync(
+    private async Task<IReadOnlyCollection<UpdateError>> ValidateChangeAsync(
+        EntityChange change,
         CancellationToken cancellationToken)
     {
-        var schemas = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-
-        foreach (var schemaId in this.builtinSchemaResolver.SchemaIds)
+        if (change.Data is not { } data || data.ValueKind != JsonValueKind.Object)
         {
-            schemas[schemaId] = this.builtinSchemaResolver.GetSchema(schemaId);
+            return Array.Empty<UpdateError>();
         }
 
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(
-            new ExportRequest(null),
-            cancellationToken);
-
-        foreach (var batch in exportResult.ChangeBatches)
+        var schemaReference = this.GetSchemaReference(data);
+        if (schemaReference is null)
         {
-            foreach (var entity in batch.Entities)
+            return Array.Empty<UpdateError>();
+        }
+
+        var schemaResult = await this.ResolveSchemaAsync(schemaReference, cancellationToken);
+        if (schemaResult is null)
+        {
+            return new[]
             {
-                this.RegisterSchemaFromEntity(entity.Data, schemas);
-            }
+                new UpdateError("Schema reference could not be resolved.", change.EntityId),
+            };
         }
 
-        return schemas;
+        return Array.Empty<UpdateError>();
     }
 
-    private IReadOnlyCollection<UpdateError> ValidateChange(
-        EntityChange change,
-        Dictionary<string, JsonObject> availableSchemas)
+    private string? GetSchemaReference(
+        JsonElement entityObject)
     {
-        var errors = new List<UpdateError>();
-        if (change.Data is not JsonObject entityObject)
-        {
-            return errors;
-        }
-
-        this.RegisterSchemaFromEntity(entityObject, availableSchemas);
-
-        if (!entityObject.TryGetPropertyValue("schema", out var schemaNode) || schemaNode is null)
-        {
-            return errors;
-        }
-
-        if (!this.TryResolveSchema(schemaNode, availableSchemas, out var schemaObject))
-        {
-            errors.Add(new UpdateError("Schema reference could not be resolved.", change.EntityId));
-            return errors;
-        }
-
-        var schemaText = schemaObject.ToJsonString();
-        var instanceText = entityObject.ToJsonString();
-        var schema = JsonSchema.FromText(schemaText);
-        var instance = JsonDocument.Parse(instanceText).RootElement;
-        var evaluation = schema.Evaluate(instance);
-
-        if (!evaluation.IsValid)
-        {
-            errors.Add(
-                new UpdateError(
-                    "Schema validation failed.",
-                    change.EntityId));
-        }
-
-        return errors;
-    }
-
-    private void RegisterSchemaFromEntity(
-        JsonNode? entityData,
-        Dictionary<string, JsonObject> availableSchemas)
-    {
-        if (entityData is not JsonObject entityObject)
-        {
-            return;
-        }
-
-        if (!entityObject.TryGetPropertyValue("schema", out var schemaNode)
-            || schemaNode is not JsonObject schemaObject)
-        {
-            return;
-        }
-
-        if (schemaObject.TryGetPropertyValue("$id", out var schemaIdNode)
-            && schemaIdNode is JsonValue schemaIdValue
-            && schemaIdValue.TryGetValue<string>(out var schemaId)
-            && !string.IsNullOrWhiteSpace(schemaId))
-        {
-            availableSchemas[schemaId] = (JsonObject)schemaObject.DeepClone();
-        }
-    }
-
-    private bool TryResolveSchema(
-        JsonNode schemaNode,
-        Dictionary<string, JsonObject> availableSchemas,
-        out JsonObject schemaObject)
-    {
-        if (schemaNode is JsonObject directSchemaObject)
-        {
-            schemaObject = (JsonObject)directSchemaObject.DeepClone();
-            return true;
-        }
-
-        if (schemaNode is JsonValue schemaValue
-            && schemaValue.TryGetValue<string>(out var schemaId)
-            && availableSchemas.TryGetValue(schemaId, out schemaObject!))
-        {
-            return true;
-        }
-
-        schemaObject = null!;
-        return false;
-    }
-
-    private EntityId? GetEntityId(
-        JsonNode? data)
-    {
-        if (data is not JsonObject entityObject)
+        if (!entityObject.TryGetProperty("$schema", out var schemaElement)
+            || schemaElement.ValueKind != JsonValueKind.String)
         {
             return null;
         }
 
-        if (!entityObject.TryGetPropertyValue("entity-id", out var entityIdNode)
-            || entityIdNode is not JsonValue entityIdValue
-            || !entityIdValue.TryGetValue<string>(out var entityIdText)
-            || !Guid.TryParse(entityIdText, out var entityGuid))
+        return schemaElement.GetString();
+    }
+
+    private async Task<JsonElement?> ResolveSchemaAsync(
+        string schemaReference,
+        CancellationToken cancellationToken)
+    {
+        var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
+            new GetRequest(
+                null,
+                new[] { new EntityName(schemaReference) },
+                null,
+                new Timestamp?[] { null }),
+            cancellationToken);
+
+        foreach (var batch in getResult.Batches)
+        {
+            foreach (var entity in batch.Entities)
+            {
+                if (entity.Data is { } data && data.ValueKind == JsonValueKind.Object)
+                {
+                    return data;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private EntityId? GetEntityId(
+        JsonElement? data)
+    {
+        if (data is not { } value || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!value.TryGetProperty("entity-id", out var entityIdElement)
+            || entityIdElement.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(entityIdElement.GetString(), out var entityGuid))
         {
             return null;
         }

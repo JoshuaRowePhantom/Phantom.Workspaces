@@ -1,20 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.phantom.app/workspaces/data/core/json-schema.json",
-  "type": "object",
-  "properties": {
-    "schema": {
-      "anyOf": [
-        {
-          "$comment": "A reference to a known or external schema",
-          "type": "string",
-          "format": "uri-reference"
-        },
-        {
-          "$comment": "An inline definition of a schema.",
-          "$ref": "https://json-schema.org/draft/2020-12/schema"
-        }
-      ]
+  "entity-id": "{6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e004}",
+  "entity-types": [
+    "json-schema"
+  ],
+  "names": [
+    "https://schemas.phantom.app/workspaces/data/core/json-schema.json"
+  ],
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    },
+    {
+      "$ref": "https://json-schema.org/draft/2020-12/schema"
     }
-  }
+  ]
 }

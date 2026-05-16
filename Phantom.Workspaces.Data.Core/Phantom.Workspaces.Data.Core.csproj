@@ -9,10 +9,12 @@
 
   <ItemGroup>
     <None Remove="JsonSchemas\*.json" />
+    <None Remove="JsonEntities\*.json" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="JsonSchemas\*.json" />
+    <EmbeddedResource Include="JsonEntities\*.json" />
   </ItemGroup>
 
   <ItemGroup>
