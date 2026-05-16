@@ -23,59 +23,22 @@ public sealed class SchemaPopulatorTests
                     error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
     }
 
-    private sealed class CountingDataAccessLayer : IDataAccessLayer
+    private sealed class CountingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
     {
-        private readonly IDataAccessLayer inner;
-
         public CountingDataAccessLayer(
             IDataAccessLayer inner)
+            : base(inner)
         {
-            this.inner = inner;
         }
 
         public int UpdateCallCount { get; private set; }
 
-        public Task<ExportResult> ExportAsync(
-            ExportRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            return this.inner.ExportAsync(request, cancellationToken);
-        }
-
-        public Task<GetResult> GetAsync(
-            GetRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            return this.inner.GetAsync(request, cancellationToken);
-        }
-
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
-            GetChangedEntitiesRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            return this.inner.GetChangedEntitiesAsync(request, cancellationToken);
-        }
-
-        public Task<GetHistoryResult> GetHistoryAsync(
-            GetHistoryRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            return this.inner.GetHistoryAsync(request, cancellationToken);
-        }
-
-        public Task<QueryResult> QueryAsync(
-            QueryRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            return this.inner.QueryAsync(request, cancellationToken);
-        }
-
-        public Task<UpdateResult> UpdateAsync(
+        public override Task<UpdateResult> UpdateAsync(
             UpdateRequest request,
             CancellationToken cancellationToken = default)
         {
             this.UpdateCallCount++;
-            return this.inner.UpdateAsync(request, cancellationToken);
+            return base.UpdateAsync(request, cancellationToken);
         }
     }
 }

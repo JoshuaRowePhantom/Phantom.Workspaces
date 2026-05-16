@@ -10,9 +10,8 @@ namespace Phantom.Workspaces.Data;
 /// <remarks>
 /// This data access layer expects UpdateRequests to have had merge processing already performed.
 /// </remarks>
-public sealed class SchemaValidatingDataAccessLayer : IDataAccessLayer
+public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
 {
-    private readonly IDataAccessLayer underlyingDataAccessLayer;
     private readonly BuiltinSchemaResolver builtinSchemaResolver;
 
     public SchemaValidatingDataAccessLayer(
@@ -26,44 +25,9 @@ public sealed class SchemaValidatingDataAccessLayer : IDataAccessLayer
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer,
         BuiltinSchemaResolver builtinSchemaResolver)
+        : base(underlyingDataAccessLayer)
     {
-        this.underlyingDataAccessLayer = underlyingDataAccessLayer;
         this.builtinSchemaResolver = builtinSchemaResolver;
-    }
-
-    public Task<ExportResult> ExportAsync(
-        ExportRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return this.underlyingDataAccessLayer.ExportAsync(request, cancellationToken);
-    }
-
-    public Task<GetResult> GetAsync(
-        GetRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return this.underlyingDataAccessLayer.GetAsync(request, cancellationToken);
-    }
-
-    public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
-        GetChangedEntitiesRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return this.underlyingDataAccessLayer.GetChangedEntitiesAsync(request, cancellationToken);
-    }
-
-    public Task<GetHistoryResult> GetHistoryAsync(
-        GetHistoryRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return this.underlyingDataAccessLayer.GetHistoryAsync(request, cancellationToken);
-    }
-
-    public Task<QueryResult> QueryAsync(
-        QueryRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return this.underlyingDataAccessLayer.QueryAsync(request, cancellationToken);
     }
 
     public async Task<UpdateResult> UpdateAsync(
@@ -102,7 +66,7 @@ public sealed class SchemaValidatingDataAccessLayer : IDataAccessLayer
             return new UpdateResult(validationResults);
         }
 
-        return await this.underlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
+        return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
     }
 
     private async Task<Dictionary<string, JsonObject>> LoadAvailableSchemasAsync(
@@ -115,7 +79,7 @@ public sealed class SchemaValidatingDataAccessLayer : IDataAccessLayer
             schemas[schemaId] = this.builtinSchemaResolver.GetSchema(schemaId);
         }
 
-        var exportResult = await this.underlyingDataAccessLayer.ExportAsync(
+        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(
             new ExportRequest(null),
             cancellationToken);
 
