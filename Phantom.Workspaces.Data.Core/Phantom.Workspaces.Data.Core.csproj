@@ -7,4 +7,8 @@
     <RootNamespace>Phantom.Workspaces.Data</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Folder Include="JsonSchemas\" />
+  </ItemGroup>
+
 </Project>

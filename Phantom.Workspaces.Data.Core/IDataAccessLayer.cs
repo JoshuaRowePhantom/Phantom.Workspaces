@@ -60,8 +60,8 @@ public sealed record UpdateMetadata(
 public sealed record EntityChange(
     EntityId? EntityId,
     ConcurrencyTag? ConcurrencyTag,
+    // null to remove the entity,
     JsonNode? Data,
-    EntityChangeKind ChangeKind,
     MergeMode MergeMode);
 
 public sealed record UpdateResult(
@@ -302,12 +302,6 @@ public enum FieldComparisonOperator
 }
 
 public readonly record struct QueryResultLimit(int Value);
-
-public enum EntityChangeKind
-{
-    Upsert = 0,
-    Remove = 1,
-}
 
 public enum MergeMode
 {
