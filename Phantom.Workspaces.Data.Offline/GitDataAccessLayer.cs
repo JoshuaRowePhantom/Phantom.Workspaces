@@ -134,7 +134,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
                 return updateResult;
             }
 
-            var signature = new Signature("Phantom Workspaces", "noreply@phantom.workspaces", DateTimeOffset.UtcNow);
+            var signature = new Signature("Phantom Workspaces", "noreply@workspaces.phantom.to", DateTimeOffset.UtcNow);
             var commitMessage = string.IsNullOrWhiteSpace(request.UpdateMetadata.Comment.Text)
                 ? "Update entities"
                 : request.UpdateMetadata.Comment.Text;
