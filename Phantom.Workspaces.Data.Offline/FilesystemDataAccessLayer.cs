@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Data.Offline;
@@ -853,10 +854,13 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
     private sealed record EntityMetadata
     {
+        [JsonPropertyName("concurrencyTag")]
         public required string ConcurrencyTag { get; init; }
 
+        [JsonPropertyName("modifiedTimeUtc")]
         public required DateTimeOffset ModifiedTimeUtc { get; init; }
 
+        [JsonPropertyName("changeId")]
         public required string ChangeId { get; init; }
     }
 }

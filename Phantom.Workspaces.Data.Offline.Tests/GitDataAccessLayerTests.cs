@@ -5,18 +5,27 @@ using Phantom.Workspaces.Data.Tests;
 
 namespace Phantom.Workspaces.Data.Offline.Tests;
 
-public sealed class GitDataAccessLayerWithoutRemoteTests : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
+public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
 {
-    private readonly string repositoryPath = TestPathFactory.CreateIsolatedDirectory("git-without-remote");
+    private readonly string repositoryPath;
 
-    public GitDataAccessLayerWithoutRemoteTests()
+    protected GitDataAccessLayerWithoutRemoteTestsBase(
+        string repositoryPathPrefix)
     {
+        this.repositoryPath = TestPathFactory.CreateIsolatedDirectory(repositoryPathPrefix);
         Repository.Init(this.repositoryPath);
     }
 
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
-        return new GitDataAccessLayer(this.repositoryPath);
+        return this.CreateGitDataAccessLayerForOperation();
+    }
+
+    protected abstract IDataAccessLayer CreateGitDataAccessLayerForOperation();
+
+    protected string GetRepositoryPath()
+    {
+        return this.repositoryPath;
     }
 
     [Fact]
@@ -32,7 +41,7 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : DataAccessLayerNonQue
 
         File.WriteAllText(Path.Combine(this.repositoryPath, "UNINTENDED.txt"), "modified");
 
-        var dataAccessLayer = new GitDataAccessLayer(this.repositoryPath);
+        var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
         var entityId = new EntityId(Guid.Parse("5d34dc34-50be-45ef-b408-1648a761f67a"));
         using var document = System.Text.Json.JsonDocument.Parse(
             $$"""
@@ -77,7 +86,7 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : DataAccessLayerNonQue
     [Fact]
     public async Task UpdateAsync_WhenEntityFileWasManuallyEdited_AppliesOnlyRequestedChange()
     {
-        var dataAccessLayer = new GitDataAccessLayer(this.repositoryPath);
+        var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
         var entityId = new EntityId(Guid.Parse("d86fb75f-ec39-4553-91f5-9f4948516bb0"));
 
         using var initialDocument = System.Text.Json.JsonDocument.Parse(
@@ -162,27 +171,17 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : DataAccessLayerNonQue
     }
 
     [Fact]
-    public async Task RecreateDataAccessLayer_PreservesGitHistory_DirectGitDal()
+    public async Task RecreateDataAccessLayer_PreservesGitHistory()
     {
         var entityId = new EntityId(Guid.Parse("17abec8f-fef5-4162-ae7d-1ecf9454d34f"));
-        var dataAccessLayer = new GitDataAccessLayer(this.repositoryPath);
+        var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
         await VerifyHistoryPreservedAcrossRequestsAsync(dataAccessLayer, entityId, useConcurrencyTag: true);
-    }
-
-    [Fact]
-    public async Task RecreateDataAccessLayer_PreservesGitHistory_PerInvocationWrapper()
-    {
-        var entityId = new EntityId(Guid.Parse("2f6dd442-09ff-4a61-8f2d-b3a892cb6742"));
-        var dataAccessLayer = new PerInvocationDataAccessLayer(
-            () => new GitDataAccessLayer(this.repositoryPath));
-        await VerifyHistoryPreservedAcrossRequestsAsync(dataAccessLayer, entityId, useConcurrencyTag: true, resolveConcurrencyTagFromGet: true);
     }
 
     private static async Task VerifyHistoryPreservedAcrossRequestsAsync(
         IDataAccessLayer dataAccessLayer,
         EntityId entityId,
-        bool useConcurrencyTag,
-        bool resolveConcurrencyTagFromGet = false)
+        bool useConcurrencyTag)
     {
         using var createDocument = System.Text.Json.JsonDocument.Parse(
             $$"""
@@ -213,22 +212,6 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : DataAccessLayerNonQue
                 ],
             });
         var concurrencyTag = Assert.Single(createResult.EntityResults).ConcurrencyTag!.Value;
-        if (resolveConcurrencyTagFromGet)
-        {
-            var getResult = await dataAccessLayer.GetAsync(
-                new GetRequest
-                {
-                    Entities = new[]
-                    {
-                        new GetEntityRequest
-                        {
-                            EntityId = entityId,
-                        },
-                    },
-                });
-            var entitySnapshot = Assert.Single(Assert.Single(getResult.Batches).Entities);
-            concurrencyTag = entitySnapshot.ConcurrencyTag!.Value;
-        }
 
         using var updateDocument = System.Text.Json.JsonDocument.Parse(
             $$"""
@@ -297,12 +280,38 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : DataAccessLayerNonQue
     }
 }
 
-public sealed class GitDataAccessLayerWithRemoteTests : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
+public sealed class GitDataAccessLayerWithoutRemoteTests : GitDataAccessLayerWithoutRemoteTestsBase
+{
+    public GitDataAccessLayerWithoutRemoteTests()
+        : base("git-without-remote")
+    {
+    }
+
+    protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()
+    {
+        return new GitDataAccessLayer(this.GetRepositoryPath());
+    }
+}
+
+public sealed class GitDataAccessLayerWithoutRemotePerInvocationTests : GitDataAccessLayerWithoutRemoteTestsBase
+{
+    public GitDataAccessLayerWithoutRemotePerInvocationTests()
+        : base("git-without-remote-per-invocation")
+    {
+    }
+
+    protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()
+    {
+        return new PerInvocationDataAccessLayer(() => new GitDataAccessLayer(this.GetRepositoryPath()));
+    }
+}
+
+public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
 {
     private readonly string remoteRepositoryPath = TestPathFactory.CreateIsolatedDirectory("git-remote-bare");
     private readonly string localRepositoryPath = TestPathFactory.CreateIsolatedDirectory("git-with-remote");
 
-    public GitDataAccessLayerWithRemoteTests()
+    protected GitDataAccessLayerWithRemoteTestsBase()
     {
         Repository.Init(this.remoteRepositoryPath, isBare: true);
         Repository.Init(this.localRepositoryPath);
@@ -327,13 +336,15 @@ public sealed class GitDataAccessLayerWithRemoteTests : DataAccessLayerNonQueryW
 
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
-        return new GitDataAccessLayer(this.localRepositoryPath);
+        return this.CreateGitDataAccessLayerForOperation();
     }
+
+    protected abstract IDataAccessLayer CreateGitDataAccessLayerForOperation();
 
     [Fact]
     public async Task UpdateAsync_WithRemote_PushesCommitToRemoteRepository()
     {
-        var dataAccessLayer = new GitDataAccessLayer(this.localRepositoryPath);
+        var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
         var entityId = new EntityId(Guid.Parse("13ee2034-e44c-40e3-9b1f-fb6e755e8892"));
 
         using var document = System.Text.Json.JsonDocument.Parse(
@@ -388,7 +399,7 @@ public sealed class GitDataAccessLayerWithRemoteTests : DataAccessLayerNonQueryW
                 null);
         }
 
-        var dataAccessLayer = new GitDataAccessLayer(this.localRepositoryPath);
+        var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
         var entityId = new EntityId(Guid.Parse("5237f2f9-cae6-4cb3-bdb0-6724b2646e50"));
         using var document = System.Text.Json.JsonDocument.Parse(
             $$"""
@@ -429,6 +440,11 @@ public sealed class GitDataAccessLayerWithRemoteTests : DataAccessLayerNonQueryW
         Assert.Contains(
             remoteRepository.Commits,
             commit => string.Equals(commit.MessageShort, "Diverging remote commit", StringComparison.Ordinal));
+    }
+
+    protected string GetLocalRepositoryPath()
+    {
+        return this.localRepositoryPath;
     }
 
     public void Dispose()
@@ -475,6 +491,22 @@ public sealed class GitDataAccessLayerWithRemoteTests : DataAccessLayerNonQueryW
         finally
         {
             TryDeleteDirectory(divergingClonePath);
+        }
+    }
+
+    public sealed class GitDataAccessLayerWithRemoteTests : GitDataAccessLayerWithRemoteTestsBase
+    {
+        protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()
+        {
+            return new GitDataAccessLayer(this.GetLocalRepositoryPath());
+        }
+    }
+
+    public sealed class GitDataAccessLayerWithRemotePerInvocationTests : GitDataAccessLayerWithRemoteTestsBase
+    {
+        protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()
+        {
+            return new PerInvocationDataAccessLayer(() => new GitDataAccessLayer(this.GetLocalRepositoryPath()));
         }
     }
 }

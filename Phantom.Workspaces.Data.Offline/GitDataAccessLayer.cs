@@ -34,11 +34,52 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         return this.filesystemDataAccessLayer.ExportAsync(request, cancellationToken);
     }
 
-    public Task<GetResult> GetAsync(
+    public async Task<GetResult> GetAsync(
         GetRequest request,
         CancellationToken cancellationToken = default)
     {
-        return this.filesystemDataAccessLayer.GetAsync(request, cancellationToken);
+        var result = await this.filesystemDataAccessLayer.GetAsync(request, cancellationToken);
+        if (request.Entities.Count == 0)
+        {
+            return result;
+        }
+
+        var batches = result.Batches.ToList();
+        for (var batchIndex = 0; batchIndex < batches.Count; batchIndex++)
+        {
+            var batch = batches[batchIndex];
+            var entities = batch.Entities.ToList();
+            var existingEntityIds = entities.Select(entity => entity.EntityId).ToHashSet();
+            foreach (var requestedEntity in request.Entities)
+            {
+                if (requestedEntity.EntityId is null || existingEntityIds.Contains(requestedEntity.EntityId.Value))
+                {
+                    continue;
+                }
+
+                var deletedSnapshot = this.TryCreateDeletedSnapshot(
+                    requestedEntity.EntityId.Value,
+                    batch.Timestamp,
+                    cancellationToken);
+                if (deletedSnapshot is null)
+                {
+                    continue;
+                }
+
+                entities.Add(deletedSnapshot);
+                existingEntityIds.Add(requestedEntity.EntityId.Value);
+            }
+
+            batches[batchIndex] = batch with
+            {
+                Entities = entities,
+            };
+        }
+
+        return result with
+        {
+            Batches = batches,
+        };
     }
 
     public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
@@ -215,5 +256,59 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         }
 
         return left.Equals(right);
+    }
+
+    private EntitySnapshot? TryCreateDeletedSnapshot(
+        EntityId entityId,
+        Timestamp? asOfTimestamp,
+        CancellationToken cancellationToken)
+    {
+        using var repository = new Repository(this.RepositoryPath);
+        var relativePath = this.GetEntityRelativePath(entityId);
+        var headBlobId = TryGetBlobObjectId(repository.Head.Tip?.Tree, relativePath);
+        if (headBlobId is not null)
+        {
+            return null;
+        }
+
+        Commit? latestChangeCommit = null;
+        foreach (var commit in repository.Commits)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var currentBlobId = TryGetBlobObjectId(commit.Tree, relativePath);
+            var parentBlobId = TryGetBlobObjectId(commit.Parents.FirstOrDefault()?.Tree, relativePath);
+            if (ObjectIdsEqual(currentBlobId, parentBlobId))
+            {
+                continue;
+            }
+
+            latestChangeCommit ??= commit;
+            if (currentBlobId is null && parentBlobId is not null)
+            {
+                if (asOfTimestamp is not null
+                    && (commit.Committer.When > asOfTimestamp.Value.DateTime
+                        || (commit.Committer.When == asOfTimestamp.Value.DateTime
+                            && string.CompareOrdinal(commit.Sha, asOfTimestamp.Value.ChangeId) > 0)))
+                {
+                    return null;
+                }
+
+                return new EntitySnapshot
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = new ConcurrencyTag(commit.Sha),
+                    ModifiedTime = new Timestamp(commit.Committer.When, commit.Sha),
+                    Data = null,
+                    Relationships = Array.Empty<EntitySnapshot>(),
+                };
+            }
+        }
+
+        if (latestChangeCommit is null)
+        {
+            return null;
+        }
+
+        return null;
     }
 }
