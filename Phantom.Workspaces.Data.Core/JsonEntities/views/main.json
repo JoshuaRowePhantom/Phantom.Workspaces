@@ -14,23 +14,38 @@
   },
   "sub-views": [
     {
-      "view-entity-id": "{6fb49878-7905-4fb8-9032-ec9fd53d6b84}",
+      "view-entity-id": [
+        "views",
+        "inbox"
+      ],
       "disposition": "expanded"
     },
     {
-      "view-entity-id": "{f62a0e43-b374-4f58-8703-1bcba4f4e874}",
+      "view-entity-id": [
+        "views",
+        "workstreams"
+      ],
       "disposition": "expanded"
     },
     {
-      "view-entity-id": "{ec1b5a84-1528-4715-b9df-4e203f73b4f9}",
+      "view-entity-id": [
+        "views",
+        "pull-requests"
+      ],
       "disposition": "expanded"
     },
     {
-      "view-entity-id": "{441f53e1-9a08-422b-bf09-675985d8dfe8}",
+      "view-entity-id": [
+        "views",
+        "sessions"
+      ],
       "disposition": "expanded"
     },
     {
-      "view-entity-id": "{92df3b73-99c5-4cdb-a310-9f63f5f33f4d}",
+      "view-entity-id": [
+        "views",
+        "workspaces"
+      ],
       "disposition": "expanded"
     }
   ]

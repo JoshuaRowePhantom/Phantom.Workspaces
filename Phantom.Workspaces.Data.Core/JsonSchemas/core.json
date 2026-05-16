@@ -6,7 +6,11 @@
     "json-schema"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/core.json"
+    "https://schemas.phantom.app/workspaces/data/core/core.json",
+    [
+      "entity-types",
+      "core"
+    ]
   ],
   "$defs": {
     "entity-id": {
@@ -54,6 +58,16 @@
           "items": {
             "type": "string"
           }
+        }
+      ]
+    },
+    "entity-reference": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/entity-id"
+        },
+        {
+          "$ref": "#/$defs/entity-name"
         }
       ]
     },

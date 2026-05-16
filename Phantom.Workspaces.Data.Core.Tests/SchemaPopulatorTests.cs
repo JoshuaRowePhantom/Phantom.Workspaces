@@ -10,8 +10,8 @@ public sealed class SchemaPopulatorTests
     public async Task Populate_LoadsEmbeddedEntities_IntoInMemoryStore()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
-        var schemaValidatingDataAccessLayer = new SchemaValidatingDataAccessLayer(inMemoryDataAccessLayer);
-        var countingDataAccessLayer = new CountingDataAccessLayer(schemaValidatingDataAccessLayer);
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var countingDataAccessLayer = new CountingDataAccessLayer(validatedDataAccessLayer);
         var schemaPopulator = new SchemaPopulator(countingDataAccessLayer);
 
         var errors = await schemaPopulator.Populate();
@@ -29,8 +29,8 @@ public sealed class SchemaPopulatorTests
     public async Task Populate_CreatesExpectedNumberOfDistinctEntities()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
-        var schemaValidatingDataAccessLayer = new SchemaValidatingDataAccessLayer(inMemoryDataAccessLayer);
-        var schemaPopulator = new SchemaPopulator(schemaValidatingDataAccessLayer);
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
         var errors = await schemaPopulator.Populate();
         Assert.True(
             errors.Count == 0,
@@ -57,6 +57,13 @@ public sealed class SchemaPopulatorTests
             .Distinct()
             .Count();
         Assert.Equal(expectedSchemaEntityCount, distinctEntityIds);
+    }
+
+    private static IDataAccessLayer CreateValidatedDataAccessLayer(
+        IDataAccessLayer underlyingDataAccessLayer)
+    {
+        return new SchemaValidatingDataAccessLayer(
+            new ReferentialIntegrityDataAccessLayer(underlyingDataAccessLayer));
     }
 
     private sealed class CountingDataAccessLayer : BaseUpdateProcessingDataAccessLayer

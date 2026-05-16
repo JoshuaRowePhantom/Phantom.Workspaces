@@ -7,7 +7,11 @@
     "entity-type"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/view.json"
+    "https://schemas.phantom.app/workspaces/data/core/view.json",
+    [
+      "entity-types",
+      "view"
+    ]
   ],
   "allOf": [
     {
@@ -42,7 +46,7 @@
       "type": "object",
       "properties": {
         "view-entity-id": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id",
+          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
           "x-entity-type": "view"
         },
         "disposition": {

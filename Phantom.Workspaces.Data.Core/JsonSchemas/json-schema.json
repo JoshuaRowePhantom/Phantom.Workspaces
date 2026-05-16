@@ -7,7 +7,11 @@
     "entity-type"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/json-schema.json"
+    "https://schemas.phantom.app/workspaces/data/core/json-schema.json",
+    [
+      "entity-types",
+      "json-schema"
+    ]
   ],
   "allOf": [
     {

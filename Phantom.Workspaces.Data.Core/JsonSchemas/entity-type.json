@@ -7,7 +7,11 @@
     "entity-type"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/entity-type.json"
+    "https://schemas.phantom.app/workspaces/data/core/entity-type.json",
+    [
+      "entity-types",
+      "entity-type"
+    ]
   ],
   "schema-entity-id": "https://schemas.phantom.app/workspaces/data/core/json-schema-reference.json"
 }
