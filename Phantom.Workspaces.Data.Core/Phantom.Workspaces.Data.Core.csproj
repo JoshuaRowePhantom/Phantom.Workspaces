@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="JsonPatch.Net" Version="5.0.2" />
     <PackageReference Include="JsonSchema.Net" Version="9.2.1" />
   </ItemGroup>
 

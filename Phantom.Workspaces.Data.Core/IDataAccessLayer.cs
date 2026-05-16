@@ -63,7 +63,7 @@ public sealed record EntityChange(
     ConcurrencyTag? ConcurrencyTag,
     // null to remove the entity,
     JsonElement? Data,
-    MergeMode MergeMode);
+    EntityChangeMode EntityChangeMode);
 
 public sealed record UpdateResult(
     IReadOnlyCollection<EntityUpdateResult> EntityResults);
@@ -322,10 +322,10 @@ public enum FieldComparisonOperator
 
 public readonly record struct QueryResultLimit(int Value);
 
-public enum MergeMode
+public enum EntityChangeMode
 {
-    Merge = 0,
-    Replace = 1,
+    Replace = 0,
+    JsonPatch = 1,
 }
 
 public enum ConcurrencyMatchState

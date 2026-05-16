@@ -257,7 +257,7 @@ public abstract class DataAccessLayerNonQueryTests
             SampleEntityId,
             concurrencyTag,
             this.CreateEntity(name),
-            MergeMode.Replace);
+            EntityChangeMode.Replace);
     }
 
     protected EntityChange CreateDeleteChange(
@@ -267,7 +267,7 @@ public abstract class DataAccessLayerNonQueryTests
             SampleEntityId,
             concurrencyTag,
             null,
-            MergeMode.Replace);
+            EntityChangeMode.Replace);
     }
 
     protected JsonElement CreateEntity(

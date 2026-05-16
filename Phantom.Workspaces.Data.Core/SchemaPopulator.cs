@@ -79,7 +79,7 @@ public sealed class SchemaPopulator
                         entityId,
                         null,
                         entityElement,
-                        MergeMode.Replace));
+                        EntityChangeMode.Replace));
             }
         }
 

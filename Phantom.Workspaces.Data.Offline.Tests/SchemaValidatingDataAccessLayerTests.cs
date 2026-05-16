@@ -118,7 +118,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             entityId,
             null,
             schemaDocument.RootElement.Clone(),
-            MergeMode.Replace);
+            EntityChangeMode.Replace);
     }
 
     private static EntityChange CreateValidatedEntityChange(
@@ -141,6 +141,6 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             entityId,
             null,
             entityDocument.RootElement.Clone(),
-            MergeMode.Replace);
+            EntityChangeMode.Replace);
     }
 }

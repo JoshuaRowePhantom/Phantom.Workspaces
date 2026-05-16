@@ -74,22 +74,11 @@ The system separates UI, agent execution, data access, and external integrations
    - applies adds, updates, and removals of entities, including relationships,
    - runs as a single transaction,
    - applies optimistic concurrency checks to each entity involved,
-   - supports incremental merge-style updates against existing entity data,
+   - supports RFC 6902 JSON Patch updates against existing entity data,
    - explicitly uses `null` to remove items; schemas never permit `null`,
    - accepts a series of changes for complex updates and validates the effective entity data only at the end of the update,
-   - `{"$replace": true}` on an entity or subobject disables merge behavior for that node,
-   - if a field is specified more than once with a `null` value and then a concrete value, the field is treated as non-merged for that update path,
-   - object merge semantics:
-     - merge fields into the existing object,
-     - remove fields when set to `null`,
-     - merge nested objects recursively,
-   - array merge semantics:
-     - append by default,
-     - support `{"$insert-at": index, ...data...}` to insert,
-     - support `{"$remove-at": index}` to remove,
-     - setting an array field to `null` clears it at the object level,
-   - string merge semantics:
-     - support `{"field": {"+=": "value to append"}}` to append to an existing string,
+   - for patch updates, `EntityChange.Data` contains a JSON Patch document (array of patch operations),
+   - patch semantics follow RFC 6902 operations and JSON Pointer path resolution,
    - returns per-entity results including:
      - the new concurrency tag,
      - whether the concurrency tag matched,
