@@ -1,70 +1,219 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+using LibGit2Sharp;
 using Phantom.Workspaces.Data;
 
-namespace Phantom.Workspaces.Data.Offline
+namespace Phantom.Workspaces.Data.Offline;
+
+/// <summary>
+/// Git-backed DAL implementation that persists the working snapshot through filesystem storage
+/// and applies update commits with fetch/reset/edit/commit/push semantics.
+/// </summary>
+public sealed class GitDataAccessLayer : IDataAccessLayer
 {
-    /// <summary>
-    /// This IDataAccessLayer implementation uses Git as its underlying data store. 
-    /// It is expected that the Git repository will be stored on the filesystem, 
-    /// and that the GitDataAccessLayer will use the filesystem to access the Git repository. 
-    /// The GitDataAccessLayer will use Git commands to perform the necessary operations on the Git repository,
-    /// except when working on the latest snapshot, where it will use an underlying FilesystemDataAccessLayer.
-    /// </summary>
-    /// <remarks>
-    /// Each git operation is atomic. This is done by:
-    /// 
-    /// ... do file modifications ...
-    /// git add .
-    /// git commit -m "commit message"
-    /// git push origin main
-    /// 
-    /// If the git push is rejected, the process is retried until it succeeds, with an additional:
-    ///
-    /// git reset --hard HEAD origin/main
-    /// 
-    /// </remarks>
-    public class GitDataAccessLayer : IDataAccessLayer
+    private readonly object updateLock = new();
+    private readonly FilesystemDataAccessLayer filesystemDataAccessLayer;
+
+    public GitDataAccessLayer(
+        string repositoryPath)
     {
-        private FilesystemDataAccessLayer _filesystemDataAccessLayer;
-
-        GitDataAccessLayer(
-            FilesystemDataAccessLayer filesystemDataAccessLayer)
+        this.RepositoryPath = repositoryPath;
+        Directory.CreateDirectory(this.RepositoryPath);
+        if (!Repository.IsValid(this.RepositoryPath))
         {
-            _filesystemDataAccessLayer = filesystemDataAccessLayer;
+            Repository.Init(this.RepositoryPath);
         }
 
-        public string Path => _filesystemDataAccessLayer.Path;
+        this.filesystemDataAccessLayer = new FilesystemDataAccessLayer(this.RepositoryPath);
+    }
 
-        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+    public string RepositoryPath { get; }
+
+    public Task<ExportResult> ExportAsync(
+        ExportRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.filesystemDataAccessLayer.ExportAsync(request, cancellationToken);
+    }
+
+    public Task<GetResult> GetAsync(
+        GetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.filesystemDataAccessLayer.GetAsync(request, cancellationToken);
+    }
+
+    public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
+        GetChangedEntitiesRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.filesystemDataAccessLayer.GetChangedEntitiesAsync(request, cancellationToken);
+    }
+
+    public Task<GetHistoryResult> GetHistoryAsync(
+        GetHistoryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        using var repository = new Repository(this.RepositoryPath);
+        var historyEntries = new List<EntityHistoryEntry>();
+        foreach (var entityId in request.EntityIds)
         {
-            throw new NotImplementedException();
+            cancellationToken.ThrowIfCancellationRequested();
+            var relativePath = this.GetEntityRelativePath(entityId);
+            var updateTimes = new List<Timestamp>();
+            foreach (var commit in repository.Commits)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var currentBlobId = TryGetBlobObjectId(commit.Tree, relativePath);
+                var parentBlobId = TryGetBlobObjectId(commit.Parents.FirstOrDefault()?.Tree, relativePath);
+                if (ObjectIdsEqual(currentBlobId, parentBlobId))
+                {
+                    continue;
+                }
+
+                updateTimes.Add(new Timestamp(commit.Committer.When, commit.Sha));
+            }
+
+            updateTimes.Reverse();
+            historyEntries.Add(
+                new EntityHistoryEntry
+                {
+                    EntityId = entityId,
+                    UpdateTimes = updateTimes,
+                });
         }
 
-        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+        return Task.FromResult(
+            new GetHistoryResult
+            {
+                History = historyEntries,
+            });
+    }
+
+    public Task<QueryResult> QueryAsync(
+        QueryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.filesystemDataAccessLayer.QueryAsync(request, cancellationToken);
+    }
+
+    public async Task<UpdateResult> UpdateAsync(
+        UpdateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (this.updateLock)
         {
-            throw new NotImplementedException();
+            return this.UpdateCoreAsync(request, cancellationToken).GetAwaiter().GetResult();
+        }
+    }
+
+    private async Task<UpdateResult> UpdateCoreAsync(
+        UpdateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var retriedAfterPushFailure = false;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using var repository = new Repository(this.RepositoryPath);
+            var hasRemote = repository.Network.Remotes["origin"] is not null;
+            this.ResetBeforeUpdate(repository, hasRemote);
+
+            var updateResult = await this.filesystemDataAccessLayer.UpdateAsync(request, cancellationToken);
+            if (updateResult.EntityResults.Any(entityResult => entityResult.UpdateState == UpdateState.Failed))
+            {
+                return updateResult;
+            }
+
+            Commands.Stage(repository, "*");
+            if (!repository.RetrieveStatus().IsDirty)
+            {
+                return updateResult;
+            }
+
+            var signature = new Signature("Phantom Workspaces", "noreply@phantom.workspaces", DateTimeOffset.UtcNow);
+            var commitMessage = string.IsNullOrWhiteSpace(request.UpdateMetadata.Comment.Text)
+                ? "Update entities"
+                : request.UpdateMetadata.Comment.Text;
+            repository.Commit(commitMessage, signature, signature);
+
+            if (!hasRemote)
+            {
+                return updateResult;
+            }
+
+            try
+            {
+                repository.Network.Push(repository.Head, new PushOptions());
+                return updateResult;
+            }
+            catch (NonFastForwardException)
+            {
+                if (retriedAfterPushFailure)
+                {
+                    throw new InvalidOperationException(
+                        "Push failed due to non-fast-forward after retry. Fetch the remote branch and retry the update.");
+                }
+
+                retriedAfterPushFailure = true;
+                continue;
+            }
+        }
+    }
+
+    private void ResetBeforeUpdate(
+        Repository repository,
+        bool hasRemote)
+    {
+        var targetCommit = hasRemote
+            ? (repository.Head.TrackedBranch?.Tip
+                ?? repository.Branches[$"origin/{repository.Head.FriendlyName}"]?.Tip
+                ?? repository.Branches["origin/main"]?.Tip
+                ?? repository.Head.Tip)
+            : repository.Head.Tip;
+
+        if (targetCommit is null)
+        {
+            return;
         }
 
-        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+        repository.Reset(ResetMode.Hard, targetCommit);
+    }
+
+    private string GetEntityRelativePath(
+        EntityId entityId)
+    {
+        var absoluteEntityPath = Path.Combine(
+            FilesystemDataAccessLayer.GetEntityDirectory(this.RepositoryPath, entityId),
+            $"{entityId.Value:D}.json");
+        return Path.GetRelativePath(this.RepositoryPath, absoluteEntityPath).Replace('\\', '/');
+    }
+
+    private static ObjectId? TryGetBlobObjectId(
+        Tree? tree,
+        string relativePath)
+    {
+        var target = tree?[relativePath]?.Target;
+        return target?.Id;
+    }
+
+    private static bool ObjectIdsEqual(
+        ObjectId? left,
+        ObjectId? right)
+    {
+        if (left is null && right is null)
         {
-            throw new NotImplementedException();
+            return true;
         }
 
-        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+        if (left is null || right is null)
         {
-            throw new NotImplementedException();
+            return false;
         }
 
-        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
-        }
+        return left.Equals(right);
     }
 }

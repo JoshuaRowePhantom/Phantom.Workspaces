@@ -261,10 +261,10 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 var timestamp = new Timestamp(
                     DateTimeOffset.UtcNow,
                     nextSequenceNumber.ToString());
-                var concurrencyTag = new ConcurrencyTag(Guid.NewGuid().ToString("D"));
                 var entityNames = ExtractEntityNames(change.Data);
                 var entityTypeNames = ExtractEntityTypeNames(change.Data);
                 var data = change.Data is null ? null : JsonDocument.Parse(change.Data.Value.GetRawText());
+                var concurrencyTag = new ConcurrencyTag(nextSequenceNumber.ToString());
                 var previousRelatedEntityIds = ExtractRelatedEntityIds(currentVersion?.Data?.RootElement);
                 var newRelatedEntityIds = ExtractRelatedEntityIds(data?.RootElement);
 

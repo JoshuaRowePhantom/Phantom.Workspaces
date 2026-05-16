@@ -26,20 +26,170 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
         Assert.Same(request, underlyingDataAccessLayer.GetRequest);
     }
 
+    [Fact]
+    public async Task ExportAsync_PassesRequestThroughUnchanged()
+    {
+        var request = new ExportRequest
+        {
+            SnapshotTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+        };
+        var underlyingDataAccessLayer = new RecordingDataAccessLayer();
+        var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
+
+        var result = await dataAccessLayer.ExportAsync(request);
+
+        Assert.Same(request, underlyingDataAccessLayer.ExportRequest);
+        Assert.Same(underlyingDataAccessLayer.ExportResultToReturn, result);
+    }
+
+    [Fact]
+    public async Task GetChangedEntitiesAsync_PassesRequestThroughUnchanged()
+    {
+        var request = new GetChangedEntitiesRequest
+        {
+            EntityIdTimestamps =
+            [
+                new EntityIdTimestamp(
+                    new EntityId(Guid.Parse("3de4f96b-b40a-45ab-b7ec-43c33188bc0f")),
+                    new Timestamp(DateTimeOffset.UtcNow, "2")),
+            ],
+        };
+        var underlyingDataAccessLayer = new RecordingDataAccessLayer();
+        var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
+
+        var result = await dataAccessLayer.GetChangedEntitiesAsync(request);
+
+        Assert.Same(request, underlyingDataAccessLayer.GetChangedEntitiesRequest);
+        Assert.Same(underlyingDataAccessLayer.GetChangedEntitiesResultToReturn, result);
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_PassesRequestThroughUnchanged()
+    {
+        var request = new GetHistoryRequest
+        {
+            EntityIds =
+            [
+                new EntityId(Guid.Parse("6eb7709a-ddce-4c45-8dfd-cc3d3f2d536f")),
+            ],
+        };
+        var underlyingDataAccessLayer = new RecordingDataAccessLayer();
+        var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
+
+        var result = await dataAccessLayer.GetHistoryAsync(request);
+
+        Assert.Same(request, underlyingDataAccessLayer.GetHistoryRequest);
+        Assert.Same(underlyingDataAccessLayer.GetHistoryResultToReturn, result);
+    }
+
+    [Fact]
+    public async Task QueryAsync_PassesRequestThroughUnchanged()
+    {
+        var request = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("query-clause"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNames(["entity"]),
+                    },
+                },
+            ],
+            Timestamps = new Timestamp?[] { null },
+        };
+        var underlyingDataAccessLayer = new RecordingDataAccessLayer();
+        var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
+
+        var result = await dataAccessLayer.QueryAsync(request);
+
+        Assert.Same(request, underlyingDataAccessLayer.QueryRequest);
+        Assert.Same(underlyingDataAccessLayer.QueryResultToReturn, result);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_PassesRequestThroughUnchanged()
+    {
+        var request = new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown
+                {
+                    Text = "update",
+                },
+            },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId(Guid.Parse("8657bc37-f020-4d89-b93d-c7bd1d76ee58")),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        };
+        var underlyingDataAccessLayer = new RecordingDataAccessLayer();
+        var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
+
+        var result = await dataAccessLayer.UpdateAsync(request);
+
+        Assert.Same(request, underlyingDataAccessLayer.UpdateRequest);
+        Assert.Same(underlyingDataAccessLayer.UpdateResultToReturn, result);
+    }
+
     private sealed class RecordingDataAccessLayer : IDataAccessLayer
     {
+        public ExportRequest? ExportRequest { get; private set; }
+
         public GetRequest? GetRequest { get; private set; }
+
+        public GetChangedEntitiesRequest? GetChangedEntitiesRequest { get; private set; }
+
+        public GetHistoryRequest? GetHistoryRequest { get; private set; }
+
+        public QueryRequest? QueryRequest { get; private set; }
+
+        public UpdateRequest? UpdateRequest { get; private set; }
+
+        public ExportResult ExportResultToReturn { get; } = new()
+        {
+            ChangeBatches = Array.Empty<ExportChangeBatch>(),
+            FinalSnapshotTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
+        };
+
+        public GetResult GetResultToReturn { get; } = new()
+        {
+            Batches = Array.Empty<TimestampedEntityBatch>(),
+        };
+
+        public GetChangedEntitiesResult GetChangedEntitiesResultToReturn { get; } = new()
+        {
+            Entities = Array.Empty<ChangedEntitySnapshot>(),
+        };
+
+        public GetHistoryResult GetHistoryResultToReturn { get; } = new()
+        {
+            History = Array.Empty<EntityHistoryEntry>(),
+        };
+
+        public QueryResult QueryResultToReturn { get; } = new()
+        {
+            Batches = Array.Empty<TimestampedQueryBatch>(),
+        };
+
+        public UpdateResult UpdateResultToReturn { get; } = new()
+        {
+            EntityResults = Array.Empty<EntityUpdateResult>(),
+        };
 
         public Task<ExportResult> ExportAsync(
             ExportRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(
-                new ExportResult
-                {
-                    ChangeBatches = Array.Empty<ExportChangeBatch>(),
-                    FinalSnapshotTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
-                });
+            this.ExportRequest = request;
+            return Task.FromResult(this.ExportResultToReturn);
         }
 
         public Task<GetResult> GetAsync(
@@ -47,55 +197,39 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
             CancellationToken cancellationToken = default)
         {
             this.GetRequest = request;
-            return Task.FromResult(
-                new GetResult
-                {
-                    Batches = Array.Empty<TimestampedEntityBatch>(),
-                });
+            return Task.FromResult(this.GetResultToReturn);
         }
 
         public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
             GetChangedEntitiesRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(
-                new GetChangedEntitiesResult
-                {
-                    Entities = Array.Empty<ChangedEntitySnapshot>(),
-                });
+            this.GetChangedEntitiesRequest = request;
+            return Task.FromResult(this.GetChangedEntitiesResultToReturn);
         }
 
         public Task<GetHistoryResult> GetHistoryAsync(
             GetHistoryRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(
-                new GetHistoryResult
-                {
-                    History = Array.Empty<EntityHistoryEntry>(),
-                });
+            this.GetHistoryRequest = request;
+            return Task.FromResult(this.GetHistoryResultToReturn);
         }
 
         public Task<QueryResult> QueryAsync(
             QueryRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(
-                new QueryResult
-                {
-                    Batches = Array.Empty<TimestampedQueryBatch>(),
-                });
+            this.QueryRequest = request;
+            return Task.FromResult(this.QueryResultToReturn);
         }
 
         public Task<UpdateResult> UpdateAsync(
             UpdateRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(
-                new UpdateResult
-                {
-                    EntityResults = Array.Empty<EntityUpdateResult>(),
-                });
+            this.UpdateRequest = request;
+            return Task.FromResult(this.UpdateResultToReturn);
         }
     }
 
