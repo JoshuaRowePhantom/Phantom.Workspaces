@@ -127,6 +127,64 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     }
 
     [Fact]
+    public async Task TypedEntityNameReferences_RequireExistingEntityByName()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var schemaEntityId = new EntityId(Guid.Parse("fd643f35-56f5-45f7-882f-0f8c81f17f13"));
+        var schemaName = "https://schemas.phantom.app/workspaces/tests/typed-reference-by-name.json";
+        var sourceEntityId = new EntityId(Guid.Parse("8dc1ff36-74a1-49d1-b11a-0fc0ef1adf2f"));
+
+        await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create typed name-ref schema"),
+                new[]
+                {
+                    this.CreateTypedNameReferenceSchemaChange(schemaEntityId, schemaName),
+                }));
+
+        var missingTargetResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create view with missing named reference"),
+                new[]
+                {
+                    this.CreateTypedNameReferenceEntityChange(
+                        sourceEntityId,
+                        "source-missing-name",
+                        schemaName,
+                        "missing-target"),
+                }));
+        var missingFailure = Assert.Single(missingTargetResult.EntityResults);
+        Assert.Equal(UpdateState.Failed, missingFailure.UpdateState);
+        Assert.Contains(missingFailure.Errors, static error => error.Message.Contains("does not exist", StringComparison.Ordinal));
+
+        await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create valid named target"),
+                new[]
+                {
+                    this.CreateEntityChange(new EntityId(Guid.Parse("9af2fdce-e592-40a6-9f38-f3c6c9f68aea")), "valid-target", "target-type"),
+                }));
+
+        var validTargetResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create view with valid named reference"),
+                new[]
+                {
+                    this.CreateTypedNameReferenceEntityChange(
+                        sourceEntityId,
+                        "source-valid-name",
+                        schemaName,
+                        "valid-target"),
+                }));
+        Assert.True(
+            validTargetResult.EntityResults.Any(result => result.UpdateState is UpdateState.Added or UpdateState.Updated),
+            string.Join(
+                Environment.NewLine,
+                validTargetResult.EntityResults.SelectMany(entityResult => entityResult.Errors.Select(error => error.Message))));
+        Assert.DoesNotContain(validTargetResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
     public async Task AddEntityAndRelationship_WithMissingReferencedEntities_Fails()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -374,6 +432,61 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "entity-types": ["entity"],
               "names": ["{{name}}"],
               "target-entity-id": "{{targetEntityId.Value:D}}"
+            }
+            """);
+        return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+    }
+
+    private EntityChange CreateTypedNameReferenceSchemaChange(
+        EntityId entityId,
+        string schemaName)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "$id": "{{schemaName}}",
+              "entity-id": "{{entityId.Value:D}}",
+              "entity-types": ["json-schema"],
+              "names": ["{{schemaName}}"],
+              "type": "object",
+              "properties": {
+                "entity-id": {
+                  "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+                },
+                "entity-types": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "names": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
+                  }
+                },
+                "target-entity-name": {
+                  "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
+                  "x-entity-type": "target-type"
+                }
+              }
+            }
+            """);
+        return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+    }
+
+    private EntityChange CreateTypedNameReferenceEntityChange(
+        EntityId entityId,
+        string name,
+        string schemaName,
+        string targetName)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "$schema": "{{schemaName}}",
+              "entity-id": "{{entityId.Value:D}}",
+              "entity-types": ["entity"],
+              "names": ["{{name}}"],
+              "target-entity-name": "{{targetName}}"
             }
             """);
         return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);

@@ -85,6 +85,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         Assert.Equal(ConcurrencyMatchState.NotMatched, failedResult.ConcurrencyMatchState);
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("type", StringComparison.OrdinalIgnoreCase));
 
         var getResult = await dataAccessLayer.GetAsync(
             CreateGetRequest(
@@ -99,6 +100,95 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                 null,
                 new Timestamp?[] { null }));
         Assert.Empty(Assert.Single(getResult.Batches).Entities);
+    }
+
+    [Fact]
+    public async Task Update_WhenValidationFails_ErrorMessageIncludesDiagnosticDetails()
+    {
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new InMemoryDataAccessLayer());
+        var invalidEntityId = new EntityId(Guid.Parse("3f8f4f4d-1664-4f6d-a74a-e5f9f3ccd67f"));
+
+        var updateResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add schema and invalid entity"),
+                new EntityChange[]
+                {
+                    CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName),
+                    CreateEntityChange(
+                        invalidEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "$schema": "{{TestSchemaName}}",
+                              "entity-id": "{{invalidEntityId.Value:D}}",
+                              "names": ["invalid-work-item"],
+                              "title": 123
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var failedResult = Assert.Single(updateResult.EntityResults);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        var error = Assert.Single(
+            failedResult.Errors,
+            static updateError => updateError.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+        Assert.Contains("does not conform to schema", error.Message, StringComparison.Ordinal);
+        Assert.Contains("type", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Update_ValidatesEntitiesByEntityTypeSchema_WhenSchemaPropertyIsMissing()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var viewEntityId = new EntityId(Guid.Parse("9a73ed76-9ef3-4c6a-8adf-d4884bc8bcbf"));
+
+        var invalidResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add invalid view entity by type"),
+                new[]
+                {
+                    CreateEntityChange(
+                        viewEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{viewEntityId.Value:D}}",
+                              "entity-types": ["view"],
+                              "names": [["views","invalid-view-by-type"]],
+                              "sub-views": []
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+        Assert.Equal(UpdateState.Failed, Assert.Single(invalidResult.EntityResults).UpdateState);
+        Assert.Contains(
+            Assert.Single(invalidResult.EntityResults).Errors,
+            error => error.Message.Contains("required", StringComparison.OrdinalIgnoreCase));
+
+        var validResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add valid view entity by type"),
+                new[]
+                {
+                    CreateEntityChange(
+                        viewEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{viewEntityId.Value:D}}",
+                              "entity-types": ["view"],
+                              "names": [["views","valid-view-by-type"]],
+                              "title": { "default": "Valid View" },
+                              "sub-views": []
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+        Assert.DoesNotContain(validResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
     }
 
     private static EntityChange CreateSchemaEntityChange(

@@ -8,11 +8,10 @@ namespace Phantom.Workspaces.Data;
 /// Performs referential integrity validation on data being updated on an underlying IDataAccessLayer.
 /// This layer also manages synthetic "reference" relationship entities for object-property references.
 /// </summary>
-public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAccessLayer
+public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLayer
 {
     private const string ReferenceRelationshipType = "reference";
     private const string RelationshipType = "relationship";
-    private const string JsonSchemaType = "json-schema";
 
     public ReferentialIntegrityDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -35,7 +34,7 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             };
         }
 
-        return await this.UnderlyingDataAccessLayer.UpdateAsync(
+        return await base.UpdateAsync(
             new UpdateRequest
             {
                 UpdateMetadata = request.UpdateMetadata,
@@ -95,9 +94,16 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         this.ApplyManagedReferenceRelationshipChanges(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
         this.ApplyRelationshipDeleteCascade(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
         await this.ApplyDuplicateRelationshipCoalescingAsync(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, cancellationToken);
+        var requestSchemasByName = this.GetSchemasFromRequest(
+            new UpdateRequest
+            {
+                UpdateMetadata = request.UpdateMetadata,
+                Changes = changesByEntityId.Values.ToArray(),
+            });
 
         var validationFailures = await this.ValidateReferencesAsync(
             changesByEntityId,
+            requestSchemasByName,
             currentSnapshotsById,
             cancellationToken);
         if (validationFailures.Count > 0)
@@ -383,11 +389,12 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
 
     private async Task<IReadOnlyCollection<EntityUpdateResult>> ValidateReferencesAsync(
         IReadOnlyDictionary<EntityId, EntityChange> changesByEntityId,
+        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
         IReadOnlyDictionary<EntityId, EntitySnapshot> currentSnapshotsById,
         CancellationToken cancellationToken)
     {
-        var requestSchemaEntitiesByName = this.GetSchemaEntitiesFromChanges(changesByEntityId.Values);
         var referencedEntityIds = new HashSet<EntityId>();
+        var referencedEntityNames = new HashSet<string>(StringComparer.Ordinal);
         var referencesBySource = new Dictionary<EntityId, List<ReferenceConstraint>>();
 
         foreach (var pair in changesByEntityId)
@@ -399,14 +406,22 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
 
             var sourceEntityId = pair.Key;
             var sourceData = pair.Value.Data.Value;
-            var references = this.ExtractReferences(
+            var references = await this.ExtractReferencesAsync(
                 sourceData,
                 requestSchemaEntitiesByName,
                 cancellationToken);
             referencesBySource[sourceEntityId] = references;
             foreach (var reference in references)
             {
-                referencedEntityIds.Add(reference.TargetEntityId);
+                if (reference.TargetEntityId is { } targetEntityId)
+                {
+                    referencedEntityIds.Add(targetEntityId);
+                }
+
+                if (!string.IsNullOrWhiteSpace(reference.TargetEntityName))
+                {
+                    referencedEntityNames.Add(reference.TargetEntityName);
+                }
             }
         }
 
@@ -417,6 +432,16 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             remainingReferencedIds,
             includeRelationships: false,
             cancellationToken);
+        var requestEntitiesByName = this.GetEntitiesByName(changesByEntityId.Values
+            .Where(static change => change.Data is { ValueKind: JsonValueKind.Object })
+            .Select(static change => change.Data!.Value));
+        var currentChangedEntitiesByName = this.GetEntitiesByName(currentSnapshotsById.Values
+            .Where(static snapshot => snapshot.Data is { ValueKind: JsonValueKind.Object })
+            .Select(static snapshot => snapshot.Data!.Value));
+        var unresolvedReferencedNames = referencedEntityNames
+            .Where(name => !requestEntitiesByName.ContainsKey(name) && !currentChangedEntitiesByName.ContainsKey(name))
+            .ToArray();
+        var currentReferencedEntitiesByName = await this.GetCurrentEntitiesByNameAsync(unresolvedReferencedNames, cancellationToken);
 
         var failures = new List<EntityUpdateResult>();
         foreach (var pair in referencesBySource)
@@ -427,17 +452,19 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
 
             foreach (var reference in pair.Value)
             {
-                var targetExists = this.TryResolveEffectiveEntity(
-                    reference.TargetEntityId,
+                var targetCandidates = this.ResolveEffectiveEntities(
+                    reference,
                     changesByEntityId,
                     currentReferencedSnapshotsById,
-                    out var targetData);
-                if (!targetExists || targetData is null)
+                    requestEntitiesByName,
+                    currentChangedEntitiesByName,
+                    currentReferencedEntitiesByName);
+                if (targetCandidates.Count == 0)
                 {
                     errors.Add(
                         new UpdateError
                         {
-                            Message = $"Referenced entity '{reference.TargetEntityId.Value:D}' does not exist.",
+                            Message = $"Referenced entity '{this.GetReferenceDisplay(reference)}' does not exist.",
                             RelatedEntityId = reference.TargetEntityId,
                         });
                     continue;
@@ -448,13 +475,18 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                     continue;
                 }
 
-                var targetTypes = this.GetEntityTypeNames(targetData.Value);
-                if (!reference.RequiredTypes.Any(targetTypes.Contains))
+                var hasMatchingType = targetCandidates.Any(
+                    candidate =>
+                    {
+                        var targetTypes = this.GetEntityTypeNames(candidate);
+                        return reference.RequiredTypes.Any(targetTypes.Contains);
+                    });
+                if (!hasMatchingType)
                 {
                     errors.Add(
                         new UpdateError
                         {
-                            Message = $"Referenced entity '{reference.TargetEntityId.Value:D}' does not match required types: {string.Join(", ", reference.RequiredTypes)}.",
+                            Message = $"Referenced entity '{this.GetReferenceDisplay(reference)}' does not match required types: {string.Join(", ", reference.RequiredTypes)}.",
                             RelatedEntityId = reference.TargetEntityId,
                         });
                 }
@@ -482,29 +514,88 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         return failures;
     }
 
-    private bool TryResolveEffectiveEntity(
-        EntityId entityId,
+    private IReadOnlyCollection<JsonElement> ResolveEffectiveEntities(
+        ReferenceConstraint reference,
         IReadOnlyDictionary<EntityId, EntityChange> changesByEntityId,
         IReadOnlyDictionary<EntityId, EntitySnapshot> currentSnapshotsById,
-        out JsonElement? data)
+        IReadOnlyDictionary<string, List<JsonElement>> requestEntitiesByName,
+        IReadOnlyDictionary<string, List<JsonElement>> currentChangedEntitiesByName,
+        IReadOnlyDictionary<string, List<JsonElement>> currentReferencedEntitiesByName)
     {
-        if (changesByEntityId.TryGetValue(entityId, out var requestedChange))
+        if (reference.TargetEntityId is { } entityId)
         {
-            data = requestedChange.Data;
-            return requestedChange.Data is not null;
+            if (changesByEntityId.TryGetValue(entityId, out var requestedChange))
+            {
+                return requestedChange.Data is { ValueKind: JsonValueKind.Object }
+                    ? new[] { requestedChange.Data.Value }
+                    : Array.Empty<JsonElement>();
+            }
+
+            if (currentSnapshotsById.TryGetValue(entityId, out var currentSnapshot)
+                && currentSnapshot.Data is { ValueKind: JsonValueKind.Object })
+            {
+                return new[] { currentSnapshot.Data.Value };
+            }
+
+            return Array.Empty<JsonElement>();
         }
 
-        if (currentSnapshotsById.TryGetValue(entityId, out var currentSnapshot))
+        if (string.IsNullOrWhiteSpace(reference.TargetEntityName))
         {
-            data = currentSnapshot.Data;
-            return currentSnapshot.Data is not null;
+            return Array.Empty<JsonElement>();
         }
 
-        data = null;
-        return false;
+        if (requestEntitiesByName.TryGetValue(reference.TargetEntityName, out var requestedTargets))
+        {
+            return requestedTargets;
+        }
+
+        if (currentChangedEntitiesByName.TryGetValue(reference.TargetEntityName, out var currentChangedTargets))
+        {
+            return currentChangedTargets;
+        }
+
+        if (currentReferencedEntitiesByName.TryGetValue(reference.TargetEntityName, out var currentTargets))
+        {
+            return currentTargets;
+        }
+
+        if (reference.RequiredTypes is not null
+            && reference.RequiredTypes.Contains("entity-type", StringComparer.Ordinal)
+            && !reference.TargetEntityName.StartsWith("[", StringComparison.Ordinal))
+        {
+            var prefixedEntityTypeName = JsonSerializer.Serialize(new[] { "entity-types", reference.TargetEntityName });
+            if (requestEntitiesByName.TryGetValue(prefixedEntityTypeName, out var requestedPrefixedTargets))
+            {
+                return requestedPrefixedTargets;
+            }
+
+            if (currentChangedEntitiesByName.TryGetValue(prefixedEntityTypeName, out var currentChangedPrefixedTargets))
+            {
+                return currentChangedPrefixedTargets;
+            }
+
+            if (currentReferencedEntitiesByName.TryGetValue(prefixedEntityTypeName, out var currentPrefixedTargets))
+            {
+                return currentPrefixedTargets;
+            }
+        }
+
+        return Array.Empty<JsonElement>();
     }
 
-    private List<ReferenceConstraint> ExtractReferences(
+    private string GetReferenceDisplay(
+        ReferenceConstraint reference)
+    {
+        if (reference.TargetEntityId is { } targetEntityId)
+        {
+            return targetEntityId.Value.ToString("D");
+        }
+
+        return reference.TargetEntityName ?? string.Empty;
+    }
+
+    private async Task<List<ReferenceConstraint>> ExtractReferencesAsync(
         JsonElement entityData,
         IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
         CancellationToken cancellationToken)
@@ -512,9 +603,13 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         var references = new List<ReferenceConstraint>();
         references.AddRange(this.ExtractRelationshipParticipantReferences(entityData));
         references.AddRange(this.ExtractHeuristicEntityIdReferences(entityData));
-        references.AddRange(this.ExtractSchemaTypedReferences(entityData, requestSchemaEntitiesByName, cancellationToken));
+        references.AddRange(await this.ExtractSchemaTypedReferencesAsync(entityData, requestSchemaEntitiesByName, cancellationToken));
         return references
-            .GroupBy(static reference => (reference.TargetEntityId, Key: string.Join("|", reference.RequiredTypes ?? Array.Empty<string>())))
+            .GroupBy(
+                static reference => (
+                    reference.TargetEntityId,
+                    reference.TargetEntityName ?? string.Empty,
+                    Key: string.Join("|", reference.RequiredTypes ?? Array.Empty<string>())))
             .Select(static group => group.First())
             .ToList();
     }
@@ -528,7 +623,7 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         }
 
         return this.GetRelationshipParticipantEntityIds(entityData)
-            .Select(static entityId => new ReferenceConstraint { TargetEntityId = entityId })
+            .Select(static entityId => new ReferenceConstraint { TargetEntityId = entityId, TargetEntityName = null })
             .ToArray();
     }
 
@@ -597,36 +692,38 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             new ReferenceConstraint
             {
                 TargetEntityId = new EntityId(targetEntityGuid),
+                TargetEntityName = null,
             });
     }
 
-    private IReadOnlyCollection<ReferenceConstraint> ExtractSchemaTypedReferences(
+    private async Task<IReadOnlyCollection<ReferenceConstraint>> ExtractSchemaTypedReferencesAsync(
         JsonElement entityData,
         IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
         CancellationToken cancellationToken)
     {
-        if (!entityData.TryGetProperty("$schema", out var schemaProperty)
-            || schemaProperty.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(schemaProperty.GetString()))
-        {
-            return Array.Empty<ReferenceConstraint>();
-        }
-
-        var rootSchemaName = schemaProperty.GetString()!;
-        var rootSchema = this.ResolveSchemaByName(rootSchemaName, requestSchemaEntitiesByName, cancellationToken);
-        if (rootSchema is null)
+        var applicableSchemas = await this.ResolveApplicableSchemasAsync(entityData, requestSchemaEntitiesByName, cancellationToken);
+        if (applicableSchemas.Count == 0)
         {
             return Array.Empty<ReferenceConstraint>();
         }
 
         var references = new List<ReferenceConstraint>();
-        this.CollectSchemaTypedReferences(
-            entityData,
-            rootSchema.Value,
-            rootSchemaName,
-            requestSchemaEntitiesByName,
-            references,
-            cancellationToken);
+        foreach (var applicableSchema in applicableSchemas)
+        {
+            if (applicableSchema.SchemaEntity is not { ValueKind: JsonValueKind.Object } schemaEntity)
+            {
+                continue;
+            }
+
+            this.CollectSchemaTypedReferences(
+                entityData,
+                schemaEntity,
+                applicableSchema.SchemaReference,
+                requestSchemaEntitiesByName,
+                references,
+                cancellationToken);
+        }
+
         return references;
     }
 
@@ -651,30 +748,7 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             .ToArray();
         if (requiredTypes.Length > 0)
         {
-            if (value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var targetEntityGuid))
-            {
-                references.Add(
-                    new ReferenceConstraint
-                    {
-                        TargetEntityId = new EntityId(targetEntityGuid),
-                        RequiredTypes = requiredTypes,
-                    });
-            }
-            else if (value.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in value.EnumerateArray())
-                {
-                    if (item.ValueKind == JsonValueKind.String && Guid.TryParse(item.GetString(), out var targetGuid))
-                    {
-                        references.Add(
-                            new ReferenceConstraint
-                            {
-                                TargetEntityId = new EntityId(targetGuid),
-                                RequiredTypes = requiredTypes,
-                            });
-                    }
-                }
-            }
+            this.AddSchemaTypedReferencesFromValue(value, resolvedSchema.Value, requiredTypes, references);
         }
 
         if (value.ValueKind == JsonValueKind.Object
@@ -734,6 +808,123 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         }
     }
 
+    private void AddSchemaTypedReferencesFromValue(
+        JsonElement value,
+        JsonElement resolvedSchema,
+        IReadOnlyCollection<string> requiredTypes,
+        ICollection<ReferenceConstraint> references)
+    {
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            var valueText = value.GetString();
+            if (string.IsNullOrWhiteSpace(valueText))
+            {
+                return;
+            }
+
+            if (Guid.TryParse(valueText, out var targetEntityGuid))
+            {
+                references.Add(
+                    new ReferenceConstraint
+                    {
+                        TargetEntityId = new EntityId(targetEntityGuid),
+                        TargetEntityName = null,
+                        RequiredTypes = requiredTypes,
+                    });
+            }
+            else
+            {
+                references.Add(
+                    new ReferenceConstraint
+                    {
+                        TargetEntityId = null,
+                        TargetEntityName = valueText,
+                        RequiredTypes = requiredTypes,
+                    });
+            }
+
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var isCollectionSchema = this.IsCollectionReferenceSchema(resolvedSchema);
+        if (!isCollectionSchema && this.TryGetCanonicalNameFromArray(value, out var canonicalName))
+        {
+            references.Add(
+                new ReferenceConstraint
+                {
+                    TargetEntityId = null,
+                    TargetEntityName = canonicalName,
+                    RequiredTypes = requiredTypes,
+                });
+            return;
+        }
+
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var itemText = item.GetString();
+                if (string.IsNullOrWhiteSpace(itemText))
+                {
+                    continue;
+                }
+
+                if (Guid.TryParse(itemText, out var itemGuid))
+                {
+                    references.Add(
+                        new ReferenceConstraint
+                        {
+                            TargetEntityId = new EntityId(itemGuid),
+                            TargetEntityName = null,
+                            RequiredTypes = requiredTypes,
+                        });
+                }
+                else
+                {
+                    references.Add(
+                        new ReferenceConstraint
+                        {
+                            TargetEntityId = null,
+                            TargetEntityName = itemText,
+                            RequiredTypes = requiredTypes,
+                        });
+                }
+
+                continue;
+            }
+
+            if (item.ValueKind == JsonValueKind.Array
+                && this.TryGetCanonicalNameFromArray(item, out var nestedCanonicalName))
+            {
+                references.Add(
+                    new ReferenceConstraint
+                    {
+                        TargetEntityId = null,
+                        TargetEntityName = nestedCanonicalName,
+                        RequiredTypes = requiredTypes,
+                    });
+            }
+        }
+    }
+
+    private bool IsCollectionReferenceSchema(
+        JsonElement schema)
+    {
+        if (schema.TryGetProperty("type", out var typeElement)
+            && typeElement.ValueKind == JsonValueKind.String
+            && string.Equals(typeElement.GetString(), "array", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private JsonElement? ResolveSchemaNode(
         JsonElement schema,
         string schemaName,
@@ -765,7 +956,9 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             referencedSchemaName = schemaName;
         }
 
-        var referencedSchema = this.ResolveSchemaByName(referencedSchemaName, requestSchemaEntitiesByName, cancellationToken);
+        var referencedSchema = this.ResolveSchemaAsync(referencedSchemaName, requestSchemaEntitiesByName, cancellationToken)
+            .GetAwaiter()
+            .GetResult();
         if (referencedSchema is null)
         {
             return null;
@@ -846,91 +1039,67 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             .ToArray();
     }
 
-    private JsonElement? ResolveSchemaByName(
-        string schemaName,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
-        CancellationToken cancellationToken)
+    private IReadOnlyDictionary<string, List<JsonElement>> GetEntitiesByName(
+        IEnumerable<JsonElement> entities)
     {
-        if (requestSchemaEntitiesByName.TryGetValue(schemaName, out var requestSchema))
+        var entitiesByName = new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
+        foreach (var entityData in entities)
         {
-            return requestSchema;
+            foreach (var name in this.GetEntityNames(entityData))
+            {
+                if (!entitiesByName.TryGetValue(name, out var namedEntities))
+                {
+                    namedEntities = new List<JsonElement>();
+                    entitiesByName[name] = namedEntities;
+                }
+
+                namedEntities.Add(entityData);
+            }
         }
 
-        var getResult = this.UnderlyingDataAccessLayer.GetAsync(
-            new GetRequest
-            {
-                Entities =
-                [
-                    new GetEntityRequest
-                    {
-                        EntityName = new EntityName(schemaName),
-                    },
-                ],
-                Timestamps = new Timestamp?[] { null },
-            },
-            cancellationToken).GetAwaiter().GetResult();
-
-        return getResult.Batches
-            .SelectMany(static batch => batch.Entities)
-            .Select(static entity => entity.Data)
-            .FirstOrDefault(static data => data is { ValueKind: JsonValueKind.Object });
+        return entitiesByName;
     }
 
-    private IReadOnlyDictionary<string, JsonElement> GetSchemaEntitiesFromChanges(
-        IEnumerable<EntityChange> changes)
+    private async Task<IReadOnlyDictionary<string, List<JsonElement>>> GetCurrentEntitiesByNameAsync(
+        IReadOnlyCollection<string> names,
+        CancellationToken cancellationToken)
     {
-        var schemas = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var change in changes)
+        if (names.Count == 0)
         {
-            if (change.Data is not { } data
-                || !this.IsSchemaEntity(data))
+            return new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
+        }
+
+        var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
+        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+        foreach (var batch in exportResult.ChangeBatches)
+        {
+            foreach (var entity in batch.Entities)
+            {
+                latestEntitiesById[entity.EntityId] = entity.Data;
+            }
+        }
+
+        var entitiesByName = new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
+        foreach (var latestEntityData in latestEntitiesById.Values)
+        {
+            if (latestEntityData is not { ValueKind: JsonValueKind.Object } entityData)
             {
                 continue;
             }
 
-            foreach (var name in this.GetEntityNames(data))
+            foreach (var name in this.GetEntityNames(entityData))
             {
-                schemas[name] = data;
+                if (!entitiesByName.TryGetValue(name, out var namedEntities))
+                {
+                    namedEntities = new List<JsonElement>();
+                    entitiesByName[name] = namedEntities;
+                }
+
+                namedEntities.Add(entityData);
             }
         }
 
-        return schemas;
-    }
-
-    private bool IsSchemaEntity(
-        JsonElement entityData)
-    {
-        return this.GetEntityTypeNames(entityData).Contains(JsonSchemaType);
-    }
-
-    private IReadOnlyCollection<string> GetEntityNames(
-        JsonElement entityData)
-    {
-        if (!entityData.TryGetProperty("names", out var namesElement)
-            || namesElement.ValueKind != JsonValueKind.Array)
-        {
-            return Array.Empty<string>();
-        }
-
-        return namesElement.EnumerateArray()
-            .Where(static name => name.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(name.GetString()))
-            .Select(static name => name.GetString()!)
-            .ToArray();
-    }
-
-    private HashSet<string> GetEntityTypeNames(
-        JsonElement entityData)
-    {
-        if (!entityData.TryGetProperty("entity-types", out var typeNames)
-            || typeNames.ValueKind != JsonValueKind.Array)
-        {
-            return new HashSet<string>(StringComparer.Ordinal);
-        }
-
-        return typeNames.EnumerateArray()
-            .Where(static typeName => typeName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(typeName.GetString()))
-            .Select(static typeName => typeName.GetString()!)
-            .ToHashSet(StringComparer.Ordinal);
+        return entitiesByName;
     }
 
     private IReadOnlyDictionary<EntityId, int> GetManagedReferenceCounts(
@@ -1165,7 +1334,9 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
 
     private sealed record ReferenceConstraint
     {
-        public required EntityId TargetEntityId { get; init; }
+        public EntityId? TargetEntityId { get; init; }
+
+        public string? TargetEntityName { get; init; }
 
         public IReadOnlyCollection<string>? RequiredTypes { get; init; }
     }
