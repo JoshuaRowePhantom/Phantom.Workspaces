@@ -7,17 +7,17 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
     [Fact]
     public async Task GetAsync_PassesRequestThroughUnchanged()
     {
-        var request = new GetRequest(
-            new[]
-            {
-                new GetEntityRequest(
-                    new EntityId(Guid.Parse("5d1d7fa5-7a74-4b0d-8aef-6b6e8d8f9d8d")),
-                    null,
-                    null,
-                    null),
-            },
-            null,
-            new Timestamp?[] { null });
+        var request = new GetRequest
+        {
+            Entities =
+            [
+                new GetEntityRequest
+                {
+                    EntityId = new EntityId(Guid.Parse("5d1d7fa5-7a74-4b0d-8aef-6b6e8d8f9d8d")),
+                },
+            ],
+            Timestamps = new Timestamp?[] { null },
+        };
         var underlyingDataAccessLayer = new RecordingDataAccessLayer();
         var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
 
@@ -34,7 +34,12 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
             ExportRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new ExportResult(Array.Empty<ExportChangeBatch>(), new Timestamp(DateTimeOffset.UnixEpoch, "0")));
+            return Task.FromResult(
+                new ExportResult
+                {
+                    ChangeBatches = Array.Empty<ExportChangeBatch>(),
+                    FinalSnapshotTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
+                });
         }
 
         public Task<GetResult> GetAsync(
@@ -42,35 +47,55 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
             CancellationToken cancellationToken = default)
         {
             this.GetRequest = request;
-            return Task.FromResult(new GetResult(Array.Empty<TimestampedEntityBatch>()));
+            return Task.FromResult(
+                new GetResult
+                {
+                    Batches = Array.Empty<TimestampedEntityBatch>(),
+                });
         }
 
         public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
             GetChangedEntitiesRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new GetChangedEntitiesResult(Array.Empty<ChangedEntitySnapshot>()));
+            return Task.FromResult(
+                new GetChangedEntitiesResult
+                {
+                    Entities = Array.Empty<ChangedEntitySnapshot>(),
+                });
         }
 
         public Task<GetHistoryResult> GetHistoryAsync(
             GetHistoryRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new GetHistoryResult(Array.Empty<EntityHistoryEntry>()));
+            return Task.FromResult(
+                new GetHistoryResult
+                {
+                    History = Array.Empty<EntityHistoryEntry>(),
+                });
         }
 
         public Task<QueryResult> QueryAsync(
             QueryRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new QueryResult(Array.Empty<TimestampedQueryBatch>()));
+            return Task.FromResult(
+                new QueryResult
+                {
+                    Batches = Array.Empty<TimestampedQueryBatch>(),
+                });
         }
 
         public Task<UpdateResult> UpdateAsync(
             UpdateRequest request,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new UpdateResult(Array.Empty<EntityUpdateResult>()));
+            return Task.FromResult(
+                new UpdateResult
+                {
+                    EntityResults = Array.Empty<EntityUpdateResult>(),
+                });
         }
     }
 

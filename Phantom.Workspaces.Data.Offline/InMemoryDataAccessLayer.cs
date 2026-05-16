@@ -69,25 +69,38 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         return Volatile.Read(ref this.currentState);
     }
 
-    private sealed record EntityVersion(
-        Timestamp Timestamp,
-        ConcurrencyTag ConcurrencyTag,
-        JsonDocument? Data,
-        IReadOnlyCollection<EntityName> EntityNames,
-        IReadOnlyCollection<string> EntityTypeNames);
-
-    private sealed record EntityState(
-        ImmutableList<EntityVersion> Versions,
-        ImmutableHashSet<EntityId> ParticipatingRelationshipIds)
+    private sealed record EntityVersion
     {
-        public static EntityState Empty { get; } = new(
-            ImmutableList<EntityVersion>.Empty,
-            ImmutableHashSet<EntityId>.Empty);
+        public required Timestamp Timestamp { get; init; }
+
+        public required ConcurrencyTag ConcurrencyTag { get; init; }
+
+        public JsonDocument? Data { get; init; }
+
+        public required IReadOnlyCollection<EntityName> EntityNames { get; init; }
+
+        public required IReadOnlyCollection<string> EntityTypeNames { get; init; }
     }
 
-    private sealed record UpdateOutcome(
-        State NextState,
-        UpdateResult UpdateResult);
+    private sealed record EntityState
+    {
+        public required ImmutableList<EntityVersion> Versions { get; init; }
+
+        public required ImmutableHashSet<EntityId> ParticipatingRelationshipIds { get; init; }
+
+        public static EntityState Empty { get; } = new()
+        {
+            Versions = ImmutableList<EntityVersion>.Empty,
+            ParticipatingRelationshipIds = ImmutableHashSet<EntityId>.Empty,
+        };
+    }
+
+    private sealed record UpdateOutcome
+    {
+        public required State NextState { get; init; }
+
+        public required UpdateResult UpdateResult { get; init; }
+    }
 
     private sealed class State
     {
@@ -161,17 +174,20 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 if (entityId is null)
                 {
                     updateResults.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            default,
-                            default,
-                            null,
-                            ConcurrencyMatchState.NotMatched,
-                            null,
-                            new[]
-                            {
-                                new UpdateError("Entity data must include an entity-id.", null),
-                            }));
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = default,
+                            ResultingEntityId = default,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = "Entity data must include an entity-id.",
+                                },
+                            ],
+                        });
                     continue;
                 }
 
@@ -182,22 +198,30 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     && change.ConcurrencyTag is null)
                 {
                     updateResults.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            entityId.Value,
-                            entityId.Value,
-                            currentVersion.ConcurrencyTag,
-                            ConcurrencyMatchState.NotMatched,
-                            new EntitySnapshot(
-                                entityId.Value,
-                                currentVersion.ConcurrencyTag,
-                                currentVersion.Timestamp,
-                                currentVersion.Data?.RootElement,
-                                Array.Empty<EntitySnapshot>()),
-                            new[]
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = currentVersion.ConcurrencyTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            CurrentEntity = new EntitySnapshot
                             {
-                                new UpdateError("Concurrency tag is required.", entityId.Value),
-                            }));
+                                EntityId = entityId.Value,
+                                ConcurrencyTag = currentVersion.ConcurrencyTag,
+                                ModifiedTime = currentVersion.Timestamp,
+                                Data = currentVersion.Data?.RootElement,
+                                Relationships = Array.Empty<EntitySnapshot>(),
+                            },
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = "Concurrency tag is required.",
+                                    RelatedEntityId = entityId.Value,
+                                },
+                            ],
+                        });
                     continue;
                 }
 
@@ -206,22 +230,30 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     && currentVersion.ConcurrencyTag != change.ConcurrencyTag.Value)
                 {
                     updateResults.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            entityId.Value,
-                            entityId.Value,
-                            currentVersion.ConcurrencyTag,
-                            ConcurrencyMatchState.NotMatched,
-                            new EntitySnapshot(
-                                entityId.Value,
-                                currentVersion.ConcurrencyTag,
-                                currentVersion.Timestamp,
-                                currentVersion.Data?.RootElement,
-                                Array.Empty<EntitySnapshot>()),
-                            new[]
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = currentVersion.ConcurrencyTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            CurrentEntity = new EntitySnapshot
                             {
-                                new UpdateError("Concurrency tag does not match.", entityId.Value),
-                            }));
+                                EntityId = entityId.Value,
+                                ConcurrencyTag = currentVersion.ConcurrencyTag,
+                                ModifiedTime = currentVersion.Timestamp,
+                                Data = currentVersion.Data?.RootElement,
+                                Relationships = Array.Empty<EntitySnapshot>(),
+                            },
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = "Concurrency tag does not match.",
+                                    RelatedEntityId = entityId.Value,
+                                },
+                            ],
+                        });
                     continue;
                 }
 
@@ -237,12 +269,14 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 var newRelatedEntityIds = ExtractRelatedEntityIds(data?.RootElement);
 
                 entityBuilder.AddVersion(
-                    new EntityVersion(
-                        timestamp,
-                        concurrencyTag,
-                        data,
-                        entityNames,
-                        entityTypeNames));
+                    new EntityVersion
+                    {
+                        Timestamp = timestamp,
+                        ConcurrencyTag = concurrencyTag,
+                        Data = data,
+                        EntityNames = entityNames,
+                        EntityTypeNames = entityTypeNames,
+                    });
 
                 if (newRelatedEntityIds.Count > 0 || previousRelatedEntityIds.Count > 0)
                 {
@@ -254,19 +288,23 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 }
 
                 updateResults.Add(
-                    new EntityUpdateResult(
-                        change.Data is null ? UpdateState.Removed : currentVersion is null ? UpdateState.Added : UpdateState.Updated,
-                        entityId.Value,
-                        entityId.Value,
-                        concurrencyTag,
-                        ConcurrencyMatchState.Matched,
-                        new EntitySnapshot(
-                            entityId.Value,
-                            concurrencyTag,
-                            timestamp,
-                            data?.RootElement,
-                            Array.Empty<EntitySnapshot>()),
-                        Array.Empty<UpdateError>()));
+                    new EntityUpdateResult
+                    {
+                        UpdateState = change.Data is null ? UpdateState.Removed : currentVersion is null ? UpdateState.Added : UpdateState.Updated,
+                        RequestedEntityId = entityId.Value,
+                        ResultingEntityId = entityId.Value,
+                        ConcurrencyTag = concurrencyTag,
+                        ConcurrencyMatchState = ConcurrencyMatchState.Matched,
+                        CurrentEntity = new EntitySnapshot
+                        {
+                            EntityId = entityId.Value,
+                            ConcurrencyTag = concurrencyTag,
+                            ModifiedTime = timestamp,
+                            Data = data?.RootElement,
+                            Relationships = Array.Empty<EntitySnapshot>(),
+                        },
+                        Errors = Array.Empty<UpdateError>(),
+                    });
             }
 
             foreach (var entityBuilder in entityBuilders.Values)
@@ -274,11 +312,16 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 nextEntities[entityBuilder.EntityId] = entityBuilder.Build();
             }
 
-            return new UpdateOutcome(
-                new State(
+            return new UpdateOutcome
+            {
+                NextState = new State(
                     new StateSnapshot(nextEntities.ToImmutable()),
                     nextSequenceNumber),
-                new UpdateResult(updateResults));
+                UpdateResult = new UpdateResult
+                {
+                    EntityResults = updateResults,
+                },
+            };
         }
 
         private EntityBuilder GetOrCreateEntityBuilder(
@@ -445,9 +488,11 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
             public EntityState Build()
             {
-                return new EntityState(
-                    this.versionsBuilder?.ToImmutable() ?? this.state.Versions,
-                    this.participatingRelationshipIdsBuilder?.ToImmutable() ?? this.state.ParticipatingRelationshipIds);
+                return new EntityState
+                {
+                    Versions = this.versionsBuilder?.ToImmutable() ?? this.state.Versions,
+                    ParticipatingRelationshipIds = this.participatingRelationshipIdsBuilder?.ToImmutable() ?? this.state.ParticipatingRelationshipIds,
+                };
             }
         }
     }
@@ -486,19 +531,23 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     }
 
                     changeBatches.Add(
-                        new ExportChangeBatch(
-                            version.Timestamp,
-                            new[]
-                            {
-                                new QueryEntitySnapshot(
-                                    entityEntry.Key,
-                                    version.ConcurrencyTag,
-                                    version.Timestamp,
-                                    null,
-                                    version.Data?.RootElement,
-                                    Array.Empty<QueryClauseIdentifier>(),
-                                    Array.Empty<FullTextQueryScore>()),
-                            }));
+                        new ExportChangeBatch
+                        {
+                            ChangeTime = version.Timestamp,
+                            Entities =
+                            [
+                                new QueryEntitySnapshot
+                                {
+                                    EntityId = entityEntry.Key,
+                                    ConcurrencyTag = version.ConcurrencyTag,
+                                    ModifiedTime = version.Timestamp,
+                                    Data = version.Data?.RootElement,
+                                    Relationships = Array.Empty<EntitySnapshot>(),
+                                    MatchingClauseIdentifiers = Array.Empty<QueryClauseIdentifier>(),
+                                    FullTextQueryScores = Array.Empty<FullTextQueryScore>(),
+                                },
+                            ],
+                        });
                 }
             }
 
@@ -513,9 +562,11 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             var finalSnapshotTime = latestVersion?.Timestamp ?? new Timestamp(DateTimeOffset.UnixEpoch, "0");
 
             return Task.FromResult(
-                new ExportResult(
-                    changeBatches,
-                    finalSnapshotTime));
+                new ExportResult
+                {
+                    ChangeBatches = changeBatches,
+                    FinalSnapshotTime = finalSnapshotTime,
+                });
         }
 
         public Task<GetResult> GetAsync(
@@ -553,19 +604,30 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                         var relationships = this.GetRelationshipsForEntity(entityId, timestamp, relationshipFilter);
 
                         entities.Add(
-                            new EntitySnapshot(
-                                entityId,
-                                version.ConcurrencyTag,
-                                version.Timestamp,
-                                version.Data?.RootElement,
-                                relationships));
+                            new EntitySnapshot
+                            {
+                                EntityId = entityId,
+                                ConcurrencyTag = version.ConcurrencyTag,
+                                ModifiedTime = version.Timestamp,
+                                Data = version.Data?.RootElement,
+                                Relationships = relationships,
+                            });
                     }
                 }
 
-                batches.Add(new TimestampedEntityBatch(timestamp, entities));
+                batches.Add(
+                    new TimestampedEntityBatch
+                    {
+                        Timestamp = timestamp,
+                        Entities = entities,
+                    });
             }
 
-            return Task.FromResult(new GetResult(batches));
+            return Task.FromResult(
+                new GetResult
+                {
+                    Batches = batches,
+                });
         }
 
         public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
@@ -587,17 +649,25 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 if (CompareTimestamp(currentVersion.Timestamp, requestedEntity.Timestamp) > 0)
                 {
                     entities.Add(
-                        new ChangedEntitySnapshot(
-                            new EntitySnapshot(
-                                requestedEntity.EntityId,
-                                currentVersion.ConcurrencyTag,
-                                currentVersion.Timestamp,
-                                currentVersion.Data?.RootElement,
-                                Array.Empty<EntitySnapshot>())));
+                        new ChangedEntitySnapshot
+                        {
+                            Entity = new EntitySnapshot
+                            {
+                                EntityId = requestedEntity.EntityId,
+                                ConcurrencyTag = currentVersion.ConcurrencyTag,
+                                ModifiedTime = currentVersion.Timestamp,
+                                Data = currentVersion.Data?.RootElement,
+                                Relationships = Array.Empty<EntitySnapshot>(),
+                            },
+                        });
                 }
             }
 
-            return Task.FromResult(new GetChangedEntitiesResult(entities));
+            return Task.FromResult(
+                new GetChangedEntitiesResult
+                {
+                    Entities = entities,
+                });
         }
 
         public Task<GetHistoryResult> GetHistoryAsync(
@@ -617,12 +687,18 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 }
 
                 history.Add(
-                    new EntityHistoryEntry(
-                        entityId,
-                        entityState.Versions.Select(static version => version.Timestamp).ToArray()));
+                    new EntityHistoryEntry
+                    {
+                        EntityId = entityId,
+                        UpdateTimes = entityState.Versions.Select(static version => version.Timestamp).ToArray(),
+                    });
             }
 
-            return Task.FromResult(new GetHistoryResult(history));
+            return Task.FromResult(
+                new GetHistoryResult
+                {
+                    History = history,
+                });
         }
 
         public Task<QueryResult> QueryAsync(
@@ -645,23 +721,34 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             var version = this.FindVersion(entityEntry.Key, timestamp);
                             return version is null
                                 ? null
-                                : new QueryEntitySnapshot(
-                                    entityEntry.Key,
-                                    version.ConcurrencyTag,
-                                    version.Timestamp,
-                                    null,
-                                    version.Data?.RootElement,
-                                    request.Clauses.Select(clause => clause.ClauseIdentifier).ToArray(),
-                                    Array.Empty<FullTextQueryScore>());
+                                : new QueryEntitySnapshot
+                                {
+                                    EntityId = entityEntry.Key,
+                                    ConcurrencyTag = version.ConcurrencyTag,
+                                    ModifiedTime = version.Timestamp,
+                                    Data = version.Data?.RootElement,
+                                    Relationships = Array.Empty<EntitySnapshot>(),
+                                    MatchingClauseIdentifiers = request.Clauses.Select(clause => clause.ClauseIdentifier).ToArray(),
+                                    FullTextQueryScores = Array.Empty<FullTextQueryScore>(),
+                                };
                         })
                     .Where(entitySnapshot => entitySnapshot is not null)
                     .Select(entitySnapshot => entitySnapshot!)
                     .ToArray();
 
-                batches.Add(new TimestampedQueryBatch(timestamp, entitySnapshots));
+                batches.Add(
+                    new TimestampedQueryBatch
+                    {
+                        Timestamp = timestamp,
+                        Entities = entitySnapshots,
+                    });
             }
 
-            return Task.FromResult(new QueryResult(batches));
+            return Task.FromResult(
+                new QueryResult
+                {
+                    Batches = batches,
+                });
         }
 
         private EntityVersion? FindVersion(
@@ -769,12 +856,14 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 }
 
                 relationships.Add(
-                    new EntitySnapshot(
-                        relationshipId,
-                        relationshipVersion.ConcurrencyTag,
-                        relationshipVersion.Timestamp,
-                        relationshipVersion.Data.RootElement,
-                        Array.Empty<EntitySnapshot>()));
+                    new EntitySnapshot
+                    {
+                        EntityId = relationshipId,
+                        ConcurrencyTag = relationshipVersion.ConcurrencyTag,
+                        ModifiedTime = relationshipVersion.Timestamp,
+                        Data = relationshipVersion.Data.RootElement,
+                        Relationships = Array.Empty<EntitySnapshot>(),
+                    });
             }
 
             return relationships;

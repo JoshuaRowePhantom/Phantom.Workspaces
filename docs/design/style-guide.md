@@ -16,6 +16,8 @@
 - Use one clear responsibility per type.
 - Prefer interfaces for replaceable behavior.
 - Keep public surface area explicit and stable.
+- Prefer non-positional records where practical.
+- Prefer designated initializer syntax when constructing record instances.
 
 ## Data Types
 

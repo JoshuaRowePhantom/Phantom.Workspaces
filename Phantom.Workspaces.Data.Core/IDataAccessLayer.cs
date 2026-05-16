@@ -48,59 +48,98 @@ public interface IDataAccessLayer
         CancellationToken cancellationToken = default);
 }
 
-public sealed record UpdateRequest(
-    UpdateMetadata UpdateMetadata,
-    IReadOnlyCollection<EntityChange> Changes);
+public sealed record UpdateRequest
+{
+    public required UpdateMetadata UpdateMetadata { get; init; }
 
-public sealed record Markdown(
-    string Text);
+    public required IReadOnlyCollection<EntityChange> Changes { get; init; }
+}
 
-public sealed record UpdateMetadata(
-    Markdown Comment);
+public sealed record Markdown
+{
+    public required string Text { get; init; }
+}
 
-public sealed record EntityChange(
-    EntityId? EntityId,
-    ConcurrencyTag? ConcurrencyTag,
-    // null to remove the entity,
-    JsonElement? Data,
-    EntityChangeMode EntityChangeMode);
+public sealed record UpdateMetadata
+{
+    public required Markdown Comment { get; init; }
+}
 
-public sealed record UpdateResult(
-    IReadOnlyCollection<EntityUpdateResult> EntityResults);
+public sealed record EntityChange
+{
+    public EntityId? EntityId { get; init; }
 
-public sealed record EntityUpdateResult(
-    UpdateState UpdateState,
-    EntityId RequestedEntityId,
-    EntityId ResultingEntityId,
-    ConcurrencyTag? ConcurrencyTag,
-    ConcurrencyMatchState ConcurrencyMatchState,
-    EntitySnapshot? CurrentEntity,
-    IReadOnlyCollection<UpdateError> Errors);
+    public ConcurrencyTag? ConcurrencyTag { get; init; }
 
-public sealed record UpdateError(
-    string Message,
+    // null to remove the entity.
+    public JsonElement? Data { get; init; }
+
+    public required EntityChangeMode EntityChangeMode { get; init; }
+}
+
+public sealed record UpdateResult
+{
+    public required IReadOnlyCollection<EntityUpdateResult> EntityResults { get; init; }
+}
+
+public sealed record EntityUpdateResult
+{
+    public required UpdateState UpdateState { get; init; }
+
+    public required EntityId RequestedEntityId { get; init; }
+
+    public required EntityId ResultingEntityId { get; init; }
+
+    public ConcurrencyTag? ConcurrencyTag { get; init; }
+
+    public required ConcurrencyMatchState ConcurrencyMatchState { get; init; }
+
+    public EntitySnapshot? CurrentEntity { get; init; }
+
+    public required IReadOnlyCollection<UpdateError> Errors { get; init; }
+}
+
+public sealed record UpdateError
+{
+    public required string Message { get; init; }
+
     // This is set if there is a related entity id causing the failure.
-    EntityId? RelatedEntityId);
+    public EntityId? RelatedEntityId { get; init; }
+}
 
-public sealed record GetRequest(
-    IReadOnlyCollection<GetEntityRequest> Entities,
+public sealed record GetRequest
+{
+    public required IReadOnlyCollection<GetEntityRequest> Entities { get; init; }
+
     // null means do not return relationships, empty means return all, non-empty means return matching relationships.
-    IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn,
-    IReadOnlyCollection<Timestamp?>? Timestamps);
+    public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
 
-public sealed record GetEntityRequest(
-    EntityId? EntityId,
-    EntityName? EntityName,
-    EntityTypeNames? EntityTypeNames,
+    public IReadOnlyCollection<Timestamp?>? Timestamps { get; init; }
+}
+
+public sealed record GetEntityRequest
+{
+    public EntityId? EntityId { get; init; }
+
+    public EntityName? EntityName { get; init; }
+
+    public EntityTypeNames? EntityTypeNames { get; init; }
+
     // null means inherit request-level value; empty means return all; non-empty means return matching relationships.
-    IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn);
+    public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
+}
 
-public sealed record GetRelationshipRequest(
-    RelationshipTypeNames? RelationshipTypeNames,
-    RoleNames? RelationshipRoleNames);
+public sealed record GetRelationshipRequest
+{
+    public RelationshipTypeNames? RelationshipTypeNames { get; init; }
 
-public sealed record GetResult(
-    IReadOnlyCollection<TimestampedEntityBatch> Batches);
+    public RoleNames? RelationshipRoleNames { get; init; }
+}
+
+public sealed record GetResult
+{
+    public required IReadOnlyCollection<TimestampedEntityBatch> Batches { get; init; }
+}
 
 /// <summary>
 /// A request to query for entities. 
@@ -111,51 +150,75 @@ public sealed record GetResult(
 /// <param name="Timestamps">
 /// The set of timestamps to query as-of. null means "now".
 /// </param>
-public sealed record QueryRequest(
-    IReadOnlyCollection<TopLevelQueryClause> Clauses,
-    IReadOnlyCollection<Timestamp?>? Timestamps);
+public sealed record QueryRequest
+{
+    public required IReadOnlyCollection<TopLevelQueryClause> Clauses { get; init; }
 
-public sealed record QueryResult(
-    IReadOnlyCollection<TimestampedQueryBatch> Batches);
+    public IReadOnlyCollection<Timestamp?>? Timestamps { get; init; }
+}
 
-public sealed record GetHistoryRequest(
-    IReadOnlyCollection<EntityId> EntityIds);
+public sealed record QueryResult
+{
+    public required IReadOnlyCollection<TimestampedQueryBatch> Batches { get; init; }
+}
 
-public sealed record GetHistoryResult(
-    IReadOnlyCollection<EntityHistoryEntry> History);
+public sealed record GetHistoryRequest
+{
+    public required IReadOnlyCollection<EntityId> EntityIds { get; init; }
+}
+
+public sealed record GetHistoryResult
+{
+    public required IReadOnlyCollection<EntityHistoryEntry> History { get; init; }
+}
 
 /// <summary>
 /// Requests a full export of all entities at or after an optional snapshot time.
 /// This API is intentionally expensive and should only be used when enumerating everything is unavoidable.
 /// </summary>
-public sealed record ExportRequest(
-    Timestamp? SnapshotTime);
+public sealed record ExportRequest
+{
+    public Timestamp? SnapshotTime { get; init; }
+}
 
 /// <summary>
 /// A full export of all entities.
 /// This result is intentionally expensive to produce and should only be consumed in rare enumeration scenarios.
 /// </summary>
-public sealed record ExportResult(
-    IReadOnlyCollection<ExportChangeBatch> ChangeBatches,
-    Timestamp FinalSnapshotTime);
+public sealed record ExportResult
+{
+    public required IReadOnlyCollection<ExportChangeBatch> ChangeBatches { get; init; }
 
-public sealed record GetChangedEntitiesRequest(
-    IReadOnlyCollection<EntityIdTimestamp> EntityIdTimestamps);
+    public required Timestamp FinalSnapshotTime { get; init; }
+}
 
-public sealed record GetChangedEntitiesResult(
-    IReadOnlyCollection<ChangedEntitySnapshot> Entities);
+public sealed record GetChangedEntitiesRequest
+{
+    public required IReadOnlyCollection<EntityIdTimestamp> EntityIdTimestamps { get; init; }
+}
 
-public sealed record TimestampedEntityBatch(
-    Timestamp? Timestamp,
-    IReadOnlyCollection<EntitySnapshot> Entities);
+public sealed record GetChangedEntitiesResult
+{
+    public required IReadOnlyCollection<ChangedEntitySnapshot> Entities { get; init; }
+}
+
+public sealed record TimestampedEntityBatch
+{
+    public Timestamp? Timestamp { get; init; }
+
+    public required IReadOnlyCollection<EntitySnapshot> Entities { get; init; }
+}
 
 /// <summary>
 /// A timestamp-specific batch of query results. 
 /// Each batch corresponds to a specific timestamp, and contains the entities that match the query as of that timestamp.
 /// </summary>
-public sealed record TimestampedQueryBatch(
-    Timestamp? Timestamp,
-    IReadOnlyCollection<QueryEntitySnapshot> Entities);
+public sealed record TimestampedQueryBatch
+{
+    public Timestamp? Timestamp { get; init; }
+
+    public required IReadOnlyCollection<QueryEntitySnapshot> Entities { get; init; }
+}
 
 /// <summary>
 /// An entity returned by a query.
@@ -166,20 +229,14 @@ public sealed record TimestampedQueryBatch(
 /// <param name="FullTextQueryScores">
 /// The full text match scores for this entity.
 /// </param>
-public sealed record QueryEntitySnapshot(
-    EntityId EntityId,
-    ConcurrencyTag? ConcurrencyTag,
-    Timestamp ModifiedTime,
-    Timestamp? ClassifiedTime,
-    JsonElement? Data,
-    IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers,
-    IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores)
-    : EntitySnapshot(
-        EntityId,
-        ConcurrencyTag,
-        ModifiedTime,
-        Data,
-        Array.Empty<EntitySnapshot>());
+public sealed record QueryEntitySnapshot : EntitySnapshot
+{
+    public Timestamp? ClassifiedTime { get; init; }
+
+    public required IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers { get; init; }
+
+    public required IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores { get; init; }
+}
 
 /// <summary>
 /// When an entity matches a FullText query, the FullTextQueryScore
@@ -191,21 +248,32 @@ public sealed record QueryEntitySnapshot(
 /// <param name="Score">
 /// The relevance score for the match.
 /// </param>
-public sealed record FullTextQueryScore(
-    QueryClauseIdentifier QueryIdentifier,
-    double Score);
+public sealed record FullTextQueryScore
+{
+    public required QueryClauseIdentifier QueryIdentifier { get; init; }
 
-public sealed record EntityHistoryEntry(
-    EntityId EntityId,
-    IReadOnlyCollection<Timestamp> UpdateTimes);
+    public required double Score { get; init; }
+}
 
-public sealed record ExportChangeBatch(
-    Timestamp ChangeTime,
-    IReadOnlyCollection<QueryEntitySnapshot> Entities);
+public sealed record EntityHistoryEntry
+{
+    public required EntityId EntityId { get; init; }
 
-public sealed record ChangedEntitySnapshot(
+    public required IReadOnlyCollection<Timestamp> UpdateTimes { get; init; }
+}
+
+public sealed record ExportChangeBatch
+{
+    public required Timestamp ChangeTime { get; init; }
+
+    public required IReadOnlyCollection<QueryEntitySnapshot> Entities { get; init; }
+}
+
+public sealed record ChangedEntitySnapshot
+{
     // The changed entity.
-    EntitySnapshot? Entity);
+    public EntitySnapshot? Entity { get; init; }
+}
 
 /// <summary>
 /// A snapshot of an entity's data.
@@ -225,12 +293,18 @@ public sealed record ChangedEntitySnapshot(
 /// <param name="Data">
 /// The data of the entity. This can be null if the entity has been deleted or if the data is not available.
 /// </param>
-public record EntitySnapshot(
-    EntityId EntityId,
-    ConcurrencyTag? ConcurrencyTag,
-    Timestamp ModifiedTime,
-    JsonElement? Data,
-    IReadOnlyCollection<EntitySnapshot> Relationships);
+public record EntitySnapshot
+{
+    public required EntityId EntityId { get; init; }
+
+    public ConcurrencyTag? ConcurrencyTag { get; init; }
+
+    public required Timestamp ModifiedTime { get; init; }
+
+    public JsonElement? Data { get; init; }
+
+    public required IReadOnlyCollection<EntitySnapshot> Relationships { get; init; }
+}
 
 public readonly record struct EntityId(Guid Value);
 
@@ -272,55 +346,90 @@ public readonly record struct RegularExpressionPattern(string Value);
 
 public readonly record struct MinimumQueryScore(double Value);
 
-public sealed record TopLevelQueryClause(
-    QueryClauseIdentifier ClauseIdentifier,
-    QueryClause Clause);
+public sealed record TopLevelQueryClause
+{
+    public required QueryClauseIdentifier ClauseIdentifier { get; init; }
+
+    public required QueryClause Clause { get; init; }
+}
 
 public abstract record QueryClause;
 
-public sealed record AndQueryClause(
-    IReadOnlyCollection<QueryClause> Clauses) : QueryClause;
+public sealed record AndQueryClause : QueryClause
+{
+    public required IReadOnlyCollection<QueryClause> Clauses { get; init; }
+}
 
-public sealed record OrQueryClause(
-    IReadOnlyCollection<QueryClause> Clauses) : QueryClause;
+public sealed record OrQueryClause : QueryClause
+{
+    public required IReadOnlyCollection<QueryClause> Clauses { get; init; }
+}
 
-public sealed record NotQueryClause(
-    QueryClause Clause) : QueryClause;
+public sealed record NotQueryClause : QueryClause
+{
+    public required QueryClause Clause { get; init; }
+}
 
-public sealed record TopQueryClause(
-    QueryResultLimit ResultLimit,
-    QueryClause Clause) : QueryClause;
+public sealed record TopQueryClause : QueryClause
+{
+    public required QueryResultLimit ResultLimit { get; init; }
+
+    public required QueryClause Clause { get; init; }
+}
 
 public abstract record EntityQueryClause : QueryClause;
 
-public sealed record EntityTypeQueryClause(
-    EntityTypeNames EntityTypeNames) : EntityQueryClause;
+public sealed record EntityTypeQueryClause : EntityQueryClause
+{
+    public required EntityTypeNames EntityTypeNames { get; init; }
+}
 
-public sealed record EntityFieldQueryClause(
-    FieldPath FieldPath,
-    FieldComparisonOperator ComparisonOperator,
-    JsonElement? Value) : EntityQueryClause;
+public sealed record EntityFieldQueryClause : EntityQueryClause
+{
+    public required FieldPath FieldPath { get; init; }
 
-public sealed record EntityFullTextQueryClause(
-    QueryClauseIdentifier FullTextQueryIdentifier,
-    FullTextQueryText QueryText,
-    MinimumQueryScore? MinimumQueryScore) : EntityQueryClause;
+    public required FieldComparisonOperator ComparisonOperator { get; init; }
 
-public sealed record EntityParticipationQueryClause(
-    RelationshipTypeNames RelationshipTypeNames,
-    RoleNames? ParticipationRoleNames,
-    EntityParticipationRequirement? MustHave) : EntityQueryClause;
+    public JsonElement? Value { get; init; }
+}
 
-public sealed record TransitQueryClause(
-    QueryClauseIdentifier SourceClauseIdentifier,
-    RelationshipTypeNames RelationshipTypeNames,
-    RoleNames? SourceParticipationRoleNames,
-    RoleNames? DestinationParticipationRoleNames,
-    QueryClause MatchClause) : QueryClause;
+public sealed record EntityFullTextQueryClause : EntityQueryClause
+{
+    public required QueryClauseIdentifier FullTextQueryIdentifier { get; init; }
 
-public sealed record EntityParticipationRequirement(
-    RoleNames? ParticipationRoleNames,
-    QueryClause Clause);
+    public required FullTextQueryText QueryText { get; init; }
+
+    public MinimumQueryScore? MinimumQueryScore { get; init; }
+}
+
+public sealed record EntityParticipationQueryClause : EntityQueryClause
+{
+    public required RelationshipTypeNames RelationshipTypeNames { get; init; }
+
+    public RoleNames? ParticipationRoleNames { get; init; }
+
+    public EntityParticipationRequirement? MustHave { get; init; }
+}
+
+public sealed record TransitQueryClause : QueryClause
+{
+    public required QueryClauseIdentifier SourceClauseIdentifier { get; init; }
+
+    public required RelationshipTypeNames RelationshipTypeNames { get; init; }
+
+    public RoleNames? SourceParticipationRoleNames { get; init; }
+
+    public RoleNames? DestinationParticipationRoleNames { get; init; }
+
+    public required QueryClause MatchClause { get; init; }
+}
+
+public sealed record EntityParticipationRequirement
+{
+    public RoleNames? ParticipationRoleNames { get; init; }
+
+    public required QueryClause Clause { get; init; }
+}
 
 public enum FieldComparisonOperator
 {

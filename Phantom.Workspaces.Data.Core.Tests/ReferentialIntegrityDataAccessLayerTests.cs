@@ -20,8 +20,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var relationshipEntityId = new EntityId(Guid.Parse("f460aa7e-a13e-4967-a7e2-87fa072f8d95"));
 
         await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create participant entities")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create participant entities"),
                 new[]
                 {
                     this.CreateEntityChange(sourceEntityId, "source"),
@@ -29,8 +29,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 }));
 
         var relationshipCreateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create relationship")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create relationship"),
                 new[]
                 {
                     this.CreateRelationshipChange(
@@ -42,11 +42,11 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
 
         var sourceDeleteTag = (await this.GetEntitySnapshotByIdAsync(dataAccessLayer, sourceEntityId)).ConcurrencyTag;
         var deleteResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Delete source entity")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Delete source entity"),
                 new[]
                 {
-                    new EntityChange(
+                    CreateEntityChange(
                         sourceEntityId,
                         sourceDeleteTag,
                         null,
@@ -69,16 +69,16 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var missingTargetEntityId = new EntityId(Guid.Parse("c33014c9-66b6-4955-b0aa-f4d5ddfd0e76"));
 
         await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create typed-ref schema")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create typed-ref schema"),
                 new[]
                 {
                     this.CreateTypedReferenceSchemaChange(schemaEntityId, schemaName),
                 }));
 
         var missingTargetResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create entity with missing target")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create entity with missing target"),
                 new[]
                 {
                     this.CreateTypedReferenceEntityChange(sourceEntityId, "source-missing", schemaName, missingTargetEntityId),
@@ -88,16 +88,16 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Contains(missingFailure.Errors, static error => error.Message.Contains("does not exist", StringComparison.Ordinal));
 
         await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create wrong-type target")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create wrong-type target"),
                 new[]
                 {
                     this.CreateEntityChange(wrongTypeTargetEntityId, "wrong-target", "other-type"),
                 }));
 
         var wrongTypeResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create entity with wrong-type target")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create entity with wrong-type target"),
                 new[]
                 {
                     this.CreateTypedReferenceEntityChange(sourceEntityId, "source-wrong-type", schemaName, wrongTypeTargetEntityId),
@@ -108,16 +108,16 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
 
         var validTargetEntityId = new EntityId(Guid.Parse("91e69f56-e57c-4da8-8450-24f40531f730"));
         await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create valid target")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create valid target"),
                 new[]
                 {
                     this.CreateEntityChange(validTargetEntityId, "valid-target", "target-type"),
                 }));
 
         var validCreateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create entity with valid target")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create entity with valid target"),
                 new[]
                 {
                     this.CreateTypedReferenceEntityChange(sourceEntityId, "source-valid", schemaName, validTargetEntityId),
@@ -136,16 +136,16 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var existingParticipantEntityId = new EntityId(Guid.Parse("11f245dd-8a17-4f8d-a9f6-4c6ef4f3dadf"));
 
         await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create existing participant")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create existing participant"),
                 new[]
                 {
                     this.CreateEntityChange(existingParticipantEntityId, "participant"),
                 }));
 
         var addEntityResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add entity with missing reference")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity with missing reference"),
                 new[]
                 {
                     this.CreateEntityWithSingleReferenceChange(
@@ -158,8 +158,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Equal(UpdateState.Failed, addEntityFailure.UpdateState);
 
         var addRelationshipResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add relationship with missing participant")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add relationship with missing participant"),
                 new[]
                 {
                     this.CreateRelationshipChange(
@@ -182,8 +182,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var missingTargetEntityId = new EntityId(Guid.Parse("48c2e6d8-c1cc-4ae8-a846-2127d0a8ecdf"));
 
         var createResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create baseline entities")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create baseline entities"),
                 new[]
                 {
                     this.CreateEntityWithSingleReferenceChange(sourceEntityId, null, "source", targetEntityId),
@@ -197,8 +197,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var relationshipConcurrencyTag = createResult.EntityResults.Single(result => result.ResultingEntityId == relationshipEntityId).ConcurrencyTag!.Value;
 
         var updateSourceResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Update entity to missing reference")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Update entity to missing reference"),
                 new[]
                 {
                     this.CreateEntityWithSingleReferenceChange(
@@ -211,8 +211,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Equal(UpdateState.Failed, updateSourceFailure.UpdateState);
 
         var updateRelationshipResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Update relationship to missing participant")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Update relationship to missing participant"),
                 new[]
                 {
                     this.CreateRelationshipChange(
@@ -233,8 +233,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var targetEntityId = new EntityId(Guid.Parse("60a52352-f9fc-4d15-9ca4-a59e4dbafe1f"));
 
         var targetCreateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create target")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create target"),
                 new[]
                 {
                     this.CreateEntityChange(targetEntityId, "target"),
@@ -242,8 +242,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Equal(UpdateState.Added, Assert.Single(targetCreateResult.EntityResults).UpdateState);
 
         var sourceCreateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Create source with duplicate references")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create source with duplicate references"),
                 new[]
                 {
                     this.CreateEntityWithMultipleReferencesChange(
@@ -259,8 +259,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Single(relationshipsAfterCreate);
 
         var removeOneReferenceResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Remove one reference")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Remove one reference"),
                 new[]
                 {
                     this.CreateEntityWithSingleReferenceChange(
@@ -276,8 +276,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Single(relationshipsAfterOneRemoval);
 
         var removeAllReferencesResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Remove all references")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Remove all references"),
                 new[]
                 {
                     this.CreateEntityWithoutReferencesChange(
@@ -304,7 +304,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "names": ["{{name}}"]
             }
             """);
-        return new EntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateRelationshipChange(
@@ -323,7 +323,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "relationship-roles": ["source", "destination"]
             }
             """);
-        return new EntityChange(relationshipEntityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(relationshipEntityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateTypedReferenceSchemaChange(
@@ -357,7 +357,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               }
             }
             """);
-        return new EntityChange(schemaEntityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(schemaEntityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateTypedReferenceEntityChange(
@@ -376,7 +376,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "target-entity-id": "{{targetEntityId.Value:D}}"
             }
             """);
-        return new EntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateEntityWithMultipleReferencesChange(
@@ -395,7 +395,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "second-entity-id": "{{secondReferenceEntityId.Value:D}}"
             }
             """);
-        return new EntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateEntityWithSingleReferenceChange(
@@ -413,7 +413,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "first-entity-id": "{{referenceEntityId.Value:D}}"
             }
             """);
-        return new EntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateEntityWithoutReferencesChange(
@@ -429,7 +429,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "names": ["{{name}}"]
             }
             """);
-        return new EntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
+        return CreateEntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private async Task<EntitySnapshot> GetEntitySnapshotByIdAsync(
@@ -437,10 +437,10 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         EntityId entityId)
     {
         var getResult = await dataAccessLayer.GetAsync(
-            new GetRequest(
+            CreateGetRequest(
                 new[]
                 {
-                    new GetEntityRequest(entityId, null, null, null),
+                    CreateGetEntityRequest(entityId, null, null, null),
                 },
                 null,
                 new Timestamp?[] { null }));
@@ -452,18 +452,95 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         EntityId sourceEntityId)
     {
         var getResult = await dataAccessLayer.GetAsync(
-            new GetRequest(
+            CreateGetRequest(
                 new[]
                 {
-                    new GetEntityRequest(sourceEntityId, null, null, null),
+                    CreateGetEntityRequest(sourceEntityId, null, null, null),
                 },
                 new[]
                 {
-                    new GetRelationshipRequest(
+                    CreateGetRelationshipRequest(
                         new RelationshipTypeNames(new[] { "reference" }),
                         null),
                 },
                 new Timestamp?[] { null }));
         return Assert.Single(Assert.Single(getResult.Batches).Entities).Relationships;
+    }
+
+    private static UpdateRequest CreateUpdateRequest(
+        UpdateMetadata updateMetadata,
+        IReadOnlyCollection<EntityChange> changes)
+    {
+        return new UpdateRequest
+        {
+            UpdateMetadata = updateMetadata,
+            Changes = changes,
+        };
+    }
+
+    private static UpdateMetadata CreateUpdateMetadata(
+        string text)
+    {
+        return new UpdateMetadata
+        {
+            Comment = new Markdown
+            {
+                Text = text,
+            },
+        };
+    }
+
+    private static EntityChange CreateEntityChange(
+        EntityId? entityId,
+        ConcurrencyTag? concurrencyTag,
+        JsonElement? data,
+        EntityChangeMode entityChangeMode)
+    {
+        return new EntityChange
+        {
+            EntityId = entityId,
+            ConcurrencyTag = concurrencyTag,
+            Data = data,
+            EntityChangeMode = entityChangeMode,
+        };
+    }
+
+    private static GetRequest CreateGetRequest(
+        IReadOnlyCollection<GetEntityRequest> entities,
+        IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn,
+        IReadOnlyCollection<Timestamp?>? timestamps)
+    {
+        return new GetRequest
+        {
+            Entities = entities,
+            RelationshipsToReturn = relationshipsToReturn,
+            Timestamps = timestamps,
+        };
+    }
+
+    private static GetEntityRequest CreateGetEntityRequest(
+        EntityId? entityId,
+        EntityName? entityName,
+        EntityTypeNames? entityTypeNames,
+        IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn)
+    {
+        return new GetEntityRequest
+        {
+            EntityId = entityId,
+            EntityName = entityName,
+            EntityTypeNames = entityTypeNames,
+            RelationshipsToReturn = relationshipsToReturn,
+        };
+    }
+
+    private static GetRelationshipRequest CreateGetRelationshipRequest(
+        RelationshipTypeNames? relationshipTypeNames,
+        RoleNames? relationshipRoleNames)
+    {
+        return new GetRelationshipRequest
+        {
+            RelationshipTypeNames = relationshipTypeNames,
+            RelationshipRoleNames = relationshipRoleNames,
+        };
     }
 }

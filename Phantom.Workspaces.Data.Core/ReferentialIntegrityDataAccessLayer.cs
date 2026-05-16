@@ -29,11 +29,18 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         var rewriteState = await this.BuildRewrittenChangesAsync(request, cancellationToken);
         if (rewriteState.Failures.Count > 0)
         {
-            return new UpdateResult(rewriteState.Failures);
+            return new UpdateResult
+            {
+                EntityResults = rewriteState.Failures,
+            };
         }
 
         return await this.UnderlyingDataAccessLayer.UpdateAsync(
-            new UpdateRequest(request.UpdateMetadata, rewriteState.Changes),
+            new UpdateRequest
+            {
+                UpdateMetadata = request.UpdateMetadata,
+                Changes = rewriteState.Changes,
+            },
             cancellationToken);
     }
 
@@ -50,17 +57,30 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             var resolvedEntityId = this.ResolveEntityId(change);
             if (resolvedEntityId is null)
             {
-                unresolvedChanges.Add(new OrderedChange(order++, change));
+                unresolvedChanges.Add(
+                    new OrderedChange
+                    {
+                        Order = order++,
+                        Change = change,
+                    });
                 continue;
             }
 
             if (!orderedChangesByEntityId.TryGetValue(resolvedEntityId.Value, out var existingOrderedChange))
             {
-                orderedChangesByEntityId[resolvedEntityId.Value] = new OrderedChange(order++, change with { EntityId = resolvedEntityId.Value });
+                orderedChangesByEntityId[resolvedEntityId.Value] = new OrderedChange
+                {
+                    Order = order++,
+                    Change = change with { EntityId = resolvedEntityId.Value },
+                };
                 continue;
             }
 
-            orderedChangesByEntityId[resolvedEntityId.Value] = new OrderedChange(existingOrderedChange.Order, change with { EntityId = resolvedEntityId.Value });
+            orderedChangesByEntityId[resolvedEntityId.Value] = new OrderedChange
+            {
+                Order = existingOrderedChange.Order,
+                Change = change with { EntityId = resolvedEntityId.Value },
+            };
         }
 
         var changesByEntityId = orderedChangesByEntityId.ToDictionary(
@@ -82,7 +102,11 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             cancellationToken);
         if (validationFailures.Count > 0)
         {
-            return new RewriteState(Array.Empty<EntityChange>(), validationFailures);
+            return new RewriteState
+            {
+                Changes = Array.Empty<EntityChange>(),
+                Failures = validationFailures,
+            };
         }
 
         var rewrittenChanges = unresolvedChanges
@@ -90,7 +114,11 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             .OrderBy(static orderedChange => orderedChange.Order)
             .Select(static orderedChange => orderedChange.Change)
             .ToArray();
-        return new RewriteState(rewrittenChanges, Array.Empty<EntityUpdateResult>());
+        return new RewriteState
+        {
+            Changes = rewrittenChanges,
+            Failures = Array.Empty<EntityUpdateResult>(),
+        };
     }
 
     private async Task ApplyDuplicateRelationshipCoalescingAsync(
@@ -242,14 +270,16 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                         changesByEntityId,
                         orderedChangesByEntityId,
                         relationshipEntityId,
-                        new EntityChange(
-                            relationshipEntityId,
-                            currentRelationship?.ConcurrencyTag,
-                            this.CreateManagedReferenceRelationshipEntity(
+                        new EntityChange
+                        {
+                            EntityId = relationshipEntityId,
+                            ConcurrencyTag = currentRelationship?.ConcurrencyTag,
+                            Data = this.CreateManagedReferenceRelationshipEntity(
                                 relationshipEntityId,
                                 entityId,
                                 targetEntityId),
-                            EntityChangeMode.Replace),
+                            EntityChangeMode = EntityChangeMode.Replace,
+                        },
                         ref nextOrder);
                     continue;
                 }
@@ -272,11 +302,13 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                     changesByEntityId,
                     orderedChangesByEntityId,
                     relationshipEntityId,
-                    new EntityChange(
-                        relationshipEntityId,
-                        currentRelationshipToDelete?.ConcurrencyTag,
-                        null,
-                        EntityChangeMode.Replace),
+                    new EntityChange
+                    {
+                        EntityId = relationshipEntityId,
+                        ConcurrencyTag = currentRelationshipToDelete?.ConcurrencyTag,
+                        Data = null,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
                     ref nextOrder);
             }
         }
@@ -307,11 +339,13 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                         changesByEntityId,
                         orderedChangesByEntityId,
                         relationship.EntityId,
-                        new EntityChange(
-                            relationship.EntityId,
-                            relationship.ConcurrencyTag,
-                            null,
-                            EntityChangeMode.Replace),
+                        new EntityChange
+                        {
+                            EntityId = relationship.EntityId,
+                            ConcurrencyTag = relationship.ConcurrencyTag,
+                            Data = null,
+                            EntityChangeMode = EntityChangeMode.Replace,
+                        },
                         ref nextOrder);
                 }
             }
@@ -335,11 +369,13 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                     changesByEntityId,
                     orderedChangesByEntityId,
                     pair.Key,
-                    new EntityChange(
-                        pair.Key,
-                        currentRelationship?.ConcurrencyTag ?? pair.Value.ConcurrencyTag,
-                        null,
-                        EntityChangeMode.Replace),
+                    new EntityChange
+                    {
+                        EntityId = pair.Key,
+                        ConcurrencyTag = currentRelationship?.ConcurrencyTag ?? pair.Value.ConcurrencyTag,
+                        Data = null,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
                     ref nextOrder);
             }
         }
@@ -399,9 +435,11 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                 if (!targetExists || targetData is null)
                 {
                     errors.Add(
-                        new UpdateError(
-                            $"Referenced entity '{reference.TargetEntityId.Value:D}' does not exist.",
-                            reference.TargetEntityId));
+                        new UpdateError
+                        {
+                            Message = $"Referenced entity '{reference.TargetEntityId.Value:D}' does not exist.",
+                            RelatedEntityId = reference.TargetEntityId,
+                        });
                     continue;
                 }
 
@@ -414,9 +452,11 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                 if (!reference.RequiredTypes.Any(targetTypes.Contains))
                 {
                     errors.Add(
-                        new UpdateError(
-                            $"Referenced entity '{reference.TargetEntityId.Value:D}' does not match required types: {string.Join(", ", reference.RequiredTypes)}.",
-                            reference.TargetEntityId));
+                        new UpdateError
+                        {
+                            Message = $"Referenced entity '{reference.TargetEntityId.Value:D}' does not match required types: {string.Join(", ", reference.RequiredTypes)}.",
+                            RelatedEntityId = reference.TargetEntityId,
+                        });
                 }
             }
 
@@ -427,14 +467,16 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
 
             currentSnapshotsById.TryGetValue(sourceEntityId, out var currentEntity);
             failures.Add(
-                new EntityUpdateResult(
-                    UpdateState.Failed,
-                    sourceEntityId,
-                    sourceEntityId,
-                    currentEntity?.ConcurrencyTag,
-                    ConcurrencyMatchState.NotMatched,
-                    currentEntity,
-                    errors));
+                new EntityUpdateResult
+                {
+                    UpdateState = UpdateState.Failed,
+                    RequestedEntityId = sourceEntityId,
+                    ResultingEntityId = sourceEntityId,
+                    ConcurrencyTag = currentEntity?.ConcurrencyTag,
+                    ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                    CurrentEntity = currentEntity,
+                    Errors = errors,
+                });
         }
 
         return failures;
@@ -486,7 +528,7 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         }
 
         return this.GetRelationshipParticipantEntityIds(entityData)
-            .Select(static entityId => new ReferenceConstraint(entityId, null))
+            .Select(static entityId => new ReferenceConstraint { TargetEntityId = entityId })
             .ToArray();
     }
 
@@ -551,7 +593,11 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             return;
         }
 
-        references.Add(new ReferenceConstraint(new EntityId(targetEntityGuid), null));
+        references.Add(
+            new ReferenceConstraint
+            {
+                TargetEntityId = new EntityId(targetEntityGuid),
+            });
     }
 
     private IReadOnlyCollection<ReferenceConstraint> ExtractSchemaTypedReferences(
@@ -607,7 +653,12 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         {
             if (value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var targetEntityGuid))
             {
-                references.Add(new ReferenceConstraint(new EntityId(targetEntityGuid), requiredTypes));
+                references.Add(
+                    new ReferenceConstraint
+                    {
+                        TargetEntityId = new EntityId(targetEntityGuid),
+                        RequiredTypes = requiredTypes,
+                    });
             }
             else if (value.ValueKind == JsonValueKind.Array)
             {
@@ -615,7 +666,12 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
                 {
                     if (item.ValueKind == JsonValueKind.String && Guid.TryParse(item.GetString(), out var targetGuid))
                     {
-                        references.Add(new ReferenceConstraint(new EntityId(targetGuid), requiredTypes));
+                        references.Add(
+                            new ReferenceConstraint
+                            {
+                                TargetEntityId = new EntityId(targetGuid),
+                                RequiredTypes = requiredTypes,
+                            });
                     }
                 }
             }
@@ -801,17 +857,17 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         }
 
         var getResult = this.UnderlyingDataAccessLayer.GetAsync(
-            new GetRequest(
-                new[]
-                {
-                    new GetEntityRequest(
-                        null,
-                        new EntityName(schemaName),
-                        null,
-                        null),
-                },
-                null,
-                new Timestamp?[] { null }),
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName(schemaName),
+                    },
+                ],
+                Timestamps = new Timestamp?[] { null },
+            },
             cancellationToken).GetAwaiter().GetResult();
 
         return getResult.Batches
@@ -1034,7 +1090,11 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             return;
         }
 
-        orderedChangesByEntityId[entityId] = new OrderedChange(nextOrder++, change);
+        orderedChangesByEntityId[entityId] = new OrderedChange
+        {
+            Order = nextOrder++,
+            Change = change,
+        };
     }
 
     private EntityId? ResolveEntityId(
@@ -1076,10 +1136,12 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
         }
 
         var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
-            new GetRequest(
-                ids.Select(static id => new GetEntityRequest(id, null, null, null)).ToArray(),
-                includeRelationships ? Array.Empty<GetRelationshipRequest>() : null,
-                new Timestamp?[] { null }),
+            new GetRequest
+            {
+                Entities = ids.Select(static id => new GetEntityRequest { EntityId = id }).ToArray(),
+                RelationshipsToReturn = includeRelationships ? Array.Empty<GetRelationshipRequest>() : null,
+                Timestamps = new Timestamp?[] { null },
+            },
             cancellationToken);
 
         return getResult.Batches
@@ -1087,15 +1149,24 @@ public class ReferentialIntegrityDataAccessLayer : BaseUpdateProcessingDataAcces
             .ToDictionary(static snapshot => snapshot.EntityId, static snapshot => snapshot);
     }
 
-    private sealed record OrderedChange(
-        int Order,
-        EntityChange Change);
+    private sealed record OrderedChange
+    {
+        public required int Order { get; init; }
 
-    private sealed record RewriteState(
-        IReadOnlyCollection<EntityChange> Changes,
-        IReadOnlyCollection<EntityUpdateResult> Failures);
+        public required EntityChange Change { get; init; }
+    }
 
-    private sealed record ReferenceConstraint(
-        EntityId TargetEntityId,
-        IReadOnlyCollection<string>? RequiredTypes);
+    private sealed record RewriteState
+    {
+        public required IReadOnlyCollection<EntityChange> Changes { get; init; }
+
+        public required IReadOnlyCollection<EntityUpdateResult> Failures { get; init; }
+    }
+
+    private sealed record ReferenceConstraint
+    {
+        public required EntityId TargetEntityId { get; init; }
+
+        public IReadOnlyCollection<string>? RequiredTypes { get; init; }
+    }
 }

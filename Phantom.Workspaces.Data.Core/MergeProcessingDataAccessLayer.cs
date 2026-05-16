@@ -49,14 +49,20 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
                 if (change.EntityChangeMode == EntityChangeMode.JsonPatch)
                 {
                     failures.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            default,
-                            default,
-                            null,
-                            ConcurrencyMatchState.NotMatched,
-                            null,
-                            new[] { new UpdateError("JsonPatch updates require an entity-id.", null) }));
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = default,
+                            ResultingEntityId = default,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = "JsonPatch updates require an entity-id.",
+                                },
+                            ],
+                        });
                     continue;
                 }
 
@@ -86,42 +92,69 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
                 if (state.WorkingData is null)
                 {
                     failures.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            entityId.Value,
-                            entityId.Value,
-                            state.CurrentTag,
-                            ConcurrencyMatchState.NotMatched,
-                            state.CurrentSnapshot,
-                            new[] { new UpdateError("JsonPatch target entity does not exist.", entityId.Value) }));
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = state.CurrentTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            CurrentEntity = state.CurrentSnapshot,
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = "JsonPatch target entity does not exist.",
+                                    RelatedEntityId = entityId.Value,
+                                },
+                            ],
+                        });
                     continue;
                 }
 
                 if (change.Data is null || change.Data.Value.ValueKind != JsonValueKind.Array)
                 {
                     failures.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            entityId.Value,
-                            entityId.Value,
-                            state.CurrentTag,
-                            ConcurrencyMatchState.NotMatched,
-                            state.CurrentSnapshot,
-                            new[] { new UpdateError("JsonPatch data must be an array of operations.", entityId.Value) }));
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = state.CurrentTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            CurrentEntity = state.CurrentSnapshot,
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = "JsonPatch data must be an array of operations.",
+                                    RelatedEntityId = entityId.Value,
+                                },
+                            ],
+                        });
                     continue;
                 }
 
                 if (!this.TryApplyJsonPatch(state.WorkingData.Value, change.Data.Value, out var patchedData, out var patchError))
                 {
                     failures.Add(
-                        new EntityUpdateResult(
-                            UpdateState.Failed,
-                            entityId.Value,
-                            entityId.Value,
-                            state.CurrentTag,
-                            ConcurrencyMatchState.NotMatched,
-                            state.CurrentSnapshot,
-                            new[] { new UpdateError(patchError ?? "JsonPatch failed.", entityId.Value) }));
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Failed,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = state.CurrentTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                            CurrentEntity = state.CurrentSnapshot,
+                            Errors =
+                            [
+                                new UpdateError
+                                {
+                                    Message = patchError ?? "JsonPatch failed.",
+                                    RelatedEntityId = entityId.Value,
+                                },
+                            ],
+                        });
                     continue;
                 }
 
@@ -134,7 +167,10 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
 
         if (failures.Count > 0)
         {
-            return new UpdateResult(failures);
+            return new UpdateResult
+            {
+                EntityResults = failures,
+            };
         }
 
         foreach (var state in statesById.Values)
@@ -158,7 +194,10 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
 
         if (failures.Count > 0)
         {
-            return new UpdateResult(failures);
+            return new UpdateResult
+            {
+                EntityResults = failures,
+            };
         }
 
         var processedChanges = new List<EntityChange>(coalescedOrder.Count + passthroughChanges.Count);
@@ -166,17 +205,23 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
         {
             var state = statesById[entityId];
             processedChanges.Add(
-                new EntityChange(
-                    entityId,
-                    state.RequestedTag,
-                    state.WorkingData,
-                    EntityChangeMode.Replace));
+                new EntityChange
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = state.RequestedTag,
+                    Data = state.WorkingData,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                });
         }
 
         processedChanges.AddRange(passthroughChanges);
 
         return await this.UnderlyingDataAccessLayer.UpdateAsync(
-            new UpdateRequest(request.UpdateMetadata, processedChanges),
+            new UpdateRequest
+            {
+                UpdateMetadata = request.UpdateMetadata,
+                Changes = processedChanges,
+            },
             cancellationToken);
     }
 
@@ -212,14 +257,23 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
         CoalescedEntityState state,
         string message)
     {
-        return new EntityUpdateResult(
-            UpdateState.Failed,
-            state.EntityId,
-            state.EntityId,
-            state.CurrentTag,
-            ConcurrencyMatchState.NotMatched,
-            state.CurrentSnapshot,
-            new[] { new UpdateError(message, state.EntityId) });
+        return new EntityUpdateResult
+        {
+            UpdateState = UpdateState.Failed,
+            RequestedEntityId = state.EntityId,
+            ResultingEntityId = state.EntityId,
+            ConcurrencyTag = state.CurrentTag,
+            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+            CurrentEntity = state.CurrentSnapshot,
+            Errors =
+            [
+                new UpdateError
+                {
+                    Message = message,
+                    RelatedEntityId = state.EntityId,
+                },
+            ],
+        };
     }
 
     private EntityId? ResolveEntityId(
@@ -255,10 +309,11 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
         }
 
         var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
-            new GetRequest(
-                entityIds.Select(static id => new GetEntityRequest(id, null, null, null)).ToArray(),
-                null,
-                new Timestamp?[] { null }),
+            new GetRequest
+            {
+                Entities = entityIds.Select(static id => new GetEntityRequest { EntityId = id }).ToArray(),
+                Timestamps = new Timestamp?[] { null },
+            },
             cancellationToken);
 
         return getResult.Batches

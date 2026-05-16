@@ -34,19 +34,22 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
 
             var entityId = change.EntityId ?? this.GetEntityId(change.Data);
             validationResults.Add(
-                new EntityUpdateResult(
-                    UpdateState.Failed,
-                    entityId ?? default,
-                    entityId ?? default,
-                    null,
-                    ConcurrencyMatchState.NotMatched,
-                    null,
-                    validationErrors));
+                new EntityUpdateResult
+                {
+                    UpdateState = UpdateState.Failed,
+                    RequestedEntityId = entityId ?? default,
+                    ResultingEntityId = entityId ?? default,
+                    ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                    Errors = validationErrors,
+                });
         }
 
         if (validationResults.Count > 0)
         {
-            return new UpdateResult(validationResults);
+            return new UpdateResult
+            {
+                EntityResults = validationResults,
+            };
         }
 
         return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
@@ -78,7 +81,11 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
         {
             return new[]
             {
-                new UpdateError("Schema reference could not be resolved.", change.EntityId),
+                new UpdateError
+                {
+                    Message = "Schema reference could not be resolved.",
+                    RelatedEntityId = change.EntityId,
+                },
             };
         }
 
@@ -91,7 +98,11 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
         {
             return new[]
             {
-                new UpdateError($"Schema is invalid: {exception.Message}", change.EntityId),
+                new UpdateError
+                {
+                    Message = $"Schema is invalid: {exception.Message}",
+                    RelatedEntityId = change.EntityId,
+                },
             };
         }
 
@@ -103,7 +114,11 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
 
         return new[]
         {
-            new UpdateError($"Entity does not conform to schema '{schemaReference}'.", change.EntityId),
+            new UpdateError
+            {
+                Message = $"Entity does not conform to schema '{schemaReference}'.",
+                RelatedEntityId = change.EntityId,
+            },
         };
     }
 
@@ -152,17 +167,17 @@ public sealed class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAc
         }
 
         var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
-            new GetRequest(
-                new[]
-                {
-                    new GetEntityRequest(
-                        null,
-                        new EntityName(schemaReference),
-                        null,
-                        null),
-                },
-                null,
-                new Timestamp?[] { null }),
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName(schemaReference),
+                    },
+                ],
+                Timestamps = new Timestamp?[] { null },
+            },
             cancellationToken);
 
         foreach (var batch in getResult.Batches)

@@ -22,9 +22,17 @@ public sealed class SchemaPopulator
         var changes = this.LoadEntityChanges(errors);
 
         var updateResult = await this.dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Populate built-in schema entities.")),
-                changes));
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Populate built-in schema entities.",
+                    },
+                },
+                Changes = changes,
+            });
 
         foreach (var entityResult in updateResult.EntityResults)
         {
@@ -52,7 +60,11 @@ public sealed class SchemaPopulator
             using var stream = assembly.GetManifestResourceStream(resourceName);
             if (stream is null)
             {
-                errors.Add(new UpdateError($"Entity resource '{resourceName}' could not be read.", null));
+                errors.Add(
+                    new UpdateError
+                    {
+                        Message = $"Entity resource '{resourceName}' could not be read.",
+                    });
                 continue;
             }
 
@@ -66,7 +78,11 @@ public sealed class SchemaPopulator
             }
             catch (JsonException exception)
             {
-                errors.Add(new UpdateError(exception.Message, null));
+                errors.Add(
+                    new UpdateError
+                    {
+                        Message = exception.Message,
+                    });
                 continue;
             }
 
@@ -75,11 +91,12 @@ public sealed class SchemaPopulator
                 var entityElement = document.RootElement.Clone();
                 var entityId = this.GetEntityId(entityElement);
                 entityChanges.Add(
-                    new EntityChange(
-                        entityId,
-                        null,
-                        entityElement,
-                        EntityChangeMode.Replace));
+                    new EntityChange
+                    {
+                        EntityId = entityId,
+                        Data = entityElement,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    });
             }
         }
 

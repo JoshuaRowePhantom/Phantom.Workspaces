@@ -22,14 +22,14 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
         var schemaUpdateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add schema")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add schema"),
                 new[] { CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName) }));
         Assert.Equal(UpdateState.Added, Assert.Single(schemaUpdateResult.EntityResults).UpdateState);
 
         var entityUpdateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add validated entity")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add validated entity"),
                 new[] { CreateValidatedEntityChange(ValidatedEntityId, "one", TestSchemaName) }));
 
         var result = Assert.Single(entityUpdateResult.EntityResults);
@@ -45,8 +45,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
         var result = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add schema and entity")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add schema and entity"),
                 new EntityChange[]
                 {
                     CreateValidatedEntityChange(ValidatedEntityId, "one", TestSchemaName),
@@ -68,14 +68,14 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
         var schemaUpdateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add schema")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add schema"),
                 new[] { CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName) }));
         Assert.Equal(UpdateState.Added, Assert.Single(schemaUpdateResult.EntityResults).UpdateState);
 
         var invalidUpdateResult = await dataAccessLayer.UpdateAsync(
-            new UpdateRequest(
-                new UpdateMetadata(new Markdown("Add invalid entity")),
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add invalid entity"),
                 new[]
                 {
                     CreateValidatedEntityChange(ValidatedEntityId, 123, TestSchemaName),
@@ -87,10 +87,10 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
 
         var getResult = await dataAccessLayer.GetAsync(
-            new GetRequest(
+            CreateGetRequest(
                 new[]
                 {
-                    new GetEntityRequest(
+                    CreateGetEntityRequest(
                         ValidatedEntityId,
                         null,
                         null,
@@ -120,7 +120,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             }
             """);
 
-        return new EntityChange(
+        return CreateEntityChange(
             entityId,
             null,
             schemaDocument.RootElement.Clone(),
@@ -143,10 +143,76 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             }
             """);
 
-        return new EntityChange(
+        return CreateEntityChange(
             entityId,
             null,
             entityDocument.RootElement.Clone(),
             EntityChangeMode.Replace);
+    }
+
+    private static UpdateRequest CreateUpdateRequest(
+        UpdateMetadata updateMetadata,
+        IReadOnlyCollection<EntityChange> changes)
+    {
+        return new UpdateRequest
+        {
+            UpdateMetadata = updateMetadata,
+            Changes = changes,
+        };
+    }
+
+    private static UpdateMetadata CreateUpdateMetadata(
+        string text)
+    {
+        return new UpdateMetadata
+        {
+            Comment = new Markdown
+            {
+                Text = text,
+            },
+        };
+    }
+
+    private static EntityChange CreateEntityChange(
+        EntityId? entityId,
+        ConcurrencyTag? concurrencyTag,
+        JsonElement? data,
+        EntityChangeMode entityChangeMode)
+    {
+        return new EntityChange
+        {
+            EntityId = entityId,
+            ConcurrencyTag = concurrencyTag,
+            Data = data,
+            EntityChangeMode = entityChangeMode,
+        };
+    }
+
+    private static GetRequest CreateGetRequest(
+        IReadOnlyCollection<GetEntityRequest> entities,
+        IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn,
+        IReadOnlyCollection<Timestamp?>? timestamps)
+    {
+        return new GetRequest
+        {
+            Entities = entities,
+            RelationshipsToReturn = relationshipsToReturn,
+            Timestamps = timestamps,
+        };
+    }
+
+    private static GetEntityRequest CreateGetEntityRequest(
+        EntityId? entityId,
+        EntityName? entityName,
+        EntityTypeNames? entityTypeNames,
+        IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn)
+    {
+        return new GetEntityRequest
+        {
+            EntityId = entityId,
+            EntityName = entityName,
+            EntityTypeNames = entityTypeNames,
+            RelationshipsToReturn = relationshipsToReturn,
+        };
     }
 }
