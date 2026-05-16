@@ -13,7 +13,7 @@
       "entity"
     ]
   ],
-  "$comment": "This base entity schema is intentionally closed (unevaluatedProperties=false) so unknown fields fail fast. We do this to prevent silent schema drift and to force each concrete entity schema to explicitly define every property it owns.",
+  "$comment": "This base entity schema is intentionally closed (unevaluatedProperties=false) so unknown fields fail fast and schema drift is caught immediately.",
   "type": "object",
   "properties": {
     "entity-id": {
@@ -34,7 +34,7 @@
     },
     "display-name": {
       "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
-    },
-    "unevaluatedProperties": false
-  }
+    }
+  },
+  "unevaluatedProperties": false
 }
