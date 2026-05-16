@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.phantom.app/workspaces/data/core/json-schema.json",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "$ref": "https://json-schema.org/draft/2020-12/schema"
+    }
+  }
+}

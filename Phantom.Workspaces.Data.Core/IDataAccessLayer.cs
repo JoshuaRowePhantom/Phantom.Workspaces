@@ -213,10 +213,10 @@ public readonly record struct ConcurrencyTag(string Value);
 
 public readonly record struct Timestamp(
     // The date and time when the change was made, in UTC.
-    DateTimeOffset Value,
-    // A specific identifier for the change, e.g. a git commit id or a database transaction id,
+    DateTimeOffset DateTime,
+    // An orderable specific identifier for the change, e.g. a datetime-prefixed git commit id or a database transaction id,
     // disambiguating changes that were made at the same time.
-    string ValueString);
+    string ChangeId);
 
 public readonly record struct RenderTimeIndex(string Value);
 
