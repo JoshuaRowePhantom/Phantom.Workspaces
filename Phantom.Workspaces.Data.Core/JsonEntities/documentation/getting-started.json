@@ -1,0 +1,21 @@
+{
+  "entity-id": "5a453d28-2fa1-4c9b-9bc9-fd4f7780d2bc",
+  "entity-types": [
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "getting-started"
+    ]
+  ],
+  "display-name": {
+    "default": "Getting Started"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/getting-started.md"
+    }
+  }
+}

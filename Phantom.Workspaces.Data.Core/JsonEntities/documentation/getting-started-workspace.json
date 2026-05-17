@@ -1,0 +1,37 @@
+{
+  "entity-id": "6cc39f41-2a36-4be6-ab95-3f3fd355e463",
+  "entity-types": [
+    "workspace"
+  ],
+  "names": [
+    [
+      "workspaces",
+      "getting-started-workspace"
+    ]
+  ],
+  "display-name": {
+    "default": "Getting Started Workspace"
+  },
+  "regions": [
+    {
+      "region-id": "editor-center",
+      "title": "Center",
+      "dock": "center",
+      "size": 1,
+      "tabs": [
+        {
+          "tab-id": "getting-started-note",
+          "title": "Getting Started",
+          "kind": "entity-view",
+          "content": {
+            "target-entity-name": [
+              "documentation",
+              "getting-started"
+            ]
+          },
+          "dock": "full"
+        }
+      ]
+    }
+  ]
+}

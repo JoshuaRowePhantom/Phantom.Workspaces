@@ -4,18 +4,21 @@
     "entity-type"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/view.json",
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json"
+    ],
     [
       "entity-types",
       "view"
     ]
   ],
   "schema": {
-    "$id": "https://schemas.phantom.app/workspaces/data/core/view.json",
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json",
     "type": "object",
     "properties": {
       "title": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+        "$ref": "core.json#/$defs/local-string"
       },
       "sub-views": {
         "type": "array",
@@ -40,7 +43,7 @@
         "type": "object",
         "properties": {
           "view-entity-id": {
-            "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
+            "$ref": "core.json#/$defs/entity-reference",
             "x-entity-type": "view"
           },
           "disposition": {
@@ -77,7 +80,7 @@
           "entity-type-views": {
             "type": "array",
             "items": {
-              "$ref": "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json",
+              "$ref": "entity-type-view.json",
               "x-entity-type": "entity-type-view"
             }
           }

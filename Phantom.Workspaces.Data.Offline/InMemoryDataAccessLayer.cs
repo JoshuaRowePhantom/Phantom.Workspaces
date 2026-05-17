@@ -417,25 +417,21 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         {
             if (data is null
                 || data.Value.ValueKind != JsonValueKind.Object
-                || !data.Value.TryGetProperty("related-entity-ids", out var relatedEntityIdsElement)
-                || relatedEntityIdsElement.ValueKind != JsonValueKind.Array)
+                || !TryGetRelationshipParticipantIds(data.Value, out var relatedEntityIds))
             {
                 return Array.Empty<EntityId>();
             }
 
-            var relatedEntityIds = new List<EntityId>();
-            foreach (var relatedEntityIdElement in relatedEntityIdsElement.EnumerateArray())
-            {
-                if (relatedEntityIdElement.ValueKind != JsonValueKind.String
-                    || !Guid.TryParse(relatedEntityIdElement.GetString(), out var relatedEntityId))
-                {
-                    continue;
-                }
-
-                relatedEntityIds.Add(new EntityId(relatedEntityId));
-            }
-
             return relatedEntityIds;
+        }
+
+        private static bool TryGetRelationshipParticipantIds(
+            JsonElement relationshipData,
+            out IReadOnlyCollection<EntityId> participantIds)
+        {
+            return RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(
+                relationshipData,
+                out participantIds);
         }
 
         private sealed class EntityBuilder
@@ -873,17 +869,54 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             JsonElement relationshipData,
             EntityId entityId)
         {
-            if (relationshipData.ValueKind != JsonValueKind.Object
-                || !relationshipData.TryGetProperty("related-entity-ids", out var relatedEntityIds)
-                || relatedEntityIds.ValueKind != JsonValueKind.Array)
+            if (relationshipData.ValueKind != JsonValueKind.Object)
             {
                 return false;
             }
 
             var entityIdText = entityId.Value.ToString("D");
-            return relatedEntityIds.EnumerateArray().Any(relatedEntityId =>
-                relatedEntityId.ValueKind == JsonValueKind.String
-                && string.Equals(relatedEntityId.GetString(), entityIdText, StringComparison.OrdinalIgnoreCase));
+            if (relationshipData.TryGetProperty("participants", out var participants)
+                && participants.ValueKind == JsonValueKind.Object
+                && this.ContainsParticipantId(participants, entityIdText))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool ContainsParticipantId(
+            JsonElement value,
+            string entityIdText)
+        {
+            if (value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in value.EnumerateObject())
+                {
+                    if (this.ContainsParticipantId(property.Value, entityIdText))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            if (value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in value.EnumerateArray())
+                {
+                    if (this.ContainsParticipantId(item, entityIdText))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            return value.ValueKind == JsonValueKind.String
+                && string.Equals(value.GetString(), entityIdText, StringComparison.OrdinalIgnoreCase);
         }
 
         private bool MatchesRelationshipFilter(
@@ -891,7 +924,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             GetRelationshipRequest filter)
         {
             if (filter.RelationshipTypeNames is not null
-                && !filter.RelationshipTypeNames.Value.Values.All(typeName => relationshipVersion.EntityTypeNames.Contains(typeName, StringComparer.Ordinal)))
+                && !this.MatchesRelationshipTypeNames(relationshipVersion, filter.RelationshipTypeNames.Value.Values))
             {
                 return false;
             }
@@ -902,17 +935,90 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             }
 
             if (relationshipVersion.Data is null
-                || !relationshipVersion.Data.RootElement.TryGetProperty("relationship-roles", out var rolesElement)
-                || rolesElement.ValueKind != JsonValueKind.Array)
+                || !relationshipVersion.Data.RootElement.TryGetProperty("participants", out var participantsElement)
+                || participantsElement.ValueKind != JsonValueKind.Object)
             {
                 return false;
             }
 
-            var availableRoles = rolesElement.EnumerateArray()
-                .Where(static role => role.ValueKind == JsonValueKind.String)
-                .Select(static role => role.GetString()!)
+            var availableRoles = participantsElement.EnumerateObject()
+                .Select(static role => role.Name)
                 .ToHashSet(StringComparer.Ordinal);
             return filter.RelationshipRoleNames.Value.Values.All(availableRoles.Contains);
+        }
+
+        private bool MatchesRelationshipTypeNames(
+            EntityVersion relationshipVersion,
+            IReadOnlyCollection<string> requestedTypeNames)
+        {
+            var explicitTypeNames = relationshipVersion.EntityTypeNames.ToHashSet(StringComparer.Ordinal);
+            foreach (var requestedTypeName in requestedTypeNames)
+            {
+                if (explicitTypeNames.Contains(requestedTypeName))
+                {
+                    continue;
+                }
+
+                if (string.Equals(requestedTypeName, "relationship", StringComparison.Ordinal)
+                    && this.IsRelationshipShape(relationshipVersion.Data))
+                {
+                    continue;
+                }
+
+                if (string.Equals(requestedTypeName, "reference", StringComparison.Ordinal)
+                    && this.IsReferenceRelationshipShape(relationshipVersion.Data))
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool IsRelationshipShape(
+            JsonDocument? data)
+        {
+            if (data is null || data.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (data.RootElement.TryGetProperty("entities", out var entities)
+                && entities.ValueKind == JsonValueKind.Array)
+            {
+                return true;
+            }
+
+            if (data.RootElement.TryGetProperty("participants", out var participants)
+                && participants.ValueKind == JsonValueKind.Object)
+            {
+                return true;
+            }
+
+            return this.IsReferenceRelationshipShape(data);
+        }
+
+        private bool IsReferenceRelationshipShape(
+            JsonDocument? data)
+        {
+            if (data is null || data.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            if (data.RootElement.TryGetProperty("entity-types", out var entityTypes)
+                && entityTypes.ValueKind == JsonValueKind.Array
+                && entityTypes.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && string.Equals(type.GetString(), "reference", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+
+            return data.RootElement.TryGetProperty("source", out var sourceEntityId)
+                && data.RootElement.TryGetProperty("target", out var targetEntityId)
+                && sourceEntityId.ValueKind == JsonValueKind.String
+                && targetEntityId.ValueKind == JsonValueKind.String;
         }
     }
 

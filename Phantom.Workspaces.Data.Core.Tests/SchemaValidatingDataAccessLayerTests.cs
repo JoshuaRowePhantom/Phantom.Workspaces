@@ -9,7 +9,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
 {
     private static readonly EntityId TestSchemaEntityId = new(Guid.Parse("2f8e74c1-3e2b-48ea-9e3b-64ff1b9f6321"));
     private static readonly EntityId ValidatedEntityId = new(Guid.Parse("f7c54a5f-ae17-4a3b-b3af-1430f4b1d6d3"));
-    private static readonly string TestSchemaName = "https://schemas.phantom.app/tests/work-item.json";
+    private static readonly string TestSchemaName = "https://schemas.workspaces.phantom.to/tests/work-item.json";
 
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
@@ -21,13 +21,16 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var schemaUpdateResult = await dataAccessLayer.UpdateAsync(
+        var schemaUpdateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Add schema"),
                 new[] { CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName) }));
-        Assert.Equal(UpdateState.Added, Assert.Single(schemaUpdateResult.EntityResults).UpdateState);
+        Assert.True(schemaUpdateResult.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(schemaUpdateResult));
+        Assert.Equal(UpdateState.Added, schemaUpdateResult.EntityResults.Single().UpdateState);
 
-        var entityUpdateResult = await dataAccessLayer.UpdateAsync(
+        var entityUpdateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Add validated entity"),
                 new[] { CreateValidatedEntityChange(ValidatedEntityId, "one", TestSchemaName) }));
@@ -40,11 +43,88 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_IsRejected_WhenEntityUsesUnknownEntityType()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId(Guid.Parse("3f02d2e0-f8d1-4ec9-8ef8-1f5fd4f8dbd8"));
+
+        var result = await RequireUpdateFailsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity with unknown type"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId.Value:D}}",
+                              "entity-types": ["profile"],
+                              "names": ["unknown-typed-entity"]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("could not be resolved", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_ValidatesLocalizedMimeAttachmentContent_ForNote()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId(Guid.Parse("1ac2b418-c4bf-4df9-9f25-6b3d9ab2d7f7"));
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add localized note content"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            """
+                            {
+                              "entity-id": "1ac2b418-c4bf-4df9-9f25-6b3d9ab2d7f7",
+                              "entity-types": ["note"],
+                              "names": [["documentation","localized-note"]],
+                              "display-name": "Localized Note",
+                              "content": {
+                                "default": {
+                                  "mime-type": "text/markdown",
+                                  "url": "documentation/getting-started.md"
+                                },
+                                "fr-FR": {
+                                  "mime-type": "text/markdown",
+                                  "content": {
+                                    "text": "# Bonjour"
+                                  }
+                                }
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(
+            result.EntityResults.All(static entityResult => entityResult.UpdateState != UpdateState.Failed),
+            UpdateResultDiagnostics.Describe(result));
+    }
+
+    [Fact]
     public async Task Update_Succeeds_WhenSchemaIsProvidedInSameUpdate()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var result = await dataAccessLayer.UpdateAsync(
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Add schema and entity"),
                 new EntityChange[]
@@ -68,9 +148,10 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
         var schemaEntityId = new EntityId(Guid.Parse("a8428673-25f5-4c30-8f70-c3014f660d95"));
         var entityId = new EntityId(Guid.Parse("ad6f2d02-2f5b-4e64-bec4-78d16dff7f92"));
-        const string schemaName = "https://schemas.phantom.app/tests/implicit-json-schema-entity-type.json";
+        const string schemaName = "https://schemas.workspaces.phantom.to/tests/implicit-json-schema-entity-type.json";
 
-        var result = await dataAccessLayer.UpdateAsync(
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Add entity-type schema and validated entity"),
                 new EntityChange[]
@@ -83,7 +164,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             {
                               "entity-id": "{{schemaEntityId.Value:D}}",
                               "entity-types": ["entity-type"],
-                              "names": ["{{schemaName}}"],
+                              "names": [["json-schemas", "{{schemaName}}"]],
                               "schema": {
                                 "$id": "{{schemaName}}",
                                 "type": "object",
@@ -125,13 +206,16 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var schemaUpdateResult = await dataAccessLayer.UpdateAsync(
+        var schemaUpdateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Add schema"),
                 new[] { CreateSchemaEntityChange(TestSchemaEntityId, TestSchemaName) }));
-        Assert.Equal(UpdateState.Added, Assert.Single(schemaUpdateResult.EntityResults).UpdateState);
+        Assert.True(schemaUpdateResult.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(schemaUpdateResult));
+        Assert.Equal(UpdateState.Added, schemaUpdateResult.EntityResults.Single().UpdateState);
 
-        var invalidUpdateResult = await dataAccessLayer.UpdateAsync(
+        var invalidUpdateResult = await RequireUpdateFailsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Add invalid entity"),
                 new[]
@@ -139,7 +223,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                     CreateValidatedEntityChange(ValidatedEntityId, 123, TestSchemaName),
                 }));
 
-        var failedResult = Assert.Single(invalidUpdateResult.EntityResults);
+        Assert.True(invalidUpdateResult.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(invalidUpdateResult));
+        var failedResult = invalidUpdateResult.EntityResults.Single();
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         Assert.Equal(ConcurrencyMatchState.NotMatched, failedResult.ConcurrencyMatchState);
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
@@ -186,7 +271,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         EntityChangeMode.Replace),
                 }));
 
-        var failedResult = Assert.Single(result.EntityResults);
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
         // Do not remove: this preserves the closed-world entity contract and prevents silent schema drift.
@@ -228,7 +314,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         EntityChangeMode.Replace),
                 }));
 
-        var failedResult = Assert.Single(result.EntityResults);
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("unexpected-property", StringComparison.Ordinal));
@@ -237,7 +324,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     [Fact]
     public async Task Update_Succeeds_WhenEntityTypeEntityContainsEntityTypeSpecificFields()
     {
-        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new InMemoryDataAccessLayer());
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
         var entityTypeEntityId = new EntityId(Guid.Parse("1d033c1d-f265-4b62-866f-ab88ceb66dcf"));
 
         var result = await dataAccessLayer.UpdateAsync(
@@ -265,7 +352,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         EntityChangeMode.Replace),
                 }));
 
-        var entityResult = Assert.Single(result.EntityResults);
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var entityResult = result.EntityResults.Single();
         Assert.Equal(UpdateState.Added, entityResult.UpdateState);
         Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
     }
@@ -273,7 +361,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     [Fact]
     public async Task Update_WhenValidationFails_ErrorMessageIncludesDiagnosticDetails()
     {
-        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new InMemoryDataAccessLayer());
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
         var invalidEntityId = new EntityId(Guid.Parse("3f8f4f4d-1664-4f6d-a74a-e5f9f3ccd67f"));
 
         var updateResult = await dataAccessLayer.UpdateAsync(
@@ -297,7 +385,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         EntityChangeMode.Replace),
                 }));
 
-        var failedResult = Assert.Single(updateResult.EntityResults);
+        Assert.True(updateResult.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(updateResult));
+        var failedResult = updateResult.EntityResults.Single();
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         var error = Assert.Single(
             failedResult.Errors,
@@ -359,6 +448,65 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.DoesNotContain(validResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
     }
 
+    [Fact]
+    public async Task Update_ValidatesWorkspaceTabContent_ForEntityTargetAndBrowserUrl()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var workspaceEntityId = new EntityId(Guid.Parse("24a2ab29-2d0e-4a0c-9f0e-2a1a5c37e5a5"));
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add workspace with tab content"),
+                new[]
+                {
+                    CreateEntityChange(
+                        workspaceEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            """
+                            {
+                              "entity-id": "24a2ab29-2d0e-4a0c-9f0e-2a1a5c37e5a5",
+                              "entity-types": ["workspace"],
+                              "names": ["workspaces/workspace-one"],
+                              "display-name": "Workspace One",
+                              "regions": [
+                                {
+                                  "region-id": "center",
+                                  "title": "Center",
+                                  "dock": "center",
+                                  "size": 1,
+                                  "tabs": [
+                                    {
+                                      "tab-id": "note-tab",
+                                      "title": "Note",
+                                      "kind": "entity-view",
+                                      "content": {
+                                        "target-entity-name": ["documentation","getting-started"]
+                                      },
+                                      "dock": "full"
+                                    },
+                                    {
+                                      "tab-id": "browser-tab",
+                                      "title": "Docs",
+                                      "kind": "browser-view",
+                                      "content": {
+                                        "url": "https://example.com"
+                                      },
+                                      "dock": "right"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(
+            result.EntityResults.All(static entityResult => entityResult.UpdateState != UpdateState.Failed),
+            UpdateResultDiagnostics.Describe(result));
+    }
+
     private static EntityChange CreateSchemaEntityChange(
         EntityId entityId,
         string schemaName)
@@ -368,7 +516,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             {
               "entity-id": "{{entityId.Value:D}}",
               "entity-types": ["entity-type"],
-              "names": ["{{schemaName}}"],
+              "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
                 "$id": "{{schemaName}}",
                 "type": "object",

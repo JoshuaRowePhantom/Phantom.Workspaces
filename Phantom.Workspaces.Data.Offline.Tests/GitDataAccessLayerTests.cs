@@ -52,7 +52,8 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             }
             """);
 
-        var result = await dataAccessLayer.UpdateAsync(
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -97,7 +98,8 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
               "names": ["initial"]
             }
             """);
-        var createResult = await dataAccessLayer.UpdateAsync(
+        var createResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -141,7 +143,8 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
               "names": ["requested-change"]
             }
             """);
-        var updateResult = await dataAccessLayer.UpdateAsync(
+        var updateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -191,7 +194,8 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
               "names": ["v1"]
             }
             """);
-        var createResult = await dataAccessLayer.UpdateAsync(
+        var createResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -221,7 +225,8 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
               "names": ["v2"]
             }
             """);
-        await dataAccessLayer.UpdateAsync(
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -291,6 +296,16 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : GitDataAccessLayerWit
     {
         return new GitDataAccessLayer(this.GetRepositoryPath());
     }
+
+    [Fact]
+    public void InitializeLocalRepository_WhenRepositoryAlreadyExists_ReturnsFalse()
+    {
+        var dataAccessLayer = new GitDataAccessLayer(this.GetRepositoryPath());
+
+        var initialized = dataAccessLayer.InitializeLocalRepository();
+
+        Assert.False(initialized);
+    }
 }
 
 public sealed class GitDataAccessLayerWithoutRemotePerInvocationTests : GitDataAccessLayerWithoutRemoteTestsBase
@@ -303,6 +318,47 @@ public sealed class GitDataAccessLayerWithoutRemotePerInvocationTests : GitDataA
     protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()
     {
         return new PerInvocationDataAccessLayer(() => new GitDataAccessLayer(this.GetRepositoryPath()));
+    }
+}
+
+public sealed class GitDataAccessLayerInitializationTests : IDisposable
+{
+    private readonly string repositoryPath = TestPathFactory.CreateIsolatedDirectory("git-init");
+
+    [Fact]
+    public void Constructor_WhenDirectoryIsNotRepository_InitializesRepository()
+    {
+        var dataAccessLayer = new GitDataAccessLayer(this.repositoryPath);
+
+        var initialized = dataAccessLayer.InitializeLocalRepository();
+
+        Assert.False(initialized);
+        Assert.True(Repository.IsValid(this.repositoryPath));
+    }
+
+    public void Dispose()
+    {
+        TryDeleteDirectory(this.repositoryPath);
+    }
+
+    private static void TryDeleteDirectory(
+        string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, true);
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Git handles can still be releasing at test teardown.
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup.
+        }
     }
 }
 

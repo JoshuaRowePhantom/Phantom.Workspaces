@@ -16,16 +16,24 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         string repositoryPath)
     {
         this.RepositoryPath = repositoryPath;
-        Directory.CreateDirectory(this.RepositoryPath);
-        if (!Repository.IsValid(this.RepositoryPath))
-        {
-            Repository.Init(this.RepositoryPath);
-        }
+        this.InitializeLocalRepository();
 
         this.filesystemDataAccessLayer = new FilesystemDataAccessLayer(this.RepositoryPath);
     }
 
     public string RepositoryPath { get; }
+
+    public bool InitializeLocalRepository()
+    {
+        Directory.CreateDirectory(this.RepositoryPath);
+        if (Repository.IsValid(this.RepositoryPath))
+        {
+            return false;
+        }
+
+        Repository.Init(this.RepositoryPath);
+        return true;
+    }
 
     public Task<ExportResult> ExportAsync(
         ExportRequest request,

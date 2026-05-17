@@ -4,14 +4,17 @@
     "entity-type"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/entity.json",
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"
+    ],
     [
       "entity-types",
       "entity"
     ]
   ],
   "schema": {
-    "$id": "https://schemas.phantom.app/workspaces/data/core/entity.json",
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json",
     "$comment": "The DAL composes this base schema with all applicable entity-type schemas and enforces unevaluatedProperties=false at the final composed-schema level.",
     "type": "object",
     "properties": {
@@ -19,27 +22,27 @@
         "type": "string"
       },
       "entity-id": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+        "$ref": "core.json#/$defs/entity-id"
       },
       "entity-types": {
         "type": "array",
         "items": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-type-id"
+          "$ref": "core.json#/$defs/entity-type-id"
         }
       },
       "names": {
         "type": "array",
         "items": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
+          "$ref": "core.json#/$defs/entity-name"
         }
       },
       "display-name": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+        "$ref": "core.json#/$defs/local-string"
       },
       "related-entity-ids": {
         "type": "array",
         "items": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+          "$ref": "core.json#/$defs/entity-id"
         }
       },
       "relationship-roles": {
@@ -51,12 +54,12 @@
     },
     "patternProperties": {
       "^.*entity-id$": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+        "$ref": "core.json#/$defs/entity-id"
       },
       "^.*entity-ids$": {
         "type": "array",
         "items": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+          "$ref": "core.json#/$defs/entity-id"
         }
       }
     }

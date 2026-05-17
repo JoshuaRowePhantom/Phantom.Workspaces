@@ -10,6 +10,8 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $solutionPath = Join-Path $repoRoot 'Phantom.Workspaces.slnx'
 
+Set-Content -Path $TestResultsPath -Value '' -Encoding utf8
+
 $dotnetArgs = @(
     'test',
     $solutionPath,

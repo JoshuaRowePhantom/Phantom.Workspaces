@@ -20,7 +20,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         var dataAccessLayer = new FilesystemDataAccessLayer(this.repositoryPath);
         var entityId = new EntityId(Guid.Parse("d0dc5498-f970-4ce4-97fc-f75284453a15"));
 
-        var result = await dataAccessLayer.UpdateAsync(CreateUpdateRequest(this.CreateEntity(entityId, "one")));
+        var result = await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(this.CreateEntity(entityId, "one")));
         Assert.Equal(UpdateState.Added, Assert.Single(result.EntityResults).UpdateState);
 
         Assert.True(File.Exists(GetEntityPath(this.repositoryPath, entityId)));
@@ -32,10 +32,11 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         var dataAccessLayer = new FilesystemDataAccessLayer(this.repositoryPath);
         var entityId = new EntityId(Guid.Parse("2ea08302-7e2f-4716-b478-8cba08f6db8c"));
 
-        var createResult = await dataAccessLayer.UpdateAsync(CreateUpdateRequest(this.CreateEntity(entityId, "one")));
+        var createResult = await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(this.CreateEntity(entityId, "one")));
         var concurrencyTag = Assert.Single(createResult.EntityResults).ConcurrencyTag!.Value;
 
-        var deleteResult = await dataAccessLayer.UpdateAsync(
+        var deleteResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 new EntityChange
                 {
@@ -57,7 +58,8 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         var participantA = new EntityId(Guid.Parse("f2978104-2f69-4467-bd07-8efd48f8536f"));
         var participantB = new EntityId(Guid.Parse("3a01ed74-b4b8-4b4d-8a40-f32cf3ec2867"));
 
-        var createRelationshipResult = await dataAccessLayer.UpdateAsync(
+        var createRelationshipResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(this.CreateRelationshipEntity(relationshipEntityId, participantA, participantB)));
         Assert.Equal(UpdateState.Added, Assert.Single(createRelationshipResult.EntityResults).UpdateState);
 
@@ -73,11 +75,13 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         var participantA = new EntityId(Guid.Parse("f910764f-97f8-47a6-b30f-278e1a6e66d4"));
         var participantB = new EntityId(Guid.Parse("6daf08cf-f044-4f07-9c9a-a8410bfc9156"));
 
-        var createRelationshipResult = await dataAccessLayer.UpdateAsync(
+        var createRelationshipResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(this.CreateRelationshipEntity(relationshipEntityId, participantA, participantB)));
         var relationshipConcurrencyTag = Assert.Single(createRelationshipResult.EntityResults).ConcurrencyTag!.Value;
 
-        await dataAccessLayer.UpdateAsync(
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 new EntityChange
                 {
@@ -97,7 +101,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         var entityId = new EntityId(Guid.Parse("5feb8fc4-dfca-4cc8-8366-f7f6bf4d3c50"));
         {
             var firstInstance = new FilesystemDataAccessLayer(this.repositoryPath);
-            var createResult = await firstInstance.UpdateAsync(CreateUpdateRequest(this.CreateEntity(entityId, "persisted")));
+            var createResult = await RequireUpdateSucceedsAsync(firstInstance, CreateUpdateRequest(this.CreateEntity(entityId, "persisted")));
             Assert.Equal(UpdateState.Added, Assert.Single(createResult.EntityResults).UpdateState);
         }
 
@@ -190,10 +194,11 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
             $$"""
             {
               "entity-id": "{{relationshipEntityId.Value:D}}",
-              "entity-types": ["relationship", "related-to"],
+              "entity-types": ["relationship", "related"],
               "names": ["a-to-b"],
-              "related-entity-ids": ["{{participantA.Value:D}}", "{{participantB.Value:D}}"],
-              "relationship-roles": ["source", "target"]
+              "participants": {
+                "entities": ["{{participantA.Value:D}}", "{{participantB.Value:D}}"]
+              }
             }
             """);
 

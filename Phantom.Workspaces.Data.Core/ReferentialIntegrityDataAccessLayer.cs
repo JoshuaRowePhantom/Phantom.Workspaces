@@ -674,8 +674,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return;
         }
 
-        if (string.Equals(propertyName, "entity-id", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(propertyName, "related-entity-ids", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(propertyName, "entity-id", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -762,6 +761,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             this.AddSchemaTypedReferencesFromValue(value, resolvedSchema.Value, requiredTypes, references);
         }
 
+        if (resolvedSchema.Value.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
         if (value.ValueKind == JsonValueKind.Object
             && resolvedSchema.Value.TryGetProperty("properties", out var properties)
             && properties.ValueKind == JsonValueKind.Object)
@@ -808,6 +812,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
             foreach (var nestedSchema in schemas.EnumerateArray())
             {
+                if (nestedSchema.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
                 this.CollectSchemaTypedReferences(
                     value,
                     nestedSchema,
@@ -942,6 +951,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
         CancellationToken cancellationToken)
     {
+        if (schema.ValueKind != JsonValueKind.Object)
+        {
+            return schema;
+        }
+
         if (!schema.TryGetProperty("$ref", out var referenceElement)
             || referenceElement.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(referenceElement.GetString()))
@@ -1054,6 +1068,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     private IReadOnlyCollection<string> GetRequiredEntityTypesFromSchema(
         JsonElement schemaNode)
     {
+        if (schemaNode.ValueKind != JsonValueKind.Object)
+        {
+            return Array.Empty<string>();
+        }
+
         if (!schemaNode.TryGetProperty("x-entity-type", out var xEntityType))
         {
             return Array.Empty<string>();
@@ -1192,6 +1211,16 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     {
         if (value.ValueKind == JsonValueKind.Object)
         {
+            if (string.Equals(propertyName, "participants", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var property in value.EnumerateObject())
+                {
+                    this.CollectParticipantReferenceCounts(property.Value, counts);
+                }
+
+                return;
+            }
+
             foreach (var property in value.EnumerateObject())
             {
                 this.CollectManagedReferenceCounts(property.Value, property.Name, counts);
@@ -1212,7 +1241,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         if (propertyName is null
             || propertyName.Equals("entity-id", StringComparison.OrdinalIgnoreCase)
-            || propertyName.Equals("related-entity-ids", StringComparison.OrdinalIgnoreCase)
             || !propertyName.EndsWith("entity-id", StringComparison.OrdinalIgnoreCase)
             && !propertyName.EndsWith("entity-ids", StringComparison.OrdinalIgnoreCase)
             || value.ValueKind != JsonValueKind.String
@@ -1224,6 +1252,41 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var targetEntityId = new EntityId(targetEntityGuid);
         counts.TryGetValue(targetEntityId, out var existingCount);
         counts[targetEntityId] = existingCount + 1;
+    }
+
+    private void CollectParticipantReferenceCounts(
+        JsonElement value,
+        IDictionary<EntityId, int> counts)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in value.EnumerateObject())
+            {
+                this.CollectParticipantReferenceCounts(property.Value, counts);
+            }
+
+            return;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                this.CollectParticipantReferenceCounts(item, counts);
+            }
+
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(value.GetString(), out var participantGuid))
+        {
+            return;
+        }
+
+        var participantEntityId = new EntityId(participantGuid);
+        counts.TryGetValue(participantEntityId, out var existingParticipantCount);
+        counts[participantEntityId] = existingParticipantCount + 1;
     }
 
     private EntityId GetManagedReferenceRelationshipEntityId(
@@ -1247,9 +1310,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             {
               "entity-id": "{{relationshipEntityId.Value:D}}",
               "entity-types": ["relationship", "reference"],
-              "names": ["reference:{{sourceEntityId.Value:D}}:{{targetEntityId.Value:D}}"],
-              "related-entity-ids": ["{{sourceEntityId.Value:D}}", "{{targetEntityId.Value:D}}"],
-              "relationship-roles": ["source", "destination"]
+              "$schema": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
+              "participants": {
+                "source": "{{sourceEntityId.Value:D}}",
+                "target": "{{targetEntityId.Value:D}}"
+              }
             }
             """);
         return document.RootElement.Clone();
@@ -1258,29 +1323,25 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     private bool IsRelationshipEntity(
         JsonElement entityData)
     {
-        return this.GetEntityTypeNames(entityData).Contains(RelationshipType);
+        return this.GetEntityTypeNames(entityData).Contains(RelationshipType)
+            || this.HasSourceTargetRelationshipShape(entityData);
     }
 
     private bool IsReferenceRelationshipEntity(
         JsonElement entityData)
     {
-        var typeNames = this.GetEntityTypeNames(entityData);
-        return typeNames.Contains(RelationshipType) && typeNames.Contains(ReferenceRelationshipType);
+        return this.HasSourceTargetRelationshipShape(entityData);
     }
 
     private IReadOnlyCollection<EntityId> GetRelationshipParticipantEntityIds(
         JsonElement entityData)
     {
-        if (!entityData.TryGetProperty("related-entity-ids", out var participantIds)
-            || participantIds.ValueKind != JsonValueKind.Array)
+        if (!RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(entityData, out var participantIds))
         {
             return Array.Empty<EntityId>();
         }
 
-        return participantIds.EnumerateArray()
-            .Where(static participantId => participantId.ValueKind == JsonValueKind.String && Guid.TryParse(participantId.GetString(), out _))
-            .Select(static participantId => new EntityId(Guid.Parse(participantId.GetString()!)))
-            .ToArray();
+        return participantIds;
     }
 
     private string? GetRelationshipKey(
@@ -1303,16 +1364,70 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var typeNames = this.GetEntityTypeNames(relationshipData)
             .OrderBy(static value => value, StringComparer.Ordinal)
             .ToArray();
-        var roles = relationshipData.TryGetProperty("relationship-roles", out var roleElement)
-            && roleElement.ValueKind == JsonValueKind.Array
-                ? roleElement.EnumerateArray()
-                    .Where(static role => role.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(role.GetString()))
-                    .Select(static role => role.GetString()!)
-                    .OrderBy(static value => value, StringComparer.Ordinal)
-                    .ToArray()
-                : Array.Empty<string>();
+        if (typeNames.Length == 0 && this.HasSourceTargetRelationshipShape(relationshipData))
+        {
+            typeNames = new[] { ReferenceRelationshipType };
+        }
+        var roles = this.GetRelationshipRoles(relationshipData);
 
         return $"{string.Join("|", typeNames)}::{string.Join("|", participantIds)}::{string.Join("|", roles)}";
+    }
+
+    private bool HasSourceTargetRelationshipShape(
+        JsonElement entityData)
+    {
+        return entityData.ValueKind == JsonValueKind.Object
+            && entityData.TryGetProperty("participants", out var participants)
+            && participants.ValueKind == JsonValueKind.Object;
+    }
+
+    private IReadOnlyCollection<string> GetRelationshipRoles(
+        JsonElement relationshipData)
+    {
+        if (!relationshipData.TryGetProperty("participants", out var participants)
+            || participants.ValueKind != JsonValueKind.Object)
+        {
+            return Array.Empty<string>();
+        }
+
+        return participants.EnumerateObject()
+            .Select(static property => property.Name)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(static value => value, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private void CollectEntityIds(
+        JsonElement value,
+        ICollection<EntityId> ids)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in value.EnumerateObject())
+            {
+                this.CollectEntityIds(property.Value, ids);
+            }
+
+            return;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                this.CollectEntityIds(item, ids);
+            }
+
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(value.GetString(), out var guid))
+        {
+            return;
+        }
+
+        ids.Add(new EntityId(guid));
     }
 
     private void UpsertChange(

@@ -1,0 +1,43 @@
+{
+  "entity-id": "2e80c5d7-6a77-4b9b-8d55-6e9b2e44f1da",
+  "entity-types": [
+    "entity-type"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json"
+    ],
+    [
+      "entity-types",
+      "reference"
+    ]
+  ],
+  "schema": {
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
+    "allOf": [
+      {
+        "$ref": "relationship.json"
+      }
+    ],
+    "type": "object",
+    "properties": {
+      "participants": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "core.json#/$defs/entity-id"
+          },
+          "target": {
+            "$ref": "core.json#/$defs/entity-id"
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

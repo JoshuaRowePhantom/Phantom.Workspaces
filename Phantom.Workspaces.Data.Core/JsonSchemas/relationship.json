@@ -1,0 +1,78 @@
+{
+  "entity-id": "bb4a6d1e-4f2c-4a52-8f1d-9a7c3f28ec11",
+  "entity-types": [
+    "entity-type"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json"
+    ],
+    [
+      "entity-types",
+      "relationship"
+    ]
+  ],
+  "schema": {
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json",
+    "type": "object",
+    "properties": {
+      "entity-types": {
+        "type": "array",
+        "items": {
+          "$ref": "core.json#/$defs/entity-type-id"
+        },
+        "contains": {
+          "const": "relationship"
+        }
+      },
+      "participants": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "core.json#/$defs/entity-id"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "required": [
+      "entity-types",
+      "participants"
+    ],
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "entity-types": {
+              "contains": {
+                "const": "entity"
+              }
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "entity-types": {
+              "minItems": 3
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "entity-types": {
+              "minItems": 2
+            }
+          }
+        }
+      }
+    ]
+  }
+}

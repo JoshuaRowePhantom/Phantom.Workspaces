@@ -9,7 +9,8 @@ public abstract class DataAccessLayerNonQueryTests : DataAccessLayerNonQueryWith
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await dataAccessLayer.UpdateAsync(
+        var createResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -44,7 +45,8 @@ public abstract class DataAccessLayerNonQueryTests : DataAccessLayerNonQueryWith
                 SnapshotTime = null,
             });
 
-        var createResult = await dataAccessLayer.UpdateAsync(
+        var createResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -68,7 +70,8 @@ public abstract class DataAccessLayerNonQueryTests : DataAccessLayerNonQueryWith
                 .History)
             .UpdateTimes);
 
-        var updateResult = await dataAccessLayer.UpdateAsync(
+        var updateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata

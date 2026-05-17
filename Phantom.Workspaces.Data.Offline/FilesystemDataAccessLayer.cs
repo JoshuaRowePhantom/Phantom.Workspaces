@@ -426,7 +426,15 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return true;
         }
 
-        var roles = ExtractStringArrayProperty(relationshipData, "relationship-roles");
+        if (!relationshipData.TryGetProperty("participants", out var participants)
+            || participants.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var roles = participants.EnumerateObject()
+            .Select(static property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
         return roleNames.Value.Values.All(role => roles.Contains(role, StringComparer.Ordinal));
     }
 
@@ -767,23 +775,21 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     {
         if (relationshipData is null
             || relationshipData.Value.ValueKind != JsonValueKind.Object
-            || !relationshipData.Value.TryGetProperty("related-entity-ids", out var relatedEntityIdsElement)
-            || relatedEntityIdsElement.ValueKind != JsonValueKind.Array)
+            || !TryGetRelationshipParticipantIds(relationshipData.Value, out var relatedEntityIds))
         {
             return Array.Empty<EntityId>();
         }
 
-        var participantEntityIds = new List<EntityId>();
-        foreach (var relatedEntityIdElement in relatedEntityIdsElement.EnumerateArray())
-        {
-            if (relatedEntityIdElement.ValueKind == JsonValueKind.String
-                && Guid.TryParse(relatedEntityIdElement.GetString(), out var relatedEntityId))
-            {
-                participantEntityIds.Add(new EntityId(relatedEntityId));
-            }
-        }
+        return relatedEntityIds;
+    }
 
-        return participantEntityIds;
+    private static bool TryGetRelationshipParticipantIds(
+        JsonElement relationshipData,
+        out IReadOnlyCollection<EntityId> participantIds)
+    {
+        return RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(
+            relationshipData,
+            out participantIds);
     }
 
     public static string GetEntityDirectory(

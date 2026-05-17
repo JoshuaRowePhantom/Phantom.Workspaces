@@ -1,1 +1,3 @@
 See `docs\design\style-guide.md` for project style rules.
+Do not write code for backward compatibility purposes.
+The WPF application must never synchronously await results from the entity repository.

@@ -11,7 +11,9 @@ namespace Phantom.Workspaces.Data;
 /// </remarks>
 public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
 {
-    private const string EntitySchemaName = "https://schemas.phantom.app/workspaces/data/core/entity.json";
+    private const string JsonSchemasNamePrefix = "json-schemas";
+    private static readonly string EntitySchemaName = JsonSerializer.Serialize(
+        new[] { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" });
     private const string JsonSchemaType = "json-schema";
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
     private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
@@ -85,13 +87,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             if (applicableSchema.SchemaEntity is null)
             {
-                // Entity-type-derived schema references are optional extension points.
-                // If no schema entity exists for a given type name, skip it.
-                if (this.IsEntityTypeSchemaReference(applicableSchema.SchemaReference))
-                {
-                    continue;
-                }
-
                 // The base entity schema may not be present in lightweight/test repositories.
                 // In that case, keep validating against whatever schemas are available.
                 if (string.Equals(applicableSchema.SchemaReference, EntitySchemaName, StringComparison.Ordinal))
@@ -458,37 +453,44 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         ISet<string> visitedSchemaReferences,
         CancellationToken cancellationToken)
     {
-        if (!visitedSchemaReferences.Add(schemaReference))
+        var schemaNames = this.GetSchemaEntityNames(schemaReference);
+        if (!schemaNames.Any(visitedSchemaReferences.Add))
         {
             return null;
         }
 
-        if (requestSchemasByName.TryGetValue(schemaReference, out var requestSchema))
+        foreach (var schemaName in schemaNames)
         {
-            return requestSchema;
+            if (requestSchemasByName.TryGetValue(schemaName, out var requestSchema))
+            {
+                return requestSchema;
+            }
         }
 
-        var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
-            new GetRequest
-            {
-                Entities =
-                [
-                    new GetEntityRequest
-                    {
-                        EntityName = new EntityName(schemaReference),
-                    },
-                ],
-                Timestamps = new Timestamp?[] { null },
-            },
-            cancellationToken);
-
-        foreach (var batch in getResult.Batches)
+        foreach (var schemaName in schemaNames)
         {
-            foreach (var entity in batch.Entities)
-            {
-                if (entity.Data is { } data && data.ValueKind == JsonValueKind.Object)
+            var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
+                new GetRequest
                 {
-                    return data;
+                    Entities =
+                    [
+                        new GetEntityRequest
+                        {
+                            EntityName = new EntityName(schemaName),
+                        },
+                    ],
+                    Timestamps = new Timestamp?[] { null },
+                },
+                cancellationToken);
+
+            foreach (var batch in getResult.Batches)
+            {
+                foreach (var entity in batch.Entities)
+                {
+                    if (entity.Data is { } data && data.ValueKind == JsonValueKind.Object)
+                    {
+                        return data;
+                    }
                 }
             }
         }
@@ -496,15 +498,15 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
         foreach (var entity in exportResult.ChangeBatches.SelectMany(static batch => batch.Entities))
         {
-        if (entity.Data is not { ValueKind: JsonValueKind.Object } data)
-        {
-            continue;
-        }
+            if (entity.Data is not { ValueKind: JsonValueKind.Object } data)
+            {
+                continue;
+            }
 
-        if (this.GetEntityNames(data).Contains(schemaReference, StringComparer.Ordinal))
-        {
-            return data;
-        }
+            if (this.GetEntityNames(data).Intersect(schemaNames, StringComparer.Ordinal).Any())
+            {
+                return data;
+            }
         }
 
         return null;
@@ -724,6 +726,30 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         ApplicableSchema schema)
     {
         return string.Equals(schema.SchemaReference, EntitySchemaName, StringComparison.Ordinal);
+    }
+
+    private IReadOnlyCollection<string> GetSchemaEntityNames(
+        string schemaReference)
+    {
+        var names = new List<string>();
+        if (!string.IsNullOrWhiteSpace(schemaReference))
+        {
+            if (schemaReference.StartsWith("[", StringComparison.Ordinal))
+            {
+                names.Add(schemaReference);
+            }
+            else
+            {
+                names.Add(JsonSerializer.Serialize(new[] { JsonSchemasNamePrefix, schemaReference }));
+            }
+
+            if (!names.Contains(schemaReference, StringComparer.Ordinal))
+            {
+                names.Add(schemaReference);
+            }
+        }
+
+        return names;
     }
 
     private string BuildComposedSchemaText(

@@ -1,0 +1,129 @@
+{
+  "entity-id": "d2a1c83b-2d83-4d5c-9f48-8f7d4e3b0f4b",
+  "entity-types": [
+    "json-schema"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/mime-attachment.json"
+    ],
+    [
+      "entity-types",
+      "mime-attachment"
+    ]
+  ],
+  "schema": {
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/mime-attachment.json",
+    "anyOf": [
+      {
+        "$ref": "#/$defs/mime-attachment-value"
+      },
+      {
+        "$ref": "#/$defs/localized-mime-attachment"
+      }
+    ],
+    "$defs": {
+      "mime-attachment-value": {
+        "type": "object",
+        "properties": {
+          "mime-type": {
+            "type": "string"
+          },
+          "content": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/mime-text-content"
+              },
+              {
+                "$ref": "#/$defs/mime-binary-content"
+              }
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "content"
+              ]
+            },
+            "then": {
+              "required": [
+                "mime-type"
+              ]
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "required": [
+                  "content"
+                ]
+              }
+            },
+            "then": {
+              "required": [
+                "url"
+              ]
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "required": [
+                  "url"
+                ]
+              }
+            },
+            "then": {
+              "required": [
+                "content"
+              ]
+            }
+          }
+        ],
+        "unevaluatedProperties": false
+      },
+      "mime-text-content": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "unevaluatedProperties": false
+      },
+      "mime-binary-content": {
+        "type": "object",
+        "properties": {
+          "binary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "binary"
+        ],
+        "unevaluatedProperties": false
+      },
+      "localized-mime-attachment": {
+        "type": "object",
+        "properties": {
+          "default": {
+            "$ref": "#/$defs/mime-attachment-value"
+          }
+        },
+        "additionalProperties": {
+          "$ref": "#/$defs/mime-attachment-value"
+        }
+      }
+    }
+  }
+}

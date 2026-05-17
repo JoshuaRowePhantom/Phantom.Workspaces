@@ -4,14 +4,17 @@
     "json-schema"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/core.json",
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json"
+    ],
     [
       "entity-types",
       "core"
     ]
   ],
   "schema": {
-    "$id": "https://schemas.phantom.app/workspaces/data/core/core.json",
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json",
     "$defs": {
       "entity-id": {
         "type": "string",

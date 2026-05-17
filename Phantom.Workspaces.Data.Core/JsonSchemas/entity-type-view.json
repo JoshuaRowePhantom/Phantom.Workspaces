@@ -4,23 +4,26 @@
     "entity-type"
   ],
   "names": [
-    "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json",
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type-view.json"
+    ],
     [
       "entity-types",
       "entity-type-view"
     ]
   ],
   "schema": {
-    "$id": "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json",
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type-view.json",
     "allOf": [
       {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/entity.json"
+        "$ref": "entity.json"
       }
     ],
     "type": "object",
     "properties": {
       "base-entity-type-field-entity-id": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+        "$ref": "core.json#/$defs/entity-id"
       },
       "fields": {
         "type": "array",
@@ -31,7 +34,7 @@
       "sort-order": {
         "type": "array",
         "items": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/sort-field"
+          "$ref": "core.json#/$defs/sort-field"
         }
       },
       "traverse-relationships": {
@@ -59,7 +62,7 @@
         "type": "object",
         "properties": {
           "field-path": {
-            "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/field-path"
+            "$ref": "core.json#/$defs/field-path"
           },
           "display-format": {
             "type": "string"
@@ -76,7 +79,7 @@
           "relationship-type-ids": {
             "type": "array",
             "items": {
-              "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-type-id",
+              "$ref": "core.json#/$defs/entity-type-id",
               "x-entity-type": "entity-type"
             }
           },

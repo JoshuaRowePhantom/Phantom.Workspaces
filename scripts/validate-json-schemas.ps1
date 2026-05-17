@@ -152,6 +152,38 @@ function Get-Refs {
     return $refs
 }
 
+function Resolve-SchemaReferencePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Ref,
+
+        [Parameter(Mandatory = $true)]
+        [System.IO.FileInfo] $SchemaFile
+    )
+
+    if ($Ref.StartsWith('#')) {
+        return $null
+    }
+
+    $targetUri = $Ref
+    if ($Ref.StartsWith('http://') -or $Ref.StartsWith('https://')) {
+        $targetUri = $Ref.Split('#', 2)[0]
+        if ($targetUri -notlike 'https://schemas.workspaces.phantom.to/workspaces/data/core/*') {
+            return $null
+        }
+
+        $targetPath = [System.IO.Path]::GetFileName($targetUri)
+        return Join-Path $SchemaFilesPath $targetPath
+    }
+
+    $relativePath = $Ref.Split('#', 2)[0]
+    if ([string]::IsNullOrWhiteSpace($relativePath)) {
+        return $null
+    }
+
+    return [System.IO.Path]::GetFullPath((Join-Path $SchemaFile.DirectoryName $relativePath))
+}
+
 function Get-LatestPackageAssemblyPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -262,15 +294,12 @@ foreach ($schemaFile in $schemaFiles) {
     $ids[$schemaId] = $schemaFile.Name
 
     foreach ($ref in (Get-Refs -Node $schemaNode)) {
-        if ($ref -like 'https://schemas.phantom.app/workspaces/data/core/*') {
-            $parts = $ref.Split('#', 2)
-            $targetUri = $parts[0]
-            $fragment = if ($parts.Count -gt 1) { "#$($parts[1])" } else { '' }
-            $targetFileName = [System.IO.Path]::GetFileName($targetUri)
-            $targetPath = Join-Path $SchemaFilesPath $targetFileName
+        $targetPath = Resolve-SchemaReferencePath -Ref $ref -SchemaFile $schemaFile
+        if ($null -ne $targetPath) {
+            $fragment = if ($ref.Contains('#')) { "#$($ref.Split('#', 2)[1])" } else { '' }
 
             if (-not (Test-Path $targetPath)) {
-                throw "Reference '$ref' in '$($schemaFile.Name)' points to missing schema file '$targetFileName'."
+                throw "Reference '$ref' in '$($schemaFile.Name)' points to missing schema file '$([System.IO.Path]::GetFileNameWithoutExtension($targetPath)).json'."
             }
 
             if ($fragment) {

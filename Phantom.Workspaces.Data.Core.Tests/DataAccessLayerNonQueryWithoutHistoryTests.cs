@@ -10,6 +10,28 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 
     protected abstract IDataAccessLayer CreateDataAccessLayer();
 
+    protected static async Task<UpdateResult> RequireUpdateSucceedsAsync(
+        IDataAccessLayer dataAccessLayer,
+        UpdateRequest request)
+    {
+        var result = await dataAccessLayer.UpdateAsync(request);
+        Assert.True(
+            result.EntityResults.All(static entityResult => entityResult.UpdateState != UpdateState.Failed),
+            UpdateResultDiagnostics.Describe(result));
+        return result;
+    }
+
+    protected static async Task<UpdateResult> RequireUpdateFailsAsync(
+            IDataAccessLayer dataAccessLayer,
+            UpdateRequest request)
+    {
+            var result = await dataAccessLayer.UpdateAsync(request);
+            Assert.True(
+                result.EntityResults.Any(static entityResult => entityResult.UpdateState == UpdateState.Failed),
+                UpdateResultDiagnostics.Describe(result));
+            return result;
+    }
+
     [Fact]
     public async Task Populate_CreateEntity_CanReadBackByIdNameAndTypeName()
     {
@@ -37,7 +59,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         AssertSuccessfulResult(createResult, UpdateState.Added);
         var createConcurrencyTag = createResult.EntityResults.Single().ConcurrencyTag!.Value;
 
-        var updateResult = await dataAccessLayer.UpdateAsync(
+        var updateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Update entity"),
                 new[] { this.CreateUpsertChange("two", createConcurrencyTag) }));
@@ -60,7 +83,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
         AssertSuccessfulResult(createResult, UpdateState.Added);
 
-        var updateResult = await dataAccessLayer.UpdateAsync(
+        var updateResult = await RequireUpdateFailsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Update entity without concurrency tag"),
                 new[] { this.CreateUpsertChange("two") }));
@@ -89,7 +113,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
                 new[] { this.CreateUpsertChange("two", initialConcurrencyTag) }));
         var currentConcurrencyTag = AssertSuccessfulResult(updateResult, UpdateState.Updated).ConcurrencyTag!.Value;
 
-        var staleUpdateResult = await dataAccessLayer.UpdateAsync(
+        var staleUpdateResult = await RequireUpdateFailsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Stale update"),
                 new[] { this.CreateUpsertChange("three", initialConcurrencyTag) }));
@@ -111,7 +136,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         AssertSuccessfulResult(createResult, UpdateState.Added);
         var createConcurrencyTag = createResult.EntityResults.Single().ConcurrencyTag!.Value;
 
-        var deleteResult = await dataAccessLayer.UpdateAsync(
+        var deleteResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Delete entity"),
                 new[] { this.CreateDeleteChange(createConcurrencyTag) }));
@@ -137,7 +163,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
                 new[] { this.CreateUpsertChange("two", initialConcurrencyTag) }));
         var currentConcurrencyTag = AssertSuccessfulResult(updateResult, UpdateState.Updated).ConcurrencyTag!.Value;
 
-        var deleteResult = await dataAccessLayer.UpdateAsync(
+        var deleteResult = await RequireUpdateFailsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Stale delete"),
                 new[] { this.CreateDeleteChange(initialConcurrencyTag) }));
@@ -165,7 +192,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
               "names": ["two"]
             }
             """);
-        await dataAccessLayer.UpdateAsync(
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Create additional participant"),
                 new[]
@@ -181,14 +209,16 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             $$"""
             {
               "entity-id": "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69",
-              "entity-types": ["relationship", "related-to"],
+              "entity-types": ["relationship", "related"],
               "names": ["one-related"],
-              "related-entity-ids": ["{{SampleEntityId.Value:D}}", "{{additionalParticipantId.Value:D}}"],
-              "relationship-roles": ["source", "target"]
+              "participants": {
+                "entities": ["{{SampleEntityId.Value:D}}", "{{additionalParticipantId.Value:D}}"]
+              }
             }
             """);
         var relationshipEntityId = new EntityId(Guid.Parse("8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69"));
-        await dataAccessLayer.UpdateAsync(
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Create relationship"),
                 new[]
@@ -294,12 +324,13 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         UpdateResult result,
         UpdateState expectedState)
     {
-        var entityResult = Assert.Single(result.EntityResults);
-        Assert.Equal(expectedState, entityResult.UpdateState);
-        Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
-        Assert.Equal(SampleEntityId, entityResult.RequestedEntityId);
-        Assert.Equal(SampleEntityId, entityResult.ResultingEntityId);
-        Assert.Empty(entityResult.Errors);
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var entityResult = result.EntityResults.Single();
+        Assert.True(entityResult.UpdateState == expectedState, UpdateResultDiagnostics.Describe(result));
+        Assert.True(entityResult.ConcurrencyMatchState == ConcurrencyMatchState.Matched, UpdateResultDiagnostics.Describe(result));
+        Assert.True(entityResult.RequestedEntityId == SampleEntityId, UpdateResultDiagnostics.Describe(result));
+        Assert.True(entityResult.ResultingEntityId == SampleEntityId, UpdateResultDiagnostics.Describe(result));
+        Assert.True(entityResult.Errors.Count == 0, UpdateResultDiagnostics.Describe(result));
         Assert.NotNull(entityResult.ConcurrencyTag);
         return entityResult;
     }
