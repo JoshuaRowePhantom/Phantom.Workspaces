@@ -1,9 +1,6 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.phantom.app/workspaces/data/core/view.json",
-  "entity-id": "{7be0f139-44fd-4b49-99f4-4cf14f8c9f4b}",
+  "entity-id": "7be0f139-44fd-4b49-99f4-4cf14f8c9f4b",
   "entity-types": [
-    "json-schema",
     "entity-type"
   ],
   "names": [
@@ -13,95 +10,92 @@
       "view"
     ]
   ],
-  "allOf": [
-    {
-      "$ref": "https://schemas.phantom.app/workspaces/data/core/entity.json"
-    }
-  ],
-  "type": "object",
-  "properties": {
-    "title": {
-      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+  "schema": {
+    "$id": "https://schemas.phantom.app/workspaces/data/core/view.json",
+    "type": "object",
+    "properties": {
+      "title": {
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+      },
+      "sub-views": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/view-reference"
+            },
+            {
+              "$ref": "#/$defs/view-definition"
+            }
+          ]
+        }
+      }
     },
-    "sub-views": {
-      "type": "array",
-      "items": {
-        "oneOf": [
-          {
-            "$ref": "#/$defs/view-reference"
+    "required": [
+      "title",
+      "sub-views"
+    ],
+    "$defs": {
+      "view-reference": {
+        "type": "object",
+        "properties": {
+          "view-entity-id": {
+            "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
+            "x-entity-type": "view"
           },
-          {
-            "$ref": "#/$defs/view-definition"
+          "disposition": {
+            "$ref": "#/$defs/view-disposition"
           }
+        },
+        "required": [
+          "view-entity-id",
+          "disposition"
+        ],
+        "unevaluatedProperties": false
+      },
+      "view-definition": {
+        "type": "object",
+        "properties": {
+          "disposition": {
+            "$ref": "#/$defs/view-disposition"
+          },
+          "query": {
+            "type": "object",
+            "properties": {
+              "clauses": {
+                "type": "array"
+              },
+              "timestamps": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "clauses"
+            ],
+            "additionalProperties": true
+          },
+          "entity-type-views": {
+            "type": "array",
+            "items": {
+              "$ref": "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json",
+              "x-entity-type": "entity-type-view"
+            }
+          }
+        },
+        "required": [
+          "disposition",
+          "query"
+        ],
+        "unevaluatedProperties": false
+      },
+      "view-disposition": {
+        "type": "string",
+        "enum": [
+          "expanded",
+          "collapsed",
+          "new-window"
         ]
       }
     }
-  },
-  "required": [
-    "title",
-    "sub-views"
-  ],
-  "$defs": {
-    "view-reference": {
-      "type": "object",
-      "properties": {
-        "view-entity-id": {
-          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
-          "x-entity-type": "view"
-        },
-        "disposition": {
-          "$ref": "#/$defs/view-disposition"
-        }
-      },
-      "required": [
-        "view-entity-id",
-        "disposition"
-      ],
-      "unevaluatedProperties": false
-    },
-    "view-definition": {
-      "type": "object",
-      "properties": {
-        "disposition": {
-          "$ref": "#/$defs/view-disposition"
-        },
-        "query": {
-          "type": "object",
-          "properties": {
-            "clauses": {
-              "type": "array"
-            },
-            "timestamps": {
-              "type": "array"
-            }
-          },
-          "required": [
-            "clauses"
-          ],
-          "additionalProperties": true
-        },
-        "entity-type-views": {
-          "type": "array",
-          "items": {
-            "$ref": "https://schemas.phantom.app/workspaces/data/core/entity-type-view.json",
-            "x-entity-type": "entity-type-view"
-          }
-        }
-      },
-      "required": [
-        "disposition",
-        "query"
-      ],
-      "unevaluatedProperties": false
-    },
-    "view-disposition": {
-      "type": "string",
-      "enum": [
-        "expanded",
-        "collapsed",
-        "new-window"
-      ]
-    }
-  },
-  "unevaluatedProperties": false
+  }
 }

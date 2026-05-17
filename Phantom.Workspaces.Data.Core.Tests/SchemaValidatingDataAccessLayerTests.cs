@@ -63,6 +63,64 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_Succeeds_WhenSchemaEntityTypeIsUsedAsJsonSchema()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var schemaEntityId = new EntityId(Guid.Parse("a8428673-25f5-4c30-8f70-c3014f660d95"));
+        var entityId = new EntityId(Guid.Parse("ad6f2d02-2f5b-4e64-bec4-78d16dff7f92"));
+        const string schemaName = "https://schemas.phantom.app/tests/implicit-json-schema-entity-type.json";
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity-type schema and validated entity"),
+                new EntityChange[]
+                {
+                    CreateEntityChange(
+                        schemaEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{schemaEntityId.Value:D}}",
+                              "entity-types": ["entity-type"],
+                              "names": ["{{schemaName}}"],
+                              "schema": {
+                                "$id": "{{schemaName}}",
+                                "type": "object",
+                                "properties": {
+                                  "title": { "type": "string" }
+                                },
+                                "required": ["title"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "$schema": "{{schemaName}}",
+                              "entity-id": "{{entityId.Value:D}}",
+                              "entity-types": ["entity"],
+                              "names": ["validated-entity"],
+                              "title": "valid"
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(
+            result.EntityResults.Count == 2,
+            string.Join(
+                Environment.NewLine,
+                result.EntityResults.SelectMany(entityResult => entityResult.Errors.Select(error => error.Message))));
+        Assert.DoesNotContain(result.EntityResults, entityResult => entityResult.UpdateState == UpdateState.Failed);
+        Assert.All(result.EntityResults, entityResult => Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState));
+    }
+
+    [Fact]
     public async Task Update_IsRejected_WhenEntityFailsValidation()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -156,9 +214,14 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{entityTypeEntityId.Value:D}}",
-                              "entity-types": ["entity", "entity-type"],
+                              "entity-types": ["entity-type"],
                               "names": [["entity-types","sample-entity-type"]],
-                              "schema-entity-id": "https://schemas.phantom.app/workspaces/data/core/entity.json",
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "title": { "type": "string" }
+                                }
+                              },
                               "unexpected-property": "should-fail"
                             }
                             """).RootElement.Clone(),
@@ -169,6 +232,42 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("unexpected-property", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_Succeeds_WhenEntityTypeEntityContainsEntityTypeSpecificFields()
+    {
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new InMemoryDataAccessLayer());
+        var entityTypeEntityId = new EntityId(Guid.Parse("1d033c1d-f265-4b62-866f-ab88ceb66dcf"));
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add valid entity-type entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityTypeEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityTypeEntityId.Value:D}}",
+                              "entity-types": ["entity-type"],
+                              "names": [["entity-types","sample-entity-type"]],
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "title": { "type": "string" }
+                                }
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var entityResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
+        Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
     }
 
     [Fact]
@@ -267,15 +366,17 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         using var schemaDocument = JsonDocument.Parse(
             $$"""
             {
-              "$id": "{{schemaName}}",
               "entity-id": "{{entityId.Value:D}}",
-              "entity-types": ["json-schema"],
+              "entity-types": ["entity-type"],
               "names": ["{{schemaName}}"],
-              "type": "object",
-              "properties": {
-                "title": { "type": "string" }
-              },
-              "required": ["title"]
+              "schema": {
+                "$id": "{{schemaName}}",
+                "type": "object",
+                "properties": {
+                  "title": { "type": "string" }
+                },
+                "required": ["title"]
+              }
             }
             """);
 

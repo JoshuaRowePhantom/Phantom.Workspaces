@@ -1,10 +1,7 @@
 {
-  "$schema": "https://schemas.phantom.app/workspaces/data/core/json-schema-reference.json",
-  "$id": "https://schemas.phantom.app/workspaces/data/core/entity-type.json",
-  "entity-id": "{739d0469-4ad8-4ae0-b2b5-3c3be996f264}",
+  "entity-id": "739d0469-4ad8-4ae0-b2b5-3c3be996f264",
   "entity-types": [
-    "entity",
-    "entity-type"
+    "json-schema"
   ],
   "names": [
     "https://schemas.phantom.app/workspaces/data/core/entity-type.json",
@@ -13,5 +10,8 @@
       "entity-type"
     ]
   ],
-  "schema-entity-id": "https://schemas.phantom.app/workspaces/data/core/json-schema-reference.json"
+  "schema": {
+    "$id": "https://schemas.phantom.app/workspaces/data/core/entity-type.json",
+    "type": "object"
+  }
 }

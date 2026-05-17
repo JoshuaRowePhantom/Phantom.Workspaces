@@ -720,9 +720,15 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 continue;
             }
 
+            var schemaNode = this.GetSchemaPayloadOrSelf(schemaEntity);
+            if (schemaNode is null)
+            {
+                continue;
+            }
+
             this.CollectSchemaTypedReferences(
                 entityData,
-                schemaEntity,
+                schemaNode.Value,
                 applicableSchema.SchemaReference,
                 requestSchemaEntitiesByName,
                 references,
@@ -946,7 +952,27 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var referenceValue = referenceElement.GetString()!;
         if (referenceValue.StartsWith('#'))
         {
-            return this.ResolveJsonPointer(schema, referenceValue);
+            var localResolution = this.ResolveJsonPointer(schema, referenceValue);
+            if (localResolution is not null)
+            {
+                return localResolution;
+            }
+
+            var rootSchema = this.ResolveSchemaAsync(schemaName, requestSchemaEntitiesByName, cancellationToken)
+                .GetAwaiter()
+                .GetResult();
+            if (rootSchema is null)
+            {
+                return null;
+            }
+
+            var rootSchemaNode = this.GetSchemaPayloadOrSelf(rootSchema.Value);
+            if (rootSchemaNode is null)
+            {
+                return null;
+            }
+
+            return this.ResolveJsonPointer(rootSchemaNode.Value, referenceValue);
         }
 
         var hashIndex = referenceValue.IndexOf('#');
@@ -969,12 +995,18 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return null;
         }
 
-        if (string.IsNullOrEmpty(fragment))
+        var referencedSchemaNode = this.GetSchemaPayloadOrSelf(referencedSchema.Value);
+        if (referencedSchemaNode is null)
         {
-            return referencedSchema;
+            return null;
         }
 
-        return this.ResolveJsonPointer(referencedSchema.Value, fragment);
+        if (string.IsNullOrEmpty(fragment))
+        {
+            return referencedSchemaNode;
+        }
+
+        return this.ResolveJsonPointer(referencedSchemaNode.Value, fragment);
     }
 
     private JsonElement? ResolveJsonPointer(
@@ -1042,6 +1074,39 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             .Where(static element => element.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(element.GetString()))
             .Select(static element => element.GetString()!)
             .ToArray();
+    }
+
+    private JsonElement? GetSchemaPayloadOrSelf(
+        JsonElement schemaEntity)
+    {
+        if (schemaEntity.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!schemaEntity.TryGetProperty("schema", out var schemaPayload))
+        {
+            return schemaEntity;
+        }
+
+        if (schemaPayload.ValueKind == JsonValueKind.Object)
+        {
+            return schemaPayload;
+        }
+
+        if (schemaPayload.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(schemaPayload.GetString()))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "$ref": "{{schemaPayload.GetString()}}"
+            }
+            """);
+        return document.RootElement.Clone();
     }
 
     private IReadOnlyDictionary<string, List<JsonElement>> GetEntitiesByName(

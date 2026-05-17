@@ -1,7 +1,5 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.phantom.app/workspaces/data/core/core.json",
-  "entity-id": "{6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e001}",
+  "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e001",
   "entity-types": [
     "json-schema"
   ],
@@ -12,109 +10,112 @@
       "core"
     ]
   ],
-  "$defs": {
-    "entity-id": {
-      "type": "string",
-      "format": "uuid"
-    },
-    "entity-type-id": {
-      "$comment": "Either the entity type name or the entity type's entity id.",
-      "type": "string"
-    },
-    "x-entity-type": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/entity-type-id"
-        },
-        {
-          "type": "array",
-          "items": {
+  "schema": {
+    "$id": "https://schemas.phantom.app/workspaces/data/core/core.json",
+    "$defs": {
+      "entity-id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "entity-type-id": {
+        "$comment": "Either the entity type name or the entity type's entity id.",
+        "type": "string"
+      },
+      "x-entity-type": {
+        "anyOf": [
+          {
             "$ref": "#/$defs/entity-type-id"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/entity-type-id"
+            }
           }
-        }
-      ]
-    },
-    "timestamp": {
-      "type": "object",
-      "properties": {
-        "datetime": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "change-id": {
-          "type": "string"
-        }
-      }
-    },
-    "entity-name": {
-      "anyOf": [
-        {
-          "$comment": "A simple string, when no further structure is required.",
-          "type": "string"
-        },
-        {
-          "$comment": "An array of strings, used when the name consists of multiple parts that need to be kept separate (e.g. a pull request id in a specific repository)",
-          "type": "array",
-          "items": {
+        ]
+      },
+      "timestamp": {
+        "type": "object",
+        "properties": {
+          "datetime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "change-id": {
             "type": "string"
           }
         }
-      ]
-    },
-    "entity-reference": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/entity-id"
-        },
-        {
-          "$ref": "#/$defs/entity-name"
-        }
-      ]
-    },
-    "local-string": {
-      "anyOf": [
-        {
-          "$comment": "A simple string, used when localization is not needed, interpreted as \"default\".",
-          "type": "string"
-        },
-        {
-          "$comment": "A localized string, where the keys are locale names (e.g. \"en-US\", \"fr-FR\") and the values are the localized strings for those locales. The \"default\" key is used as a fallback when a specific locale is not available.",
-          "type": "object",
-          "properties": {
-            "default": {
+      },
+      "entity-name": {
+        "anyOf": [
+          {
+            "$comment": "A simple string, when no further structure is required.",
+            "type": "string"
+          },
+          {
+            "$comment": "An array of strings, used when the name consists of multiple parts that need to be kept separate (e.g. a pull request id in a specific repository)",
+            "type": "array",
+            "items": {
               "type": "string"
             }
+          }
+        ]
+      },
+      "entity-reference": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/entity-id"
           },
-          "additionalProperties": true
-        }
-      ]
-    },
-    "field-path": {
-      "type": "array",
-      "items": {
-        "type": "string"
+          {
+            "$ref": "#/$defs/entity-name"
+          }
+        ]
       },
-      "minItems": 1
-    },
-    "sort-field": {
-      "type": "object",
-      "properties": {
-        "field-path": {
-          "$ref": "#/$defs/field-path"
+      "local-string": {
+        "anyOf": [
+          {
+            "$comment": "A simple string, used when localization is not needed, interpreted as \"default\".",
+            "type": "string"
+          },
+          {
+            "$comment": "A localized string, where the keys are locale names (e.g. \"en-US\", \"fr-FR\") and the values are the localized strings for those locales. The \"default\" key is used as a fallback when a specific locale is not available.",
+            "type": "object",
+            "properties": {
+              "default": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      },
+      "field-path": {
+        "type": "array",
+        "items": {
+          "type": "string"
         },
-        "sort-direction": {
-          "type": "string",
-          "enum": [
-            "ascending",
-            "descending"
-          ]
-        }
+        "minItems": 1
       },
-      "required": [
-        "field-path",
-        "sort-direction"
-      ],
-      "unevaluatedProperties": false
+      "sort-field": {
+        "type": "object",
+        "properties": {
+          "field-path": {
+            "$ref": "#/$defs/field-path"
+          },
+          "sort-direction": {
+            "type": "string",
+            "enum": [
+              "ascending",
+              "descending"
+            ]
+          }
+        },
+        "required": [
+          "field-path",
+          "sort-direction"
+        ],
+        "unevaluatedProperties": false
+      }
     }
   }
 }

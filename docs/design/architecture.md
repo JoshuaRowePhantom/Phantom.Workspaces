@@ -164,17 +164,19 @@ The system separates UI, agent execution, data access, and external integrations
 7. Schema enforcement model:
    - each entity type defines/owns its schema,
    - schema validation is performed at entry time by a DAL schema-enforcement layer,
-   - individual storage implementations do not each re-implement schema enforcement,
-   - all schemas must set `unevaluatedProperties` to `false`.
+   - individual storage implementations do not each re-implement schema enforcement.
 8. Schema composition model:
-   - a base entity schema defines common fields,
-   - entity-specific schemas extend the base via `allOf`,
-   - the final composed schema is the validation target,
-   - the composed schema may be surfaced through an `anyOf` over the registered entity schemas when the system needs a top-level “any entity” validator.
+   - `entity.json` defines the entity-type for all entities,
+   - `entity-type.json` defines the entity-type for entity-type entities,
+   - `json-schema.json` defines the entity-type for json-schema entities,
+   - json-schema entities carry schema content in a `schema` property,
+   - `schema` can be either an embedded schema object or a URI reference to another schema.
 9. Entity type composition model:
-   - each entity exposes a `type` array of entity-type identifiers,
-   - the entity must satisfy all schemas referenced by the `type` array,
-   - validator composition is performed by the DAL/schema layer by translating the `type` array into a composed `allOf`.
+   - every entity is implicitly validated as entity type `entity`,
+   - entities may additionally declare explicit `entity-types`,
+   - each explicit type contributes its schema to a composed validator,
+   - `entity-type` implicitly composes the `json-schema` entity type,
+   - the final composed schema enforces `unevaluatedProperties: false`.
 10. Shared vs user-specific visibility:
    - each entity has a shared representation and per-user representation,
    - effective user-visible data comes from user-specific data,

@@ -11,7 +11,12 @@ namespace Phantom.Workspaces.Data;
 /// </remarks>
 public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
 {
+    private const string EntitySchemaName = "https://schemas.phantom.app/workspaces/data/core/entity.json";
     private const string JsonSchemaType = "json-schema";
+    private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
+    private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
+    private const string CustomEntityTypeKeyword = "x-entity-type";
+    private static readonly object SchemaRegistryLock = new();
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -68,11 +73,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return Array.Empty<UpdateError>();
         }
 
-        if (this.IsSchemaEntity(data))
-        {
-            return Array.Empty<UpdateError>();
-        }
-
         var applicableSchemas = await this.ResolveApplicableSchemasAsync(data, requestSchemasByName, cancellationToken);
         if (applicableSchemas.Count == 0)
         {
@@ -80,6 +80,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         var errors = new List<UpdateError>();
+        var resolvedSchemas = new List<ApplicableSchema>();
         foreach (var applicableSchema in applicableSchemas)
         {
             if (applicableSchema.SchemaEntity is null)
@@ -87,6 +88,18 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 // Entity-type-derived schema references are optional extension points.
                 // If no schema entity exists for a given type name, skip it.
                 if (this.IsEntityTypeSchemaReference(applicableSchema.SchemaReference))
+                {
+                    continue;
+                }
+
+                // The base entity schema may not be present in lightweight/test repositories.
+                // In that case, keep validating against whatever schemas are available.
+                if (string.Equals(applicableSchema.SchemaReference, EntitySchemaName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (string.Equals(applicableSchema.SchemaReference, Draft202012MetaSchema, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -100,45 +113,66 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 continue;
             }
 
-            JsonSchema schema;
-            try
-            {
-                schema = JsonSchema.FromText(this.GetSchemaText(applicableSchema.SchemaEntity.Value));
-            }
-            catch (Exception exception)
-            {
-                errors.Add(
-                    new UpdateError
-                    {
-                        Message = $"Schema '{applicableSchema.SchemaReference}' is invalid: {exception.Message}",
-                        RelatedEntityId = change.EntityId,
-                    });
-                continue;
-            }
+            resolvedSchemas.Add(
+                applicableSchema with
+                {
+                    SchemaEntity = applicableSchema.SchemaEntity.Value,
+                });
+        }
 
-            var evaluation = schema.Evaluate(
+        if (errors.Count > 0 || resolvedSchemas.Count == 0)
+        {
+            return errors;
+        }
+
+        var shouldCloseUnevaluatedProperties = resolvedSchemas.Any(
+            schema => !this.IsBaseEntitySchema(schema));
+
+        JsonSchema composedSchema;
+        try
+        {
+            lock (SchemaRegistryLock)
+            {
+                composedSchema = JsonSchema.FromText(this.BuildComposedSchemaText(resolvedSchemas, shouldCloseUnevaluatedProperties));
+            }
+        }
+        catch (Exception exception)
+        {
+            errors.Add(
+                new UpdateError
+                {
+                    Message = $"Composed schema is invalid: {exception.Message}",
+                    RelatedEntityId = change.EntityId,
+                });
+            return errors;
+        }
+
+        EvaluationResults evaluation;
+        lock (SchemaRegistryLock)
+        {
+            evaluation = composedSchema.Evaluate(
                 data,
                 new EvaluationOptions
                 {
                     OutputFormat = OutputFormat.Hierarchical,
                     PreserveDroppedAnnotations = true,
                 });
-            if (!evaluation.IsValid)
-            {
-                evaluation.ToList();
-                var detailedErrors = this.GetDetailedValidationErrors(evaluation)
-                    .Take(10)
-                    .ToArray();
-                var detailsSuffix = detailedErrors.Length == 0
-                    ? $" Details: {evaluation}"
-                    : $" Details: {string.Join(" | ", detailedErrors)}";
-                errors.Add(
-                    new UpdateError
-                    {
-                        Message = $"Entity does not conform to schema '{applicableSchema.SchemaReference}'.{detailsSuffix}",
-                        RelatedEntityId = change.EntityId,
-                    });
-            }
+        }
+        if (!evaluation.IsValid)
+        {
+            evaluation.ToList();
+            var detailedErrors = this.GetDetailedValidationErrors(evaluation)
+                .Take(10)
+                .ToArray();
+            var detailsSuffix = detailedErrors.Length == 0
+                ? $" Details: {evaluation}"
+                : $" Details: {string.Join(" | ", detailedErrors)}";
+            errors.Add(
+                new UpdateError
+                {
+                    Message = $"Entity does not conform to schema composition for references [{string.Join(", ", applicableSchemas.Select(static schema => schema.SchemaReference))}].{detailsSuffix}",
+                    RelatedEntityId = change.EntityId,
+                });
         }
 
         return errors;
@@ -174,8 +208,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             try
             {
-                var schema = JsonSchema.FromText(this.GetSchemaText(pair.Value));
-                SchemaRegistry.Global.Register(new Uri(pair.Key, UriKind.Absolute), schema);
+                lock (SchemaRegistryLock)
+                {
+                    var schema = JsonSchema.FromText(this.GetSchemaText(pair.Value));
+                    SchemaRegistry.Global.Register(new Uri(pair.Key, UriKind.Absolute), schema);
+                }
             }
             catch
             {
@@ -188,14 +225,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         IDictionary<string, JsonElement> schemaEntitiesById,
         JsonElement schemaEntity)
     {
-        if (!schemaEntity.TryGetProperty("$id", out var idElement)
-            || idElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(idElement.GetString()))
+        if (!this.TryGetSchemaPayloadId(schemaEntity, out var id))
         {
             return;
         }
 
-        var id = idElement.GetString()!;
         if (!Uri.TryCreate(id, UriKind.Absolute, out _))
         {
             return;
@@ -286,16 +320,26 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     protected IReadOnlyCollection<string> GetSchemaReferencesForEntity(
         JsonElement entityObject)
     {
-        var references = new List<string>();
+        var references = new List<string>
+        {
+            EntitySchemaName,
+        };
+
         var explicitSchemaReference = this.GetSchemaReference(entityObject);
-        if (!string.IsNullOrWhiteSpace(explicitSchemaReference))
+        if (!string.IsNullOrWhiteSpace(explicitSchemaReference)
+            && !string.Equals(explicitSchemaReference, Draft202012MetaSchema, StringComparison.Ordinal))
         {
             references.Add(explicitSchemaReference);
         }
 
-        foreach (var entityTypeName in this.GetEntityTypeNames(entityObject))
+        foreach (var entityTypeName in this.GetExplicitEntityTypeNames(entityObject))
         {
             references.Add(JsonSerializer.Serialize(new[] { "entity-types", entityTypeName }));
+
+            if (string.Equals(entityTypeName, "entity-type", StringComparison.Ordinal))
+            {
+                references.Add(JsonSerializer.Serialize(new[] { "entity-types", JsonSchemaType }));
+            }
         }
 
         return references;
@@ -304,6 +348,30 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     protected string GetSchemaText(
         JsonElement schemaEntity)
     {
+        if (schemaEntity.TryGetProperty("schema", out var schemaPayload))
+        {
+            if (schemaPayload.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(schemaPayload.GetString()))
+            {
+                using var payloadStream = new MemoryStream();
+                using var payloadWriter = new Utf8JsonWriter(payloadStream);
+                payloadWriter.WriteStartObject();
+                payloadWriter.WriteString("$ref", schemaPayload.GetString());
+                payloadWriter.WriteEndObject();
+                payloadWriter.Flush();
+                return System.Text.Encoding.UTF8.GetString(payloadStream.ToArray());
+            }
+
+            if (schemaPayload.ValueKind == JsonValueKind.Object)
+            {
+                using var payloadStream = new MemoryStream();
+                using var payloadWriter = new Utf8JsonWriter(payloadStream);
+                this.WriteElementWithoutCustomKeywords(schemaPayload, payloadWriter);
+                payloadWriter.Flush();
+                return System.Text.Encoding.UTF8.GetString(payloadStream.ToArray());
+            }
+        }
+
         using var stream = new MemoryStream();
         using var writer = new Utf8JsonWriter(stream);
 
@@ -315,12 +383,49 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 continue;
             }
 
-            property.WriteTo(writer);
+            writer.WritePropertyName(property.Name);
+            this.WriteElementWithoutCustomKeywords(property.Value, writer);
         }
 
         writer.WriteEndObject();
         writer.Flush();
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    protected void WriteElementWithoutCustomKeywords(
+        JsonElement element,
+        Utf8JsonWriter writer)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (string.Equals(property.Name, CustomEntityTypeKeyword, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    writer.WritePropertyName(property.Name);
+                    this.WriteElementWithoutCustomKeywords(property.Value, writer);
+                }
+
+                writer.WriteEndObject();
+                return;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    this.WriteElementWithoutCustomKeywords(item, writer);
+                }
+
+                writer.WriteEndArray();
+                return;
+            default:
+                element.WriteTo(writer);
+                return;
+        }
     }
 
     protected string? GetSchemaReference(
@@ -340,6 +445,24 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
         CancellationToken cancellationToken)
     {
+        return await this.ResolveSchemaAsync(
+            schemaReference,
+            requestSchemasByName,
+            new HashSet<string>(StringComparer.Ordinal),
+            cancellationToken);
+    }
+
+    protected async Task<JsonElement?> ResolveSchemaAsync(
+        string schemaReference,
+        IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
+        ISet<string> visitedSchemaReferences,
+        CancellationToken cancellationToken)
+    {
+        if (!visitedSchemaReferences.Add(schemaReference))
+        {
+            return null;
+        }
+
         if (requestSchemasByName.TryGetValue(schemaReference, out var requestSchema))
         {
             return requestSchema;
@@ -416,7 +539,8 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     protected bool IsSchemaEntity(
         JsonElement entityObject)
     {
-        return this.GetEntityTypeNames(entityObject).Contains(JsonSchemaType)
+        return entityObject.TryGetProperty("schema", out _)
+            || this.GetExplicitEntityTypeNames(entityObject).Contains(JsonSchemaType)
             || entityObject.TryGetProperty("$id", out var idElement)
             && idElement.ValueKind == JsonValueKind.String;
     }
@@ -450,7 +574,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         return names;
     }
 
-    protected HashSet<string> GetEntityTypeNames(
+    protected HashSet<string> GetExplicitEntityTypeNames(
         JsonElement entityData)
     {
         if (!entityData.TryGetProperty("entity-types", out var typeNames)
@@ -463,6 +587,12 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             .Where(static typeName => typeName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(typeName.GetString()))
             .Select(static typeName => typeName.GetString()!)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    protected HashSet<string> GetEntityTypeNames(
+        JsonElement entityData)
+    {
+        return this.GetExplicitEntityTypeNames(entityData);
     }
 
     protected bool TryGetCanonicalNameFromArray(
@@ -504,7 +634,8 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         return propertyName.Equals("$id", StringComparison.Ordinal)
             || propertyName.Equals("entity-id", StringComparison.Ordinal)
             || propertyName.Equals("entity-types", StringComparison.Ordinal)
-            || propertyName.Equals("names", StringComparison.Ordinal);
+            || propertyName.Equals("names", StringComparison.Ordinal)
+            || propertyName.Equals("unevaluatedProperties", StringComparison.Ordinal);
     }
 
     protected EntityId? GetEntityId(
@@ -561,5 +692,92 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             return false;
         }
+    }
+
+    private bool TryGetSchemaPayloadId(
+        JsonElement schemaEntity,
+        out string schemaId)
+    {
+        schemaId = string.Empty;
+        if (schemaEntity.TryGetProperty("schema", out var schemaPayload)
+            && schemaPayload.ValueKind == JsonValueKind.Object
+            && schemaPayload.TryGetProperty("$id", out var payloadId)
+            && payloadId.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(payloadId.GetString()))
+        {
+            schemaId = payloadId.GetString()!;
+            return true;
+        }
+
+        if (schemaEntity.TryGetProperty("$id", out var idElement)
+            && idElement.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(idElement.GetString()))
+        {
+            schemaId = idElement.GetString()!;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsBaseEntitySchema(
+        ApplicableSchema schema)
+    {
+        return string.Equals(schema.SchemaReference, EntitySchemaName, StringComparison.Ordinal);
+    }
+
+    private string BuildComposedSchemaText(
+        IReadOnlyCollection<ApplicableSchema> schemas,
+        bool closeUnevaluatedProperties)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+
+        writer.WriteStartObject();
+        writer.WritePropertyName("allOf");
+        writer.WriteStartArray();
+        foreach (var schema in schemas)
+        {
+            if (schema.SchemaEntity is { } schemaEntity
+                && schemaEntity.TryGetProperty("schema", out _))
+            {
+                if (this.TryGetSchemaPayloadId(schemaEntity, out var payloadId)
+                    && Uri.TryCreate(payloadId, UriKind.Absolute, out _))
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("$ref", payloadId);
+                    writer.WriteEndObject();
+                }
+                else
+                {
+                    using var schemaDocument = JsonDocument.Parse(this.GetSchemaText(schemaEntity));
+                    schemaDocument.RootElement.WriteTo(writer);
+                }
+            }
+            else if (schema.SchemaEntity is { } schemaEntityWithId
+                && schemaEntityWithId.TryGetProperty("$id", out var idElement)
+                && idElement.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(idElement.GetString()))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("$ref", idElement.GetString());
+                writer.WriteEndObject();
+            }
+            else if (schema.SchemaEntity is { } inlineSchemaEntity)
+            {
+                using var schemaDocument = JsonDocument.Parse(this.GetSchemaText(inlineSchemaEntity));
+                schemaDocument.RootElement.WriteTo(writer);
+            }
+        }
+
+        writer.WriteEndArray();
+        if (closeUnevaluatedProperties)
+        {
+            writer.WriteBoolean("unevaluatedProperties", false);
+        }
+        writer.WriteEndObject();
+        writer.Flush();
+
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
 }

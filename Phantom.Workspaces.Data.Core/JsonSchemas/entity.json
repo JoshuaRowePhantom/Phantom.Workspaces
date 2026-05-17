@@ -1,9 +1,6 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.phantom.app/workspaces/data/core/entity.json",
-  "entity-id": "{6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e002}",
+  "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e002",
   "entity-types": [
-    "json-schema",
     "entity-type"
   ],
   "names": [
@@ -13,28 +10,55 @@
       "entity"
     ]
   ],
-  "$comment": "This base entity schema is intentionally closed (unevaluatedProperties=false) so unknown fields fail fast. We do this to prevent silent schema drift and to force each concrete entity schema to explicitly define every property it owns.",
-  "type": "object",
-  "properties": {
-    "entity-id": {
-      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
-    },
-    "entity-types": {
-      "type": "array",
-      "items": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-type-id",
-        "x-entity-type": "entity-type"
+  "schema": {
+    "$id": "https://schemas.phantom.app/workspaces/data/core/entity.json",
+    "$comment": "The DAL composes this base schema with all applicable entity-type schemas and enforces unevaluatedProperties=false at the final composed-schema level.",
+    "type": "object",
+    "properties": {
+      "$schema": {
+        "type": "string"
+      },
+      "entity-id": {
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+      },
+      "entity-types": {
+        "type": "array",
+        "items": {
+          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-type-id"
+        }
+      },
+      "names": {
+        "type": "array",
+        "items": {
+          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
+        }
+      },
+      "display-name": {
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
+      },
+      "related-entity-ids": {
+        "type": "array",
+        "items": {
+          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+        }
+      },
+      "relationship-roles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       }
     },
-    "names": {
-      "type": "array",
-      "items": {
-        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
+    "patternProperties": {
+      "^.*entity-id$": {
+        "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+      },
+      "^.*entity-ids$": {
+        "type": "array",
+        "items": {
+          "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+        }
       }
-    },
-    "display-name": {
-      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/local-string"
     }
-  },
-  "unevaluatedProperties": false
+  }
 }

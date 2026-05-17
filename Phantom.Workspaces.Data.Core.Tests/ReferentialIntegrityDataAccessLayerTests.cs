@@ -393,27 +393,28 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "$schema": "https://json-schema.org/draft/2020-12/schema",
-              "$id": "{{schemaName}}",
               "entity-id": "{{schemaEntityId.Value:D}}",
-              "entity-types": ["json-schema"],
+              "entity-types": ["entity-type"],
               "names": ["{{schemaName}}"],
-              "type": "object",
-              "properties": {
-                "entity-id": {
-                  "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
-                },
-                "entity-types": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                },
-                "names": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                },
-                "target-entity-id": {
-                  "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id",
-                  "x-entity-type": "entity"
+              "schema": {
+                "$id": "{{schemaName}}",
+                "type": "object",
+                "properties": {
+                  "entity-id": {
+                    "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+                  },
+                  "entity-types": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "names": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "target-entity-id": {
+                    "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id",
+                    "x-entity-type": "entity"
+                  }
                 }
               }
             }
@@ -447,29 +448,30 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "$schema": "https://json-schema.org/draft/2020-12/schema",
-              "$id": "{{schemaName}}",
               "entity-id": "{{entityId.Value:D}}",
-              "entity-types": ["json-schema"],
+              "entity-types": ["entity-type"],
               "names": ["{{schemaName}}"],
-              "type": "object",
-              "properties": {
-                "entity-id": {
-                  "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
-                },
-                "entity-types": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                },
-                "names": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
+              "schema": {
+                "$id": "{{schemaName}}",
+                "type": "object",
+                "properties": {
+                  "entity-id": {
+                    "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-id"
+                  },
+                  "entity-types": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "names": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-name"
+                    }
+                  },
+                  "target-entity-name": {
+                    "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
+                    "x-entity-type": "entity"
                   }
-                },
-                "target-entity-name": {
-                  "$ref": "https://schemas.phantom.app/workspaces/data/core/core.json#/$defs/entity-reference",
-                  "x-entity-type": "entity"
                 }
               }
             }
