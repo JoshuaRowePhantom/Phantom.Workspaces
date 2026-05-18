@@ -60,9 +60,9 @@ public sealed class EntityRepository
 
     public EntitySnapshot? TryGetEntityByName(
         IReadOnlyDictionary<EntityId, EntitySnapshot> snapshots,
-        IReadOnlyList<string> nameComponents)
+        EntityName entityName)
     {
-        var nameKey = string.Join("/", nameComponents);
+        var nameKey = string.Join("/", entityName.Components);
         foreach (var snapshot in snapshots.Values)
         {
             if (snapshot.Data is not JsonElement data)

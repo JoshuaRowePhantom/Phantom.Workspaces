@@ -362,16 +362,38 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             JsonElement? data)
         {
             if (data is null
-                || data.Value.ValueKind != JsonValueKind.Object)
+                || data.Value.ValueKind != JsonValueKind.Object
+                || !data.Value.TryGetProperty("names", out var namesElement)
+                || namesElement.ValueKind != JsonValueKind.Array)
             {
                 return Array.Empty<EntityName>();
             }
 
-            var namesArray = data.Value.ExtractStringArray("names");
             var names = new List<EntityName>();
-            foreach (var name in namesArray)
+            foreach (var nameElement in namesElement.EnumerateArray())
             {
-                names.Add(new EntityName(name.Split('/', StringSplitOptions.RemoveEmptyEntries)));
+                if (nameElement.ValueKind == JsonValueKind.String)
+                {
+                    var name = nameElement.GetString();
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        continue;
+                    }
+
+                    var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    if (components.Length > 0)
+                    {
+                        names.Add(new EntityName(components));
+                    }
+
+                    continue;
+                }
+
+                var entityName = nameElement.TryReadEntityName();
+                if (entityName is not null)
+                {
+                    names.Add(entityName.Value);
+                }
             }
 
             return names;

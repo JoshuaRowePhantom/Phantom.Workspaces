@@ -218,43 +218,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         foreach (var subView in subViews.EnumerateArray())
         {
-            if (!subView.TryGetProperty("view-entity-id", out var referenceValue))
+            if (!TryReadEntityRequest(subView, "view-entity-id", out var viewRequest))
             {
                 continue;
             }
 
-            EntitySnapshot? viewSnapshot = null;
-            if (referenceValue.ValueKind == JsonValueKind.String)
-            {
-                var stringValue = referenceValue.GetString();
-                if (Guid.TryParse(stringValue, out var entityGuid))
-                {
-                    viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-                        new GetEntityRequest { EntityId = new EntityId(entityGuid) });
-                }
-                else if (!string.IsNullOrWhiteSpace(stringValue))
-                {
-                    var components = stringValue.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                    if (components.Length > 0)
-                    {
-                        viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-                            new GetEntityRequest { EntityName = new EntityName(components) });
-                    }
-                }
-            }
-            else if (referenceValue.ValueKind == JsonValueKind.Array)
-            {
-                var components = referenceValue.EnumerateArray()
-                    .Where(static item => item.ValueKind == JsonValueKind.String)
-                    .Select(static item => item.GetString())
-                    .Where(static text => !string.IsNullOrWhiteSpace(text))
-                    .ToArray();
-                if (components.Length > 0)
-                {
-                    viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-                        new GetEntityRequest { EntityName = new EntityName(components!) });
-                }
-            }
+            var viewSnapshot = await this.LoadSingleEntitySnapshotAsync(viewRequest);
 
             if (viewSnapshot?.Data is JsonElement viewData)
             {
@@ -350,43 +319,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (!subView.TryGetProperty("view-entity-id", out var referenceValue))
+                if (!TryReadEntityRequest(subView, "view-entity-id", out var viewRequest))
                 {
                     continue;
                 }
 
-                EntitySnapshot? viewSnapshot = null;
-                if (referenceValue.ValueKind == JsonValueKind.String)
-                {
-                    var stringValue = referenceValue.GetString();
-                    if (Guid.TryParse(stringValue, out var entityGuid))
-                    {
-                        viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-                            new GetEntityRequest { EntityId = new EntityId(entityGuid) });
-                    }
-                    else if (!string.IsNullOrWhiteSpace(stringValue))
-                    {
-                        var components = stringValue.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                        if (components.Length > 0)
-                        {
-                            viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-                                new GetEntityRequest { EntityName = new EntityName(components) });
-                        }
-                    }
-                }
-                else if (referenceValue.ValueKind == JsonValueKind.Array)
-                {
-                    var components = referenceValue.EnumerateArray()
-                        .Where(static item => item.ValueKind == JsonValueKind.String)
-                        .Select(static item => item.GetString())
-                        .Where(static text => !string.IsNullOrWhiteSpace(text))
-                        .ToArray();
-                    if (components.Length > 0)
-                    {
-                        viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-                            new GetEntityRequest { EntityName = new EntityName(components!) });
-                    }
-                }
+                var viewSnapshot = await this.LoadSingleEntitySnapshotAsync(viewRequest);
 
                 if (viewSnapshot?.Data is not JsonElement viewData)
                 {
@@ -543,7 +481,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         JsonElement workspaceData)
     {
         var requests = new List<GetEntityRequest>();
-        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var seenNames = new HashSet<EntityName>();
 
         if (!workspaceData.TryGetProperty("regions", out var regions)
             || regions.ValueKind != JsonValueKind.Array)
@@ -571,7 +509,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 }
 
                 var entityName = ReadEntityName(targetEntityName);
-                if (entityName is null || !seenNames.Add(entityName.Value.Components.First()))
+                if (entityName is null || !seenNames.Add(entityName.Value))
                 {
                     continue;
                 }
@@ -766,36 +704,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (subView.TryGetProperty("view-entity-id", out var referenceValue))
+                if (TryReadEntityRequest(subView, "view-entity-id", out var request))
                 {
-                    if (referenceValue.ValueKind == JsonValueKind.String)
-                    {
-                        var stringValue = referenceValue.GetString();
-                        if (Guid.TryParse(stringValue, out var entityGuid))
-                        {
-                            requests.Add(new GetEntityRequest { EntityId = new EntityId(entityGuid) });
-                        }
-                        else if (!string.IsNullOrWhiteSpace(stringValue))
-                        {
-                            var components = stringValue.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                            if (components.Length > 0)
-                            {
-                                requests.Add(new GetEntityRequest { EntityName = new EntityName(components) });
-                            }
-                        }
-                    }
-                    else if (referenceValue.ValueKind == JsonValueKind.Array)
-                    {
-                        var components = referenceValue.EnumerateArray()
-                            .Where(static item => item.ValueKind == JsonValueKind.String)
-                            .Select(static item => item.GetString())
-                            .Where(static text => !string.IsNullOrWhiteSpace(text))
-                            .ToArray();
-                        if (components.Length > 0)
-                        {
-                            requests.Add(new GetEntityRequest { EntityName = new EntityName(components!) });
-                        }
-                    }
+                    requests.Add(request);
                 }
             }
         }
@@ -977,6 +888,48 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         return null;
+    }
+
+    private static bool TryReadEntityRequest(
+        JsonElement parent,
+        string propertyName,
+        out GetEntityRequest request)
+    {
+        request = null!;
+        if (!parent.TryGetProperty(propertyName, out var property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.String)
+        {
+            var text = property.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            if (Guid.TryParse(text, out _))
+            {
+                request = new GetEntityRequest
+                {
+                    EntityId = new EntityId(text),
+                };
+                return true;
+            }
+        }
+
+        var entityName = ReadEntityName(property);
+        if (entityName is null)
+        {
+            return false;
+        }
+
+        request = new GetEntityRequest
+        {
+            EntityName = entityName,
+        };
+        return true;
     }
 
     private static string? ReadLocalString(

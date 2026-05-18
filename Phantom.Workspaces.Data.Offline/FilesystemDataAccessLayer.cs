@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Data.Offline;
@@ -9,6 +11,9 @@ namespace Phantom.Workspaces.Data.Offline;
 /// </summary>
 public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 {
+    private const string EntitiesDirectoryName = "entities";
+    private const string EntityNamesIndexDirectoryName = "entityNames";
+    private const string EntityNamePrefixesIndexDirectoryName = "entityNamePrefixes";
     private readonly object updateLock = new();
     private readonly Dictionary<EntityId, EntitySnapshot> deletedEntities = new();
     private long nextSequenceNumber;
@@ -77,7 +82,6 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             ? request.Timestamps.ToArray()
             : new Timestamp?[] { null };
         var batches = new List<TimestampedEntityBatch>(timestamps.Length);
-        var knownEntityIds = this.GetKnownEntityIds();
 
         foreach (var timestamp in timestamps)
         {
@@ -85,7 +89,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             var includedEntityIds = new HashSet<EntityId>();
             foreach (var requestedEntity in request.Entities)
             {
-                foreach (var entityId in this.FindMatchingEntityIds(requestedEntity, knownEntityIds))
+                foreach (var entityId in this.FindMatchingEntityIds(requestedEntity))
                 {
                     if (!includedEntityIds.Add(entityId))
                     {
@@ -208,6 +212,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         var results = new List<EntityUpdateResult>(request.Changes.Count);
         var pendingStates = new Dictionary<EntityId, EntitySnapshot?>();
         var pendingData = new Dictionary<EntityId, JsonElement?>();
+        var pendingPreviousData = new Dictionary<EntityId, JsonElement?>();
         var failed = false;
 
         foreach (var change in request.Changes)
@@ -238,6 +243,10 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
                 ? pendingSnapshot
                 : this.TryLoadEntitySnapshot(entityId.Value);
             pendingStates[entityId.Value] = current;
+            if (!pendingPreviousData.ContainsKey(entityId.Value))
+            {
+                pendingPreviousData[entityId.Value] = current?.Data?.Clone();
+            }
 
             if (current is not null && current.Data is not null && change.ConcurrencyTag is null)
             {
@@ -296,9 +305,11 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         {
             var entityId = entityResult.ResultingEntityId;
             var data = pendingData[entityId];
+            var previousData = pendingPreviousData.GetValueOrDefault(entityId);
             this.nextSequenceNumber++;
             this.WriteEntityFile(entityId, data);
             this.WriteEntityMetadata(entityId, entityResult.ConcurrencyTag!.Value, entityResult.CurrentEntity!.ModifiedTime);
+            this.UpdateEntityNameIndexes(entityId, previousData, data);
             this.RemoveRelationshipMarkerFiles(entityId);
             this.WriteRelationshipMarkerFiles(entityId, data);
             if (data is null)
@@ -438,32 +449,39 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         return roleNames.Value.Values.All(role => roles.Contains(role, StringComparer.Ordinal));
     }
 
-    private HashSet<EntityId> GetKnownEntityIds()
-    {
-        var ids = this.EnumerateEntityIdsFromFiles().ToHashSet();
-        foreach (var deletedEntityId in this.deletedEntities.Keys)
-        {
-            ids.Add(deletedEntityId);
-        }
-
-        return ids;
-    }
-
     private IEnumerable<EntityId> FindMatchingEntityIds(
-        GetEntityRequest request,
-        HashSet<EntityId> knownEntityIds)
+        GetEntityRequest request)
     {
         if (request.EntityId is not null)
         {
-            if (knownEntityIds.Contains(request.EntityId.Value))
+            yield return request.EntityId.Value;
+            yield break;
+        }
+
+        if (request.EntityName is null)
+        {
+            foreach (var entityId in this.FindEntityIdsByPrefix(new EntityName(Array.Empty<string>())))
             {
-                yield return request.EntityId.Value;
+                var snapshot = this.TryLoadEntitySnapshot(entityId);
+                if (snapshot is null || snapshot.Data is null)
+                {
+                    continue;
+                }
+
+                if (!this.MatchesEntityTypeNames(snapshot.Data.Value, request.EntityTypeNames))
+                {
+                    continue;
+                }
+
+                yield return entityId;
             }
 
             yield break;
         }
 
-        foreach (var entityId in knownEntityIds)
+        var candidateEntityIds = this.FindEntityIdsByName(request.EntityName.Value);
+
+        foreach (var entityId in candidateEntityIds)
         {
             var snapshot = this.TryLoadEntitySnapshot(entityId);
             if (snapshot is null || snapshot.Data is null)
@@ -494,17 +512,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return true;
         }
 
-        var names = entityData.ExtractStringArray("names");
-        foreach (var name in names)
-        {
-            var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (components.SequenceEqual(entityName.Value.Components, StringComparer.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return ExtractEntityNames(entityData).Contains(entityName.Value);
     }
 
     private bool MatchesEntityTypeNames(
@@ -709,17 +717,124 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         EntityId relationshipEntityId)
     {
         var markerSuffix = $"_{relationshipEntityId}.rel";
-        foreach (var filePath in Directory.EnumerateFiles(this.Path, $"*{markerSuffix}", SearchOption.AllDirectories))
+        var entitiesRootPath = GetEntitiesRootPath(this.Path);
+        if (!Directory.Exists(entitiesRootPath))
+        {
+            return;
+        }
+
+        foreach (var filePath in Directory.EnumerateFiles(entitiesRootPath, $"*{markerSuffix}", SearchOption.AllDirectories))
         {
             File.Delete(filePath);
         }
     }
 
+    private void UpdateEntityNameIndexes(
+        EntityId entityId,
+        JsonElement? previousData,
+        JsonElement? nextData)
+    {
+        var previousNames = ExtractEntityNames(previousData);
+        var nextNames = ExtractEntityNames(nextData);
+
+        var previousNameHashes = previousNames
+            .Select(ComputeEntityNameHash)
+            .ToHashSet(StringComparer.Ordinal);
+        var nextNameHashes = nextNames
+            .Select(ComputeEntityNameHash)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var removedNameHash in previousNameHashes.Except(nextNameHashes))
+        {
+            DeleteIndexFile(GetEntityNameIndexFilePath(this.Path, removedNameHash, entityId));
+        }
+
+        foreach (var addedNameHash in nextNameHashes.Except(previousNameHashes))
+        {
+            CreateZeroLengthFile(GetEntityNameIndexFilePath(this.Path, addedNameHash, entityId));
+        }
+
+        var previousPrefixHashes = GetEntityNamePrefixHashes(previousNames);
+        var nextPrefixHashes = GetEntityNamePrefixHashes(nextNames);
+        foreach (var removedPrefixHash in previousPrefixHashes.Except(nextPrefixHashes))
+        {
+            DeleteIndexFile(GetEntityNamePrefixIndexFilePath(this.Path, removedPrefixHash, entityId));
+        }
+
+        foreach (var addedPrefixHash in nextPrefixHashes.Except(previousPrefixHashes))
+        {
+            CreateZeroLengthFile(GetEntityNamePrefixIndexFilePath(this.Path, addedPrefixHash, entityId));
+        }
+    }
+
+    private IReadOnlyCollection<EntityId> FindEntityIdsByName(
+        EntityName entityName)
+    {
+        var hash = ComputeEntityNameHash(entityName);
+        var indexDirectoryPath = GetEntityNameIndexDirectoryPath(this.Path, hash);
+        if (!Directory.Exists(indexDirectoryPath))
+        {
+            return Array.Empty<EntityId>();
+        }
+
+        var expectedFileNamePrefix = $"{hash}_";
+        var matchingEntityIds = new List<EntityId>();
+        foreach (var filePath in Directory.EnumerateFiles(indexDirectoryPath, $"{expectedFileNamePrefix}*", SearchOption.TopDirectoryOnly))
+        {
+            var fileName = System.IO.Path.GetFileName(filePath);
+            if (!fileName.StartsWith(expectedFileNamePrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var entityIdText = fileName[expectedFileNamePrefix.Length..];
+            if (!Guid.TryParse(entityIdText, out var entityId))
+            {
+                continue;
+            }
+
+            matchingEntityIds.Add(new EntityId(entityId));
+        }
+
+        return matchingEntityIds;
+    }
+
+    private IReadOnlyCollection<EntityId> FindEntityIdsByPrefix(
+        EntityName prefix)
+    {
+        var prefixHash = ComputeEntityNameHash(prefix);
+        var prefixDirectoryPath = GetEntityNamePrefixIndexDirectoryPath(this.Path, prefixHash);
+        if (!Directory.Exists(prefixDirectoryPath))
+        {
+            return Array.Empty<EntityId>();
+        }
+
+        var matchingEntityIds = new HashSet<EntityId>();
+        foreach (var filePath in Directory.EnumerateFiles(prefixDirectoryPath, "*", SearchOption.AllDirectories))
+        {
+            var entityIdText = System.IO.Path.GetFileName(filePath);
+            if (!Guid.TryParse(entityIdText, out var entityId))
+            {
+                continue;
+            }
+
+            matchingEntityIds.Add(new EntityId(entityId));
+        }
+
+        return matchingEntityIds;
+    }
+
     private IEnumerable<EntityId> EnumerateEntityIdsFromFiles()
     {
-        foreach (var entityFilePath in Directory.EnumerateFiles(this.Path, "*.json", SearchOption.AllDirectories))
+        var entitiesRootPath = GetEntitiesRootPath(this.Path);
+        if (!Directory.Exists(entitiesRootPath))
         {
-            if (TryGetEntityIdFromDalPath(this.Path, entityFilePath, out var entityId))
+            yield break;
+        }
+
+        foreach (var entityFilePath in Directory.EnumerateFiles(entitiesRootPath, "*.json", SearchOption.AllDirectories))
+        {
+            if (TryGetEntityIdFromDalPath(entitiesRootPath, entityFilePath, out var entityId))
             {
                 yield return entityId;
             }
@@ -780,6 +895,95 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         return new EntityId(entityGuid);
     }
 
+    private static IReadOnlyCollection<EntityName> ExtractEntityNames(
+        JsonElement? data)
+    {
+        if (data is null
+            || data.Value.ValueKind != JsonValueKind.Object
+            || !data.Value.TryGetProperty("names", out var namesElement)
+            || namesElement.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<EntityName>();
+        }
+
+        var names = new List<EntityName>();
+        foreach (var nameElement in namesElement.EnumerateArray())
+        {
+            if (TryGetEntityName(nameElement, out var entityName))
+            {
+                names.Add(entityName);
+            }
+        }
+
+        return names;
+    }
+
+    private static bool TryGetEntityName(
+        JsonElement nameElement,
+        out EntityName entityName)
+    {
+        entityName = default;
+        if (nameElement.ValueKind == JsonValueKind.String)
+        {
+            var name = nameElement.GetString();
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (components.Length == 0)
+            {
+                return false;
+            }
+
+            entityName = new EntityName(components);
+            return true;
+        }
+
+        var parsedEntityName = nameElement.TryReadEntityName();
+        if (parsedEntityName is null)
+        {
+            return false;
+        }
+
+        entityName = parsedEntityName.Value;
+        return true;
+    }
+
+    private static HashSet<string> GetEntityNamePrefixHashes(
+        IReadOnlyCollection<EntityName> names)
+    {
+        var hashes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var name in names)
+        {
+            for (var index = 0; index <= name.Components.Length; index++)
+            {
+                hashes.Add(ComputeEntityNameHash(new EntityName(name.Components[..index])));
+            }
+        }
+
+        return hashes;
+    }
+
+    public static string ComputeEntityNameHash(
+        EntityName entityName)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(entityName.Components.Length);
+        foreach (var component in entityName.Components)
+        {
+            var componentBytes = Encoding.UTF8.GetBytes(component);
+            writer.Write(componentBytes.Length);
+            writer.Write(componentBytes);
+        }
+
+        writer.Flush();
+        using var sha256 = SHA256.Create();
+        return Convert.ToHexString(sha256.ComputeHash(stream.ToArray()))[..24].ToLowerInvariant();
+    }
+
     private static IReadOnlyCollection<EntityId> ExtractRelationshipParticipantEntityIds(
         JsonElement? relationshipData)
     {
@@ -808,7 +1012,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     {
         var bytes = entityId.Value.ToByteArray();
         return System.IO.Path.Combine(
-            rootPath,
+            GetEntitiesRootPath(rootPath),
             bytes[0].ToString("x2"),
             bytes[1].ToString("x2"),
             bytes[2].ToString("x2"));
@@ -826,6 +1030,91 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         EntityId entityId)
     {
         return System.IO.Path.Combine(GetEntityDirectory(rootPath, entityId), $"{entityId}.meta");
+    }
+
+    private static string GetEntitiesRootPath(
+        string rootPath)
+    {
+        return System.IO.Path.Combine(rootPath, EntitiesDirectoryName);
+    }
+
+    private static string GetEntityNameIndexRootPath(
+        string rootPath)
+    {
+        return System.IO.Path.Combine(rootPath, EntityNamesIndexDirectoryName);
+    }
+
+    private static string GetEntityNamePrefixesIndexRootPath(
+        string rootPath)
+    {
+        return System.IO.Path.Combine(rootPath, EntityNamePrefixesIndexDirectoryName);
+    }
+
+    private static string GetEntityNameIndexDirectoryPath(
+        string rootPath,
+        string nameHash)
+    {
+        return GetShardedDirectoryPath(GetEntityNameIndexRootPath(rootPath), nameHash);
+    }
+
+    private static string GetEntityNameIndexFilePath(
+        string rootPath,
+        string nameHash,
+        EntityId entityId)
+    {
+        var entityIdText = entityId.Value.ToString("N");
+        return System.IO.Path.Combine(GetEntityNameIndexDirectoryPath(rootPath, nameHash), $"{nameHash}_{entityIdText}");
+    }
+
+    private static string GetEntityNamePrefixIndexFilePath(
+        string rootPath,
+        string prefixHash,
+        EntityId entityId)
+    {
+        var entityIdText = entityId.Value.ToString("N");
+        var prefixShardPath = GetEntityNamePrefixIndexDirectoryPath(rootPath, prefixHash);
+        return System.IO.Path.Combine(
+            GetShardedDirectoryPath(prefixShardPath, entityIdText),
+            entityIdText);
+    }
+
+    private static string GetEntityNamePrefixIndexDirectoryPath(
+        string rootPath,
+        string prefixHash)
+    {
+        return System.IO.Path.Combine(
+            GetShardedDirectoryPath(GetEntityNamePrefixesIndexRootPath(rootPath), prefixHash),
+            prefixHash);
+    }
+
+    private static string GetShardedDirectoryPath(
+        string rootPath,
+        string shardKey)
+    {
+        if (shardKey.Length < 6)
+        {
+            throw new ArgumentException("Shard key must be at least 6 hexadecimal characters.", nameof(shardKey));
+        }
+
+        return System.IO.Path.Combine(rootPath, shardKey[..2], shardKey.Substring(2, 2), shardKey.Substring(4, 2));
+    }
+
+    private static void CreateZeroLengthFile(
+        string filePath)
+    {
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(filePath)!);
+        using var file = File.Create(filePath);
+    }
+
+    private static void DeleteIndexFile(
+        string filePath)
+    {
+        if (!File.Exists(filePath))
+        {
+            return;
+        }
+
+        File.Delete(filePath);
     }
 
     private static bool TryGetEntityIdFromDalPath(

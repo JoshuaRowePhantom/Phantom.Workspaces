@@ -313,7 +313,9 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     protected JsonElement CreateEntity(
         EntityName entityName)
     {
-        var serializedEntityName = JsonSerializer.Serialize(entityName.Components);
+        var serializedEntityName = entityName.Components.Length == 1
+            ? JsonSerializer.Serialize(new[] { entityName.Components[0] })
+            : JsonSerializer.Serialize(new object[] { entityName.Components });
         using var document = JsonDocument.Parse(
             $$"""
             {
@@ -443,7 +445,27 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             return null;
         }
 
-        return namesElement.TryReadEntityName();
+        foreach (var nameElement in namesElement.EnumerateArray())
+        {
+            if (nameElement.ValueKind == JsonValueKind.String)
+            {
+                var name = nameElement.GetString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    return new EntityName(name);
+                }
+
+                continue;
+            }
+
+            var entityName = nameElement.TryReadEntityName();
+            if (entityName is not null)
+            {
+                return entityName;
+            }
+        }
+
+        return null;
     }
 
     private static UpdateRequest CreateUpdateRequest(
