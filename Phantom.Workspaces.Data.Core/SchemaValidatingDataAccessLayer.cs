@@ -469,6 +469,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
         foreach (var schemaName in schemaNames)
         {
+            if (!this.TryParseEntityName(schemaName, out var parsedSchemaName))
+            {
+                continue;
+            }
+
             var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
                 new GetRequest
                 {
@@ -476,7 +481,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                     [
                         new GetEntityRequest
                         {
-                            EntityName = new EntityName(EntitySchemaNameComponents),
+                            EntityName = parsedSchemaName,
                         },
                     ],
                     Timestamps = new Timestamp?[] { null },
@@ -627,6 +632,37 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         canonicalName = JsonSerializer.Serialize(components);
+        return true;
+    }
+
+    private bool TryParseEntityName(
+        string name,
+        out EntityName entityName)
+    {
+        if (name.StartsWith("[", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(name);
+                var parsedEntityName = document.RootElement.TryReadEntityName();
+                if (parsedEntityName is not null)
+                {
+                    entityName = parsedEntityName.Value;
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            entityName = default;
+            return false;
+        }
+
+        entityName = new EntityName(name);
         return true;
     }
 
