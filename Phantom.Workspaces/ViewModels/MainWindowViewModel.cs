@@ -616,7 +616,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                 [
                     new GetEntityRequest
                     {
-                        EntityName = new EntityName(Array.Empty<string>()),
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
                         EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
                     },
                 ],

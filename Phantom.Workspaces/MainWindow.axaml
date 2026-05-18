@@ -92,8 +92,8 @@
 
                                         <ItemsControl ItemsSource="{Binding DisplayItems}">
                                             <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="x:String">
-                                                    <TextBlock Text="{Binding .}" />
+                                                <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
+                                                    <TextBlock Text="{Binding Text}" />
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>

@@ -47,7 +47,12 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 [
                     new GetEntityRequest
                     {
-                        EntityName = new EntityName(Array.Empty<string>()),
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
                         EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
                     },
                 ],
@@ -64,12 +69,19 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 string.Equals(item.ItemKey, "[\"entity-types\"]", StringComparison.Ordinal)
                 && item.HasChildren));
 
+        var rootItem = Assert.Single(
+            viewModel.EntityList.Items.Where(item =>
+                string.Equals(item.ItemKey, "[]", StringComparison.Ordinal)));
+        Assert.True(rootItem.IsExpanded);
+        Assert.Equal(0, rootItem.Level);
+        Assert.Null(rootItem.ParentItemKey);
+
         var parentItem = Assert.Single(
             viewModel.EntityList.Items.Where(item =>
                 string.Equals(item.ItemKey, "[\"entity-types\"]", StringComparison.Ordinal)));
         Assert.Equal("[\"entity-types\"]", parentItem.ItemKey);
-        Assert.Null(parentItem.ParentItemKey);
-        Assert.Equal(0, parentItem.Level);
+        Assert.Equal("[]", parentItem.ParentItemKey);
+        Assert.Equal(1, parentItem.Level);
         Assert.Contains("[\"entity-types\",\"workspace\"]", parentItem.ChildItemKeys);
 
         parentItem.IsExpanded = true;
@@ -80,7 +92,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var childItem = Assert.Single(
             viewModel.EntityList.Items.Where(item =>
                 string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal)));
-        Assert.Equal(1, childItem.Level);
+        Assert.Equal(2, childItem.Level);
         Assert.Equal(parentItem.ItemKey, childItem.ParentItemKey);
 
         viewModel.UpdateStickyContextFromVisibleItem(childItem.ItemKey);

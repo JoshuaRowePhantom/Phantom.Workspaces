@@ -51,6 +51,16 @@
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
     </Style>
+    <Style Selector="Border.entity-card.context-pinned">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+        <Setter Property="Opacity" Value="0.92" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
     <Style Selector="Border.entity-card-expand-section">
         <Setter Property="Margin" Value="0,-4,0,0" />
         <Setter Property="BorderThickness" Value="1" />

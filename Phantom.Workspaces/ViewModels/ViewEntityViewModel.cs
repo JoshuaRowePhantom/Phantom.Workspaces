@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class ViewEntityViewModel : ViewModelBase
 {
-    private readonly ObservableCollection<string> displayItems = [];
+    private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
 
     public ViewEntityViewModel(
         SubscribedEntityViewModel entity,
@@ -36,7 +36,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public BadgesViewModel Badges { get; }
 
-    public ObservableCollection<string> DisplayItems => this.displayItems;
+    public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
     public Thickness IndentMargin => new(this.IndentLevel * 20, 0, 0, 0);
 

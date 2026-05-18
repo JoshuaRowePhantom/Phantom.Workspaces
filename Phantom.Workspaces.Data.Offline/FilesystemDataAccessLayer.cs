@@ -480,7 +480,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
         if (request.EntityName is null)
         {
-            foreach (var entityId in this.FindEntityIdsByPrefix(new EntityName(Array.Empty<string>())))
+            foreach (var entityId in this.FindEntityIdsByPrefix(EntityName.Root))
             {
                 var snapshot = this.TryLoadEntitySnapshot(entityId);
                 if (snapshot is null || snapshot.Data is null)

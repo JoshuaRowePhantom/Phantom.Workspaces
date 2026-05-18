@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces;
 
@@ -45,10 +46,10 @@ public static class EntityPresentation
         return "entity";
     }
 
-    public static IReadOnlyCollection<string> GetDisplayItems(
+    public static IReadOnlyCollection<EntityDisplayItemViewModel> GetDisplayItems(
         EntitySnapshot snapshot)
     {
-        var items = new List<string>();
+        var items = new List<EntityDisplayItemViewModel>();
         if (snapshot.Data is not JsonElement data)
         {
             return items;
@@ -57,7 +58,7 @@ public static class EntityPresentation
         var markdown = GetMarkdownText(data);
         if (!string.IsNullOrWhiteSpace(markdown))
         {
-            items.Add(markdown);
+            items.Add(new EntityDisplayItemViewModel(markdown));
         }
 
         return items;

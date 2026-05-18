@@ -33,7 +33,16 @@
       "names": {
         "type": "array",
         "items": {
-          "$ref": "core.json#/$defs/entity-name"
+          "anyOf": [
+            {
+              "$ref": "core.json#/$defs/entity-name"
+            },
+            {
+              "$comment": "Root folder uses an empty name path ([]).",
+              "type": "array",
+              "maxItems": 0
+            }
+          ]
         },
         "minItems": 1,
         "maxItems": 1

@@ -420,6 +420,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         var requiredFolderNames = new Dictionary<string, EntityName>(StringComparer.Ordinal);
         var existingFolderByName = new Dictionary<string, (EntityId EntityId, ConcurrencyTag? ConcurrencyTag)>(StringComparer.Ordinal);
+        var hasNamedEntities = false;
         foreach (var pair in projectedEntitiesById)
         {
             if (pair.Value.Data is not { ValueKind: JsonValueKind.Object } entityData)
@@ -428,6 +429,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             }
 
             var names = this.GetEntityNameValues(entityData);
+            if (names.Count > 0)
+            {
+                hasNamedEntities = true;
+            }
+
             if (this.IsFolderEntity(entityData))
             {
                 foreach (var name in names)
@@ -447,6 +453,12 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     requiredFolderNames[SerializeEntityName(prefixName)] = prefixName;
                 }
             }
+        }
+
+        if (hasNamedEntities)
+        {
+            var rootFolderName = EntityName.Root;
+            requiredFolderNames[SerializeEntityName(rootFolderName)] = rootFolderName;
         }
 
         foreach (var requiredFolder in requiredFolderNames)
@@ -1582,7 +1594,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         EntityName folderName)
     {
         var folderTitle = folderName.Components.Length == 0
-            ? "folder"
+            ? "root"
             : folderName.Components[^1];
         var serializedTitle = JsonSerializer.Serialize(folderTitle);
         var serializedName = JsonSerializer.Serialize(new[] { folderName.Components });

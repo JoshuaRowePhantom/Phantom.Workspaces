@@ -52,7 +52,7 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public string EntityType => this.Node.EntityType;
 
-    public IReadOnlyCollection<string> DisplayItems => this.Node.DisplayItems;
+    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.Node.DisplayItems;
 
     public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
 

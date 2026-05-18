@@ -63,7 +63,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         }
 
         var rootChildren = this.BuildChildren(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
-        var items = this.BuildItems(rootChildren, expansionStateByPath);
+        var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
         this.entityList.SetItems(items);
         if (this.stickyFocusItemKey is null)
         {
@@ -136,11 +136,27 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     }
 
     private IReadOnlyCollection<EntityListItemViewModel> BuildItems(
+        IReadOnlyCollection<SubscribedEntityViewModel> rootEntities,
         IReadOnlyCollection<EntityListNodeViewModel> rootChildren,
         IReadOnlyDictionary<string, bool> expansionStateByPath)
     {
         var items = new List<EntityListItemViewModel>();
         var order = 0;
+        if (this.TryFindEntityForPath(rootEntities, Array.Empty<string>(), out var rootEntity))
+        {
+            var rootNode = new EntityListNodeViewModel(rootEntity, Array.Empty<string>(), "[]");
+            rootNode.SetChildren(rootChildren);
+            this.AddItemsDepthFirst(
+                rootNode,
+                parentItemKey: null,
+                level: 0,
+                parentVisible: true,
+                expansionStateByPath,
+                items,
+                ref order);
+            return items;
+        }
+
         foreach (var rootNode in rootChildren.OrderBy(static node => node.SortKey, StringComparer.Ordinal))
         {
             this.AddItemsDepthFirst(
@@ -170,7 +186,9 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             .OrderBy(static child => child.SortKey, StringComparer.Ordinal)
             .Select(static child => JsonSerializer.Serialize(child.NameComponents))
             .ToArray();
-        var isExpanded = expansionStateByPath.TryGetValue(itemKey, out var expanded) && expanded;
+        var isExpanded = expansionStateByPath.TryGetValue(itemKey, out var expanded)
+            ? expanded
+            : node.NameComponents.Count == 0;
         node.IsExpanded = isExpanded;
 
         if (parentVisible)
@@ -217,8 +235,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         this.StickyParentItems.Clear();
 
-        var rootLevel = 0;
-        this.StickyParentItems.Add(new EntityHierarchyContextItemViewModel("root", "folder", rootLevel));
         if (string.IsNullOrWhiteSpace(this.stickyFocusItemKey))
         {
             this.RaisePropertyChanged(nameof(this.HasStickyParentItems));
@@ -240,12 +256,15 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             parentKey = ancestor.ParentItemKey;
         }
 
-        var level = 1;
         while (ancestorStack.Count > 0)
         {
             var ancestor = ancestorStack.Pop();
-            this.StickyParentItems.Add(new EntityHierarchyContextItemViewModel(ancestor.DisplayName, ancestor.EntityType, level));
-            level++;
+            this.StickyParentItems.Add(
+                new EntityHierarchyContextItemViewModel(
+                    ancestor.DisplayName,
+                    ancestor.EntityType,
+                    ancestor.Level,
+                    ancestor.DisplayItems));
         }
 
         this.RaisePropertyChanged(nameof(this.HasStickyParentItems));
@@ -292,5 +311,44 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         {
             this.pendingSubscriptions.Remove(pathKey);
         }
+    }
+
+    private bool TryFindEntityForPath(
+        IReadOnlyCollection<SubscribedEntityViewModel> entities,
+        IReadOnlyCollection<string> path,
+        out SubscribedEntityViewModel entityForPath)
+    {
+        foreach (var entity in entities)
+        {
+            if (entity.Snapshot.Data is not JsonElement data
+                || !data.TryGetProperty("names", out var names)
+                || names.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var nameElement in names.EnumerateArray())
+            {
+                if (nameElement.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var components = nameElement.EnumerateArray()
+                    .Where(static item => item.ValueKind == JsonValueKind.String)
+                    .Select(static item => item.GetString())
+                    .Where(static value => !string.IsNullOrWhiteSpace(value))
+                    .ToArray();
+                if (components.Length == path.Count
+                    && components.SequenceEqual(path, StringComparer.Ordinal))
+                {
+                    entityForPath = entity;
+                    return true;
+                }
+            }
+        }
+
+        entityForPath = null!;
+        return false;
     }
 }

@@ -346,12 +346,16 @@ public readonly record struct EntityTypeAndName(
 
 public readonly struct EntityName : IEquatable<EntityName>
 {
+    private readonly string[] components;
+
+    public static EntityName Root { get; } = new(Array.Empty<string>());
+
     public EntityName(params string[] components)
     {
-        this.Components = components ?? [];
+        this.components = components ?? [];
     }
 
-    public string[] Components { get; }
+    public string[] Components => this.components ?? [];
 
     public bool Equals(EntityName other)
     {
@@ -648,8 +652,10 @@ public static class DataAccessLayerJsonExtensions
         }
 
         var components = new List<string>();
+        var hasItems = false;
         foreach (var item in element.EnumerateArray())
         {
+            hasItems = true;
             if (item.ValueKind == JsonValueKind.String)
             {
                 var component = item.GetString();
@@ -658,6 +664,11 @@ public static class DataAccessLayerJsonExtensions
                     components.Add(component);
                 }
             }
+        }
+
+        if (!hasItems)
+        {
+            return EntityName.Root;
         }
 
         return components.Count > 0 ? new EntityName(components.ToArray()) : null;

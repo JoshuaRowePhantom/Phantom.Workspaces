@@ -3,28 +3,12 @@
              xmlns:vm="using:Phantom.Workspaces.ViewModels"
              x:Class="Phantom.Workspaces.Templates.EntityBrowserWorkspaceTabView"
              x:DataType="vm:EntityBrowserWorkspaceTabViewModel">
-    <Grid RowDefinitions="Auto,*">
-        <Border Grid.Row="0"
-                Classes="entity-card"
-                Margin="0,0,0,8"
-                IsVisible="{Binding HasStickyParentItems}">
-            <StackPanel Spacing="4">
-                <TextBlock Text="Context" Classes="muted" />
-                <ItemsControl ItemsSource="{Binding StickyParentItems}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:EntityHierarchyContextItemViewModel">
-                            <StackPanel Margin="{Binding IndentMargin}" Orientation="Horizontal" Spacing="8">
-                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding EntityType}" Classes="muted" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
-        </Border>
-
-        <ScrollViewer x:Name="BrowserScrollViewer" Grid.Row="1">
-            <ItemsControl x:Name="BrowserItemsControl" ItemsSource="{Binding EntityList.Items}" />
-        </ScrollViewer>
-    </Grid>
+    <ScrollViewer x:Name="BrowserScrollViewer"
+                  AllowAutoHide="False"
+                  HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
+        <ItemsControl x:Name="BrowserItemsControl"
+                      Margin="0,0,8,0"
+                      ItemsSource="{Binding EntityList.Items}" />
+    </ScrollViewer>
 </UserControl>

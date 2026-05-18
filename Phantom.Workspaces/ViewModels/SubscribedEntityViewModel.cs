@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class SubscribedEntityViewModel : ViewModelBase
 {
     private EntitySnapshot snapshot;
-    private readonly List<string> displayItems = [];
+    private readonly List<EntityDisplayItemViewModel> displayItems = [];
 
     public SubscribedEntityViewModel(
         EntitySnapshot snapshot)
@@ -55,7 +55,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
     public IReadOnlyCollection<EntitySnapshot> Relationships => this.snapshot.Relationships;
 
-    public IReadOnlyCollection<string> DisplayItems => this.displayItems;
+    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
     internal void UpdateSnapshot(
         EntitySnapshot snapshot)

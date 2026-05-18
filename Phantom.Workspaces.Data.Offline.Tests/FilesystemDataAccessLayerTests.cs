@@ -87,7 +87,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         Assert.True(File.Exists(fullNameIndexPath));
         Assert.Equal(0L, new FileInfo(fullNameIndexPath).Length);
 
-        var emptyPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, new EntityName(Array.Empty<string>()), entityId);
+        var emptyPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, EntityName.Root, entityId);
         var firstPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, new EntityName("foo"), entityId);
         var secondPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, new EntityName("foo", "bar"), entityId);
         var fullPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, entityName, entityId);
@@ -112,7 +112,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         var concurrencyTag = Assert.Single(createResult.EntityResults).ConcurrencyTag!.Value;
 
         var fullNameIndexPath = GetEntityNameIndexPath(this.repositoryPath, entityName, entityId);
-        var emptyPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, new EntityName(Array.Empty<string>()), entityId);
+        var emptyPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, EntityName.Root, entityId);
         var firstPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, new EntityName("to-delete"), entityId);
         var fullPrefixIndexPath = GetEntityNamePrefixIndexPath(this.repositoryPath, entityName, entityId);
         Assert.True(File.Exists(fullNameIndexPath));

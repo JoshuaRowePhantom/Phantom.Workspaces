@@ -14,8 +14,8 @@
                     </StackPanel>
                     <ItemsControl ItemsSource="{Binding DisplayItems}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="x:String">
-                                <TextBlock Text="{Binding .}" />
+                            <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
+                                <TextBlock Text="{Binding Text}" />
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -45,8 +45,8 @@
                     </StackPanel>
                     <ItemsControl ItemsSource="{Binding DisplayItems}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="x:String">
-                                <TextBlock Text="{Binding .}" />
+                            <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
+                                <TextBlock Text="{Binding Text}" />
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -71,8 +71,8 @@
                 <TextBlock Text="{Binding Entity.EntityType}" Classes="muted" />
                 <ItemsControl ItemsSource="{Binding Entity.DisplayItems}">
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="x:String">
-                            <TextBlock Text="{Binding .}" />
+                        <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
+                            <TextBlock Text="{Binding Text}" />
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>

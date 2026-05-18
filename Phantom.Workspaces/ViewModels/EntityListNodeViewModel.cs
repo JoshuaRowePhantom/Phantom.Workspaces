@@ -63,7 +63,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public string EntityType => this.entity?.EntityType ?? this.entityType;
 
-    public IReadOnlyCollection<string> DisplayItems => this.entity?.DisplayItems ?? Array.Empty<string>();
+    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.entity?.DisplayItems ?? Array.Empty<EntityDisplayItemViewModel>();
 
     public bool HasChildren => this.Children.Count > 0;
 

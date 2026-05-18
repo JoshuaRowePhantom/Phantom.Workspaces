@@ -171,6 +171,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         var snapshots = await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, entityName);
         var snapshot = Assert.Single(snapshots);
         Assert.False(HasEntityType(snapshot, "folder"));
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, EntityName.Root)).Single(), "folder"));
     }
 
     [Fact]

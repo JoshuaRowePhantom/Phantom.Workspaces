@@ -43,7 +43,16 @@
       "names": {
         "type": "array",
         "items": {
-          "$ref": "core.json#/$defs/entity-name"
+          "anyOf": [
+            {
+              "$ref": "core.json#/$defs/entity-name"
+            },
+            {
+              "$comment": "Used only for the root folder name path ([]).",
+              "type": "array",
+              "maxItems": 0
+            }
+          ]
         }
       },
       "display-name": {
@@ -72,6 +81,43 @@
           "$ref": "core.json#/$defs/entity-id"
         }
       }
-    }
+    },
+    "allOf": [
+      {
+        "$comment": "An empty entity name path ([]) is valid only for the root folder and must be the only name.",
+        "if": {
+          "properties": {
+            "names": {
+              "contains": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          },
+          "required": [
+            "names"
+          ]
+        },
+        "then": {
+          "properties": {
+            "entity-types": {
+              "type": "array",
+              "contains": {
+                "const": "folder"
+              }
+            },
+            "names": {
+              "const": [
+                []
+              ]
+            }
+          },
+          "required": [
+            "entity-types",
+            "names"
+          ]
+        }
+      }
+    ]
   }
 }

@@ -30,13 +30,14 @@ public sealed class DataAccessLayerJsonExtensionsTests
     }
 
     [Fact]
-    public void TryReadEntityName_WithEmptyArray_ReturnsNull()
+    public void TryReadEntityName_WithEmptyArray_ReturnsRootEntityName()
     {
         var json = JsonDocument.Parse("[]").RootElement;
         
         var result = json.TryReadEntityName();
         
-        Assert.Null(result);
+        Assert.NotNull(result);
+        Assert.Empty(result.Value.Components);
     }
 
     [Fact]
