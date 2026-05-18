@@ -183,6 +183,271 @@ public sealed class EntityBrokerTests
         Assert.Contains(entityId, changedEntityIds);
     }
 
+    [Fact]
+    public async Task SubscribeGetAsync_LoadsInitialResults()
+    {
+        var firstId = new EntityId("55555555-5555-5555-5555-555555555555");
+        var secondId = new EntityId("66666666-6666-6666-6666-666666666666");
+        var broker = await CreateBrokerAsync();
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                firstId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "55555555-5555-5555-5555-555555555555",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "first"]],
+                  "display-name": { "default": "First" }
+                }
+                """));
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                secondId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "1"),
+                """
+                {
+                  "entity-id": "66666666-6666-6666-6666-666666666666",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "second"]],
+                  "display-name": { "default": "Second" }
+                }
+                """));
+
+        var subscribedGet = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName("subscriptions", "views"),
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            });
+
+        var resultIds = subscribedGet.Results.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(firstId, resultIds);
+        Assert.Contains(secondId, resultIds);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_SubscribedGetRerunsGetAndReplacesResultCollection()
+    {
+        var firstId = new EntityId("77777777-7777-7777-7777-777777777777");
+        var secondId = new EntityId("88888888-8888-8888-8888-888888888888");
+        var broker = await CreateBrokerAsync();
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                firstId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "77777777-7777-7777-7777-777777777777",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "first"]],
+                  "display-name": { "default": "First" }
+                }
+                """));
+
+        var subscribedGet = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName("subscriptions", "views"),
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            });
+        Assert.Equal(firstId, Assert.Single(subscribedGet.Results).EntityId);
+
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var firstConcurrencyTag = Assert.Contains(firstId, snapshots).ConcurrencyTag;
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                firstId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "2"),
+                """
+                {
+                  "entity-id": "77777777-7777-7777-7777-777777777777",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "other", "first"]],
+                  "display-name": { "default": "First (moved)" }
+                }
+                """),
+            firstConcurrencyTag);
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                secondId,
+                new Timestamp(DateTimeOffset.UtcNow, "1"),
+                """
+                {
+                  "entity-id": "88888888-8888-8888-8888-888888888888",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "second"]],
+                  "display-name": { "default": "Second" }
+                }
+                """));
+
+        await broker.RefreshAsync();
+
+        var resultIds = subscribedGet.Results.Select(static entity => entity.EntityId).ToArray();
+        Assert.DoesNotContain(firstId, resultIds);
+        Assert.Contains(secondId, resultIds);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_SubscribedGet_UsesIncrementalCollectionNotifications()
+    {
+        var firstId = new EntityId("99999999-9999-9999-9999-999999999999");
+        var secondId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var broker = await CreateBrokerAsync();
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                firstId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "99999999-9999-9999-9999-999999999999",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "first"]],
+                  "display-name": { "default": "First" }
+                }
+                """));
+
+        var subscribedGet = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName("subscriptions", "views"),
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            });
+
+        var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        subscribedGet.Results.CollectionChanged += (_, args) =>
+        {
+            actions.Add(args.Action);
+        };
+
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var firstConcurrencyTag = Assert.Contains(firstId, snapshots).ConcurrencyTag;
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                firstId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "2"),
+                """
+                {
+                  "entity-id": "99999999-9999-9999-9999-999999999999",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "other", "first"]],
+                  "display-name": { "default": "First (moved)" }
+                }
+                """),
+            firstConcurrencyTag);
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                secondId,
+                new Timestamp(DateTimeOffset.UtcNow, "1"),
+                """
+                {
+                  "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "second"]],
+                  "display-name": { "default": "Second" }
+                }
+                """));
+
+        await broker.RefreshAsync();
+
+        Assert.Contains(System.Collections.Specialized.NotifyCollectionChangedAction.Remove, actions);
+        Assert.Contains(System.Collections.Specialized.NotifyCollectionChangedAction.Add, actions);
+        Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_SubscribedGet_DoesNotClearAndRecreateCollection_WhenMembershipUnchanged()
+    {
+        var entityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var broker = await CreateBrokerAsync();
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "stable"]],
+                  "display-name": { "default": "Stable" }
+                }
+                """));
+
+        var subscribedGet = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName("subscriptions", "views"),
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            });
+
+        var originalItem = Assert.Single(subscribedGet.Results);
+        var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        subscribedGet.Results.CollectionChanged += (_, args) => actions.Add(args.Action);
+
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var concurrencyTag = Assert.Contains(entityId, snapshots).ConcurrencyTag;
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "2"),
+                """
+                {
+                  "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  "entity-types": ["entity"],
+                  "names": [["subscriptions", "views", "stable"]],
+                  "display-name": { "default": "Stable (updated)" }
+                }
+                """),
+            concurrencyTag);
+
+        await broker.RefreshAsync();
+
+        Assert.Empty(actions);
+        Assert.Same(originalItem, Assert.Single(subscribedGet.Results));
+        Assert.Equal("Stable (updated)", subscribedGet.Results[0].DisplayName);
+    }
+
     private static Task<EntityBroker> CreateBrokerAsync()
     {
         return EntityBroker.CreateInitializedAsync(
