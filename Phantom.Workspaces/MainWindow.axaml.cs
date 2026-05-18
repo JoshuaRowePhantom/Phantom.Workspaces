@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces;
@@ -15,5 +16,22 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         this.DataContext = viewModel;
+    }
+
+    private async void OnOpenSettingsClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        var settingsWindow = new SettingsWindow
+        {
+            DataContext = viewModel,
+        };
+
+        await settingsWindow.ShowDialog(this);
     }
 }

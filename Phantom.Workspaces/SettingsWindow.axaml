@@ -1,0 +1,41 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        mc:Ignorable="d"
+        x:Class="Phantom.Workspaces.SettingsWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Width="360"
+        Height="220"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Settings">
+    <Grid Classes="settings-root" RowDefinitions="*,Auto">
+        <StackPanel Classes="settings-main">
+            <StackPanel Classes="settings-section">
+                <TextBlock Text="Theme" Classes="section-title" />
+                <ComboBox ItemsSource="{Binding ThemeNames}"
+                          SelectedItem="{Binding SelectedThemeName}" />
+            </StackPanel>
+
+            <StackPanel Classes="settings-section">
+                <TextBlock Text="Debugging" Classes="section-title" />
+                <StackPanel Classes="settings-row">
+                    <Button Content="On"
+                            Command="{Binding SetDebuggingCommand}"
+                            CommandParameter="True"
+                            IsEnabled="{Binding IsDebuggingDisabled}" />
+                    <Button Content="Off"
+                            Command="{Binding SetDebuggingCommand}"
+                            CommandParameter="False"
+                            IsEnabled="{Binding IsDebuggingEnabled}" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Classes="settings-actions">
+            <Button Classes="settings-close" Content="Close" Click="OnCloseClicked" />
+        </StackPanel>
+    </Grid>
+</Window>

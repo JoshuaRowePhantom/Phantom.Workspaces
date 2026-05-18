@@ -1,0 +1,122 @@
+<Styles xmlns="https://github.com/avaloniaui">
+    <Style Selector="TextBlock.heading">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.heading.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.heading.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.heading.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.heading.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.section-title">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.section-title.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.section-title.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.section-title.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.section-title.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.caption.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.caption.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.caption.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.muted.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.muted.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.muted.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.accent">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.accent.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.accent.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.accent.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.accent.FontSize}" />
+    </Style>
+
+    <Style Selector="Grid.entity-pane">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+    </Style>
+    <Style Selector="Grid.entity-pane:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
+    </Style>
+    <Style Selector="Border.entity-card">
+        <Setter Property="Padding" Value="10" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+    <Style Selector="Border.entity-card.selected">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+
+    <Style Selector="Border.window-header">
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="ListBox.top-view-list">
+        <Setter Property="Margin" Value="18,0" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
+    <Style Selector="Border.top-view-item">
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="Button.settings-gear">
+        <Setter Property="MinWidth" Value="34" />
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.pane-header">
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.workspace-region-card">
+        <Setter Property="Margin" Value="0,0,0,12" />
+        <Setter Property="Padding" Value="10" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="Border.entity-badge">
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="Margin" Value="0,2,6,0" />
+    </Style>
+    <Style Selector="GridSplitter.main-splitter">
+        <Setter Property="Width" Value="6" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="ResizeDirection" Value="Columns" />
+        <Setter Property="ResizeBehavior" Value="PreviousAndNext" />
+        <Setter Property="ShowsPreview" Value="True" />
+    </Style>
+
+    <Style Selector="Grid.settings-root">
+        <Setter Property="Margin" Value="16" />
+    </Style>
+    <Style Selector="StackPanel.settings-main">
+        <Setter Property="Spacing" Value="14" />
+    </Style>
+    <Style Selector="StackPanel.settings-section">
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="StackPanel.settings-row">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="8" />
+    </Style>
+    <Style Selector="StackPanel.settings-actions">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
+    <Style Selector="Button.settings-close">
+        <Setter Property="MinWidth" Value="90" />
+    </Style>
+</Styles>

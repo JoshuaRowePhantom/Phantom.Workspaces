@@ -1,0 +1,73 @@
+{
+  "entity-id": "6fdfeb28-6183-42d8-8e0f-a9be86d0d7fd",
+  "entity-types": [
+    "entity-type"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/interest.json"
+    ],
+    [
+      "entity-types",
+      "interest"
+    ]
+  ],
+  "schema": {
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/interest.json",
+    "type": "object",
+    "properties": {
+      "entity-types": {
+        "type": "array",
+        "items": {
+          "$ref": "core.json#/$defs/entity-type-id"
+        },
+        "allOf": [
+          {
+            "contains": {
+              "const": "relationship"
+            }
+          },
+          {
+            "contains": {
+              "const": "interest"
+            }
+          }
+        ]
+      },
+      "applied": {
+        "$ref": "#/$defs/interest-state-content"
+      },
+      "notApplied": {
+        "$ref": "#/$defs/interest-state-content"
+      }
+    },
+    "required": [
+      "entity-types",
+      "applied",
+      "notApplied"
+    ],
+    "$defs": {
+      "interest-state-content": {
+        "type": "object",
+        "properties": {
+          "indicator": {
+            "$ref": "core.json#/$defs/local-string"
+          },
+          "description": {
+            "$ref": "core.json#/$defs/local-string"
+          },
+          "actionText": {
+            "$ref": "core.json#/$defs/local-string"
+          }
+        },
+        "required": [
+          "indicator",
+          "description",
+          "actionText"
+        ],
+        "unevaluatedProperties": false
+      }
+    }
+  }
+}

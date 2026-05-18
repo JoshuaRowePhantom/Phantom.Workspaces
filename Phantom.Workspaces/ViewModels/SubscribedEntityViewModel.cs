@@ -17,6 +17,8 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
         this.displayItems.AddRange(EntityPresentation.GetDisplayItems(snapshot));
     }
 
+    public BadgesModel Badges { get; } = new();
+
     public EntityId EntityId => this.snapshot.EntityId;
 
     public EntitySnapshot Snapshot

@@ -21,6 +21,20 @@ public sealed class EntityBroker
         this.entityRepository = entityRepository;
     }
 
+    public EntityRepository EntityRepository => this.entityRepository;
+
+    public static async Task<EntityBroker> CreateInitializedAsync(
+        RepositorySource repositorySource,
+        CancellationToken cancellationToken = default)
+    {
+        var repository = await EntityRepository.CreateAsync(repositorySource);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var broker = new EntityBroker(repository);
+        await broker.InitializeAsync(cancellationToken);
+        return broker;
+    }
+
     public event EventHandler<EntityBrokerChangedEventArgs>? Changed;
 
     public Task InitializeAsync(
@@ -58,6 +72,12 @@ public sealed class EntityBroker
         }
 
         return entities;
+    }
+
+    public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await this.entityRepository.ExportEntitySnapshotsAsync(cancellationToken);
     }
 
     public bool TryGetReferencedEntity(

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Phantom.Workspaces.Data;
@@ -23,25 +24,26 @@ public sealed class MainWindowViewModel : ViewModelBase
         Description = string.Empty,
         IconGlyph = "◻",
     };
-    private readonly Task<EntityRepository> entityRepositoryTask;
-    private EntityRepository? entityRepository;
+    private readonly Task<EntityBroker> entityBrokerTask;
     private EntityBroker? entityBroker;
-    private readonly ThemeProfileStore themeProfileStore;
+    private SubscribedEntityViewModel? mainNavigationView;
+    private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
-    private string selectedThemeName = "Dark";
+    private Profile currentProfile = Profile.Default;
+    private string selectedThemeName = ProfileThemeSettings.Dark.Name;
+    private bool suppressThemeSelectionChange;
 
     public MainWindowViewModel(
         RepositorySource repositorySource)
     {
         this.RepositorySource = repositorySource;
-        this.entityRepositoryTask = EntityRepository.CreateAsync(repositorySource);
-        this.themeProfileStore = ThemeProfileStore.ForCurrentUser();
+        this.entityBrokerTask = EntityBroker.CreateInitializedAsync(repositorySource);
+        this.profileStore = ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
-        this.VisibleEntities = new ObservableCollection<EntityVisualViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>
         {
             CreatePlaceholderWorkspacePane(PlaceholderWorkspaceId, "Loading workspace..."),
@@ -49,8 +51,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         this.selectedWorkspacePane = this.WorkspacePanes[0];
         this.ActivateEntityCommand = new RelayCommand(async _ => await this.OnActivateEntityAsync(_));
-        this.SetDarkThemeCommand = new RelayCommand(async _ => await this.SetThemeAsync("Dark"));
-        this.SetLightThemeCommand = new RelayCommand(async _ => await this.SetThemeAsync("Light"));
+        this.SetDebuggingCommand = new RelayCommand(async parameter => await this.SetDebuggingAsync(ReadDebuggingParameter(parameter)));
+        this.ApplyThemeResources(this.currentProfile.Theme);
+        this.ApplyThemeVariant(this.currentProfile.Theme.Name);
 
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
@@ -60,19 +63,39 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public ObservableCollection<ViewDefinitionViewModel> TopLevelViews { get; }
 
-    public ObservableCollection<EntityVisualViewModel> VisibleEntities { get; }
-
     public ObservableCollection<WorkspacePaneViewModel> WorkspacePanes { get; }
 
     public RelayCommand ActivateEntityCommand { get; }
 
-    public RelayCommand SetDarkThemeCommand { get; }
+    public RelayCommand SetDebuggingCommand { get; }
 
-    public RelayCommand SetLightThemeCommand { get; }
+    public Profile CurrentProfile => this.currentProfile;
 
-    public bool IsDarkThemeSelected => string.Equals(this.selectedThemeName, "Dark", StringComparison.Ordinal);
+    public IReadOnlyList<string> ThemeNames => ProfileThemeSettings.ThemeNames;
 
-    public bool IsLightThemeSelected => string.Equals(this.selectedThemeName, "Light", StringComparison.Ordinal);
+    public string SelectedThemeName
+    {
+        get => this.selectedThemeName;
+        set
+        {
+            var normalizedThemeName = ProfileThemeSettings.ForName(value).Name;
+            if (!this.SetProperty(ref this.selectedThemeName, normalizedThemeName))
+            {
+                return;
+            }
+
+            if (this.suppressThemeSelectionChange)
+            {
+                return;
+            }
+
+            _ = this.SetThemeAsync(normalizedThemeName);
+        }
+    }
+
+    public bool IsDebuggingEnabled => this.CurrentProfile.Debugging;
+
+    public bool IsDebuggingDisabled => !this.IsDebuggingEnabled;
 
     public ViewDefinitionViewModel SelectedTopLevelView
     {
@@ -102,7 +125,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         _ => "In-memory repository source.",
     };
 
-    public bool HasStickyParentContext => !string.IsNullOrWhiteSpace(this.StickyParentContextText);
+    public bool HasStickyParentContext => this.CurrentProfile.DebugOnlyIsVisible
+        && !string.IsNullOrWhiteSpace(this.StickyParentContextText);
 
     public string StickyParentContextText
     {
@@ -118,61 +142,164 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private EntityRepository EntityRepository => this.entityRepository
-        ?? throw new InvalidOperationException("The view model has not been initialized.");
-
     private EntityBroker EntityBroker => this.entityBroker
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
     public async Task InitializeAsync()
     {
-        this.entityRepository = await this.entityRepositoryTask;
-        this.entityBroker = new EntityBroker(this.EntityRepository);
+        this.entityBroker = await this.entityBrokerTask;
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
-
-        await this.EntityBroker.InitializeAsync();
-        await this.LoadNavigationSubscriptionAsync();
-        await this.RebuildViewsFromRepositoryAsync();
-        await this.InitializeThemeAsync();
+        this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
+        this.InitializeTopLevelViews();
+        await this.ApplySelectedViewAsync();
+        await this.InitializeProfileAsync();
         await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
     }
 
-    private async Task InitializeThemeAsync()
+    private async Task InitializeProfileAsync()
     {
-        var resolvedTheme = await this.themeProfileStore.GetOrInitializeThemeAsync();
-        this.ApplyTheme(normalizeToDisplayName: true, resolvedTheme);
+        var profile = await this.profileStore.GetOrInitializeProfileAsync();
+        this.ApplyProfile(profile);
     }
 
     private async Task SetThemeAsync(
         string themeName)
     {
-        this.ApplyTheme(normalizeToDisplayName: false, themeName);
-        await this.themeProfileStore.SetThemeAsync(themeName);
+        var updatedProfile = await this.profileStore.ChangeProfileAsync(
+            profile => profile with
+            {
+                Theme = ProfileThemeSettings.ForName(themeName),
+            });
+        this.ApplyProfile(updatedProfile);
     }
 
-    private void ApplyTheme(
-        bool normalizeToDisplayName,
-        string themeName)
+    private async Task SetDebuggingAsync(
+        bool debugging)
     {
-        var normalizedDisplayName = normalizeToDisplayName
-            ? string.Equals(themeName, "light", StringComparison.OrdinalIgnoreCase) ? "Light" : "Dark"
-            : themeName;
-        if (!this.SetProperty(ref this.selectedThemeName, normalizedDisplayName, nameof(this.SelectedThemeName)))
+        var updatedProfile = await this.profileStore.ChangeProfileAsync(
+            profile => profile with
+            {
+                Debugging = debugging,
+            });
+        this.ApplyProfile(updatedProfile);
+    }
+
+    private void ApplyProfile(
+        ProfileSettings profile)
+    {
+        this.suppressThemeSelectionChange = true;
+        this.SetProperty(ref this.selectedThemeName, profile.Theme.Name, nameof(this.SelectedThemeName));
+        this.suppressThemeSelectionChange = false;
+
+        var wrappedProfile = new Profile(profile);
+        if (!this.SetProperty(ref this.currentProfile, wrappedProfile, nameof(this.CurrentProfile)))
         {
-            this.RaisePropertyChanged(nameof(this.IsDarkThemeSelected));
-            this.RaisePropertyChanged(nameof(this.IsLightThemeSelected));
+            this.ApplyThemeResources(profile.Theme);
+            this.ApplyThemeVariant(profile.Theme.Name);
+            this.RaisePropertyChanged(nameof(this.IsDebuggingEnabled));
+            this.RaisePropertyChanged(nameof(this.IsDebuggingDisabled));
+            this.RaisePropertyChanged(nameof(this.HasStickyParentContext));
             return;
         }
 
-        Application.Current!.RequestedThemeVariant = string.Equals(this.selectedThemeName, "Light", StringComparison.Ordinal)
-            ? ThemeVariant.Light
-            : ThemeVariant.Dark;
-        this.RaisePropertyChanged(nameof(this.IsDarkThemeSelected));
-        this.RaisePropertyChanged(nameof(this.IsLightThemeSelected));
+        this.ApplyThemeResources(profile.Theme);
+        this.ApplyThemeVariant(profile.Theme.Name);
+        this.RaisePropertyChanged(nameof(this.IsDebuggingEnabled));
+        this.RaisePropertyChanged(nameof(this.IsDebuggingDisabled));
+        this.RaisePropertyChanged(nameof(this.HasStickyParentContext));
     }
 
-    public string SelectedThemeName => this.selectedThemeName;
+    private void ApplyThemeVariant(
+        string themeName)
+    {
+        Application.Current!.RequestedThemeVariant = string.Equals(themeName, "light", StringComparison.OrdinalIgnoreCase)
+            ? ThemeVariant.Light
+            : ThemeVariant.Dark;
+    }
+
+    private void ApplyThemeResources(
+        ProfileThemeSettings theme)
+    {
+        var resources = Application.Current!.Resources;
+        SetResource(resources, "Theme.FontFamily", new FontFamily(theme.Fonts.BaseFamily));
+        SetResource(resources, "Theme.FontSize.Base", theme.Fonts.BaseSize * theme.Fonts.GlobalScale.Value);
+
+        SetBrushResource(resources, "Theme.Surface.EntityPane.Background", theme.Surfaces.EntityPane.Background);
+        SetBrushResource(resources, "Theme.Surface.EntityPane.Border", theme.Surfaces.EntityPane.Border);
+        SetBrushResource(resources, "Theme.Surface.EntityPane.HoverBackground", theme.Surfaces.EntityPane.HoverBackground);
+        SetBrushResource(resources, "Theme.Surface.EntityPane.HoverBorder", theme.Surfaces.EntityPane.HoverBorder);
+        SetBrushResource(resources, "Theme.Surface.EntityPane.SelectedBackground", theme.Surfaces.EntityPane.SelectedBackground);
+        SetBrushResource(resources, "Theme.Surface.EntityPane.SelectedBorder", theme.Surfaces.EntityPane.SelectedBorder);
+
+        SetBrushResource(resources, "Theme.Surface.EntityCard.Background", theme.Surfaces.EntityCard.Background);
+        SetBrushResource(resources, "Theme.Surface.EntityCard.Border", theme.Surfaces.EntityCard.Border);
+        SetBrushResource(resources, "Theme.Surface.EntityCard.HoverBackground", theme.Surfaces.EntityCard.HoverBackground);
+        SetBrushResource(resources, "Theme.Surface.EntityCard.HoverBorder", theme.Surfaces.EntityCard.HoverBorder);
+        SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBackground", theme.Surfaces.EntityCard.SelectedBackground);
+        SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBorder", theme.Surfaces.EntityCard.SelectedBorder);
+
+        var classNames = new[] { "normal", "heading", "section-title", "caption", "muted", "accent" };
+        foreach (var className in classNames)
+        {
+            this.ApplyClassResources(resources, className, theme.Classes.GetClass(className), theme);
+        }
+    }
+
+    private void ApplyClassResources(
+        Avalonia.Controls.IResourceDictionary resources,
+        string className,
+        ProfileThemeClass themeClass,
+        ProfileThemeSettings theme)
+    {
+        SetBrushResource(resources, $"Theme.Class.{className}.Foreground", themeClass.Foreground);
+        SetResource(resources, $"Theme.Class.{className}.Opacity", themeClass.Opacity);
+        SetResource(
+            resources,
+            $"Theme.Class.{className}.FontSize",
+            theme.Fonts.BaseSize * theme.Fonts.GlobalScale.Value * themeClass.FontScale.Value);
+        SetResource(resources, $"Theme.Class.{className}.FontWeight", ParseFontWeight(themeClass.FontWeight));
+    }
+
+    private static void SetBrushResource(
+        Avalonia.Controls.IResourceDictionary resources,
+        string key,
+        string colorHex)
+    {
+        SetResource(resources, key, new SolidColorBrush(Color.Parse(colorHex)));
+    }
+
+    private static void SetResource(
+        Avalonia.Controls.IResourceDictionary resources,
+        string key,
+        object value)
+    {
+        resources[key] = value;
+    }
+
+    private static FontWeight ParseFontWeight(
+        string fontWeight)
+    {
+        return fontWeight switch
+        {
+            "Bold" => FontWeight.Bold,
+            "SemiBold" => FontWeight.SemiBold,
+            "Medium" => FontWeight.Medium,
+            "Light" => FontWeight.Light,
+            _ => FontWeight.Normal,
+        };
+    }
+
+    private static bool ReadDebuggingParameter(
+        object? parameter)
+    {
+        return parameter switch
+        {
+            bool boolParameter => boolParameter,
+            string stringParameter => bool.TryParse(stringParameter, out var parsed) && parsed,
+            _ => false,
+        };
+    }
 
     private static WorkspacePaneViewModel CreatePlaceholderWorkspacePane(
         string paneId,
@@ -198,48 +325,23 @@ public sealed class MainWindowViewModel : ViewModelBase
         return new WorkspacePaneViewModel(entity, paneId);
     }
 
-    private async Task RebuildViewsFromRepositoryAsync()
+    private void InitializeTopLevelViews()
     {
-        var mainViewRequest = new GetEntityRequest
-        {
-            EntityName = new EntityName("views", "main"),
-        };
-
-        var mainViewSnapshot = await this.LoadSingleEntitySnapshotAsync(mainViewRequest);
-        if (mainViewSnapshot?.Data is not JsonElement mainViewData
-            || !mainViewData.TryGetProperty("sub-views", out var subViews)
-            || subViews.ValueKind != JsonValueKind.Array)
-        {
-            this.TopLevelViews.Clear();
-            this.TopLevelViews.Add(EmptyView);
-            this.SelectedTopLevelView = EmptyView;
-            return;
-        }
-
         var existingSelectionId = this.SelectedTopLevelView?.Id;
         var nextViews = new List<ViewDefinitionViewModel>();
-
-        foreach (var subView in subViews.EnumerateArray())
+        if (this.mainNavigationView?.Snapshot.Data is JsonElement mainViewData
+            && mainViewData.TryGetProperty("sub-views", out var subViews)
+            && subViews.ValueKind == JsonValueKind.Array)
         {
-            if (!TryReadEntityRequest(subView, "view-entity-id", out var viewRequest))
+            foreach (var subView in subViews.EnumerateArray())
             {
-                continue;
-            }
+                if (!this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var viewEntity)
+                    || viewEntity is null)
+                {
+                    continue;
+                }
 
-            var viewSnapshot = await this.LoadSingleEntitySnapshotAsync(viewRequest);
-
-            if (viewSnapshot?.Data is JsonElement viewData)
-            {
-                nextViews.Add(
-                    new ViewDefinitionViewModel
-                    {
-                        Id = viewSnapshot.EntityId.ToString(),
-                        Title = ReadLocalString(viewData, "title")
-                            ?? ReadLocalString(viewData, "display-name")
-                            ?? "View",
-                        Description = ReadPrimaryName(viewData) ?? "Repository view",
-                        IconGlyph = "◻",
-                    });
+                nextViews.Add(CreateTopLevelView(viewEntity));
             }
         }
 
@@ -261,10 +363,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (this.TopLevelViews.Count == 0)
         {
-            this.SelectedTopLevelView = EmptyView;
-            this.VisibleEntities.Clear();
-            this.StickyParentContextText = string.Empty;
-            return;
+            this.TopLevelViews.Add(EmptyView);
         }
 
         this.SelectedTopLevelView = this.TopLevelViews.FirstOrDefault(
@@ -272,10 +371,33 @@ public sealed class MainWindowViewModel : ViewModelBase
             ?? this.TopLevelViews[0];
     }
 
+    private static ViewDefinitionViewModel CreateTopLevelView(
+        SubscribedEntityViewModel viewEntity)
+    {
+        var title = "View";
+        var description = "Repository view";
+        if (viewEntity.Snapshot.Data is JsonElement viewData)
+        {
+            title = ReadLocalString(viewData, "title")
+                ?? ReadLocalString(viewData, "display-name")
+                ?? title;
+            description = ReadPrimaryName(viewData) ?? description;
+        }
+
+        return new ViewDefinitionViewModel
+        {
+            Id = viewEntity.EntityId.ToString(),
+            Title = title,
+            Description = description,
+            IconGlyph = "◻",
+            ViewEntity = viewEntity,
+        };
+    }
+
     private async Task ApplySelectedViewAsync()
     {
         var selectedView = this.selectedTopLevelView ?? EmptyView;
-        this.VisibleEntities.Clear();
+        selectedView.Entities.Clear();
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
             this.StickyParentContextText = string.Empty;
@@ -284,57 +406,42 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (selectedView.IsEntityBrowser)
         {
-            var allSnapshots = await this.EntityRepository.ExportEntitySnapshotsAsync();
-
-            foreach (var snapshot in allSnapshots.Values.OrderBy(static snapshot => snapshot.EntityId.Value))
+            var allSnapshots = await this.EntityBroker.ExportEntitySnapshotsAsync();
+            var allEntities = await this.EntityBroker.GetEntitiesAsync(allSnapshots.Keys.ToArray());
+            foreach (var entity in allEntities.OrderBy(static entity => entity.EntityId.Value))
             {
-                if (snapshot.Data is not JsonElement data)
-                {
-                    continue;
-                }
-
-                this.VisibleEntities.Add(CreateEntityVisual(snapshot.EntityId, data, indentLevel: 0));
+                selectedView.Entities.Add(new ViewEntityViewModel(entity, indentLevel: 0));
             }
 
             this.StickyParentContextText = "Entity Browser";
             return;
         }
 
-        if (!Guid.TryParse(selectedView.Id, out var selectedViewIdGuid))
+        if (selectedView.ViewEntity is not SubscribedEntityViewModel selectedViewEntity)
         {
             this.StickyParentContextText = selectedView.Title;
             return;
         }
 
-        var selectedViewId = new EntityId(selectedViewIdGuid);
-        var selectedViewSnapshot = await this.LoadSingleEntitySnapshotAsync(
-            new GetEntityRequest { EntityId = selectedViewId });
-        
-        if (selectedViewSnapshot?.Data is not JsonElement selectedViewData)
+        selectedView.Entities.Add(new ViewEntityViewModel(selectedViewEntity, indentLevel: 0, isParentContext: true));
+        if (selectedViewEntity.Snapshot.Data is not JsonElement selectedViewData)
         {
             this.StickyParentContextText = selectedView.Title;
             return;
         }
 
-        this.VisibleEntities.Add(CreateEntityVisual(selectedViewSnapshot.EntityId, selectedViewData, indentLevel: 0, isParentContext: true));
         if (selectedViewData.TryGetProperty("sub-views", out var subViews)
             && subViews.ValueKind == JsonValueKind.Array)
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (!TryReadEntityRequest(subView, "view-entity-id", out var viewRequest))
+                if (!this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
+                    || subViewEntity is null)
                 {
                     continue;
                 }
 
-                var viewSnapshot = await this.LoadSingleEntitySnapshotAsync(viewRequest);
-
-                if (viewSnapshot?.Data is not JsonElement viewData)
-                {
-                    continue;
-                }
-
-                this.VisibleEntities.Add(CreateEntityVisual(viewSnapshot.EntityId, viewData, indentLevel: 1));
+                selectedView.Entities.Add(new ViewEntityViewModel(subViewEntity, indentLevel: 1));
             }
         }
 
@@ -344,32 +451,28 @@ public sealed class MainWindowViewModel : ViewModelBase
     private async Task OnActivateEntityAsync(
         object? parameter)
     {
-        if (parameter is not EntityVisualViewModel entity)
+        if (parameter is not ViewEntityViewModel entityView)
         {
             return;
         }
+
+        var entity = entityView.Entity;
 
         if (string.Equals(entity.EntityType, "workspace", StringComparison.Ordinal))
         {
-            if (Guid.TryParse(entity.EntityId, out var workspaceGuid))
-            {
-                await this.OpenWorkspaceAsync(
-                    new GetEntityRequest
-                    {
-                        EntityId = new EntityId(workspaceGuid),
-                    });
-            }
+            await this.OpenWorkspaceAsync(
+                new GetEntityRequest
+                {
+                    EntityId = entity.EntityId,
+                });
             return;
         }
 
-        if (Guid.TryParse(entity.EntityId, out var entityGuid))
-        {
-            await this.OpenEntityTabAsync(
-                new GetEntityRequest
-                {
-                    EntityId = new EntityId(entityGuid),
-                });
-        }
+        await this.OpenEntityTabAsync(
+            new GetEntityRequest
+            {
+                EntityId = entity.EntityId,
+            });
     }
 
     private async void OnRefreshTick(
@@ -383,7 +486,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         object? sender,
         EntityBrokerChangedEventArgs e)
     {
-        _ = this.RebuildViewsFromRepositoryAsync();
+        if (this.mainNavigationView is not null
+            && e.ChangedEntityIds.Contains(this.mainNavigationView.EntityId))
+        {
+            this.InitializeTopLevelViews();
+        }
+
+        _ = this.ApplySelectedViewAsync();
     }
 
     private async Task OpenWorkspaceAsync(
@@ -482,20 +591,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        WorkspaceTabViewModel tab = string.Equals(subscribedEntity.EntityType, "note", StringComparison.Ordinal)
-            ? new NoteWorkspaceTabViewModel
-            {
-                Id = subscribedEntity.EntityId.ToString(),
-                Title = subscribedEntity.DisplayName,
-                Markdown = string.Join(Environment.NewLine, subscribedEntity.DisplayItems),
-                Entity = subscribedEntity,
-            }
-            : new EntityWorkspaceTabViewModel
-            {
-                Id = subscribedEntity.EntityId.ToString(),
-                Title = subscribedEntity.DisplayName,
-                Entity = subscribedEntity,
-            };
+        WorkspaceTabViewModel tab = new EntityWorkspaceTabViewModel
+        {
+            Id = subscribedEntity.EntityId.ToString(),
+            Title = subscribedEntity.DisplayName,
+            Entity = subscribedEntity,
+        };
 
         selectedRegion.Tabs.Add(tab);
         selectedRegion.SelectedTab = tab;
@@ -504,15 +605,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(
         GetEntityRequest request)
     {
-        var getResult = await this.EntityRepository.DataAccessLayer.GetAsync(
-            new GetRequest
-            {
-                Entities = [request],
-            });
-
-        return getResult.Batches
-            .SelectMany(static batch => batch.Entities)
-            .FirstOrDefault();
+        var entities = await this.EntityBroker.GetEntitiesAsync([request]);
+        return entities.FirstOrDefault()?.Snapshot;
     }
 
     private IReadOnlyCollection<GetEntityRequest> BuildWorkspaceEntityRequests(
@@ -579,7 +673,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                     continue;
                 }
 
-                var workspaceRegion = this.CreateWorkspaceRegion(region);
+                var workspaceRegion = this.CreateWorkspaceRegion(region, workspaceEntity);
                 regions.Add(workspaceRegion);
             }
         }
@@ -594,11 +688,10 @@ public sealed class MainWindowViewModel : ViewModelBase
                 RelativeSize = 1,
             };
             fallbackRegion.Tabs.Add(
-                new NoteWorkspaceTabViewModel
+                new EntityWorkspaceTabViewModel
                 {
                     Id = workspaceEntity.EntityId.ToString(),
                     Title = workspaceEntity.DisplayName,
-                    Markdown = string.Join(Environment.NewLine, workspaceEntity.DisplayItems),
                     Entity = workspaceEntity,
                     DockRegion = "full",
                 });
@@ -616,7 +709,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     private WorkspaceRegionViewModel CreateWorkspaceRegion(
-        JsonElement region)
+        JsonElement region,
+        SubscribedEntityViewModel workspaceEntity)
     {
         var workspaceRegion = new WorkspaceRegionViewModel
         {
@@ -646,11 +740,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (workspaceRegion.Tabs.Count == 0)
         {
             workspaceRegion.Tabs.Add(
-                new NoteWorkspaceTabViewModel
+                new EntityWorkspaceTabViewModel
                 {
-                    Id = workspaceRegion.Id,
-                    Title = workspaceRegion.Title,
-                    Markdown = string.Empty,
+                    Id = workspaceEntity.EntityId.ToString(),
+                    Title = workspaceEntity.DisplayName,
+                    Entity = workspaceEntity,
                     DockRegion = "full",
                 });
         }
@@ -674,22 +768,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (this.entityBroker?.TryGetReferencedEntity(content, "target-entity-name", out var targetEntity) == true
             && targetEntity is not null)
         {
-            workspaceTab = targetEntity.EntityType == "note"
-                ? new NoteWorkspaceTabViewModel
-                {
-                    Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
-                    Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
-                    Markdown = string.Join(Environment.NewLine, targetEntity.DisplayItems),
-                    Entity = targetEntity,
-                    DockRegion = ReadString(tab, "dock") ?? "full",
-                }
-                : new EntityWorkspaceTabViewModel
-                {
-                    Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
-                    Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
-                    Entity = targetEntity,
-                    DockRegion = ReadString(tab, "dock") ?? "full",
-                };
+            workspaceTab = new EntityWorkspaceTabViewModel
+            {
+                Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
+                Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                Entity = targetEntity,
+                DockRegion = ReadString(tab, "dock") ?? "full",
+            };
             return true;
         }
 
@@ -719,17 +804,18 @@ public sealed class MainWindowViewModel : ViewModelBase
             });
     }
 
-    private async Task LoadNavigationSubscriptionAsync()
+    private async Task<SubscribedEntityViewModel?> LoadNavigationSubscriptionAsync()
     {
         var mainViewRequest = new GetEntityRequest
         {
             EntityName = new EntityName("views", "main"),
         };
 
-        var mainViewSnapshot = await this.LoadSingleEntitySnapshotAsync(mainViewRequest);
-        if (mainViewSnapshot?.Data is not JsonElement mainViewData)
+        var mainViewEntities = await this.EntityBroker.GetEntitiesAsync([mainViewRequest]);
+        var mainViewEntity = mainViewEntities.FirstOrDefault();
+        if (mainViewEntity?.Snapshot.Data is not JsonElement mainViewData)
         {
-            return;
+            return null;
         }
 
         var requests = new List<GetEntityRequest>
@@ -750,52 +836,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         await this.EntityBroker!.GetEntitiesAsync(requests);
-    }
-
-    private static EntityVisualViewModel CreateEntityVisual(
-        EntityId entityId,
-        JsonElement element,
-        int indentLevel,
-        bool isParentContext = false)
-    {
-        var entityType = ReadFirstEntityType(element) ?? "entity";
-        var displayName = ReadLocalString(element, "display-name")
-            ?? ReadLocalString(element, "title")
-            ?? ReadPrimaryName(element)
-            ?? entityId.ToString();
-
-        var visual = new EntityVisualViewModel
-        {
-            EntityId = entityId.ToString(),
-            EntityType = entityType,
-            DisplayName = displayName,
-            IndentLevel = indentLevel,
-            IsParentContext = isParentContext,
-        };
-
-        if (element.TryGetProperty("badges", out var badges) && badges.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var badge in badges.EnumerateArray().Where(static value => value.ValueKind == JsonValueKind.String))
-            {
-                visual.Badges.Add(badge.GetString()!);
-            }
-        }
-
-        if (element.TryGetProperty("shortcuts", out var shortcuts) && shortcuts.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var shortcut in shortcuts.EnumerateArray().Where(static value => value.ValueKind == JsonValueKind.String))
-            {
-                visual.Shortcuts.Add(shortcut.GetString()!);
-            }
-        }
-
-        var markdown = ReadString(element, "markdown");
-        if (!string.IsNullOrWhiteSpace(markdown))
-        {
-            visual.DisplayItems.Add(markdown);
-        }
-
-        return visual;
+        return mainViewEntity;
     }
 
     private WorkspaceRegionViewModel GetOrCreateSelectedWorkspaceRegion()
@@ -835,26 +876,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         return property.GetString();
-    }
-
-    private static string? ReadFirstEntityType(
-        JsonElement element)
-    {
-        if (!element.TryGetProperty("entity-types", out var types)
-            || types.ValueKind != JsonValueKind.Array)
-        {
-            return null;
-        }
-
-        foreach (var type in types.EnumerateArray())
-        {
-            if (type.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(type.GetString()))
-            {
-                return type.GetString();
-            }
-        }
-
-        return null;
     }
 
     private static string? ReadPrimaryName(

@@ -96,20 +96,6 @@ public sealed class EntityRepository
 
     private async Task EnsureSeedDataIfNeededAsync()
     {
-        if (this.RepositorySource.SourceType == RepositorySourceType.LocalGit)
-        {
-            return;
-        }
-
-        var exportResult = await this.DataAccessLayer.ExportAsync(new ExportRequest());
-        var hasEntities = exportResult.ChangeBatches
-            .SelectMany(static batch => batch.Entities)
-            .Any(static snapshot => snapshot.Data is not null);
-        if (hasEntities)
-        {
-            return;
-        }
-
         var errors = await new SchemaPopulator(this.DataAccessLayer).Populate();
         if (errors.Count == 0)
         {
@@ -117,7 +103,7 @@ public sealed class EntityRepository
         }
 
         throw new InvalidOperationException(
-            $"Failed to seed in-memory repository: {string.Join(" | ", errors.Select(static error => error.Message))}");
+            $"Failed to populate repository schemas: {string.Join(" | ", errors.Select(static error => error.Message))}");
     }
 
     private static bool TryGetNameKeys(

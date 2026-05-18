@@ -14,5 +14,7 @@ public sealed class ViewDefinitionViewModel : ViewModelBase
 
     public bool IsEntityBrowser { get; init; }
 
-    public ObservableCollection<EntityVisualViewModel> Entities { get; } = new();
+    public SubscribedEntityViewModel? ViewEntity { get; init; }
+
+    public ObservableCollection<ViewEntityViewModel> Entities { get; } = new();
 }
