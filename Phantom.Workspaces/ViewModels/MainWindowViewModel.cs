@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase
 {
-    private const string PlaceholderWorkspaceId = "loading-workspace";
+    private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
     private static readonly ViewDefinitionViewModel EmptyView = new()
     {
@@ -46,7 +46,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>
         {
-            CreatePlaceholderWorkspacePane(PlaceholderWorkspaceId, "Loading workspace..."),
+            CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected."),
         };
 
         this.selectedWorkspacePane = this.WorkspacePanes[0];
@@ -554,7 +554,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         var placeholderPane = this.WorkspacePanes.FirstOrDefault(
-            pane => string.Equals(pane.Id, PlaceholderWorkspaceId, StringComparison.Ordinal));
+            pane => string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal));
         if (placeholderPane is not null)
         {
             this.WorkspacePanes.Remove(placeholderPane);

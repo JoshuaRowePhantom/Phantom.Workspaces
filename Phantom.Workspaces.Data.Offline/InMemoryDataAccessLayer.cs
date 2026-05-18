@@ -195,6 +195,47 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 var currentVersion = entityBuilder.CurrentVersion;
 
                 if (currentVersion is not null
+                    && this.IsNoContentChange(currentVersion, change.Data))
+                {
+                    if (change.ConcurrencyTag is not null
+                        && currentVersion.ConcurrencyTag != change.ConcurrencyTag.Value)
+                    {
+                        updateResults.Add(
+                            new EntityUpdateResult
+                            {
+                                UpdateState = UpdateState.Failed,
+                                RequestedEntityId = entityId.Value,
+                                ResultingEntityId = entityId.Value,
+                                ConcurrencyTag = currentVersion.ConcurrencyTag,
+                                ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                                CurrentEntity = this.CreateSnapshot(entityId.Value, currentVersion),
+                                Errors =
+                                [
+                                    new UpdateError
+                                    {
+                                        Message = "Concurrency tag does not match.",
+                                        RelatedEntityId = entityId.Value,
+                                    },
+                                ],
+                            });
+                        continue;
+                    }
+
+                    updateResults.Add(
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Updated,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = currentVersion.ConcurrencyTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.Matched,
+                            CurrentEntity = this.CreateSnapshot(entityId.Value, currentVersion),
+                            Errors = Array.Empty<UpdateError>(),
+                        });
+                    continue;
+                }
+
+                if (currentVersion is not null
                     && change.ConcurrencyTag is null)
                 {
                     updateResults.Add(
@@ -205,14 +246,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             ResultingEntityId = entityId.Value,
                             ConcurrencyTag = currentVersion.ConcurrencyTag,
                             ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
-                            CurrentEntity = new EntitySnapshot
-                            {
-                                EntityId = entityId.Value,
-                                ConcurrencyTag = currentVersion.ConcurrencyTag,
-                                ModifiedTime = currentVersion.Timestamp,
-                                Data = currentVersion.Data?.RootElement,
-                                Relationships = Array.Empty<EntitySnapshot>(),
-                            },
+                            CurrentEntity = this.CreateSnapshot(entityId.Value, currentVersion),
                             Errors =
                             [
                                 new UpdateError
@@ -237,14 +271,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             ResultingEntityId = entityId.Value,
                             ConcurrencyTag = currentVersion.ConcurrencyTag,
                             ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
-                            CurrentEntity = new EntitySnapshot
-                            {
-                                EntityId = entityId.Value,
-                                ConcurrencyTag = currentVersion.ConcurrencyTag,
-                                ModifiedTime = currentVersion.Timestamp,
-                                Data = currentVersion.Data?.RootElement,
-                                Relationships = Array.Empty<EntitySnapshot>(),
-                            },
+                            CurrentEntity = this.CreateSnapshot(entityId.Value, currentVersion),
                             Errors =
                             [
                                 new UpdateError
@@ -322,6 +349,32 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     EntityResults = updateResults,
                 },
             };
+        }
+
+        private EntitySnapshot CreateSnapshot(
+            EntityId entityId,
+            EntityVersion currentVersion)
+        {
+            return new EntitySnapshot
+            {
+                EntityId = entityId,
+                ConcurrencyTag = currentVersion.ConcurrencyTag,
+                ModifiedTime = currentVersion.Timestamp,
+                Data = currentVersion.Data?.RootElement,
+                Relationships = Array.Empty<EntitySnapshot>(),
+            };
+        }
+
+        private bool IsNoContentChange(
+            EntityVersion currentVersion,
+            JsonElement? nextData)
+        {
+            if (currentVersion.Data is null || nextData is null)
+            {
+                return currentVersion.Data is null && nextData is null;
+            }
+
+            return JsonElement.DeepEquals(currentVersion.Data.RootElement, nextData.Value);
         }
 
         private EntityBuilder GetOrCreateEntityBuilder(

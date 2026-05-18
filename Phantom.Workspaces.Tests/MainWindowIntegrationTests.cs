@@ -1,5 +1,5 @@
-using Avalonia;
 using Avalonia.Media;
+using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -7,33 +7,27 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowIntegrationTests
 {
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ThemeResources_UseFontFamilyType()
     {
-        EnsureAppInitialized();
-
         _ = new MainWindowViewModel(CreateInMemoryRepositorySource());
 
-        Assert.True(Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
+        Assert.True(Avalonia.Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
         Assert.IsType<FontFamily>(fontFamilyResource);
     }
 
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_InitializesWithExpectedPipeline()
     {
-        EnsureAppInitialized();
-
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
         Assert.IsType<MergeProcessingDataAccessLayer>(repository.DataAccessLayer);
         Assert.NotEmpty(snapshots);
     }
 
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void MainWindowViewModel_ThemeSelectionIsDataDriven()
     {
-        EnsureAppInitialized();
-
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         Assert.Contains("dark", viewModel.ThemeNames);
         Assert.Contains("light", viewModel.ThemeNames);
@@ -41,16 +35,17 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("light", viewModel.SelectedThemeName);
     }
 
-    private static void EnsureAppInitialized()
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_InitializeAsync_ReplacesDefaultAndLoadingWorkspacePanes()
     {
-        if (Application.Current is not null)
-        {
-            return;
-        }
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
 
-        AppBuilder.Configure<TestApplication>()
-            .UsePlatformDetect()
-            .SetupWithoutStarting();
+        Assert.NotEmpty(viewModel.WorkspacePanes);
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, "default-workspace", StringComparison.Ordinal)
+                || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
@@ -58,7 +53,4 @@ public sealed class MainWindowIntegrationTests
         return new RepositorySource(RepositorySourceType.Unknown, "(none)");
     }
 
-    private sealed class TestApplication : Application
-    {
-    }
 }

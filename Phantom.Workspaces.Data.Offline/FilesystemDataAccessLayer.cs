@@ -250,6 +250,22 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
             if (current is not null && current.Data is not null && change.ConcurrencyTag is null)
             {
+                if (change.Data is not null && JsonElement.DeepEquals(current.Data.Value, change.Data.Value))
+                {
+                    results.Add(
+                        new EntityUpdateResult
+                        {
+                            UpdateState = UpdateState.Updated,
+                            RequestedEntityId = entityId.Value,
+                            ResultingEntityId = entityId.Value,
+                            ConcurrencyTag = current.ConcurrencyTag,
+                            ConcurrencyMatchState = ConcurrencyMatchState.Matched,
+                            CurrentEntity = current,
+                            Errors = Array.Empty<UpdateError>(),
+                        });
+                    continue;
+                }
+
                 failed = true;
                 results.Add(this.CreateConcurrencyFailure(entityId.Value, current, "Concurrency tag is required."));
                 continue;
@@ -304,7 +320,11 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         foreach (var entityResult in results)
         {
             var entityId = entityResult.ResultingEntityId;
-            var data = pendingData[entityId];
+            if (!pendingData.TryGetValue(entityId, out var data))
+            {
+                continue;
+            }
+
             var previousData = pendingPreviousData.GetValueOrDefault(entityId);
             this.nextSequenceNumber++;
             this.WriteEntityFile(entityId, data);

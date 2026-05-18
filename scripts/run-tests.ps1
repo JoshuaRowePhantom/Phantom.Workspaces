@@ -2,7 +2,9 @@ param(
     [Parameter()]
     [string] $TestResultsPath = (Join-Path $PSScriptRoot 'test-results.log'),
     [Parameter()]
-    [string[]] $TestNames
+    [string[]] $TestNames,
+    [Parameter()]
+    [string] $PerTestHangTimeout = '15s'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,7 +20,10 @@ $dotnetArgs = @(
     '--no-restore',
     '--nologo',
     '-v',
-    'minimal'
+    'minimal',
+    '--blame-hang',
+    '--blame-hang-timeout',
+    $PerTestHangTimeout
 )
 
 if ($TestNames -and $TestNames.Count -gt 0)

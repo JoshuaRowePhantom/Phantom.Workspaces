@@ -285,6 +285,29 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     [Fact]
+    public async Task Populate_UpdateEntity_WithIdenticalContentAndNoConcurrencyTag_IsIgnored()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
+        var initialResult = AssertSuccessfulResult(createResult, UpdateState.Added);
+        var initialTag = initialResult.ConcurrencyTag!.Value;
+
+        var noOpUpdateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("No-op update without concurrency tag"),
+                new[] { this.CreateUpsertChange(new EntityName("one")) }));
+
+        var noOpEntityResult = AssertSuccessfulResult(noOpUpdateResult, UpdateState.Updated);
+        Assert.Equal(initialTag, noOpEntityResult.ConcurrencyTag);
+
+        var latestById = await this.GetSingleSnapshotByIdAsync(dataAccessLayer);
+        Assert.Equal(new EntityName("one"), this.GetName(latestById.Data));
+        Assert.Equal(initialTag, latestById.ConcurrencyTag);
+    }
+
+    [Fact]
     public async Task Populate_UpdateEntity_WithoutConcurrencyTag_Fails()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();

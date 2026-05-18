@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -40,6 +41,7 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
         var statesById = new Dictionary<EntityId, CoalescedEntityState>();
         var coalescedOrder = new List<EntityId>();
         var passthroughChanges = new List<EntityChange>();
+        var noOpEntityResults = new List<EntityUpdateResult>();
 
         foreach (var change in request.Changes)
         {
@@ -173,8 +175,27 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
             };
         }
 
+        var entitiesToPersist = new List<EntityId>(coalescedOrder.Count);
+        foreach (var entityId in coalescedOrder)
+        {
+            var state = statesById[entityId];
+            if (this.TryCreateNoOpResult(state, out var noOpResult))
+            {
+                noOpEntityResults.Add(noOpResult);
+                continue;
+            }
+
+            entitiesToPersist.Add(entityId);
+        }
+
+        var entitiesToPersistSet = entitiesToPersist.ToHashSet();
         foreach (var state in statesById.Values)
         {
+            if (!entitiesToPersistSet.Contains(state.EntityId))
+            {
+                continue;
+            }
+
             if (!state.ExistsInStore)
             {
                 continue;
@@ -200,8 +221,8 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
             };
         }
 
-        var processedChanges = new List<EntityChange>(coalescedOrder.Count + passthroughChanges.Count);
-        foreach (var entityId in coalescedOrder)
+        var processedChanges = new List<EntityChange>(entitiesToPersist.Count + passthroughChanges.Count);
+        foreach (var entityId in entitiesToPersist)
         {
             var state = statesById[entityId];
             processedChanges.Add(
@@ -216,13 +237,31 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
 
         processedChanges.AddRange(passthroughChanges);
 
-        return await this.UnderlyingDataAccessLayer.UpdateAsync(
+        if (processedChanges.Count == 0)
+        {
+            return new UpdateResult
+            {
+                EntityResults = noOpEntityResults,
+            };
+        }
+
+        var updateResult = await this.UnderlyingDataAccessLayer.UpdateAsync(
             new UpdateRequest
             {
                 UpdateMetadata = request.UpdateMetadata,
                 Changes = processedChanges,
             },
             cancellationToken);
+
+        if (noOpEntityResults.Count == 0)
+        {
+            return updateResult;
+        }
+
+        return new UpdateResult
+        {
+            EntityResults = updateResult.EntityResults.Concat(noOpEntityResults).ToArray(),
+        };
     }
 
     private bool TryMergeConcurrencyTag(
@@ -274,6 +313,39 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
                 },
             ],
         };
+    }
+
+    private bool TryCreateNoOpResult(
+        CoalescedEntityState state,
+        out EntityUpdateResult result)
+    {
+        result = default!;
+
+        if (!state.ExistsInStore
+            || state.CurrentSnapshot?.Data is not JsonElement currentData
+            || state.WorkingData is not JsonElement workingData
+            || !JsonElement.DeepEquals(currentData, workingData))
+        {
+            return false;
+        }
+
+        if (state.RequestedTag is not null
+            && state.CurrentTag != state.RequestedTag.Value)
+        {
+            return false;
+        }
+
+        result = new EntityUpdateResult
+        {
+            UpdateState = UpdateState.Updated,
+            RequestedEntityId = state.EntityId,
+            ResultingEntityId = state.EntityId,
+            ConcurrencyTag = state.CurrentTag,
+            ConcurrencyMatchState = ConcurrencyMatchState.Matched,
+            CurrentEntity = state.CurrentSnapshot,
+            Errors = Array.Empty<UpdateError>(),
+        };
+        return true;
     }
 
     private EntityId? ResolveEntityId(

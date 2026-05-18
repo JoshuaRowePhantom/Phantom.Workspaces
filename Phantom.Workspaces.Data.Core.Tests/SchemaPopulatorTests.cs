@@ -155,6 +155,30 @@ public sealed class SchemaPopulatorTests
             "default workspaces profile was not populated correctly");
     }
 
+    [Fact]
+    public async Task Populate_WhenRunTwiceThroughRepositoryPipeline_IsIdempotent()
+    {
+        var pipelineDataAccessLayer = new MergeProcessingDataAccessLayer(
+            CreateValidatedDataAccessLayer(new InMemoryDataAccessLayer()));
+        var schemaPopulator = new SchemaPopulator(pipelineDataAccessLayer);
+
+        var firstPopulateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            firstPopulateErrors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                firstPopulateErrors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var secondPopulateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            secondPopulateErrors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                secondPopulateErrors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+    }
+
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {
