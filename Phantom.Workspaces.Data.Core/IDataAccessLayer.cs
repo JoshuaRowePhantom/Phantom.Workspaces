@@ -123,10 +123,19 @@ public sealed record GetEntityRequest
 
     public EntityName? EntityName { get; init; }
 
+    public EnumerateChildrenAction EnumerateChildren { get; init; } = EnumerateChildrenAction.EnumerateSelf;
+
     public EntityTypeNameSet? EntityTypeNames { get; init; }
 
     // null means inherit request-level value; empty means return all; non-empty means return matching relationships.
     public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
+}
+
+public enum EnumerateChildrenAction
+{
+    EnumerateSelf = 0,
+    EnumerateChildren = 1,
+    EnumerateAllChildren = 2,
 }
 
 public sealed record GetRelationshipRequest

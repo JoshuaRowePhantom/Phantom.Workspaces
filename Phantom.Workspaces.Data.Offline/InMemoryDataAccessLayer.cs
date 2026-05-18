@@ -822,7 +822,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             GetEntityRequest request)
         {
             if (request.EntityName is not null
-                && !version.EntityNames.Any(entityName => entityName.Components.SequenceEqual(request.EntityName.Value.Components, StringComparer.Ordinal)))
+                && !version.EntityNames.Any(entityName => MatchesEntityName(entityName, request.EntityName.Value, request.EnumerateChildren)))
             {
                 return false;
             }
@@ -834,6 +834,27 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             }
 
             return true;
+        }
+
+        private static bool MatchesEntityName(
+            EntityName candidateName,
+            EntityName requestedName,
+            EnumerateChildrenAction enumerateChildren)
+        {
+            var candidateComponents = candidateName.Components;
+            var requestedComponents = requestedName.Components;
+            if (!candidateComponents.Take(requestedComponents.Length).SequenceEqual(requestedComponents, StringComparer.Ordinal))
+            {
+                return false;
+            }
+
+            return enumerateChildren switch
+            {
+                EnumerateChildrenAction.EnumerateSelf => candidateComponents.Length == requestedComponents.Length,
+                EnumerateChildrenAction.EnumerateChildren => candidateComponents.Length == requestedComponents.Length + 1,
+                EnumerateChildrenAction.EnumerateAllChildren => candidateComponents.Length > requestedComponents.Length,
+                _ => false,
+            };
         }
 
         private IReadOnlyCollection<EntitySnapshot> GetRelationshipsForEntity(

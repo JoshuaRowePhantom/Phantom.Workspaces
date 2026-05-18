@@ -479,7 +479,9 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             yield break;
         }
 
-        var candidateEntityIds = this.FindEntityIdsByName(request.EntityName.Value);
+        var candidateEntityIds = request.EnumerateChildren == EnumerateChildrenAction.EnumerateSelf
+            ? this.FindEntityIdsByName(request.EntityName.Value)
+            : this.FindEntityIdsByPrefix(request.EntityName.Value);
 
         foreach (var entityId in candidateEntityIds)
         {
@@ -489,7 +491,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
                 continue;
             }
 
-            if (!this.MatchesEntityName(snapshot.Data.Value, request.EntityName))
+            if (!this.MatchesEntityName(snapshot.Data.Value, request.EntityName, request.EnumerateChildren))
             {
                 continue;
             }
@@ -505,14 +507,36 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
     private bool MatchesEntityName(
         JsonElement entityData,
-        EntityName? entityName)
+        EntityName? entityName,
+        EnumerateChildrenAction enumerateChildren)
     {
         if (entityName is null)
         {
             return true;
         }
 
-        return ExtractEntityNames(entityData).Contains(entityName.Value);
+        return ExtractEntityNames(entityData).Any(name => MatchesEntityName(name, entityName.Value, enumerateChildren));
+    }
+
+    private static bool MatchesEntityName(
+        EntityName candidateName,
+        EntityName requestedName,
+        EnumerateChildrenAction enumerateChildren)
+    {
+        var candidateComponents = candidateName.Components;
+        var requestedComponents = requestedName.Components;
+        if (!candidateComponents.Take(requestedComponents.Length).SequenceEqual(requestedComponents, StringComparer.Ordinal))
+        {
+            return false;
+        }
+
+        return enumerateChildren switch
+        {
+            EnumerateChildrenAction.EnumerateSelf => candidateComponents.Length == requestedComponents.Length,
+            EnumerateChildrenAction.EnumerateChildren => candidateComponents.Length == requestedComponents.Length + 1,
+            EnumerateChildrenAction.EnumerateAllChildren => candidateComponents.Length > requestedComponents.Length,
+            _ => false,
+        };
     }
 
     private bool MatchesEntityTypeNames(

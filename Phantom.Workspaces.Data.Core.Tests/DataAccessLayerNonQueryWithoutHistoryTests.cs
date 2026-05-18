@@ -66,6 +66,199 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     [Fact]
+    public async Task Populate_GetByName_EnumerateSelf_ReturnsOnlySelf()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var rootEntityId = new EntityId("49bf663e-4c2b-4287-9cac-ea146a7524d6");
+        var childEntityId = new EntityId("006a3225-0d15-41bd-935d-9fc8d5f9515d");
+        var grandchildEntityId = new EntityId("6b70aef9-1824-486f-84f8-47f5579ca40a");
+        var rootName = new EntityName("tree", "root");
+        var childName = new EntityName("tree", "root", "child");
+        var grandchildName = new EntityName("tree", "root", "child", "leaf");
+        await this.CreateHierarchyAsync(dataAccessLayer, rootEntityId, rootName, childEntityId, childName, grandchildEntityId, grandchildName);
+
+        var result = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = rootName,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                },
+                null));
+
+        var entities = Assert.Single(result.Batches).Entities;
+        var entityIds = entities.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(rootEntityId, entityIds);
+        Assert.DoesNotContain(childEntityId, entityIds);
+        Assert.DoesNotContain(grandchildEntityId, entityIds);
+    }
+
+    [Fact]
+    public async Task Populate_GetByName_EnumerateChildren_ReturnsOnlyDirectChildren()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var rootEntityId = new EntityId("b95ca95f-82dc-4eb4-b463-649737e5b9af");
+        var childEntityId = new EntityId("e6eccce4-149d-4af8-8a4a-8d4d935d141f");
+        var grandchildEntityId = new EntityId("8a0d5f6e-7fe7-49c7-bc1f-44eb3d4c2990");
+        var siblingRootEntityId = new EntityId("7247bc9b-f347-4c85-a0ad-f9a77370e247");
+        var rootName = new EntityName("tree", "root");
+        var childName = new EntityName("tree", "root", "child");
+        var grandchildName = new EntityName("tree", "root", "child", "leaf");
+        await this.CreateHierarchyAsync(dataAccessLayer, rootEntityId, rootName, childEntityId, childName, grandchildEntityId, grandchildName);
+        await this.CreateNamedEntityAsync(dataAccessLayer, siblingRootEntityId, new EntityName("tree", "other", "child"));
+
+        var result = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = rootName,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                },
+                null));
+
+        var entities = Assert.Single(result.Batches).Entities;
+        var entityIds = entities.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(childEntityId, entityIds);
+        Assert.DoesNotContain(rootEntityId, entityIds);
+        Assert.DoesNotContain(grandchildEntityId, entityIds);
+        Assert.DoesNotContain(siblingRootEntityId, entityIds);
+    }
+
+    [Fact]
+    public async Task Populate_GetByName_EnumerateAllChildren_ReturnsDescendantsOnly()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var rootEntityId = new EntityId("6a8e14dd-c6fd-4af2-a824-aa0f7b4ce2c6");
+        var childEntityId = new EntityId("8de49f6a-4f6f-42f0-ae4b-1717c3e87071");
+        var grandchildEntityId = new EntityId("fb4ea780-2036-4606-8fb5-3f757374f5f4");
+        var unrelatedEntityId = new EntityId("9fceec8f-86bb-4348-8465-ed59973aaaf4");
+        var rootName = new EntityName("tree", "root");
+        var childName = new EntityName("tree", "root", "child");
+        var grandchildName = new EntityName("tree", "root", "child", "leaf");
+        await this.CreateHierarchyAsync(dataAccessLayer, rootEntityId, rootName, childEntityId, childName, grandchildEntityId, grandchildName);
+        await this.CreateNamedEntityAsync(dataAccessLayer, unrelatedEntityId, new EntityName("tree", "unrelated", "leaf"));
+
+        var result = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = rootName,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+                },
+                null));
+
+        var entities = Assert.Single(result.Batches).Entities;
+        var entityIds = entities.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(childEntityId, entityIds);
+        Assert.Contains(grandchildEntityId, entityIds);
+        Assert.DoesNotContain(rootEntityId, entityIds);
+        Assert.DoesNotContain(unrelatedEntityId, entityIds);
+    }
+
+    [Fact]
+    public async Task Populate_GetByName_WithEnumerateChildren_AndSpecifiedTypeSet_ReturnsOnlyMatchingTypes()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var rootName = new EntityName("typed-tree", "root");
+        var entityChildId = new EntityId("6020c61d-4090-46ea-bf77-5f5054bc7847");
+        var viewChildId = new EntityId("699abf89-4f9c-4333-b58a-8a6fbaf31ab5");
+        await this.CreateNamedEntityAsync(dataAccessLayer, new EntityId("973e1989-b515-424f-b73a-1a9214349f7f"), rootName);
+        await this.CreateNamedEntityAsync(dataAccessLayer, entityChildId, new EntityName("typed-tree", "root", "entity-child"));
+        await this.CreateViewEntityAsync(dataAccessLayer, viewChildId, new EntityName("typed-tree", "root", "view-child"));
+
+        var result = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = rootName,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    EntityTypeNames = new EntityTypeNameSet(["view"]),
+                },
+                null));
+
+        var entities = Assert.Single(result.Batches).Entities;
+        var entityIds = entities.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(viewChildId, entityIds);
+        Assert.DoesNotContain(entityChildId, entityIds);
+    }
+
+    [Fact]
+    public async Task Populate_GetByName_WithEnumerateChildren_AndNullOrEmptyTypeSet_ReturnsAllMatchingNameEntities()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var rootName = new EntityName("typed-tree", "root");
+        var entityChildId = new EntityId("8db9dbf6-9641-45d8-8f35-ea6e65fae718");
+        var viewChildId = new EntityId("d71150e3-ef89-4309-bf1d-f13645f50521");
+        await this.CreateNamedEntityAsync(dataAccessLayer, new EntityId("f8ba2899-0e51-4e3d-8f8d-da590b5447cd"), rootName);
+        await this.CreateNamedEntityAsync(dataAccessLayer, entityChildId, new EntityName("typed-tree", "root", "entity-child"));
+        await this.CreateViewEntityAsync(dataAccessLayer, viewChildId, new EntityName("typed-tree", "root", "view-child"));
+
+        var withNullTypes = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = rootName,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    EntityTypeNames = null,
+                },
+                null));
+        var nullTypeIds = Assert.Single(withNullTypes.Batches).Entities.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(entityChildId, nullTypeIds);
+        Assert.Contains(viewChildId, nullTypeIds);
+
+        var withEmptyTypes = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = rootName,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    EntityTypeNames = new EntityTypeNameSet(Array.Empty<string>()),
+                },
+                null));
+        var emptyTypeIds = Assert.Single(withEmptyTypes.Batches).Entities.Select(static entity => entity.EntityId).ToArray();
+        Assert.Contains(entityChildId, emptyTypeIds);
+        Assert.Contains(viewChildId, emptyTypeIds);
+    }
+
+    [Fact]
+    public async Task Populate_GetByName_EnumerateChildren_EntityTypesPrefix_ReturnsEntityTypeChildrenWithoutParentEntity()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityTypesPrefix = new EntityName("entity-types");
+
+        var selfResult = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = entityTypesPrefix,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                },
+                null));
+        Assert.Empty(Assert.Single(selfResult.Batches).Entities);
+
+        var childrenResult = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityName = entityTypesPrefix,
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                },
+                null));
+        var children = Assert.Single(childrenResult.Batches).Entities;
+        Assert.NotEmpty(children);
+        Assert.All(
+            children,
+            child => Assert.True(this.HasDirectChildNameUnderPrefix(child.Data, entityTypesPrefix)));
+        Assert.Contains(children, child => this.HasName(child.Data, new EntityName("entity-types", "entity")));
+        Assert.Contains(children, child => this.HasName(child.Data, new EntityName("entity-types", "view")));
+    }
+
+    [Fact]
     public async Task Populate_UpdateEntity_WithMatchingConcurrencyTag_ReplacesDataAndAdvancesConcurrencyTag()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -431,6 +624,81 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         return Assert.Single(Assert.Single(result.Batches).Entities);
     }
 
+    private bool HasDirectChildNameUnderPrefix(
+        JsonElement? data,
+        EntityName prefix)
+    {
+        if (data is null || data.Value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!data.Value.TryGetProperty("names", out var namesElement)
+            || namesElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var nameElement in namesElement.EnumerateArray())
+        {
+            var name = nameElement.TryReadEntityName();
+            if (name is null)
+            {
+                continue;
+            }
+
+            if (name.Value.Components.Length == prefix.Components.Length + 1
+                && name.Value.Components.Take(prefix.Components.Length)
+                    .SequenceEqual(prefix.Components, StringComparer.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool HasName(
+        JsonElement? data,
+        EntityName expectedName)
+    {
+        if (data is null || data.Value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!data.Value.TryGetProperty("names", out var namesElement)
+            || namesElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var nameElement in namesElement.EnumerateArray())
+        {
+            if (nameElement.ValueKind == JsonValueKind.String)
+            {
+                var name = nameElement.GetString();
+                if (!string.IsNullOrWhiteSpace(name)
+                    && expectedName.Components.Length == 1
+                    && string.Equals(expectedName.Components[0], name, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            var entityName = nameElement.TryReadEntityName();
+            if (entityName is not null
+                && entityName.Value.Components.SequenceEqual(expectedName.Components, StringComparer.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private EntityName? GetName(
         JsonElement? data)
     {
@@ -504,6 +772,88 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             Data = data,
             EntityChangeMode = entityChangeMode,
         };
+    }
+
+    private async Task CreateHierarchyAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId rootEntityId,
+        EntityName rootName,
+        EntityId childEntityId,
+        EntityName childName,
+        EntityId grandchildEntityId,
+        EntityName grandchildName)
+    {
+        await this.CreateNamedEntityAsync(dataAccessLayer, rootEntityId, rootName);
+        await this.CreateNamedEntityAsync(dataAccessLayer, childEntityId, childName);
+        await this.CreateNamedEntityAsync(dataAccessLayer, grandchildEntityId, grandchildName);
+    }
+
+    private async Task CreateNamedEntityAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId,
+        EntityName entityName)
+    {
+        var serializedEntityName = entityName.Components.Length == 1
+            ? JsonSerializer.Serialize(new[] { entityName.Components[0] })
+            : JsonSerializer.Serialize(new object[] { entityName.Components });
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity"],
+              "names": {{serializedEntityName}}
+            }
+            """);
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create named entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        document.RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+        var entityResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
+    }
+
+    private async Task CreateViewEntityAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId,
+        EntityName entityName)
+    {
+        var serializedEntityName = entityName.Components.Length == 1
+            ? JsonSerializer.Serialize(new[] { entityName.Components[0] })
+            : JsonSerializer.Serialize(new object[] { entityName.Components });
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["view"],
+              "names": {{serializedEntityName}},
+              "title": { "default": "Typed view child" },
+              "sub-views": []
+            }
+            """);
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create view entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        document.RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+        var entityResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
     }
 
     private static GetEntityRequest CreateGetEntityRequest(
