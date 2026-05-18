@@ -407,7 +407,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (selectedView.IsEntityBrowser)
         {
             await this.OpenEntityBrowserTabAsync();
-            this.StickyParentContextText = "Entity Browser (tab)";
+            this.StickyParentContextText = string.Empty;
             return;
         }
 
@@ -708,27 +708,6 @@ public sealed class MainWindowViewModel : ViewModelBase
                 var workspaceRegion = this.CreateWorkspaceRegion(region, workspaceEntity);
                 regions.Add(workspaceRegion);
             }
-        }
-
-        if (regions.Count == 0)
-        {
-            var fallbackRegion = new WorkspaceRegionViewModel
-            {
-                Id = "center",
-                Title = "Center",
-                DockRegion = "center",
-                RelativeSize = 1,
-            };
-            fallbackRegion.Tabs.Add(
-                new EntityWorkspaceTabViewModel
-                {
-                    Id = workspaceEntity.EntityId.ToString(),
-                    Title = workspaceEntity.DisplayName,
-                    Entity = workspaceEntity,
-                    DockRegion = "full",
-                });
-            fallbackRegion.SelectedTab = fallbackRegion.Tabs[0];
-            regions.Add(fallbackRegion);
         }
 
         workspacePane.SetRegions(regions);

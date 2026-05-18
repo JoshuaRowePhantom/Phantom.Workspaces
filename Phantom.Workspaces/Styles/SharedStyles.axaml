@@ -104,6 +104,32 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="6" />
     </Style>
+    <Style Selector="TabControl.workspace-tabs">
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs TabItem">
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="Margin" Value="0,0,2,0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6,6,0,0" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs TabItem:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs TabItem:selected">
+        <Setter Property="Margin" Value="0,0,2,-1" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs /template/ ContentPresenter#PART_SelectedContentHost">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="Padding" Value="10" />
+    </Style>
     <Style Selector="Border.entity-badge">
         <Setter Property="CornerRadius" Value="10" />
         <Setter Property="Padding" Value="8,2" />

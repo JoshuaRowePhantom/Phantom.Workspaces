@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Linq;
 
@@ -18,6 +19,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         this.title = entity.DisplayName;
         this.Id = id ?? entity.EntityId.ToString();
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
+        this.Regions.CollectionChanged += this.OnRegionsCollectionChanged;
     }
 
     public string Id { get; }
@@ -31,6 +33,10 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     public SubscribedEntityViewModel Entity { get; }
 
     public ObservableCollection<WorkspaceRegionViewModel> Regions { get; } = [];
+
+    public bool HasRegions => this.Regions.Count > 0;
+
+    public bool HasNoRegions => !this.HasRegions;
 
     public WorkspaceRegionViewModel? SelectedRegion
     {
@@ -48,6 +54,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         }
 
         this.SelectedRegion = this.Regions.FirstOrDefault();
+        this.RaisePropertyChanged(nameof(this.HasRegions));
+        this.RaisePropertyChanged(nameof(this.HasNoRegions));
     }
 
     private void OnEntityPropertyChanged(
@@ -58,5 +66,13 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         {
             this.Title = this.Entity.DisplayName;
         }
+    }
+
+    private void OnRegionsCollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        this.RaisePropertyChanged(nameof(this.HasRegions));
+        this.RaisePropertyChanged(nameof(this.HasNoRegions));
     }
 }

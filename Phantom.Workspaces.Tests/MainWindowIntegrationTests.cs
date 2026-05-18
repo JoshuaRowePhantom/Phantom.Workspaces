@@ -1,5 +1,7 @@
 using Avalonia.Media;
 using Avalonia.Headless.XUnit;
+using System.Reflection;
+using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -56,6 +58,50 @@ public sealed class MainWindowIntegrationTests
 
         Assert.NotNull(window);
         Assert.Empty(window.DataTemplates);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void CreateWorkspacePane_DoesNotInjectFallbackCenterRegion_WhenWorkspaceHasNoRegions()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        using var workspaceDocument = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-types": ["workspace"],
+              "display-name": { "default": "Workspace Without Regions" }
+            }
+            """);
+        using var entityDocument = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-types": ["workspace"],
+              "display-name": { "default": "Workspace Without Regions" }
+            }
+            """);
+        var workspaceEntity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = entityDocument.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+
+        var createWorkspacePane = typeof(MainWindowViewModel).GetMethod(
+            "CreateWorkspacePane",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(createWorkspacePane);
+
+        var workspacePane = (WorkspacePaneViewModel?)createWorkspacePane!.Invoke(
+            viewModel,
+            [workspaceEntity, workspaceDocument.RootElement.Clone()]);
+
+        Assert.NotNull(workspacePane);
+        Assert.Empty(workspacePane!.Regions);
+        Assert.Null(workspacePane.SelectedRegion);
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()

@@ -46,7 +46,7 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public RelayCommand ToggleExpandCommand { get; }
 
-    public Thickness IndentMargin => new(this.Level * 22, 0, 0, 0);
+    public Thickness IndentMargin => new(this.Level * 22, 0, 0, 4);
 
     public string DisplayName => this.Node.DisplayName;
 

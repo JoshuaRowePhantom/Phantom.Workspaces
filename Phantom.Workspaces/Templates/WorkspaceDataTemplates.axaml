@@ -1,6 +1,7 @@
 <DataTemplates xmlns="https://github.com/avaloniaui"
                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                xmlns:vm="using:Phantom.Workspaces.ViewModels"
+               xmlns:templates="using:Phantom.Workspaces.Templates"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
         <StackPanel Spacing="4">
@@ -80,9 +81,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityBrowserWorkspaceTabViewModel">
-        <ScrollViewer>
-            <ItemsControl ItemsSource="{Binding EntityList.Items}" />
-        </ScrollViewer>
+        <templates:EntityBrowserWorkspaceTabView />
     </DataTemplate>
 
     <DataTemplate DataType="vm:BrowserWorkspaceTabViewModel">
@@ -101,9 +100,22 @@
                 </StackPanel>
             </Border>
 
-            <ScrollViewer Grid.Row="1">
-                <ItemsControl ItemsSource="{Binding Regions}">
-                    <ItemsControl.ItemTemplate>
+            <Grid Grid.Row="1">
+                <Border Classes="entity-card"
+                        IsVisible="{Binding HasNoRegions}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Empty workspace" Classes="heading" />
+                        <TextBlock Text="See the guidance note for how to add regions and tabs to this workspace."
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="Documentation entity: documentation/empty-workspace"
+                                   Classes="muted"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <ContentControl Content="{Binding SelectedRegion}"
+                                IsVisible="{Binding HasRegions}">
+                    <ContentControl.ContentTemplate>
                         <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
                             <Border Classes="workspace-region-card">
                                 <Grid RowDefinitions="Auto,*">
@@ -113,6 +125,8 @@
                                         <TextBlock Text="{Binding RelativeSize, StringFormat='x{0}'}" Classes="muted" />
                                     </StackPanel>
                                     <TabControl Grid.Row="1"
+                                                MinHeight="0"
+                                                Classes="workspace-tabs"
                                                 ItemsSource="{Binding Tabs}"
                                                 SelectedItem="{Binding SelectedTab}">
                                         <TabControl.ItemTemplate>
@@ -124,9 +138,9 @@
                                 </Grid>
                             </Border>
                         </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+                    </ContentControl.ContentTemplate>
+                </ContentControl>
+            </Grid>
         </Grid>
     </DataTemplate>
 </DataTemplates>

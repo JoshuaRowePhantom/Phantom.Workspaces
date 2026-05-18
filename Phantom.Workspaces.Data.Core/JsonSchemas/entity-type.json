@@ -1,7 +1,7 @@
 {
   "entity-id": "739d0469-4ad8-4ae0-b2b5-3c3be996f264",
   "entity-types": [
-    "json-schema",
+    "entity-type",
     "note"
   ],
   "names": [
@@ -25,6 +25,11 @@
   },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type.json",
+    "allOf": [
+      {
+        "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json"
+      }
+    ],
     "type": "object",
     "properties": {
       "names": {

@@ -78,6 +78,61 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
+    public async Task Populate_EntityTypeSchema_IsEntityTypeAndRequiresSchema()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var entityTypeSchema = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                {
+                    var parsedName = name.TryReadEntityName();
+                    return parsedName is not null
+                        && parsedName.Value.Components.SequenceEqual(
+                            ["entity-types", "entity-type"],
+                            StringComparer.Ordinal);
+                }));
+
+        Assert.True(
+            entityTypeSchema.TryGetProperty("entity-types", out var entityTypes)
+            && entityTypes.ValueKind == JsonValueKind.Array
+            && entityTypes.EnumerateArray().Any(type =>
+                type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), "entity-type", StringComparison.Ordinal))
+            && !entityTypes.EnumerateArray().Any(type =>
+                type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), "json-schema", StringComparison.Ordinal))
+            && entityTypeSchema.TryGetProperty("schema", out var schema)
+            && schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("allOf", out var allOf)
+            && allOf.ValueKind == JsonValueKind.Array
+            && allOf.EnumerateArray().Any(definition =>
+                definition.ValueKind == JsonValueKind.Object
+                && definition.TryGetProperty("$ref", out var reference)
+                && reference.ValueKind == JsonValueKind.String
+                && string.Equals(
+                    reference.GetString(),
+                    "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json",
+                    StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task Populate_SetsGettingStartedContent_ToMarkdownAttachment()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
