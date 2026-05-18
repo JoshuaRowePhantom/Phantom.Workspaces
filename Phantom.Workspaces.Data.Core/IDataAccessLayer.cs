@@ -123,7 +123,7 @@ public sealed record GetEntityRequest
 
     public EntityName? EntityName { get; init; }
 
-    public EntityTypeNames? EntityTypeNames { get; init; }
+    public EntityTypeNameSet? EntityTypeNames { get; init; }
 
     // null means inherit request-level value; empty means return all; non-empty means return matching relationships.
     public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
@@ -131,9 +131,9 @@ public sealed record GetEntityRequest
 
 public sealed record GetRelationshipRequest
 {
-    public RelationshipTypeNames? RelationshipTypeNames { get; init; }
+    public RelationshipTypeNameSet? RelationshipTypeNames { get; init; }
 
-    public RoleNames? RelationshipRoleNames { get; init; }
+    public RoleNameSet? RelationshipRoleNames { get; init; }
 }
 
 public sealed record GetResult
@@ -306,14 +306,75 @@ public record EntitySnapshot
     public required IReadOnlyCollection<EntitySnapshot> Relationships { get; init; }
 }
 
-public readonly record struct EntityId(Guid Value);
+public readonly record struct EntityId
+{
+    public EntityId()
+    {
+        this.Value = Guid.NewGuid();
+    }
+
+    public EntityId(Guid value)
+    {
+        this.Value = value;
+    }
+
+    public EntityId(string value)
+    {
+        this.Value = Guid.Parse(value);
+    }
+
+    public Guid Value { get; init; }
+
+    public override string ToString()
+    {
+        return this.Value.ToString("D");
+    }
+}
 
 public readonly record struct EntityTypeAndName(
-    EntityTypeNames TypeNames,
+    EntityTypeNameSet TypeNames,
     EntityName EntityName);
 
-public readonly record struct EntityName(
-    string Components);
+public readonly struct EntityName : IEquatable<EntityName>
+{
+    public EntityName(params string[] components)
+    {
+        this.Components = components ?? [];
+    }
+
+    public string[] Components { get; }
+
+    public bool Equals(EntityName other)
+    {
+        return this.Components.SequenceEqual(other.Components, StringComparer.Ordinal);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is EntityName other && this.Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        var hashCode = new HashCode();
+        foreach (var component in this.Components)
+        {
+            hashCode.Add(component, StringComparer.Ordinal);
+        }
+
+        return hashCode.ToHashCode();
+    }
+
+    public static bool operator ==(EntityName left, EntityName right)
+    {
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(EntityName left, EntityName right)
+    {
+        return !left.Equals(right);
+    }
+}
 
 public readonly record struct ConcurrencyTag(string Value);
 
@@ -332,13 +393,52 @@ public readonly record struct EntityIdTimestamp(
 
 public readonly record struct QueryClauseIdentifier(string Value);
 
-public readonly record struct EntityTypeNames(string[] Values);
+public readonly record struct EntityTypeNameSet(string[] Values);
 
-public readonly record struct RelationshipTypeNames(string[] Values);
+public readonly record struct RelationshipTypeNameSet(string[] Values);
 
-public readonly record struct RoleNames(string[] Values);
+public readonly record struct RoleNameSet(string[] Values);
 
-public readonly record struct FieldPath(string[] Components);
+public readonly struct FieldPath : IEquatable<FieldPath>
+{
+    public FieldPath(params string[] components)
+    {
+        this.Components = components ?? [];
+    }
+
+    public string[] Components { get; }
+
+    public bool Equals(FieldPath other)
+    {
+        return this.Components.SequenceEqual(other.Components, StringComparer.Ordinal);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is FieldPath other && this.Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        var hashCode = new HashCode();
+        foreach (var component in this.Components)
+        {
+            hashCode.Add(component, StringComparer.Ordinal);
+        }
+
+        return hashCode.ToHashCode();
+    }
+
+    public static bool operator ==(FieldPath left, FieldPath right)
+    {
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(FieldPath left, FieldPath right)
+    {
+        return !left.Equals(right);
+    }
+}
 
 public readonly record struct FullTextQueryText(string Value);
 
@@ -381,7 +481,7 @@ public abstract record EntityQueryClause : QueryClause;
 
 public sealed record EntityTypeQueryClause : EntityQueryClause
 {
-    public required EntityTypeNames EntityTypeNames { get; init; }
+    public required EntityTypeNameSet EntityTypeNames { get; init; }
 }
 
 public sealed record EntityFieldQueryClause : EntityQueryClause
@@ -404,9 +504,9 @@ public sealed record EntityFullTextQueryClause : EntityQueryClause
 
 public sealed record EntityParticipationQueryClause : EntityQueryClause
 {
-    public required RelationshipTypeNames RelationshipTypeNames { get; init; }
+    public required RelationshipTypeNameSet RelationshipTypeNames { get; init; }
 
-    public RoleNames? ParticipationRoleNames { get; init; }
+    public RoleNameSet? ParticipationRoleNames { get; init; }
 
     public EntityParticipationRequirement? MustHave { get; init; }
 }
@@ -415,18 +515,18 @@ public sealed record TransitQueryClause : QueryClause
 {
     public required QueryClauseIdentifier SourceClauseIdentifier { get; init; }
 
-    public required RelationshipTypeNames RelationshipTypeNames { get; init; }
+    public required RelationshipTypeNameSet RelationshipTypeNames { get; init; }
 
-    public RoleNames? SourceParticipationRoleNames { get; init; }
+    public RoleNameSet? SourceParticipationRoleNames { get; init; }
 
-    public RoleNames? DestinationParticipationRoleNames { get; init; }
+    public RoleNameSet? DestinationParticipationRoleNames { get; init; }
 
     public required QueryClause MatchClause { get; init; }
 }
 
 public sealed record EntityParticipationRequirement
 {
-    public RoleNames? ParticipationRoleNames { get; init; }
+    public RoleNameSet? ParticipationRoleNames { get; init; }
 
     public required QueryClause Clause { get; init; }
 }
@@ -462,4 +562,143 @@ public enum UpdateState
     Updated = 1,
     Removed = 2,
     Failed = 3,
+}
+
+/// <summary>
+/// JSON serialization helpers for converting between JsonElement and DAL value types.
+/// </summary>
+public static class DataAccessLayerJsonExtensions
+{
+    /// <summary>
+    /// Reads an array of strings from a JsonElement and returns them as an EntityName.
+    /// </summary>
+    public static EntityName? TryReadEntityName(this JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var components = new List<string>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var component = item.GetString();
+                if (!string.IsNullOrWhiteSpace(component))
+                {
+                    components.Add(component);
+                }
+            }
+        }
+
+        return components.Count > 0 ? new EntityName(components.ToArray()) : null;
+    }
+
+    /// <summary>
+    /// Reads an array of strings from a JsonElement and returns them as EntityTypeNameSet.
+    /// </summary>
+    public static EntityTypeNameSet? TryReadEntityTypeNames(this JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var typeNames = new List<string>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var typeName = item.GetString();
+                if (!string.IsNullOrWhiteSpace(typeName))
+                {
+                    typeNames.Add(typeName);
+                }
+            }
+        }
+
+        return typeNames.Count > 0 ? new EntityTypeNameSet(typeNames.ToArray()) : null;
+    }
+
+    /// <summary>
+    /// Reads an array of strings from a JsonElement and returns them as RelationshipTypeNameSet.
+    /// </summary>
+    public static RelationshipTypeNameSet? TryReadRelationshipTypeNames(this JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var typeNames = new List<string>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var typeName = item.GetString();
+                if (!string.IsNullOrWhiteSpace(typeName))
+                {
+                    typeNames.Add(typeName);
+                }
+            }
+        }
+
+        return typeNames.Count > 0 ? new RelationshipTypeNameSet(typeNames.ToArray()) : null;
+    }
+
+    /// <summary>
+    /// Reads an array of strings from a JsonElement and returns them as RoleNameSet.
+    /// </summary>
+    public static RoleNameSet? TryReadRoleNames(this JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var roleNames = new List<string>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var roleName = item.GetString();
+                if (!string.IsNullOrWhiteSpace(roleName))
+                {
+                    roleNames.Add(roleName);
+                }
+            }
+        }
+
+        return roleNames.Count > 0 ? new RoleNameSet(roleNames.ToArray()) : null;
+    }
+
+    /// <summary>
+    /// Extracts an array of strings by property name from a JsonElement.
+    /// Returns an empty array if the property doesn't exist or isn't an array.
+    /// </summary>
+    public static IReadOnlyCollection<string> ExtractStringArray(this JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(propertyName, out var propertyElement)
+            || propertyElement.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        var result = new List<string>();
+        foreach (var item in propertyElement.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var value = item.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    result.Add(value);
+                }
+            }
+        }
+
+        return result;
+    }
 }

@@ -42,11 +42,11 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
         File.WriteAllText(Path.Combine(this.repositoryPath, "UNINTENDED.txt"), "modified");
 
         var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
-        var entityId = new EntityId(Guid.Parse("5d34dc34-50be-45ef-b408-1648a761f67a"));
+        var entityId = new EntityId("5d34dc34-50be-45ef-b408-1648a761f67a");
         using var document = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["tracked-entity"]
             }
@@ -88,12 +88,12 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
     public async Task UpdateAsync_WhenEntityFileWasManuallyEdited_AppliesOnlyRequestedChange()
     {
         var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
-        var entityId = new EntityId(Guid.Parse("d86fb75f-ec39-4553-91f5-9f4948516bb0"));
+        var entityId = new EntityId("d86fb75f-ec39-4553-91f5-9f4948516bb0");
 
         using var initialDocument = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["initial"]
             }
@@ -123,12 +123,12 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
 
         var entityFilePath = Path.Combine(
             FilesystemDataAccessLayer.GetEntityDirectory(this.repositoryPath, entityId),
-            $"{entityId.Value:D}.json");
+            $"{entityId}.json");
         File.WriteAllText(
             entityFilePath,
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["manual-edit"],
               "manual-only": true
@@ -138,7 +138,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
         using var requestedDocument = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["requested-change"]
             }
@@ -176,7 +176,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
     [Fact]
     public async Task RecreateDataAccessLayer_PreservesGitHistory()
     {
-        var entityId = new EntityId(Guid.Parse("17abec8f-fef5-4162-ae7d-1ecf9454d34f"));
+        var entityId = new EntityId("17abec8f-fef5-4162-ae7d-1ecf9454d34f");
         var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
         await VerifyHistoryPreservedAcrossRequestsAsync(dataAccessLayer, entityId, useConcurrencyTag: true);
     }
@@ -189,7 +189,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
         using var createDocument = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["v1"]
             }
@@ -220,7 +220,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
         using var updateDocument = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["v2"]
             }
@@ -401,12 +401,12 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
     public async Task UpdateAsync_WithRemote_PushesCommitToRemoteRepository()
     {
         var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
-        var entityId = new EntityId(Guid.Parse("13ee2034-e44c-40e3-9b1f-fb6e755e8892"));
+        var entityId = new EntityId("13ee2034-e44c-40e3-9b1f-fb6e755e8892");
 
         using var document = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["remote-check"]
             }
@@ -456,11 +456,11 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
         }
 
         var dataAccessLayer = this.CreateGitDataAccessLayerForOperation();
-        var entityId = new EntityId(Guid.Parse("5237f2f9-cae6-4cb3-bdb0-6724b2646e50"));
+        var entityId = new EntityId("5237f2f9-cae6-4cb3-bdb0-6724b2646e50");
         using var document = System.Text.Json.JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["remote-divergence"]
             }

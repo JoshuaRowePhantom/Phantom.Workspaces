@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="Phantom.Workspaces.Data.Core.Tests/Phantom.Workspaces.Data.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.Core/Phantom.Workspaces.Data.Core.csproj" />
+  <Project Path="Phantom.Workspaces.Tests/Phantom.Workspaces.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.CosmosDB.Tests/Phantom.Workspaces.Data.CosmosDB.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.CosmosDB/Phantom.Workspaces.Data.CosmosDB.csproj" />
   <Project Path="Phantom.Workspaces.Data.Offline.Tests/Phantom.Workspaces.Data.Offline.Tests.csproj" />

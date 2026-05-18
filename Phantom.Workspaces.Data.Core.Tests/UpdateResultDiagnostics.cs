@@ -86,6 +86,6 @@ public static class UpdateResultDiagnostics
     private static string FormatEntityId(
         EntityId entityId)
     {
-        return entityId.Value == Guid.Empty ? "(empty)" : entityId.Value.ToString("D");
+        return entityId.Value == Guid.Empty ? "(empty)" : entityId.ToString();
     }
 }

@@ -237,7 +237,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
     {
         var absoluteEntityPath = Path.Combine(
             FilesystemDataAccessLayer.GetEntityDirectory(this.RepositoryPath, entityId),
-            $"{entityId.Value:D}.json");
+            $"{entityId}.json");
         return Path.GetRelativePath(this.RepositoryPath, absoluteEntityPath).Replace('\\', '/');
     }
 

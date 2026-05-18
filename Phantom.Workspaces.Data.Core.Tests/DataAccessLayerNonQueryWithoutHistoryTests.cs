@@ -5,8 +5,7 @@ namespace Phantom.Workspaces.Data.Tests;
 
 public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 {
-    protected static readonly EntityId SampleEntityId = new(
-        Guid.Parse("5a48c0ee-4a39-4d1b-9c6c-c3de6e67ce27"));
+    protected static readonly EntityId SampleEntityId = new EntityId();
 
     protected abstract IDataAccessLayer CreateDataAccessLayer();
 
@@ -37,17 +36,33 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var entityName = new EntityName("one");
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createResult, UpdateState.Added);
 
         var byId = await this.GetSingleSnapshotByIdAsync(dataAccessLayer);
-        Assert.Equal("one", this.GetName(byId.Data));
+        Assert.Equal(entityName, this.GetName(byId.Data));
 
-        var byName = await this.GetSingleSnapshotByNameAsync(dataAccessLayer, "one");
-        Assert.Equal("one", this.GetName(byName.Data));
+        var byName = await this.GetSingleSnapshotByNameAsync(dataAccessLayer, entityName);
+        Assert.Equal(entityName, this.GetName(byName.Data));
 
-        var byTypeAndName = await this.GetSingleSnapshotByTypeAndNameAsync(dataAccessLayer, "entity", "one");
-        Assert.Equal("one", this.GetName(byTypeAndName.Data));
+        var byTypeAndName = await this.GetSingleSnapshotByTypeAndNameAsync(
+            dataAccessLayer,
+            new EntityTypeNameSet(new[] { "entity" }),
+            entityName);
+        Assert.Equal(entityName, this.GetName(byTypeAndName.Data));
+    }
+
+    [Fact]
+    public async Task Populate_CreateEntity_WithTwoComponentName_CanReadBackByName()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("parent", "child"));
+        AssertSuccessfulResult(createResult, UpdateState.Added);
+
+        var byName = await this.GetSingleSnapshotByNameAsync(dataAccessLayer, new EntityName("parent", "child"));
+        Assert.Equal(SampleEntityId, byName.EntityId);
     }
 
     [Fact]
@@ -55,7 +70,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var updatedName = new EntityName("two");
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createResult, UpdateState.Added);
         var createConcurrencyTag = createResult.EntityResults.Single().ConcurrencyTag!.Value;
 
@@ -63,16 +79,16 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Update entity"),
-                new[] { this.CreateUpsertChange("two", createConcurrencyTag) }));
+                new[] { this.CreateUpsertChange(new EntityName("two"), createConcurrencyTag) }));
 
         var updateEntityResult = AssertSuccessfulResult(updateResult, UpdateState.Updated);
         Assert.NotEqual(createConcurrencyTag, updateEntityResult.ConcurrencyTag);
 
         var latestById = await this.GetSingleSnapshotByIdAsync(dataAccessLayer);
-        Assert.Equal("two", this.GetName(latestById.Data));
+        Assert.Equal(updatedName, this.GetName(latestById.Data));
 
-        var latestByName = await this.GetSingleSnapshotByNameAsync(dataAccessLayer, "two");
-        Assert.Equal("two", this.GetName(latestByName.Data));
+        var latestByName = await this.GetSingleSnapshotByNameAsync(dataAccessLayer, updatedName);
+        Assert.Equal(updatedName, this.GetName(latestByName.Data));
     }
 
     [Fact]
@@ -80,14 +96,14 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createResult, UpdateState.Added);
 
         var updateResult = await RequireUpdateFailsAsync(
             dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Update entity without concurrency tag"),
-                new[] { this.CreateUpsertChange("two") }));
+                new[] { this.CreateUpsertChange(new EntityName("two")) }));
 
         var failedResult = Assert.Single(updateResult.EntityResults);
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
@@ -95,7 +111,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         Assert.Equal(SampleEntityId, failedResult.RequestedEntityId);
         Assert.Equal(SampleEntityId, failedResult.ResultingEntityId);
         Assert.NotNull(failedResult.CurrentEntity);
-        Assert.Equal("one", this.GetName(failedResult.CurrentEntity?.Data));
+        Assert.Equal(new EntityName("one"), this.GetName(failedResult.CurrentEntity?.Data));
     }
 
     [Fact]
@@ -103,28 +119,28 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createResult, UpdateState.Added);
         var initialConcurrencyTag = createResult.EntityResults.Single().ConcurrencyTag!.Value;
 
         var updateResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
                 CreateUpdateMetadata("Update entity"),
-                new[] { this.CreateUpsertChange("two", initialConcurrencyTag) }));
+                new[] { this.CreateUpsertChange(new EntityName("two"), initialConcurrencyTag) }));
         var currentConcurrencyTag = AssertSuccessfulResult(updateResult, UpdateState.Updated).ConcurrencyTag!.Value;
 
         var staleUpdateResult = await RequireUpdateFailsAsync(
             dataAccessLayer,
             CreateUpdateRequest(
                 CreateUpdateMetadata("Stale update"),
-                new[] { this.CreateUpsertChange("three", initialConcurrencyTag) }));
+                new[] { this.CreateUpsertChange(new EntityName("three"), initialConcurrencyTag) }));
 
         var failedResult = Assert.Single(staleUpdateResult.EntityResults);
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
         Assert.Equal(currentConcurrencyTag, failedResult.ConcurrencyTag);
 
         var latestById = await this.GetSingleSnapshotByIdAsync(dataAccessLayer);
-        Assert.Equal("two", this.GetName(latestById.Data));
+        Assert.Equal(new EntityName("two"), this.GetName(latestById.Data));
     }
 
     [Fact]
@@ -132,7 +148,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createResult, UpdateState.Added);
         var createConcurrencyTag = createResult.EntityResults.Single().ConcurrencyTag!.Value;
 
@@ -153,14 +169,14 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
 
-        var createResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createResult, UpdateState.Added);
         var initialConcurrencyTag = createResult.EntityResults.Single().ConcurrencyTag!.Value;
 
         var updateResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
                 CreateUpdateMetadata("Update entity"),
-                new[] { this.CreateUpsertChange("two", initialConcurrencyTag) }));
+                new[] { this.CreateUpsertChange(new EntityName("two"), initialConcurrencyTag) }));
         var currentConcurrencyTag = AssertSuccessfulResult(updateResult, UpdateState.Updated).ConcurrencyTag!.Value;
 
         var deleteResult = await RequireUpdateFailsAsync(
@@ -174,20 +190,20 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         Assert.Equal(currentConcurrencyTag, failedResult.ConcurrencyTag);
 
         var latestById = await this.GetSingleSnapshotByIdAsync(dataAccessLayer);
-        Assert.Equal("two", this.GetName(latestById.Data));
+        Assert.Equal(new EntityName("two"), this.GetName(latestById.Data));
     }
 
     [Fact]
     public async Task Populate_GetEntityRelationships_RespectsRequestAndEntityRelationshipFilters()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var createEntityResult = await this.CreateEntityAsync(dataAccessLayer, "one");
+        var createEntityResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("one"));
         AssertSuccessfulResult(createEntityResult, UpdateState.Added);
-        var additionalParticipantId = new EntityId(Guid.Parse("5ab56174-f4b0-4f64-bbf7-c96bc5cfe419"));
+        var additionalParticipantId = new EntityId("5ab56174-f4b0-4f64-bbf7-c96bc5cfe419");
         using var additionalParticipantDocument = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{additionalParticipantId.Value:D}}",
+              "entity-id": "{{additionalParticipantId}}",
               "entity-types": ["entity"],
               "names": ["two"]
             }
@@ -212,11 +228,11 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
               "entity-types": ["relationship", "related"],
               "names": ["one-related"],
               "participants": {
-                "entities": ["{{SampleEntityId.Value:D}}", "{{additionalParticipantId.Value:D}}"]
+                "entities": ["{{SampleEntityId}}", "{{additionalParticipantId}}"]
               }
             }
             """);
-        var relationshipEntityId = new EntityId(Guid.Parse("8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69"));
+        var relationshipEntityId = new EntityId("8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69");
         await RequireUpdateSucceedsAsync(
             dataAccessLayer,
             CreateUpdateRequest(
@@ -256,7 +272,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
                         new[]
                         {
                             CreateGetRelationshipRequest(
-                                new RelationshipTypeNames(new[] { "unrelated-type" }),
+                                new RelationshipTypeNameSet(new[] { "unrelated-type" }),
                                 null),
                         }),
                 },
@@ -274,13 +290,13 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     protected EntityChange CreateUpsertChange(
-        string name,
+        EntityName entityName,
         ConcurrencyTag? concurrencyTag = null)
     {
         return CreateEntityChange(
             SampleEntityId,
             concurrencyTag,
-            this.CreateEntity(name),
+            this.CreateEntity(entityName),
             EntityChangeMode.Replace);
     }
 
@@ -295,14 +311,15 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     protected JsonElement CreateEntity(
-        string name)
+        EntityName entityName)
     {
+        var serializedEntityName = JsonSerializer.Serialize(entityName.Components);
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{SampleEntityId.Value:D}}",
+              "entity-id": "{{SampleEntityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"]
+              "names": {{serializedEntityName}}
             }
             """);
 
@@ -311,14 +328,15 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 
     private async Task<UpdateResult> CreateEntityAsync(
         IDataAccessLayer dataAccessLayer,
-        string name,
+        EntityName entityName,
         ConcurrencyTag? concurrencyTag = null)
     {
         return await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
                 CreateUpdateMetadata("Create entity"),
-                new[] { this.CreateUpsertChange(name, concurrencyTag) }));
+                new[] { this.CreateUpsertChange(entityName, concurrencyTag) }));
     }
+
 
     private static EntityUpdateResult AssertSuccessfulResult(
         UpdateResult result,
@@ -351,14 +369,14 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 
     private async Task<EntitySnapshot> GetSingleSnapshotByNameAsync(
         IDataAccessLayer dataAccessLayer,
-        string name)
+        EntityName entityName)
     {
         return this.GetSingleSnapshotAsync(
             await dataAccessLayer.GetAsync(
                 CreateGetRequest(
                     CreateGetEntityRequest(
                         null,
-                        new EntityName(name),
+                        entityName,
                         null,
                         null),
                     null)));
@@ -366,16 +384,16 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 
     private async Task<EntitySnapshot> GetSingleSnapshotByTypeAndNameAsync(
         IDataAccessLayer dataAccessLayer,
-        string typeName,
-        string name)
+        EntityTypeNameSet entityTypeNames,
+        EntityName entityName)
     {
         return this.GetSingleSnapshotAsync(
             await dataAccessLayer.GetAsync(
                 CreateGetRequest(
                     CreateGetEntityRequest(
                         null,
-                        new EntityName(name),
-                        new EntityTypeNames(new[] { typeName }),
+                        entityName,
+                        entityTypeNames,
                         null),
                     null)));
     }
@@ -411,7 +429,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         return Assert.Single(Assert.Single(result.Batches).Entities);
     }
 
-    private string? GetName(
+    private EntityName? GetName(
         JsonElement? data)
     {
         if (data is null || data.Value.ValueKind != JsonValueKind.Object)
@@ -425,15 +443,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             return null;
         }
 
-        foreach (var nameElement in namesElement.EnumerateArray())
-        {
-            if (nameElement.ValueKind == JsonValueKind.String)
-            {
-                return nameElement.GetString();
-            }
-        }
-
-        return null;
+        return namesElement.TryReadEntityName();
     }
 
     private static UpdateRequest CreateUpdateRequest(
@@ -477,7 +487,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     private static GetEntityRequest CreateGetEntityRequest(
         EntityId? entityId,
         EntityName? entityName,
-        EntityTypeNames? entityTypeNames,
+        EntityTypeNameSet? entityTypeNames,
         IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn)
     {
         return new GetEntityRequest
@@ -490,8 +500,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     private static GetRelationshipRequest CreateGetRelationshipRequest(
-        RelationshipTypeNames? relationshipTypeNames,
-        RoleNames? relationshipRoleNames)
+        RelationshipTypeNameSet? relationshipTypeNames,
+        RoleNameSet? relationshipRoleNames)
     {
         return new GetRelationshipRequest
         {

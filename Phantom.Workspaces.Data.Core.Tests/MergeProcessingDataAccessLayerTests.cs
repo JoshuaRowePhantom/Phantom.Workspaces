@@ -298,7 +298,7 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{SampleEntityId.Value:D}}",
+              "entity-id": "{{SampleEntityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"],
               "title": "{{title}}"
@@ -316,7 +316,7 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{SampleEntityId.Value:D}}",
+              "entity-id": "{{SampleEntityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"],
               "tags": [{{tagList}}]
@@ -436,7 +436,7 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
     private static GetEntityRequest CreateGetEntityRequest(
         EntityId? entityId,
         EntityName? entityName,
-        EntityTypeNames? entityTypeNames,
+        EntityTypeNameSet? entityTypeNames,
         IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn)
     {
         return new GetEntityRequest

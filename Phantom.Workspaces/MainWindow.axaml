@@ -13,16 +13,19 @@
         Title="Phantom.Workspaces">
     <Window.DataTemplates>
         <DataTemplate DataType="vm:NoteWorkspaceTabViewModel">
-            <TextBox Text="{Binding Markdown}"
-                     AcceptsReturn="True"
-                     IsReadOnly="True"
-                     TextWrapping="Wrap"
-                     BorderThickness="0"
-                     Background="Transparent" />
+            <StackPanel Spacing="8">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16" />
+                <TextBox Text="{Binding Markdown}"
+                         AcceptsReturn="True"
+                         IsReadOnly="True"
+                         TextWrapping="Wrap"
+                         BorderThickness="0"
+                         Background="Transparent" />
+            </StackPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:EntityWorkspaceTabViewModel">
             <StackPanel Spacing="6">
-                <TextBlock Text="{Binding Entity.DisplayName}" FontWeight="Bold" FontSize="16" />
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16" />
                 <TextBlock Text="{Binding Entity.EntityType}" Opacity="0.7" />
                 <ItemsControl ItemsSource="{Binding Entity.DisplayItems}">
                     <ItemsControl.ItemTemplate>
@@ -38,6 +41,43 @@
                 <TextBlock Text="Browser" FontWeight="Bold" FontSize="16" />
                 <TextBlock Text="{Binding Url}" />
             </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:WorkspacePaneViewModel">
+            <Grid RowDefinitions="Auto,*">
+                <Border Padding="12,10" BorderThickness="0,0,0,1">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="16" />
+                        <TextBlock Text="{Binding Entity.EntityType}" Opacity="0.75" />
+                    </StackPanel>
+                </Border>
+
+                <ScrollViewer Grid.Row="1">
+                    <ItemsControl ItemsSource="{Binding Regions}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
+                                <Border Margin="0,0,0,12" Padding="10" BorderThickness="1" CornerRadius="6">
+                                    <Grid RowDefinitions="Auto,*">
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="{Binding Title}" FontWeight="Bold" />
+                                            <TextBlock Text="{Binding DockRegion}" Opacity="0.7" />
+                                            <TextBlock Text="{Binding RelativeSize, StringFormat='x{0}'}" Opacity="0.7" />
+                                        </StackPanel>
+                                        <TabControl Grid.Row="1"
+                                                    ItemsSource="{Binding Tabs}"
+                                                    SelectedItem="{Binding SelectedTab}">
+                                            <TabControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
+                                                    <TextBlock Text="{Binding Title}" />
+                                                </DataTemplate>
+                                            </TabControl.ItemTemplate>
+                                        </TabControl>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
         </DataTemplate>
     </Window.DataTemplates>
 
@@ -145,37 +185,15 @@
 
             <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
-            <Border Grid.Column="2" Padding="10" BorderThickness="1,0,0,0">
-                <Grid RowDefinitions="Auto,*">
-                    <TextBlock Text="Workspace" FontSize="18" FontWeight="Bold" Margin="0,2,0,10" />
-                    <ScrollViewer Grid.Row="1">
-                        <ItemsControl ItemsSource="{Binding SelectedWorkspacePane.Regions}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
-                                    <Border Margin="0,0,0,12" Padding="10" BorderThickness="1" CornerRadius="6">
-                                        <Grid RowDefinitions="Auto,*">
-                                            <StackPanel Orientation="Horizontal" Spacing="10">
-                                                <TextBlock Text="{Binding Title}" FontWeight="Bold" />
-                                                <TextBlock Text="{Binding DockRegion}" Opacity="0.7" />
-                                                <TextBlock Text="{Binding RelativeSize, StringFormat='x{0}'}" Opacity="0.7" />
-                                            </StackPanel>
-                                            <TabControl Grid.Row="1"
-                                                        ItemsSource="{Binding Tabs}"
-                                                        SelectedItem="{Binding SelectedTab}">
-                                                <TabControl.ItemTemplate>
-                                                    <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
-                                                        <TextBlock Text="{Binding Title}" />
-                                                    </DataTemplate>
-                                                </TabControl.ItemTemplate>
-                                            </TabControl>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </Grid>
-            </Border>
+            <TabControl Grid.Column="2"
+                        ItemsSource="{Binding WorkspacePanes}"
+                        SelectedItem="{Binding SelectedWorkspacePane}">
+                <TabControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WorkspacePaneViewModel">
+                        <TextBlock Text="{Binding Title}" />
+                    </DataTemplate>
+                </TabControl.ItemTemplate>
+            </TabControl>
         </Grid>
     </Grid>
 </Window>

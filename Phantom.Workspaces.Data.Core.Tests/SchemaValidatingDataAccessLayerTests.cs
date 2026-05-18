@@ -46,7 +46,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_IsRejected_WhenEntityUsesUnknownEntityType()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var entityId = new EntityId(Guid.Parse("3f02d2e0-f8d1-4ec9-8ef8-1f5fd4f8dbd8"));
+        var entityId = new EntityId("3f02d2e0-f8d1-4ec9-8ef8-1f5fd4f8dbd8");
 
         var result = await RequireUpdateFailsAsync(
             dataAccessLayer,
@@ -60,7 +60,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{entityId.Value:D}}",
+                              "entity-id": "{{entityId}}",
                               "entity-types": ["profile"],
                               "names": ["unknown-typed-entity"]
                             }
@@ -78,7 +78,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_ValidatesLocalizedMimeAttachmentContent_ForNote()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var entityId = new EntityId(Guid.Parse("1ac2b418-c4bf-4df9-9f25-6b3d9ab2d7f7"));
+        var entityId = new EntityId("1ac2b418-c4bf-4df9-9f25-6b3d9ab2d7f7");
 
         var result = await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -146,8 +146,8 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_Succeeds_WhenSchemaEntityTypeIsUsedAsJsonSchema()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var schemaEntityId = new EntityId(Guid.Parse("a8428673-25f5-4c30-8f70-c3014f660d95"));
-        var entityId = new EntityId(Guid.Parse("ad6f2d02-2f5b-4e64-bec4-78d16dff7f92"));
+        var schemaEntityId = new EntityId("a8428673-25f5-4c30-8f70-c3014f660d95");
+        var entityId = new EntityId("ad6f2d02-2f5b-4e64-bec4-78d16dff7f92");
         const string schemaName = "https://schemas.workspaces.phantom.to/tests/implicit-json-schema-entity-type.json";
 
         var result = await RequireUpdateSucceedsAsync(
@@ -162,7 +162,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{schemaEntityId.Value:D}}",
+                              "entity-id": "{{schemaEntityId}}",
                               "entity-types": ["entity-type"],
                               "names": [["json-schemas", "{{schemaName}}"]],
                               "schema": {
@@ -183,7 +183,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "$schema": "{{schemaName}}",
-                              "entity-id": "{{entityId.Value:D}}",
+                              "entity-id": "{{entityId}}",
                               "entity-types": ["entity"],
                               "names": ["validated-entity"],
                               "title": "valid"
@@ -249,7 +249,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_IsRejected_WhenEntityContainsExtraProperty()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var entityId = new EntityId(Guid.Parse("d9ad4a78-10a9-4e4c-a7e8-0b71495fe6a5"));
+        var entityId = new EntityId("d9ad4a78-10a9-4e4c-a7e8-0b71495fe6a5");
 
         var result = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -262,7 +262,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{entityId.Value:D}}",
+                              "entity-id": "{{entityId}}",
                               "entity-types": ["entity"],
                               "names": ["entity-with-extra-property"],
                               "unexpected-property": "should-fail"
@@ -286,7 +286,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         // entity-types ("entity" + "entity-type") and rejects properties that are not defined
         // in the union of those schemas.
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var entityTypeEntityId = new EntityId(Guid.Parse("930bc3f8-ddbe-4884-bfba-7a405c209cc9"));
+        var entityTypeEntityId = new EntityId("930bc3f8-ddbe-4884-bfba-7a405c209cc9");
 
         var result = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -299,7 +299,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{entityTypeEntityId.Value:D}}",
+                              "entity-id": "{{entityTypeEntityId}}",
                               "entity-types": ["entity-type"],
                               "names": [["entity-types","sample-entity-type"]],
                               "schema": {
@@ -325,7 +325,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_Succeeds_WhenEntityTypeEntityContainsEntityTypeSpecificFields()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var entityTypeEntityId = new EntityId(Guid.Parse("1d033c1d-f265-4b62-866f-ab88ceb66dcf"));
+        var entityTypeEntityId = new EntityId("1d033c1d-f265-4b62-866f-ab88ceb66dcf");
 
         var result = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -338,7 +338,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{entityTypeEntityId.Value:D}}",
+                              "entity-id": "{{entityTypeEntityId}}",
                               "entity-types": ["entity-type"],
                               "names": [["entity-types","sample-entity-type"]],
                               "schema": {
@@ -362,7 +362,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_WhenValidationFails_ErrorMessageIncludesDiagnosticDetails()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var invalidEntityId = new EntityId(Guid.Parse("3f8f4f4d-1664-4f6d-a74a-e5f9f3ccd67f"));
+        var invalidEntityId = new EntityId("3f8f4f4d-1664-4f6d-a74a-e5f9f3ccd67f");
 
         var updateResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -377,7 +377,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "$schema": "{{TestSchemaName}}",
-                              "entity-id": "{{invalidEntityId.Value:D}}",
+                              "entity-id": "{{invalidEntityId}}",
                               "names": ["invalid-work-item"],
                               "title": 123
                             }
@@ -399,7 +399,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_ValidatesEntitiesByEntityTypeSchema_WhenSchemaPropertyIsMissing()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var viewEntityId = new EntityId(Guid.Parse("9a73ed76-9ef3-4c6a-8adf-d4884bc8bcbf"));
+        var viewEntityId = new EntityId("9a73ed76-9ef3-4c6a-8adf-d4884bc8bcbf");
 
         var invalidResult = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -412,7 +412,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{viewEntityId.Value:D}}",
+                              "entity-id": "{{viewEntityId}}",
                               "entity-types": ["view"],
                               "names": [["views","invalid-view-by-type"]],
                               "sub-views": []
@@ -436,7 +436,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         JsonDocument.Parse(
                             $$"""
                             {
-                              "entity-id": "{{viewEntityId.Value:D}}",
+                              "entity-id": "{{viewEntityId}}",
                               "entity-types": ["view"],
                               "names": [["views","valid-view-by-type"]],
                               "title": { "default": "Valid View" },
@@ -452,7 +452,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     public async Task Update_ValidatesWorkspaceTabContent_ForEntityTargetAndBrowserUrl()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var workspaceEntityId = new EntityId(Guid.Parse("24a2ab29-2d0e-4a0c-9f0e-2a1a5c37e5a5"));
+        var workspaceEntityId = new EntityId("24a2ab29-2d0e-4a0c-9f0e-2a1a5c37e5a5");
 
         var result = await dataAccessLayer.UpdateAsync(
             CreateUpdateRequest(
@@ -514,7 +514,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         using var schemaDocument = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity-type"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
@@ -544,7 +544,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             $$"""
             {
               "$schema": "{{schemaName}}",
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["validated-entity"],
               "title": {{JsonSerializer.Serialize(title)}}
@@ -612,7 +612,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     private static GetEntityRequest CreateGetEntityRequest(
         EntityId? entityId,
         EntityName? entityName,
-        EntityTypeNames? entityTypeNames,
+        EntityTypeNameSet? entityTypeNames,
         IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn)
     {
         return new GetEntityRequest

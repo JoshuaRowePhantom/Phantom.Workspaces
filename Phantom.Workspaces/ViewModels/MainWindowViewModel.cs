@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -13,6 +14,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase
 {
+    private const string PlaceholderWorkspaceId = "loading-workspace";
     private static readonly ViewDefinitionViewModel EmptyView = new()
     {
         Id = "empty",
@@ -41,24 +43,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.VisibleEntities = new ObservableCollection<EntityVisualViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>
         {
-            new()
-            {
-                Id = "workspace-main",
-                Title = "Main Workspace",
-            },
+            CreatePlaceholderWorkspacePane(),
         };
 
         this.selectedWorkspacePane = this.WorkspacePanes[0];
-        this.selectedWorkspacePane.Regions.Add(
-            new WorkspaceRegionViewModel
-            {
-                Id = "center",
-                Title = "Center",
-                DockRegion = "center",
-                RelativeSize = 1,
-            });
-        this.selectedWorkspacePane.SelectedRegion = this.selectedWorkspacePane.Regions[0];
-        this.ActivateEntityCommand = new RelayCommand(this.OnActivateEntity);
+        this.ActivateEntityCommand = new RelayCommand(async _ => await this.OnActivateEntityAsync(_));
         this.SetDarkThemeCommand = new RelayCommand(async _ => await this.SetThemeAsync("Dark"));
         this.SetLightThemeCommand = new RelayCommand(async _ => await this.SetThemeAsync("Light"));
 
@@ -95,7 +84,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            this.ApplySelectedView();
+            _ = this.ApplySelectedViewAsync();
         }
     }
 
@@ -141,9 +130,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
 
         await this.EntityBroker.InitializeAsync();
-        this.RebuildViewsFromRepository();
+        await this.LoadNavigationSubscriptionAsync();
+        await this.RebuildViewsFromRepositoryAsync();
         await this.InitializeThemeAsync();
-        this.LoadStartupWorkspaceFromEntities();
+        await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
     }
 
@@ -183,16 +173,114 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public string SelectedThemeName => this.selectedThemeName;
 
-    private void RebuildViewsFromRepository()
+    private static WorkspacePaneViewModel CreatePlaceholderWorkspacePane()
     {
-        var snapshotsById = this.EntityBroker.SnapshotsById;
-        if (snapshotsById.Count == 0)
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "00000000-0000-0000-0000-000000000000",
+              "entity-types": ["workspace"],
+              "display-name": "Loading Workspace"
+            }
+            """);
+
+        var entity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId(Guid.Empty),
+                ModifiedTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+        return new WorkspacePaneViewModel(entity);
+    }
+
+    private async Task RebuildViewsFromRepositoryAsync()
+    {
+        var mainViewRequest = new GetEntityRequest
         {
+            EntityName = new EntityName("views", "main"),
+        };
+
+        var mainViewSnapshot = await this.LoadSingleEntitySnapshotAsync(mainViewRequest);
+        if (mainViewSnapshot?.Data is not JsonElement mainViewData
+            || !mainViewData.TryGetProperty("sub-views", out var subViews)
+            || subViews.ValueKind != JsonValueKind.Array)
+        {
+            this.TopLevelViews.Clear();
+            this.TopLevelViews.Add(EmptyView);
+            this.SelectedTopLevelView = EmptyView;
             return;
         }
 
         var existingSelectionId = this.SelectedTopLevelView?.Id;
-        var nextViews = this.BuildTopLevelViews(snapshotsById);
+        var nextViews = new List<ViewDefinitionViewModel>();
+
+        foreach (var subView in subViews.EnumerateArray())
+        {
+            if (!subView.TryGetProperty("view-entity-id", out var referenceValue))
+            {
+                continue;
+            }
+
+            EntitySnapshot? viewSnapshot = null;
+            if (referenceValue.ValueKind == JsonValueKind.String)
+            {
+                var stringValue = referenceValue.GetString();
+                if (Guid.TryParse(stringValue, out var entityGuid))
+                {
+                    viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+                        new GetEntityRequest { EntityId = new EntityId(entityGuid) });
+                }
+                else if (!string.IsNullOrWhiteSpace(stringValue))
+                {
+                    var components = stringValue.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    if (components.Length > 0)
+                    {
+                        viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+                            new GetEntityRequest { EntityName = new EntityName(components) });
+                    }
+                }
+            }
+            else if (referenceValue.ValueKind == JsonValueKind.Array)
+            {
+                var components = referenceValue.EnumerateArray()
+                    .Where(static item => item.ValueKind == JsonValueKind.String)
+                    .Select(static item => item.GetString())
+                    .Where(static text => !string.IsNullOrWhiteSpace(text))
+                    .ToArray();
+                if (components.Length > 0)
+                {
+                    viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+                        new GetEntityRequest { EntityName = new EntityName(components!) });
+                }
+            }
+
+            if (viewSnapshot?.Data is JsonElement viewData)
+            {
+                nextViews.Add(
+                    new ViewDefinitionViewModel
+                    {
+                        Id = viewSnapshot.EntityId.ToString(),
+                        Title = ReadLocalString(viewData, "title")
+                            ?? ReadLocalString(viewData, "display-name")
+                            ?? "View",
+                        Description = ReadPrimaryName(viewData) ?? "Repository view",
+                        IconGlyph = "◻",
+                    });
+            }
+        }
+
+        nextViews.Add(
+            new ViewDefinitionViewModel
+            {
+                Id = "entity-browser",
+                Title = "Entity Browser",
+                Description = "Dedicated browser/search (not view-driven).",
+                IconGlyph = "⌕",
+                IsEntityBrowser = true,
+            });
+
         this.TopLevelViews.Clear();
         foreach (var viewDefinition in nextViews)
         {
@@ -212,54 +300,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             ?? this.TopLevelViews[0];
     }
 
-    private IReadOnlyCollection<ViewDefinitionViewModel> BuildTopLevelViews(
-        IReadOnlyDictionary<EntityId, EntitySnapshot> snapshotsById)
-    {
-        var built = new List<ViewDefinitionViewModel>();
-        var mainView = this.EntityRepository.TryGetEntityByName(snapshotsById, ["views", "main"]);
-        if (mainView?.Data is JsonElement mainViewData
-            && mainViewData.TryGetProperty("sub-views", out var subViews)
-            && subViews.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var subView in subViews.EnumerateArray())
-            {
-                if (!TryReadEntityReference(subView, "view-entity-id", out var reference))
-                {
-                    continue;
-                }
-
-                var viewSnapshot = ResolveEntityReference(snapshotsById, reference);
-                if (viewSnapshot?.Data is not JsonElement viewData)
-                {
-                    continue;
-                }
-
-                built.Add(
-                    new ViewDefinitionViewModel
-                    {
-                        Id = viewSnapshot.EntityId.Value.ToString("D"),
-                        Title = ReadLocalString(viewData, "title")
-                            ?? ReadLocalString(viewData, "display-name")
-                            ?? "View",
-                        Description = ReadPrimaryName(viewData) ?? "Repository view",
-                        IconGlyph = "◻",
-                    });
-            }
-        }
-
-        built.Add(
-            new ViewDefinitionViewModel
-            {
-                Id = "entity-browser",
-                Title = "Entity Browser",
-                Description = "Dedicated browser/search (not view-driven).",
-                IconGlyph = "⌕",
-                IsEntityBrowser = true,
-            });
-        return built;
-    }
-
-    private void ApplySelectedView()
+    private async Task ApplySelectedViewAsync()
     {
         var selectedView = this.selectedTopLevelView ?? EmptyView;
         this.VisibleEntities.Clear();
@@ -269,10 +310,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        var snapshotsById = this.EntityBroker.SnapshotsById;
         if (selectedView.IsEntityBrowser)
         {
-            foreach (var snapshot in snapshotsById.Values.OrderBy(static snapshot => snapshot.EntityId.Value))
+            var allSnapshots = await this.EntityRepository.ExportEntitySnapshotsAsync();
+
+            foreach (var snapshot in allSnapshots.Values.OrderBy(static snapshot => snapshot.EntityId.Value))
             {
                 if (snapshot.Data is not JsonElement data)
                 {
@@ -293,8 +335,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         var selectedViewId = new EntityId(selectedViewIdGuid);
-        if (!snapshotsById.TryGetValue(selectedViewId, out var selectedViewSnapshot)
-            || selectedViewSnapshot.Data is not JsonElement selectedViewData)
+        var selectedViewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+            new GetEntityRequest { EntityId = selectedViewId });
+        
+        if (selectedViewSnapshot?.Data is not JsonElement selectedViewData)
         {
             this.StickyParentContextText = selectedView.Title;
             return;
@@ -306,12 +350,44 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (!TryReadEntityReference(subView, "view-entity-id", out var reference))
+                if (!subView.TryGetProperty("view-entity-id", out var referenceValue))
                 {
                     continue;
                 }
 
-                var viewSnapshot = ResolveEntityReference(snapshotsById, reference);
+                EntitySnapshot? viewSnapshot = null;
+                if (referenceValue.ValueKind == JsonValueKind.String)
+                {
+                    var stringValue = referenceValue.GetString();
+                    if (Guid.TryParse(stringValue, out var entityGuid))
+                    {
+                        viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+                            new GetEntityRequest { EntityId = new EntityId(entityGuid) });
+                    }
+                    else if (!string.IsNullOrWhiteSpace(stringValue))
+                    {
+                        var components = stringValue.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                        if (components.Length > 0)
+                        {
+                            viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+                                new GetEntityRequest { EntityName = new EntityName(components) });
+                        }
+                    }
+                }
+                else if (referenceValue.ValueKind == JsonValueKind.Array)
+                {
+                    var components = referenceValue.EnumerateArray()
+                        .Where(static item => item.ValueKind == JsonValueKind.String)
+                        .Select(static item => item.GetString())
+                        .Where(static text => !string.IsNullOrWhiteSpace(text))
+                        .ToArray();
+                    if (components.Length > 0)
+                    {
+                        viewSnapshot = await this.LoadSingleEntitySnapshotAsync(
+                            new GetEntityRequest { EntityName = new EntityName(components!) });
+                    }
+                }
+
                 if (viewSnapshot?.Data is not JsonElement viewData)
                 {
                     continue;
@@ -324,7 +400,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
     }
 
-    private void OnActivateEntity(
+    private async Task OnActivateEntityAsync(
         object? parameter)
     {
         if (parameter is not EntityVisualViewModel entity)
@@ -334,56 +410,25 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (string.Equals(entity.EntityType, "workspace", StringComparison.Ordinal))
         {
-            var existingWorkspace = this.WorkspacePanes.FirstOrDefault(
-                pane => string.Equals(pane.Id, entity.EntityId, StringComparison.Ordinal));
-            if (existingWorkspace is null)
+            if (Guid.TryParse(entity.EntityId, out var workspaceGuid))
             {
-                existingWorkspace = new WorkspacePaneViewModel
-                {
-                    Id = entity.EntityId,
-                    Title = entity.DisplayName,
-                };
-                existingWorkspace.Regions.Add(
-                    new WorkspaceRegionViewModel
+                await this.OpenWorkspaceAsync(
+                    new GetEntityRequest
                     {
-                        Id = "center",
-                        Title = "Center",
-                        DockRegion = "center",
-                        RelativeSize = 1,
+                        EntityId = new EntityId(workspaceGuid),
                     });
-                existingWorkspace.SelectedRegion = existingWorkspace.Regions[0];
-                this.WorkspacePanes.Add(existingWorkspace);
             }
-
-            this.SelectedWorkspacePane = existingWorkspace;
             return;
         }
 
-        var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
-        var existingTab = selectedRegion.Tabs.FirstOrDefault(
-            tab => string.Equals(tab.Id, entity.EntityId, StringComparison.Ordinal));
-        if (existingTab is not null)
+        if (Guid.TryParse(entity.EntityId, out var entityGuid))
         {
-            selectedRegion.SelectedTab = existingTab;
-            return;
+            await this.OpenEntityTabAsync(
+                new GetEntityRequest
+                {
+                    EntityId = new EntityId(entityGuid),
+                });
         }
-
-        WorkspaceTabViewModel tab = string.Equals(entity.EntityType, "note", StringComparison.Ordinal)
-            ? new NoteWorkspaceTabViewModel
-            {
-                Id = entity.EntityId,
-                Title = entity.DisplayName,
-                Markdown = string.Join(Environment.NewLine, entity.DisplayItems),
-            }
-            : new EntityWorkspaceTabViewModel
-            {
-                Id = entity.EntityId,
-                Title = entity.DisplayName,
-                Entity = entity,
-            };
-
-        selectedRegion.Tabs.Add(tab);
-        selectedRegion.SelectedTab = tab;
     }
 
     private async void OnRefreshTick(
@@ -397,78 +442,365 @@ public sealed class MainWindowViewModel : ViewModelBase
         object? sender,
         EntityBrokerChangedEventArgs e)
     {
-        this.RebuildViewsFromRepository();
+        _ = this.RebuildViewsFromRepositoryAsync();
     }
 
-    private void LoadStartupWorkspaceFromEntities()
+    private async Task OpenWorkspaceAsync(
+        GetEntityRequest workspaceRequest)
     {
-        var snapshotsById = this.EntityBroker.SnapshotsById;
-        var noteSnapshot = this.EntityRepository.TryGetEntityByName(snapshotsById, ["documentation", "getting-started"]);
-        var workspaceSnapshot = this.EntityRepository.TryGetEntityByName(snapshotsById, ["documentation", "getting-started-workspace"]);
-        if (noteSnapshot?.Data is not JsonElement noteData
-            || workspaceSnapshot?.Data is not JsonElement workspaceData)
+        var workspaceSnapshot = await this.LoadSingleEntitySnapshotAsync(workspaceRequest);
+        if (workspaceSnapshot?.Data is not JsonElement workspaceData)
         {
             return;
         }
 
-        var noteEntity = CreateEntityVisual(noteSnapshot.EntityId, noteData, indentLevel: 0);
-        var workspaceId = ReadString(workspaceData, "entity-id") ?? "getting-started-workspace";
-        var workspaceTitle = ReadLocalString(workspaceData, "display-name")
-            ?? ReadLocalString(workspaceData, "title")
-            ?? "Getting Started";
-        var noteName = ReadPrimaryName(noteData);
-
-        var workspacePane = this.WorkspacePanes.FirstOrDefault(p => string.Equals(p.Id, workspaceId, StringComparison.Ordinal));
-        if (workspacePane is null)
+        var existingWorkspace = this.WorkspacePanes.FirstOrDefault(
+            pane => string.Equals(pane.Id, workspaceSnapshot.EntityId.ToString(), StringComparison.Ordinal));
+        if (existingWorkspace is not null)
         {
-            workspacePane = new WorkspacePaneViewModel
-            {
-                Id = workspaceId,
-                Title = workspaceTitle,
-            };
-            this.WorkspacePanes.Add(workspacePane);
+            this.SelectedWorkspacePane = existingWorkspace;
+            return;
         }
 
-        workspacePane.Regions.Clear();
-        if (workspaceData.TryGetProperty("regions", out var regions)
-            && regions.ValueKind == JsonValueKind.Array)
+        var workspaceEntityRequests = this.BuildWorkspaceEntityRequests(workspaceData);
+        var requests = new List<GetEntityRequest>
         {
-            foreach (var region in regions.EnumerateArray())
+            workspaceRequest,
+        };
+        requests.AddRange(workspaceEntityRequests);
+
+        var entities = await this.EntityBroker!.GetEntitiesAsync(requests);
+        var workspaceEntity = entities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
+        if (workspaceEntity is null)
+        {
+            return;
+        }
+
+        if (this.WorkspacePanes.Count == 1
+            && string.Equals(this.WorkspacePanes[0].Id, PlaceholderWorkspaceId, StringComparison.Ordinal))
+        {
+            this.WorkspacePanes.Clear();
+        }
+
+        var workspacePane = this.CreateWorkspacePane(workspaceEntity, workspaceData);
+        this.WorkspacePanes.Add(workspacePane);
+        this.SelectedWorkspacePane = workspacePane;
+    }
+
+    private async Task OpenEntityTabAsync(
+        GetEntityRequest entityRequest)
+    {
+        var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest]);
+        var subscribedEntity = entities.FirstOrDefault();
+        if (subscribedEntity is null)
+        {
+            return;
+        }
+
+        var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
+        var existingTab = selectedRegion.Tabs.FirstOrDefault(
+            tab => string.Equals(tab.Id, subscribedEntity.EntityId.ToString(), StringComparison.Ordinal));
+        if (existingTab is not null)
+        {
+            selectedRegion.SelectedTab = existingTab;
+            return;
+        }
+
+        WorkspaceTabViewModel tab = string.Equals(subscribedEntity.EntityType, "note", StringComparison.Ordinal)
+            ? new NoteWorkspaceTabViewModel
+            {
+                Id = subscribedEntity.EntityId.ToString(),
+                Title = subscribedEntity.DisplayName,
+                Markdown = string.Join(Environment.NewLine, subscribedEntity.DisplayItems),
+                Entity = subscribedEntity,
+            }
+            : new EntityWorkspaceTabViewModel
+            {
+                Id = subscribedEntity.EntityId.ToString(),
+                Title = subscribedEntity.DisplayName,
+                Entity = subscribedEntity,
+            };
+
+        selectedRegion.Tabs.Add(tab);
+        selectedRegion.SelectedTab = tab;
+    }
+
+    private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(
+        GetEntityRequest request)
+    {
+        var getResult = await this.EntityRepository.DataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [request],
+            });
+
+        return getResult.Batches
+            .SelectMany(static batch => batch.Entities)
+            .FirstOrDefault();
+    }
+
+    private IReadOnlyCollection<GetEntityRequest> BuildWorkspaceEntityRequests(
+        JsonElement workspaceData)
+    {
+        var requests = new List<GetEntityRequest>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+
+        if (!workspaceData.TryGetProperty("regions", out var regions)
+            || regions.ValueKind != JsonValueKind.Array)
+        {
+            return requests;
+        }
+
+        foreach (var region in regions.EnumerateArray())
+        {
+            if (region.ValueKind != JsonValueKind.Object
+                || !region.TryGetProperty("tabs", out var tabs)
+                || tabs.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var tab in tabs.EnumerateArray())
+            {
+                if (tab.ValueKind != JsonValueKind.Object
+                    || !tab.TryGetProperty("content", out var content)
+                    || content.ValueKind != JsonValueKind.Object
+                    || !content.TryGetProperty("target-entity-name", out var targetEntityName))
+                {
+                    continue;
+                }
+
+                var entityName = ReadEntityName(targetEntityName);
+                if (entityName is null || !seenNames.Add(entityName.Value.Components.First()))
+                {
+                    continue;
+                }
+
+                requests.Add(new GetEntityRequest
+                {
+                    EntityName = entityName,
+                });
+            }
+        }
+
+        return requests;
+    }
+
+    private WorkspacePaneViewModel CreateWorkspacePane(
+        SubscribedEntityViewModel workspaceEntity,
+        JsonElement workspaceData)
+    {
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity);
+        var regions = new List<WorkspaceRegionViewModel>();
+
+        if (workspaceData.TryGetProperty("regions", out var workspaceRegions)
+            && workspaceRegions.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var region in workspaceRegions.EnumerateArray())
             {
                 if (region.ValueKind != JsonValueKind.Object)
                 {
                     continue;
                 }
 
-                var workspaceRegion = CreateWorkspaceRegion(region, noteName, noteEntity);
-                workspacePane.Regions.Add(workspaceRegion);
+                var workspaceRegion = this.CreateWorkspaceRegion(region);
+                regions.Add(workspaceRegion);
             }
         }
 
-        if (workspacePane.Regions.Count == 0)
+        if (regions.Count == 0)
         {
-            var centerRegion = new WorkspaceRegionViewModel
+            var fallbackRegion = new WorkspaceRegionViewModel
             {
                 Id = "center",
                 Title = "Center",
                 DockRegion = "center",
                 RelativeSize = 1,
             };
-            centerRegion.Tabs.Add(
+            fallbackRegion.Tabs.Add(
                 new NoteWorkspaceTabViewModel
                 {
-                    Id = noteEntity.EntityId,
-                    Title = noteEntity.DisplayName,
-                    Markdown = string.Join(Environment.NewLine, noteEntity.DisplayItems),
+                    Id = workspaceEntity.EntityId.ToString(),
+                    Title = workspaceEntity.DisplayName,
+                    Markdown = string.Join(Environment.NewLine, workspaceEntity.DisplayItems),
+                    Entity = workspaceEntity,
                     DockRegion = "full",
                 });
-            centerRegion.SelectedTab = centerRegion.Tabs[0];
-            workspacePane.Regions.Add(centerRegion);
+            fallbackRegion.SelectedTab = fallbackRegion.Tabs[0];
+            regions.Add(fallbackRegion);
         }
 
-        workspacePane.SelectedRegion = workspacePane.Regions[0];
-        workspacePane.SelectedRegion.SelectedTab ??= workspacePane.SelectedRegion.Tabs.FirstOrDefault();
-        this.SelectedWorkspacePane = workspacePane;
+        workspacePane.SetRegions(regions);
+        if (workspacePane.SelectedRegion is not null)
+        {
+            workspacePane.SelectedRegion.SelectedTab ??= workspacePane.SelectedRegion.Tabs.FirstOrDefault();
+        }
+
+        return workspacePane;
+    }
+
+    private WorkspaceRegionViewModel CreateWorkspaceRegion(
+        JsonElement region)
+    {
+        var workspaceRegion = new WorkspaceRegionViewModel
+        {
+            Id = ReadString(region, "region-id") ?? "region",
+            Title = ReadString(region, "title") ?? "Region",
+            DockRegion = ReadString(region, "dock") ?? "center",
+            RelativeSize = ReadDouble(region, "size") ?? 1,
+        };
+
+        if (region.TryGetProperty("tabs", out var tabs)
+            && tabs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var tab in tabs.EnumerateArray())
+            {
+                if (tab.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (this.TryReadWorkspaceTabContent(tab, out var workspaceTab))
+                {
+                    workspaceRegion.Tabs.Add(workspaceTab);
+                }
+            }
+        }
+
+        if (workspaceRegion.Tabs.Count == 0)
+        {
+            workspaceRegion.Tabs.Add(
+                new NoteWorkspaceTabViewModel
+                {
+                    Id = workspaceRegion.Id,
+                    Title = workspaceRegion.Title,
+                    Markdown = string.Empty,
+                    DockRegion = "full",
+                });
+        }
+
+        workspaceRegion.SelectedTab = workspaceRegion.Tabs[0];
+        return workspaceRegion;
+    }
+
+    private bool TryReadWorkspaceTabContent(
+        JsonElement tab,
+        out WorkspaceTabViewModel workspaceTab)
+    {
+        workspaceTab = null!;
+        if (!tab.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        // Try entity reference through the broker
+        if (this.entityBroker?.TryGetReferencedEntity(content, "target-entity-name", out var targetEntity) == true
+            && targetEntity is not null)
+        {
+            workspaceTab = targetEntity.EntityType == "note"
+                ? new NoteWorkspaceTabViewModel
+                {
+                    Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
+                    Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                    Markdown = string.Join(Environment.NewLine, targetEntity.DisplayItems),
+                    Entity = targetEntity,
+                    DockRegion = ReadString(tab, "dock") ?? "full",
+                }
+                : new EntityWorkspaceTabViewModel
+                {
+                    Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
+                    Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                    Entity = targetEntity,
+                    DockRegion = ReadString(tab, "dock") ?? "full",
+                };
+            return true;
+        }
+
+        if (content.TryGetProperty("url", out var url)
+            && url.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(url.GetString()))
+        {
+            workspaceTab = new BrowserWorkspaceTabViewModel
+            {
+                Id = ReadString(tab, "tab-id") ?? url.GetString()!,
+                Title = ReadString(tab, "title") ?? url.GetString()!,
+                Url = url.GetString()!,
+                DockRegion = ReadString(tab, "dock") ?? "full",
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task OpenStartupWorkspaceAsync()
+    {
+        await this.OpenWorkspaceAsync(
+            new GetEntityRequest
+            {
+                EntityName = new EntityName("workspaces", "getting-started-workspace"),
+            });
+    }
+
+    private async Task LoadNavigationSubscriptionAsync()
+    {
+        var mainViewRequest = new GetEntityRequest
+        {
+            EntityName = new EntityName("views", "main"),
+        };
+
+        var mainViewSnapshot = await this.LoadSingleEntitySnapshotAsync(mainViewRequest);
+        if (mainViewSnapshot?.Data is not JsonElement mainViewData)
+        {
+            return;
+        }
+
+        var requests = new List<GetEntityRequest>
+        {
+            mainViewRequest,
+        };
+
+        if (mainViewData.TryGetProperty("sub-views", out var subViews)
+            && subViews.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var subView in subViews.EnumerateArray())
+            {
+                if (subView.TryGetProperty("view-entity-id", out var referenceValue))
+                {
+                    if (referenceValue.ValueKind == JsonValueKind.String)
+                    {
+                        var stringValue = referenceValue.GetString();
+                        if (Guid.TryParse(stringValue, out var entityGuid))
+                        {
+                            requests.Add(new GetEntityRequest { EntityId = new EntityId(entityGuid) });
+                        }
+                        else if (!string.IsNullOrWhiteSpace(stringValue))
+                        {
+                            var components = stringValue.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                            if (components.Length > 0)
+                            {
+                                requests.Add(new GetEntityRequest { EntityName = new EntityName(components) });
+                            }
+                        }
+                    }
+                    else if (referenceValue.ValueKind == JsonValueKind.Array)
+                    {
+                        var components = referenceValue.EnumerateArray()
+                            .Where(static item => item.ValueKind == JsonValueKind.String)
+                            .Select(static item => item.GetString())
+                            .Where(static text => !string.IsNullOrWhiteSpace(text))
+                            .ToArray();
+                        if (components.Length > 0)
+                        {
+                            requests.Add(new GetEntityRequest { EntityName = new EntityName(components!) });
+                        }
+                    }
+                }
+            }
+        }
+
+        await this.EntityBroker!.GetEntitiesAsync(requests);
     }
 
     private static EntityVisualViewModel CreateEntityVisual(
@@ -481,11 +813,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         var displayName = ReadLocalString(element, "display-name")
             ?? ReadLocalString(element, "title")
             ?? ReadPrimaryName(element)
-            ?? entityId.Value.ToString("D");
+            ?? entityId.ToString();
 
         var visual = new EntityVisualViewModel
         {
-            EntityId = entityId.Value.ToString("D"),
+            EntityId = entityId.ToString(),
             EntityType = entityType,
             DisplayName = displayName,
             IndentLevel = indentLevel,
@@ -517,52 +849,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         return visual;
     }
 
-    private WorkspaceRegionViewModel CreateWorkspaceRegion(
-        JsonElement region,
-        string? noteName,
-        EntityVisualViewModel noteEntity)
-    {
-        var workspaceRegion = new WorkspaceRegionViewModel
-        {
-            Id = ReadString(region, "region-id") ?? "region",
-            Title = ReadString(region, "title") ?? "Region",
-            DockRegion = ReadString(region, "dock") ?? "center",
-            RelativeSize = ReadDouble(region, "size") ?? 1,
-        };
-
-        if (region.TryGetProperty("tabs", out var tabs)
-            && tabs.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var tab in tabs.EnumerateArray())
-            {
-                if (tab.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                if (TryReadWorkspaceTabContent(tab, noteName, noteEntity, out var workspaceTab))
-                {
-                    workspaceRegion.Tabs.Add(workspaceTab);
-                }
-            }
-        }
-
-        if (workspaceRegion.Tabs.Count == 0)
-        {
-            workspaceRegion.Tabs.Add(
-                new NoteWorkspaceTabViewModel
-                {
-                    Id = noteEntity.EntityId,
-                    Title = noteEntity.DisplayName,
-                    Markdown = string.Join(Environment.NewLine, noteEntity.DisplayItems),
-                    DockRegion = "full",
-                });
-        }
-
-        workspaceRegion.SelectedTab = workspaceRegion.Tabs[0];
-        return workspaceRegion;
-    }
-
     private WorkspaceRegionViewModel GetOrCreateSelectedWorkspaceRegion()
     {
         if (this.SelectedWorkspacePane.SelectedRegion is not null)
@@ -588,140 +874,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         return this.SelectedWorkspacePane.SelectedRegion;
     }
 
-    private static EntitySnapshot? ResolveEntityReference(
-        IReadOnlyDictionary<EntityId, EntitySnapshot> snapshotsById,
-        EntityReference reference)
-    {
-        if (reference.EntityId is EntityId entityId
-            && snapshotsById.TryGetValue(entityId, out var resolvedById))
-        {
-            return resolvedById;
-        }
-
-        if (reference.NameKey is not null)
-        {
-            foreach (var snapshot in snapshotsById.Values)
-            {
-                if (snapshot.Data is not JsonElement data)
-                {
-                    continue;
-                }
-
-                if (!TryReadNames(data, out var nameKeys))
-                {
-                    continue;
-                }
-
-                if (nameKeys.Contains(reference.NameKey, StringComparer.Ordinal))
-                {
-                    return snapshot;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private static bool TryReadEntityReference(
-        JsonElement parent,
-        string propertyName,
-        out EntityReference reference)
-    {
-        reference = default;
-        if (!parent.TryGetProperty(propertyName, out var value))
-        {
-            return false;
-        }
-
-        if (value.ValueKind == JsonValueKind.String)
-        {
-            var stringValue = value.GetString();
-            if (Guid.TryParse(stringValue, out var entityGuid))
-            {
-                reference = new EntityReference
-                {
-                    EntityId = new EntityId(entityGuid),
-                };
-                return true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(stringValue))
-            {
-                reference = new EntityReference
-                {
-                    NameKey = stringValue,
-                };
-                return true;
-            }
-
-            return false;
-        }
-
-        if (value.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
-
-        var components = value.EnumerateArray()
-            .Where(static item => item.ValueKind == JsonValueKind.String)
-            .Select(static item => item.GetString())
-            .Where(static text => !string.IsNullOrWhiteSpace(text))
-            .ToArray();
-        if (components.Length == 0)
-        {
-            return false;
-        }
-
-        reference = new EntityReference
-        {
-            NameKey = string.Join("/", components!),
-        };
-        return true;
-    }
-
-    private static bool TryReadNames(
-        JsonElement entityData,
-        out IReadOnlyCollection<string> names)
-    {
-        var resolved = new List<string>();
-        if (!entityData.TryGetProperty("names", out var namesElement)
-            || namesElement.ValueKind != JsonValueKind.Array)
-        {
-            names = resolved;
-            return false;
-        }
-
-        foreach (var nameElement in namesElement.EnumerateArray())
-        {
-            if (nameElement.ValueKind == JsonValueKind.String)
-            {
-                var value = nameElement.GetString();
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    resolved.Add(value);
-                }
-                continue;
-            }
-
-            if (nameElement.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            var components = nameElement.EnumerateArray()
-                .Where(static item => item.ValueKind == JsonValueKind.String)
-                .Select(static item => item.GetString())
-                .Where(static item => !string.IsNullOrWhiteSpace(item))
-                .ToArray();
-            if (components.Length > 0)
-            {
-                resolved.Add(string.Join("/", components!));
-            }
-        }
-
-        names = resolved;
-        return resolved.Count > 0;
-    }
 
     private static string? ReadString(
         JsonElement element,
@@ -784,53 +936,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         return null;
     }
 
-    private static bool TryReadWorkspaceTabContent(
-        JsonElement tab,
-        string? noteName,
-        EntityVisualViewModel noteEntity,
-        out WorkspaceTabViewModel workspaceTab)
-    {
-        workspaceTab = null!;
-        if (!tab.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
-
-        if (content.TryGetProperty("target-entity-name", out var targetEntityName))
-        {
-            var targetName = ReadEntityReferenceText(targetEntityName);
-            if (!string.IsNullOrWhiteSpace(targetName)
-                && string.Equals(targetName, noteName, StringComparison.Ordinal))
-            {
-                workspaceTab = new NoteWorkspaceTabViewModel
-                {
-                    Id = ReadString(tab, "tab-id") ?? noteEntity.EntityId,
-                    Title = ReadString(tab, "title") ?? noteEntity.DisplayName,
-                    Markdown = string.Join(Environment.NewLine, noteEntity.DisplayItems),
-                    DockRegion = ReadString(tab, "dock") ?? "full",
-                };
-                return true;
-            }
-        }
-
-        if (content.TryGetProperty("url", out var url)
-            && url.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(url.GetString()))
-        {
-            workspaceTab = new BrowserWorkspaceTabViewModel
-            {
-                Id = ReadString(tab, "tab-id") ?? url.GetString()!,
-                Title = ReadString(tab, "title") ?? url.GetString()!,
-                Url = url.GetString()!,
-                DockRegion = ReadString(tab, "dock") ?? "full",
-            };
-            return true;
-        }
-
-        return false;
-    }
-
     private static string? ReadEntityReferenceText(
         JsonElement property)
     {
@@ -851,6 +956,29 @@ public sealed class MainWindowViewModel : ViewModelBase
         return null;
     }
 
+    private static EntityName? ReadEntityName(
+        JsonElement property)
+    {
+        if (property.ValueKind == JsonValueKind.String)
+        {
+            var text = property.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            var components = text.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            return components.Length > 0 ? new EntityName(components) : null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Array)
+        {
+            return property.TryReadEntityName();
+        }
+
+        return null;
+    }
+
     private static string? ReadLocalString(
         JsonElement element,
         string propertyName)
@@ -865,11 +993,27 @@ public sealed class MainWindowViewModel : ViewModelBase
             return property.GetString();
         }
 
-        if (property.ValueKind == JsonValueKind.Object
-            && property.TryGetProperty("default", out var defaultValue)
-            && defaultValue.ValueKind == JsonValueKind.String)
+        if (property.ValueKind == JsonValueKind.Object)
         {
-            return defaultValue.GetString();
+            var locale = CultureInfo.CurrentUICulture.Name;
+            if (property.TryGetProperty(locale, out var localizedValue)
+                && localizedValue.ValueKind == JsonValueKind.String)
+            {
+                return localizedValue.GetString();
+            }
+
+            var neutralLocale = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (property.TryGetProperty(neutralLocale, out localizedValue)
+                && localizedValue.ValueKind == JsonValueKind.String)
+            {
+                return localizedValue.GetString();
+            }
+
+            if (property.TryGetProperty("default", out var defaultValue)
+                && defaultValue.ValueKind == JsonValueKind.String)
+            {
+                return defaultValue.GetString();
+            }
         }
 
         return null;

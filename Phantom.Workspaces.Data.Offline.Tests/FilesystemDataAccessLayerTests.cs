@@ -18,7 +18,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     public async Task UpdateReplace_CreatesEntityJsonFile()
     {
         var dataAccessLayer = new FilesystemDataAccessLayer(this.repositoryPath);
-        var entityId = new EntityId(Guid.Parse("d0dc5498-f970-4ce4-97fc-f75284453a15"));
+        var entityId = new EntityId("d0dc5498-f970-4ce4-97fc-f75284453a15");
 
         var result = await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(this.CreateEntity(entityId, "one")));
         Assert.Equal(UpdateState.Added, Assert.Single(result.EntityResults).UpdateState);
@@ -30,7 +30,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     public async Task UpdateReplace_WithNullData_DeletesEntityJsonFile()
     {
         var dataAccessLayer = new FilesystemDataAccessLayer(this.repositoryPath);
-        var entityId = new EntityId(Guid.Parse("2ea08302-7e2f-4716-b478-8cba08f6db8c"));
+        var entityId = new EntityId("2ea08302-7e2f-4716-b478-8cba08f6db8c");
 
         var createResult = await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(this.CreateEntity(entityId, "one")));
         var concurrencyTag = Assert.Single(createResult.EntityResults).ConcurrencyTag!.Value;
@@ -54,9 +54,9 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     public async Task UpdateReplace_RelationshipEntity_CreatesMarkerFilesForParticipants()
     {
         var dataAccessLayer = new FilesystemDataAccessLayer(this.repositoryPath);
-        var relationshipEntityId = new EntityId(Guid.Parse("8c7679a1-9f2d-4f8d-b611-6496c38f3ac5"));
-        var participantA = new EntityId(Guid.Parse("f2978104-2f69-4467-bd07-8efd48f8536f"));
-        var participantB = new EntityId(Guid.Parse("3a01ed74-b4b8-4b4d-8a40-f32cf3ec2867"));
+        var relationshipEntityId = new EntityId("8c7679a1-9f2d-4f8d-b611-6496c38f3ac5");
+        var participantA = new EntityId("f2978104-2f69-4467-bd07-8efd48f8536f");
+        var participantB = new EntityId("3a01ed74-b4b8-4b4d-8a40-f32cf3ec2867");
 
         var createRelationshipResult = await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -71,9 +71,9 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     public async Task UpdateReplace_DeletingRelationshipEntity_DeletesMarkerFilesForParticipants()
     {
         var dataAccessLayer = new FilesystemDataAccessLayer(this.repositoryPath);
-        var relationshipEntityId = new EntityId(Guid.Parse("fc7177f2-db5a-4215-9ed5-b1c821c4d4b3"));
-        var participantA = new EntityId(Guid.Parse("f910764f-97f8-47a6-b30f-278e1a6e66d4"));
-        var participantB = new EntityId(Guid.Parse("6daf08cf-f044-4f07-9c9a-a8410bfc9156"));
+        var relationshipEntityId = new EntityId("fc7177f2-db5a-4215-9ed5-b1c821c4d4b3");
+        var participantA = new EntityId("f910764f-97f8-47a6-b30f-278e1a6e66d4");
+        var participantB = new EntityId("6daf08cf-f044-4f07-9c9a-a8410bfc9156");
 
         var createRelationshipResult = await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -98,7 +98,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     [Fact]
     public async Task RecreateDataAccessLayer_CanReadPreviouslyWrittenData()
     {
-        var entityId = new EntityId(Guid.Parse("5feb8fc4-dfca-4cc8-8366-f7f6bf4d3c50"));
+        var entityId = new EntityId("5feb8fc4-dfca-4cc8-8366-f7f6bf4d3c50");
         {
             var firstInstance = new FilesystemDataAccessLayer(this.repositoryPath);
             var createResult = await RequireUpdateSucceedsAsync(firstInstance, CreateUpdateRequest(this.CreateEntity(entityId, "persisted")));
@@ -151,7 +151,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         string rootPath,
         EntityId entityId)
     {
-        return Path.Combine(FilesystemDataAccessLayer.GetEntityDirectory(rootPath, entityId), $"{entityId.Value:D}.json");
+        return Path.Combine(FilesystemDataAccessLayer.GetEntityDirectory(rootPath, entityId), $"{entityId}.json");
     }
 
     private static string GetRelationshipMarkerPath(
@@ -161,7 +161,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
     {
         return Path.Combine(
             FilesystemDataAccessLayer.GetEntityDirectory(rootPath, participantEntityId),
-            $"{participantEntityId.Value:D}_{relationshipEntityId.Value:D}.rel");
+            $"{participantEntityId}_{relationshipEntityId}.rel");
     }
 
     private EntityChange CreateEntity(
@@ -171,7 +171,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"]
             }
@@ -193,11 +193,11 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{relationshipEntityId.Value:D}}",
+              "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "related"],
               "names": ["a-to-b"],
               "participants": {
-                "entities": ["{{participantA.Value:D}}", "{{participantB.Value:D}}"]
+                "entities": ["{{participantA}}", "{{participantB}}"]
               }
             }
             """);

@@ -362,24 +362,16 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             JsonElement? data)
         {
             if (data is null
-                || data.Value.ValueKind != JsonValueKind.Object
-                || !data.Value.TryGetProperty("names", out var namesElement)
-                || namesElement.ValueKind != JsonValueKind.Array)
+                || data.Value.ValueKind != JsonValueKind.Object)
             {
                 return Array.Empty<EntityName>();
             }
 
+            var namesArray = data.Value.ExtractStringArray("names");
             var names = new List<EntityName>();
-            foreach (var nameElement in namesElement.EnumerateArray())
+            foreach (var name in namesArray)
             {
-                if (nameElement.ValueKind == JsonValueKind.String)
-                {
-                    var name = nameElement.GetString();
-                    if (!string.IsNullOrWhiteSpace(name))
-                    {
-                        names.Add(new EntityName(name));
-                    }
-                }
+                names.Add(new EntityName(name.Split('/', StringSplitOptions.RemoveEmptyEntries)));
             }
 
             return names;
@@ -808,7 +800,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             GetEntityRequest request)
         {
             if (request.EntityName is not null
-                && !version.EntityNames.Any(entityName => string.Equals(entityName.Components, request.EntityName.Value.Components, StringComparison.Ordinal)))
+                && !version.EntityNames.Any(entityName => entityName.Components.SequenceEqual(request.EntityName.Value.Components, StringComparer.Ordinal)))
             {
                 return false;
             }
@@ -874,7 +866,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 return false;
             }
 
-            var entityIdText = entityId.Value.ToString("D");
+            var entityIdText = entityId.ToString();
             if (relationshipData.TryGetProperty("participants", out var participants)
                 && participants.ValueKind == JsonValueKind.Object
                 && this.ContainsParticipantId(participants, entityIdText))

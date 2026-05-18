@@ -13,7 +13,7 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
             [
                 new GetEntityRequest
                 {
-                    EntityId = new EntityId(Guid.Parse("5d1d7fa5-7a74-4b0d-8aef-6b6e8d8f9d8d")),
+                    EntityId = new EntityId("5d1d7fa5-7a74-4b0d-8aef-6b6e8d8f9d8d"),
                 },
             ],
             Timestamps = new Timestamp?[] { null },
@@ -50,7 +50,7 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
             EntityIdTimestamps =
             [
                 new EntityIdTimestamp(
-                    new EntityId(Guid.Parse("3de4f96b-b40a-45ab-b7ec-43c33188bc0f")),
+                    new EntityId("3de4f96b-b40a-45ab-b7ec-43c33188bc0f"),
                     new Timestamp(DateTimeOffset.UtcNow, "2")),
             ],
         };
@@ -70,7 +70,7 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
         {
             EntityIds =
             [
-                new EntityId(Guid.Parse("6eb7709a-ddce-4c45-8dfd-cc3d3f2d536f")),
+                new EntityId("6eb7709a-ddce-4c45-8dfd-cc3d3f2d536f"),
             ],
         };
         var underlyingDataAccessLayer = new RecordingDataAccessLayer();
@@ -94,7 +94,7 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
                     ClauseIdentifier = new QueryClauseIdentifier("query-clause"),
                     Clause = new EntityTypeQueryClause
                     {
-                        EntityTypeNames = new EntityTypeNames(["entity"]),
+                        EntityTypeNames = new EntityTypeNameSet(["entity"]),
                     },
                 },
             ],
@@ -125,7 +125,7 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
             [
                 new EntityChange
                 {
-                    EntityId = new EntityId(Guid.Parse("8657bc37-f020-4d89-b93d-c7bd1d76ee58")),
+                    EntityId = new EntityId("8657bc37-f020-4d89-b93d-c7bd1d76ee58"),
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
             ],

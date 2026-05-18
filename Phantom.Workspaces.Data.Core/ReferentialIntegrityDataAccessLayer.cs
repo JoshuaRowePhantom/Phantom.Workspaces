@@ -594,7 +594,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     {
         if (reference.TargetEntityId is { } targetEntityId)
         {
-            return targetEntityId.Value.ToString("D");
+            return targetEntityId.ToString();
         }
 
         return reference.TargetEntityName ?? string.Empty;
@@ -1293,7 +1293,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         EntityId sourceEntityId,
         EntityId targetEntityId)
     {
-        var bytes = Encoding.UTF8.GetBytes($"{sourceEntityId.Value:D}|{targetEntityId.Value:D}");
+        var bytes = Encoding.UTF8.GetBytes($"{sourceEntityId}|{targetEntityId}");
         var hash = SHA256.HashData(bytes);
         Span<byte> guidBytes = stackalloc byte[16];
         hash.AsSpan(0, 16).CopyTo(guidBytes);
@@ -1308,12 +1308,12 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{relationshipEntityId.Value:D}}",
+              "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "reference"],
               "$schema": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
               "participants": {
-                "source": "{{sourceEntityId.Value:D}}",
-                "target": "{{targetEntityId.Value:D}}"
+                "source": "{{sourceEntityId}}",
+                "target": "{{targetEntityId}}"
               }
             }
             """);
@@ -1353,7 +1353,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         }
 
         var participantIds = this.GetRelationshipParticipantEntityIds(relationshipData)
-            .Select(static entityId => entityId.Value.ToString("D"))
+            .Select(static entityId => entityId.ToString())
             .OrderBy(static value => value, StringComparer.Ordinal)
             .ToArray();
         if (participantIds.Length == 0)

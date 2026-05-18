@@ -100,6 +100,45 @@ public sealed class SchemaPopulatorTests
             "getting-started content was not populated as a markdown attachment");
     }
 
+    [Fact]
+    public async Task Populate_CreatesDefaultWorkspacesProfile()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var defaultProfile = exportResult.ChangeBatches
+            .SelectMany(static changeBatch => changeBatch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray().Select(static part => part.GetString()).SequenceEqual(["defaults", "profiles", "default"])));
+
+        Assert.True(
+            defaultProfile.TryGetProperty("theme", out var theme)
+            && theme.ValueKind == JsonValueKind.String
+            && string.Equals(theme.GetString(), "dark", StringComparison.Ordinal)
+            && defaultProfile.TryGetProperty("initial-workspace", out var initialWorkspace)
+            && initialWorkspace.ValueKind == JsonValueKind.String
+            && string.Equals(initialWorkspace.GetString(), "6cc39f41-2a36-4be6-ab95-3f3fd355e463", StringComparison.Ordinal)
+            && defaultProfile.TryGetProperty("opened-workspaces", out var openedWorkspaces)
+            && openedWorkspaces.ValueKind == JsonValueKind.Array
+            && openedWorkspaces.EnumerateArray().Select(static item => item.GetString()).SequenceEqual(["6cc39f41-2a36-4be6-ab95-3f3fd355e463"]),
+            "default workspaces profile was not populated correctly");
+    }
+
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {

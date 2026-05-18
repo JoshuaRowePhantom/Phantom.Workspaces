@@ -1,0 +1,18 @@
+{
+  "entity-id": "d9c0a75b-51a4-4c18-ae3f-3f3dd1d9f2ad",
+  "entity-types": [
+    "workspaces-profile"
+  ],
+  "names": [
+    [
+      "defaults",
+      "profiles",
+      "default"
+    ]
+  ],
+  "theme": "dark",
+  "initial-workspace": "6cc39f41-2a36-4be6-ab95-3f3fd355e463",
+  "opened-workspaces": [
+    "6cc39f41-2a36-4be6-ab95-3f3fd355e463"
+  ]
+}

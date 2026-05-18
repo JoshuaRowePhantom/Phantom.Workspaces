@@ -406,7 +406,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
     private bool MatchesRelationshipTypeNames(
         JsonElement relationshipData,
-        RelationshipTypeNames? relationshipTypeNames)
+        RelationshipTypeNameSet? relationshipTypeNames)
     {
         if (relationshipTypeNames is null)
         {
@@ -419,7 +419,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
 
     private bool MatchesRelationshipRoleNames(
         JsonElement relationshipData,
-        RoleNames? roleNames)
+        RoleNameSet? roleNames)
     {
         if (roleNames is null)
         {
@@ -494,12 +494,22 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return true;
         }
 
-        return ExtractStringArrayProperty(entityData, "names").Contains(entityName.Value.Components, StringComparer.Ordinal);
+        var names = entityData.ExtractStringArray("names");
+        foreach (var name in names)
+        {
+            var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (components.SequenceEqual(entityName.Value.Components, StringComparer.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool MatchesEntityTypeNames(
         JsonElement entityData,
-        EntityTypeNames? entityTypeNames)
+        EntityTypeNameSet? entityTypeNames)
     {
         if (entityTypeNames is null)
         {
@@ -540,7 +550,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             return Array.Empty<EntityId>();
         }
 
-        var prefix = $"{participantEntityId.Value:D}_";
+        var prefix = $"{participantEntityId}_";
         var ids = new List<EntityId>();
         foreach (var markerPath in Directory.EnumerateFiles(directoryPath, $"{prefix}*.rel", SearchOption.TopDirectoryOnly))
         {
@@ -690,7 +700,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             Directory.CreateDirectory(directoryPath);
             var markerPath = System.IO.Path.Combine(
                 directoryPath,
-                $"{participantEntityId.Value:D}_{relationshipEntityId.Value:D}.rel");
+                $"{participantEntityId}_{relationshipEntityId}.rel");
             File.WriteAllText(markerPath, string.Empty);
         }
     }
@@ -698,7 +708,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     private void RemoveRelationshipMarkerFiles(
         EntityId relationshipEntityId)
     {
-        var markerSuffix = $"_{relationshipEntityId.Value:D}.rel";
+        var markerSuffix = $"_{relationshipEntityId}.rel";
         foreach (var filePath in Directory.EnumerateFiles(this.Path, $"*{markerSuffix}", SearchOption.AllDirectories))
         {
             File.Delete(filePath);
@@ -808,14 +818,14 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         string rootPath,
         EntityId entityId)
     {
-        return System.IO.Path.Combine(GetEntityDirectory(rootPath, entityId), $"{entityId.Value:D}.json");
+        return System.IO.Path.Combine(GetEntityDirectory(rootPath, entityId), $"{entityId}.json");
     }
 
     private static string GetMetadataPath(
         string rootPath,
         EntityId entityId)
     {
-        return System.IO.Path.Combine(GetEntityDirectory(rootPath, entityId), $"{entityId.Value:D}.meta");
+        return System.IO.Path.Combine(GetEntityDirectory(rootPath, entityId), $"{entityId}.meta");
     }
 
     private static bool TryGetEntityIdFromDalPath(

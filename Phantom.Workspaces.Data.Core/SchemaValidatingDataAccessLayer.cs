@@ -12,8 +12,8 @@ namespace Phantom.Workspaces.Data;
 public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
 {
     private const string JsonSchemasNamePrefix = "json-schemas";
-    private static readonly string EntitySchemaName = JsonSerializer.Serialize(
-        new[] { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" });
+    private static readonly string[] EntitySchemaNameComponents = { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" };
+    private static readonly string EntitySchemaName = JsonSerializer.Serialize(EntitySchemaNameComponents);
     private const string JsonSchemaType = "json-schema";
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
     private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
@@ -476,7 +476,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                     [
                         new GetEntityRequest
                         {
-                            EntityName = new EntityName(schemaName),
+                            EntityName = new EntityName(EntitySchemaNameComponents),
                         },
                     ],
                     Timestamps = new Timestamp?[] { null },

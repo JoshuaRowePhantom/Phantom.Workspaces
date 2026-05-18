@@ -7,4 +7,6 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     public required string Title { get; init; }
 
     public string DockRegion { get; init; } = "full";
+
+    public SubscribedEntityViewModel? Entity { get; init; }
 }

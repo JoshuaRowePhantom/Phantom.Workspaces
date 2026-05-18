@@ -15,9 +15,9 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     public async Task DeleteParticipant_RemovesRelationshipEntityAutomatically()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var sourceEntityId = new EntityId(Guid.Parse("2ff0a31d-a5a6-4202-bcce-a9ca313f2fa9"));
-        var destinationEntityId = new EntityId(Guid.Parse("da1fc548-8dac-484f-b9bc-f53d0483f17c"));
-        var relationshipEntityId = new EntityId(Guid.Parse("f460aa7e-a13e-4967-a7e2-87fa072f8d95"));
+        var sourceEntityId = new EntityId("2ff0a31d-a5a6-4202-bcce-a9ca313f2fa9");
+        var destinationEntityId = new EntityId("da1fc548-8dac-484f-b9bc-f53d0483f17c");
+        var relationshipEntityId = new EntityId("f460aa7e-a13e-4967-a7e2-87fa072f8d95");
 
         await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -68,11 +68,11 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     public async Task TypedEntityReferences_RequireExistingEntityAndMatchingType()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var schemaEntityId = new EntityId(Guid.Parse("1f4ddf45-24f9-460d-9f58-02e3f3f1b278"));
+        var schemaEntityId = new EntityId("1f4ddf45-24f9-460d-9f58-02e3f3f1b278");
         var schemaName = "https://schemas.workspaces.phantom.to/workspaces/tests/typed-reference.json";
-        var sourceEntityId = new EntityId(Guid.Parse("1a51d9a5-72b2-4427-8cd0-1c238b9bb42a"));
-        var wrongTypeTargetEntityId = new EntityId(Guid.Parse("6fb49878-7905-4fb8-9032-ec9fd53d6b84"));
-        var missingTargetEntityId = new EntityId(Guid.Parse("c33014c9-66b6-4955-b0aa-f4d5ddfd0e76"));
+        var sourceEntityId = new EntityId("1a51d9a5-72b2-4427-8cd0-1c238b9bb42a");
+        var wrongTypeTargetEntityId = new EntityId("6fb49878-7905-4fb8-9032-ec9fd53d6b84");
+        var missingTargetEntityId = new EntityId("c33014c9-66b6-4955-b0aa-f4d5ddfd0e76");
 
         await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -109,7 +109,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Equal(UpdateState.Failed, wrongTypeFailure.UpdateState);
         Assert.Contains(wrongTypeFailure.Errors, static error => error.Message.Contains("does not match required types", StringComparison.Ordinal));
 
-        var validTargetEntityId = new EntityId(Guid.Parse("91e69f56-e57c-4da8-8450-24f40531f730"));
+        var validTargetEntityId = new EntityId("91e69f56-e57c-4da8-8450-24f40531f730");
         var validTargetCreateResult = await RequireUpdateSucceedsAsync(
             dataAccessLayer,
             CreateUpdateRequest(
@@ -137,9 +137,9 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     public async Task TypedEntityNameReferences_RequireExistingEntityByName()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var schemaEntityId = new EntityId(Guid.Parse("fd643f35-56f5-45f7-882f-0f8c81f17f13"));
+        var schemaEntityId = new EntityId("fd643f35-56f5-45f7-882f-0f8c81f17f13");
         var schemaName = "https://schemas.workspaces.phantom.to/workspaces/tests/typed-reference-by-name.json";
-        var sourceEntityId = new EntityId(Guid.Parse("8dc1ff36-74a1-49d1-b11a-0fc0ef1adf2f"));
+        var sourceEntityId = new EntityId("8dc1ff36-74a1-49d1-b11a-0fc0ef1adf2f");
 
         await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -173,7 +173,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 CreateUpdateMetadata("Create valid named target"),
                 new[]
                 {
-                    this.CreateEntityChange(new EntityId(Guid.Parse("9af2fdce-e592-40a6-9f38-f3c6c9f68aea")), "valid-target"),
+                    this.CreateEntityChange(new EntityId("9af2fdce-e592-40a6-9f38-f3c6c9f68aea"), "valid-target"),
                 }));
 
         var validTargetResult = await RequireUpdateSucceedsAsync(
@@ -200,10 +200,10 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     public async Task AddEntityAndRelationship_WithMissingReferencedEntities_Fails()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var entityId = new EntityId(Guid.Parse("c30108d2-4e17-4e8c-98d6-31ebf54db8de"));
-        var relationshipEntityId = new EntityId(Guid.Parse("24c03916-f515-497e-af7b-96e3874eb6ec"));
-        var missingTargetEntityId = new EntityId(Guid.Parse("f73dc6ec-432c-46e7-af03-cd53c423f5b3"));
-        var existingParticipantEntityId = new EntityId(Guid.Parse("11f245dd-8a17-4f8d-a9f6-4c6ef4f3dadf"));
+        var entityId = new EntityId("c30108d2-4e17-4e8c-98d6-31ebf54db8de");
+        var relationshipEntityId = new EntityId("24c03916-f515-497e-af7b-96e3874eb6ec");
+        var missingTargetEntityId = new EntityId("f73dc6ec-432c-46e7-af03-cd53c423f5b3");
+        var existingParticipantEntityId = new EntityId("11f245dd-8a17-4f8d-a9f6-4c6ef4f3dadf");
 
         await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -248,11 +248,11 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     public async Task UpdateEntityAndRelationship_WithMissingReferencedEntities_Fails()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var sourceEntityId = new EntityId(Guid.Parse("d1594aac-208f-4eb6-a88e-4897be2d8cb6"));
-        var targetEntityId = new EntityId(Guid.Parse("4fb7bd08-cc2a-4178-b7bf-cdca9f70c1df"));
-        var otherParticipantEntityId = new EntityId(Guid.Parse("331f56a2-f15e-4cd3-9740-29df9f274516"));
-        var relationshipEntityId = new EntityId(Guid.Parse("74f9f094-5bea-4108-ae85-e6321a349adb"));
-        var missingTargetEntityId = new EntityId(Guid.Parse("48c2e6d8-c1cc-4ae8-a846-2127d0a8ecdf"));
+        var sourceEntityId = new EntityId("d1594aac-208f-4eb6-a88e-4897be2d8cb6");
+        var targetEntityId = new EntityId("4fb7bd08-cc2a-4178-b7bf-cdca9f70c1df");
+        var otherParticipantEntityId = new EntityId("331f56a2-f15e-4cd3-9740-29df9f274516");
+        var relationshipEntityId = new EntityId("74f9f094-5bea-4108-ae85-e6321a349adb");
+        var missingTargetEntityId = new EntityId("48c2e6d8-c1cc-4ae8-a846-2127d0a8ecdf");
 
         var createResult = await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -304,8 +304,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     public async Task ReferenceRelationship_IsRemovedOnlyWhenAllReferencesAreGone()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
-        var sourceEntityId = new EntityId(Guid.Parse("b82d6a9c-157f-4f2f-a2cd-3f96035e3585"));
-        var targetEntityId = new EntityId(Guid.Parse("60a52352-f9fc-4d15-9ca4-a59e4dbafe1f"));
+        var sourceEntityId = new EntityId("b82d6a9c-157f-4f2f-a2cd-3f96035e3585");
+        var targetEntityId = new EntityId("60a52352-f9fc-4d15-9ca4-a59e4dbafe1f");
 
         var targetCreateResult = await RequireUpdateSucceedsAsync(
             dataAccessLayer,
@@ -344,10 +344,10 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             && participants.ValueKind == JsonValueKind.Object
             && participants.TryGetProperty("source", out var sourceId)
             && sourceId.ValueKind == JsonValueKind.String
-            && string.Equals(sourceId.GetString(), sourceEntityId.Value.ToString("D"), StringComparison.Ordinal)
+            && string.Equals(sourceId.GetString(), sourceEntityId.ToString(), StringComparison.Ordinal)
             && participants.TryGetProperty("target", out var targetId)
             && targetId.ValueKind == JsonValueKind.String
-            && string.Equals(targetId.GetString(), targetEntityId.Value.ToString("D"), StringComparison.Ordinal),
+            && string.Equals(targetId.GetString(), targetEntityId.ToString(), StringComparison.Ordinal),
             "Generated reference relationship shape did not match the tightened schema.");
 
         var removeOneReferenceResult = await RequireUpdateSucceedsAsync(
@@ -393,7 +393,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["{{entityType}}"],
               "names": ["{{name}}"]
             }
@@ -410,11 +410,11 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{relationshipEntityId.Value:D}}",
+              "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "related"],
               "names": ["source-to-destination"],
               "participants": {
-                "entities": ["{{sourceEntityId.Value:D}}", "{{destinationEntityId.Value:D}}"]
+                "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
               }
             }
             """);
@@ -428,7 +428,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{schemaEntityId.Value:D}}",
+              "entity-id": "{{schemaEntityId}}",
               "entity-types": ["entity-type"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
@@ -467,10 +467,10 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "$schema": "{{schemaName}}",
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"],
-              "target-entity-id": "{{targetEntityId.Value:D}}"
+              "target-entity-id": "{{targetEntityId}}"
             }
             """);
         return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
@@ -483,7 +483,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity-type"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
@@ -524,7 +524,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "$schema": "{{schemaName}}",
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"],
               "target-entity-name": "{{targetName}}"
@@ -542,11 +542,11 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"],
-              "first-entity-id": "{{firstReferenceEntityId.Value:D}}",
-              "second-entity-id": "{{secondReferenceEntityId.Value:D}}"
+              "first-entity-id": "{{firstReferenceEntityId}}",
+              "second-entity-id": "{{secondReferenceEntityId}}"
             }
             """);
         return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
@@ -561,10 +561,10 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"],
-              "first-entity-id": "{{referenceEntityId.Value:D}}"
+              "first-entity-id": "{{referenceEntityId}}"
             }
             """);
         return CreateEntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
@@ -578,7 +578,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         using var document = JsonDocument.Parse(
             $$"""
             {
-              "entity-id": "{{entityId.Value:D}}",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
               "names": ["{{name}}"]
             }
@@ -614,7 +614,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 new[]
                 {
                     CreateGetRelationshipRequest(
-                        new RelationshipTypeNames(new[] { "reference" }),
+                        new RelationshipTypeNameSet(new[] { "reference" }),
                         null),
                 },
                 new Timestamp?[] { null }));
@@ -675,7 +675,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     private static GetEntityRequest CreateGetEntityRequest(
         EntityId? entityId,
         EntityName? entityName,
-        EntityTypeNames? entityTypeNames,
+        EntityTypeNameSet? entityTypeNames,
         IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn)
     {
         return new GetEntityRequest
@@ -688,8 +688,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     }
 
     private static GetRelationshipRequest CreateGetRelationshipRequest(
-        RelationshipTypeNames? relationshipTypeNames,
-        RoleNames? relationshipRoleNames)
+        RelationshipTypeNameSet? relationshipTypeNames,
+        RoleNameSet? relationshipRoleNames)
     {
         return new GetRelationshipRequest
         {
