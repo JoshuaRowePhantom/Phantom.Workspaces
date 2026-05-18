@@ -40,12 +40,23 @@ public sealed class DataAccessLayerJsonExtensionsTests
     }
 
     [Fact]
-    public void TryReadEntityName_WithNonArrayElement_ReturnsNull()
+    public void TryReadEntityName_WithStringElement_ReturnsSingleComponentEntityName()
     {
         var json = JsonDocument.Parse("\"string\"").RootElement;
         
         var result = json.TryReadEntityName();
         
+        Assert.NotNull(result);
+        Assert.Single(result.Value.Components, "string");
+    }
+
+    [Fact]
+    public void TryReadEntityName_WithNonStringNonArrayElement_ReturnsNull()
+    {
+        var json = JsonDocument.Parse("{\"name\":\"string\"}").RootElement;
+
+        var result = json.TryReadEntityName();
+
         Assert.Null(result);
     }
 

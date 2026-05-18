@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Linq;
 
 namespace Phantom.Workspaces.Data;
 
@@ -19,7 +20,8 @@ public sealed class SchemaPopulator
     public async Task<IReadOnlyCollection<UpdateError>> Populate()
     {
         var errors = new List<UpdateError>();
-        var changes = this.LoadEntityChanges(errors);
+        var rawChanges = this.LoadEntityChanges(errors).ToArray();
+        var changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges);
 
         var updateResult = await this.dataAccessLayer.UpdateAsync(
             new UpdateRequest
@@ -40,6 +42,44 @@ public sealed class SchemaPopulator
         }
 
         return errors;
+    }
+
+    private async Task<IReadOnlyCollection<EntityChange>> ApplyCurrentConcurrencyTagsAsync(
+        IReadOnlyCollection<EntityChange> changes)
+    {
+        var entityIds = changes
+            .Where(static change => change.EntityId is not null)
+            .Select(static change => change.EntityId!.Value)
+            .Distinct()
+            .ToArray();
+        if (entityIds.Length == 0)
+        {
+            return changes;
+        }
+
+        var getResult = await this.dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = entityIds.Select(static entityId => new GetEntityRequest { EntityId = entityId }).ToArray(),
+                Timestamps = [null],
+            });
+        var snapshotsById = getResult.Batches
+            .SelectMany(static batch => batch.Entities)
+            .ToDictionary(static snapshot => snapshot.EntityId, static snapshot => snapshot);
+
+        if (snapshotsById.Count == 0)
+        {
+            return changes;
+        }
+
+        return changes
+            .Select(
+                change => change.EntityId is not null
+                    && snapshotsById.TryGetValue(change.EntityId.Value, out var currentSnapshot)
+                    && currentSnapshot.ConcurrencyTag is not null
+                    ? change with { ConcurrencyTag = currentSnapshot.ConcurrencyTag }
+                    : change)
+            .ToArray();
     }
 
     private IReadOnlyCollection<EntityChange> LoadEntityChanges(

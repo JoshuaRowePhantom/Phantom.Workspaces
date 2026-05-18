@@ -941,24 +941,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private static EntityName? ReadEntityName(
         JsonElement property)
     {
-        if (property.ValueKind == JsonValueKind.String)
-        {
-            var text = property.GetString();
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return null;
-            }
-
-            var components = text.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            return components.Length > 0 ? new EntityName(components) : null;
-        }
-
-        if (property.ValueKind == JsonValueKind.Array)
-        {
-            return property.TryReadEntityName();
-        }
-
-        return null;
+        return property.TryReadEntityName();
     }
 
     private static string GetWorkspaceRequestDisplayText(

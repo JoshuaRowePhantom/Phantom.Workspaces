@@ -10,6 +10,18 @@ Use the repository test script instead of invoking `dotnet test` directly.
 .\scripts\run-tests.ps1
 ```
 
+Run only fast tests (excludes tests marked `Category=SlowGit`):
+
+```powershell
+.\scripts\run-tests.ps1 -Mode fast
+```
+
+Run the complete suite including slow Git tests:
+
+```powershell
+.\scripts\run-tests.ps1 -Mode full
+```
+
 Run specific tests by name (matched against `FullyQualifiedName`):
 
 ```powershell

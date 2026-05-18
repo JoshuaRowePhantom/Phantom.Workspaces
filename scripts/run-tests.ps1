@@ -4,7 +4,12 @@ param(
     [Parameter()]
     [string[]] $TestNames,
     [Parameter()]
-    [string] $PerTestHangTimeout = '15s'
+    [string] $PerTestHangTimeout = '15s',
+    [Parameter()]
+    [ValidateSet('full', 'fast')]
+    [string] $Mode = 'full',
+    [Parameter()]
+    [switch] $NoBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,16 +25,38 @@ $dotnetArgs = @(
     '--no-restore',
     '--nologo',
     '-v',
-    'minimal',
-    '--blame-hang',
-    '--blame-hang-timeout',
-    $PerTestHangTimeout
+    'minimal'
 )
 
+if ($NoBuild)
+{
+    $dotnetArgs += '--no-build'
+}
+
+if ($Mode -eq 'full')
+{
+    $dotnetArgs += @(
+        '--blame-hang',
+        '--blame-hang-timeout',
+        $PerTestHangTimeout
+    )
+}
+
+$filterClauses = @()
 if ($TestNames -and $TestNames.Count -gt 0)
 {
-    $filter = ($TestNames | ForEach-Object { "FullyQualifiedName~$_" }) -join '|'
-    $dotnetArgs += @('--filter', $filter)
+    $nameFilter = ($TestNames | ForEach-Object { "FullyQualifiedName~$_" }) -join '|'
+    $filterClauses += "($nameFilter)"
+}
+
+if ($Mode -eq 'fast')
+{
+    $filterClauses += '(Category!=SlowGit)'
+}
+
+if ($filterClauses.Count -gt 0)
+{
+    $dotnetArgs += @('--filter', ($filterClauses -join '&'))
 }
 
 $rawOutput = & dotnet @dotnetArgs 2>&1

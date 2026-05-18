@@ -285,6 +285,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
     }
 }
 
+[Trait("Category", "SlowGit")]
 public sealed class GitDataAccessLayerWithoutRemoteTests : GitDataAccessLayerWithoutRemoteTestsBase
 {
     public GitDataAccessLayerWithoutRemoteTests()
@@ -308,6 +309,7 @@ public sealed class GitDataAccessLayerWithoutRemoteTests : GitDataAccessLayerWit
     }
 }
 
+[Trait("Category", "SlowGit")]
 public sealed class GitDataAccessLayerWithoutRemotePerInvocationTests : GitDataAccessLayerWithoutRemoteTestsBase
 {
     public GitDataAccessLayerWithoutRemotePerInvocationTests()
@@ -321,6 +323,7 @@ public sealed class GitDataAccessLayerWithoutRemotePerInvocationTests : GitDataA
     }
 }
 
+[Trait("Category", "SlowGit")]
 public sealed class GitDataAccessLayerInitializationTests : IDisposable
 {
     private readonly string repositoryPath = TestPathFactory.CreateIsolatedDirectory("git-init");
@@ -550,6 +553,7 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
         }
     }
 
+    [Trait("Category", "SlowGit")]
     public sealed class GitDataAccessLayerWithRemoteTests : GitDataAccessLayerWithRemoteTestsBase
     {
         protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()
@@ -558,6 +562,7 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
         }
     }
 
+    [Trait("Category", "SlowGit")]
     public sealed class GitDataAccessLayerWithRemotePerInvocationTests : GitDataAccessLayerWithRemoteTestsBase
     {
         protected override IDataAccessLayer CreateGitDataAccessLayerForOperation()

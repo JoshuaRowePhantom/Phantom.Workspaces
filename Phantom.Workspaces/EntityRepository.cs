@@ -62,7 +62,6 @@ public sealed class EntityRepository
         IReadOnlyDictionary<EntityId, EntitySnapshot> snapshots,
         EntityName entityName)
     {
-        var nameKey = string.Join("/", entityName.Components);
         foreach (var snapshot in snapshots.Values)
         {
             if (snapshot.Data is not JsonElement data)
@@ -70,12 +69,12 @@ public sealed class EntityRepository
                 continue;
             }
 
-            if (!TryGetNameKeys(data, out var keys))
+            if (!TryGetEntityNames(data, out var names))
             {
                 continue;
             }
 
-            if (keys.Contains(nameKey, StringComparer.Ordinal))
+            if (names.Any(name => name == entityName))
             {
                 return snapshot;
             }
@@ -106,43 +105,28 @@ public sealed class EntityRepository
             $"Failed to populate repository schemas: {string.Join(" | ", errors.Select(static error => error.Message))}");
     }
 
-    private static bool TryGetNameKeys(
+    private static bool TryGetEntityNames(
         JsonElement entityData,
-        out IReadOnlyCollection<string> keys)
+        out IReadOnlyCollection<EntityName> names)
     {
-        var resolved = new List<string>();
+        var resolved = new List<EntityName>();
         if (!entityData.TryGetProperty("names", out var namesElement)
             || namesElement.ValueKind != JsonValueKind.Array)
         {
-            keys = resolved;
+            names = resolved;
             return false;
         }
 
         foreach (var nameElement in namesElement.EnumerateArray())
         {
-            if (nameElement.ValueKind == JsonValueKind.String)
+            var parsedEntityName = nameElement.TryReadEntityName();
+            if (parsedEntityName is not null)
             {
-                var name = nameElement.GetString();
-                if (!string.IsNullOrWhiteSpace(name))
-                {
-                    resolved.Add(name);
-                }
-            }
-            else if (nameElement.ValueKind == JsonValueKind.Array)
-            {
-                var components = nameElement.EnumerateArray()
-                    .Where(static component => component.ValueKind == JsonValueKind.String)
-                    .Select(static component => component.GetString())
-                    .Where(static component => !string.IsNullOrWhiteSpace(component))
-                    .ToArray();
-                if (components.Length > 0)
-                {
-                    resolved.Add(string.Join("/", components!));
-                }
+                resolved.Add(parsedEntityName.Value);
             }
         }
 
-        keys = resolved;
+        names = resolved;
         return resolved.Count > 0;
     }
 }

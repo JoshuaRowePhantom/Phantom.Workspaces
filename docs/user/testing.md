@@ -6,6 +6,20 @@ Always run tests through the repository script:
 .\scripts\run-tests.ps1
 ```
 
+## Run fast vs full suites
+
+Use fast mode for day-to-day iteration (excludes tests marked `Category=SlowGit`):
+
+```powershell
+.\scripts\run-tests.ps1 -Mode fast
+```
+
+Use full mode to include all tests, including slow Git tests:
+
+```powershell
+.\scripts\run-tests.ps1 -Mode full
+```
+
 ## Run targeted tests
 
 Pass one or more names to `-TestNames`. Each name is matched against `FullyQualifiedName`.

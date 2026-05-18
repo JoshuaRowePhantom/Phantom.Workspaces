@@ -15,6 +15,18 @@ Run all tests:
 .\scripts\run-tests.ps1
 ```
 
+Run the fast suite (default for most changes):
+
+```powershell
+.\scripts\run-tests.ps1 -Mode fast
+```
+
+Run full suite including slow Git tests:
+
+```powershell
+.\scripts\run-tests.ps1 -Mode full
+```
+
 Run targeted tests by name (`FullyQualifiedName` contains match):
 
 ```powershell
@@ -31,3 +43,4 @@ Run targeted tests by name (`FullyQualifiedName` contains match):
 5. Do not prefix test commands with `Set-Location`.
 6. Do not prefix the script invocation with `&`.
 7. For targeted runs, use `.\scripts\run-tests.ps1 -TestNames ...`.
+8. Only run slow Git tests (`-Mode full`) when changes affect the filesystem or Git repository layers; otherwise use fast mode.

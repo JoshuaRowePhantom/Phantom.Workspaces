@@ -51,6 +51,25 @@
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
     </Style>
+    <Style Selector="Border.entity-card-expand-section">
+        <Setter Property="Margin" Value="0,-4,0,0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Border.entity-card-expand-section:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+    <Style Selector="Button.entity-card-expand-button">
+        <Setter Property="Padding" Value="0,2" />
+        <Setter Property="FontSize" Value="8" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
 
     <Style Selector="Border.window-header">
         <Setter Property="Padding" Value="12,8" />

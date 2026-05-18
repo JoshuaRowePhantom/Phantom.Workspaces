@@ -425,23 +425,6 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             var names = new List<EntityName>();
             foreach (var nameElement in namesElement.EnumerateArray())
             {
-                if (nameElement.ValueKind == JsonValueKind.String)
-                {
-                    var name = nameElement.GetString();
-                    if (string.IsNullOrWhiteSpace(name))
-                    {
-                        continue;
-                    }
-
-                    var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                    if (components.Length > 0)
-                    {
-                        names.Add(new EntityName(components));
-                    }
-
-                    continue;
-                }
-
                 var entityName = nameElement.TryReadEntityName();
                 if (entityName is not null)
                 {

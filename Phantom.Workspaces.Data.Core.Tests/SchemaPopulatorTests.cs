@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 
@@ -179,6 +180,78 @@ public sealed class SchemaPopulatorTests
                     error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
     }
 
+    [Fact]
+    public async Task Populate_WhenSeedEntityDiffers_UsesConcurrencyTagAndRestoresCanonicalData()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var pipelineDataAccessLayer = new MergeProcessingDataAccessLayer(
+            CreateValidatedDataAccessLayer(inMemoryDataAccessLayer));
+        var schemaPopulator = new SchemaPopulator(pipelineDataAccessLayer);
+
+        var firstPopulateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            firstPopulateErrors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                firstPopulateErrors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var defaultProfile = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .First(entity =>
+                entity.Data is JsonElement data
+                && data.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray().Select(static part => part.GetString()).SequenceEqual(["defaults", "profiles", "default"])));
+        Assert.NotNull(defaultProfile.Data);
+        Assert.NotNull(defaultProfile.ConcurrencyTag);
+
+        var modifiedProfileData = this.WithUpdatedTheme(defaultProfile.Data.Value, "light");
+        var driftResult = await pipelineDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Introduce profile drift.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = defaultProfile.EntityId,
+                        ConcurrencyTag = defaultProfile.ConcurrencyTag,
+                        Data = modifiedProfileData,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+        Assert.DoesNotContain(driftResult.EntityResults, static entityResult => entityResult.UpdateState == UpdateState.Failed);
+
+        var secondPopulateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            secondPopulateErrors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                secondPopulateErrors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var postPopulateResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var restoredProfile = postPopulateResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .First(entity => entity.EntityId == defaultProfile.EntityId);
+        Assert.NotNull(restoredProfile.Data);
+        Assert.True(
+            restoredProfile.Data.Value.TryGetProperty("theme", out var restoredTheme)
+            && restoredTheme.ValueKind == JsonValueKind.String
+            && string.Equals(restoredTheme.GetString(), "dark", StringComparison.Ordinal));
+    }
+
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {
@@ -194,6 +267,17 @@ public sealed class SchemaPopulatorTests
             && entityTypes.ValueKind == JsonValueKind.Array
             && entityTypes.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String
                 && string.Equals(type.GetString(), "folder", StringComparison.Ordinal));
+    }
+
+    private JsonElement WithUpdatedTheme(
+        JsonElement profileData,
+        string themeName)
+    {
+        var profileNode = JsonNode.Parse(profileData.GetRawText()) as JsonObject
+            ?? throw new InvalidOperationException("Expected profile object JSON.");
+        profileNode["theme"] = themeName;
+        using var document = JsonDocument.Parse(profileNode.ToJsonString());
+        return document.RootElement.Clone();
     }
 
     private sealed class CountingDataAccessLayer : BaseUpdateProcessingDataAccessLayer

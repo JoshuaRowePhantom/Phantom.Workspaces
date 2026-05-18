@@ -967,24 +967,6 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
         out EntityName entityName)
     {
         entityName = default;
-        if (nameElement.ValueKind == JsonValueKind.String)
-        {
-            var name = nameElement.GetString();
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return false;
-            }
-
-            var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (components.Length == 0)
-            {
-                return false;
-            }
-
-            entityName = new EntityName(components);
-            return true;
-        }
-
         var parsedEntityName = nameElement.TryReadEntityName();
         if (parsedEntityName is null)
         {

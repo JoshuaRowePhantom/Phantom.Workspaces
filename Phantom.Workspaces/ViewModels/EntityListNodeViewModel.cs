@@ -1,20 +1,27 @@
-using System.Collections.ObjectModel;
+using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json;
+using Avalonia;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class EntityBrowserTreeNodeViewModel : ViewModelBase
+public sealed class EntityListNodeViewModel : ViewModelBase
 {
     private bool isExpanded;
+    private readonly SubscribedEntityViewModel? entity;
+    private readonly string displayName;
+    private readonly string entityType;
 
-    public EntityBrowserTreeNodeViewModel(
+    public EntityListNodeViewModel(
         SubscribedEntityViewModel entity,
         IReadOnlyList<string> nameComponents,
         string sortKey)
     {
-        this.Entity = entity;
+        this.entity = entity;
+        this.displayName = entity.DisplayName;
+        this.entityType = entity.EntityType;
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(
@@ -22,23 +29,41 @@ public sealed class EntityBrowserTreeNodeViewModel : ViewModelBase
             _ => this.HasChildren);
     }
 
-    public SubscribedEntityViewModel Entity { get; }
+    public EntityListNodeViewModel(
+        string displayName,
+        string entityType,
+        IReadOnlyList<string> nameComponents,
+        string sortKey,
+        bool isExpanded = false)
+    {
+        this.entity = null;
+        this.displayName = displayName;
+        this.entityType = entityType;
+        this.NameComponents = nameComponents;
+        this.SortKey = sortKey;
+        this.ToggleExpandCommand = new RelayCommand(
+            _ => this.IsExpanded = !this.IsExpanded,
+            _ => this.HasChildren);
+        this.isExpanded = isExpanded;
+    }
+
+    public SubscribedEntityViewModel? Entity => this.entity;
 
     public IReadOnlyList<string> NameComponents { get; }
 
     public string SortKey { get; }
 
-    public ObservableCollection<EntityBrowserTreeNodeViewModel> Children { get; } = new();
+    public ObservableCollection<EntityListNodeViewModel> Children { get; } = new();
 
-    public ObservableCollection<EntityBrowserTreeNodeViewModel> VisibleChildren { get; } = new();
+    public ObservableCollection<EntityListNodeViewModel> VisibleChildren { get; } = new();
 
     public RelayCommand ToggleExpandCommand { get; }
 
-    public string DisplayName => this.Entity.DisplayName;
+    public string DisplayName => this.entity?.DisplayName ?? this.displayName;
 
-    public string EntityType => this.Entity.EntityType;
+    public string EntityType => this.entity?.EntityType ?? this.entityType;
 
-    public IReadOnlyCollection<string> DisplayItems => this.Entity.DisplayItems;
+    public IReadOnlyCollection<string> DisplayItems => this.entity?.DisplayItems ?? Array.Empty<string>();
 
     public bool HasChildren => this.Children.Count > 0;
 
@@ -65,10 +90,16 @@ public sealed class EntityBrowserTreeNodeViewModel : ViewModelBase
         }
     }
 
-    public string ExpandArrow => this.IsExpanded ? "▲" : "▼";
+    public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
+
+    public CornerRadius ContentCornerRadius => this.HasChildren
+        ? new CornerRadius(6, 6, 0, 0)
+        : new CornerRadius(6);
+
+    public CornerRadius ExpandSectionCornerRadius => new CornerRadius(0, 0, 6, 6);
 
     public void SetChildren(
-        IReadOnlyCollection<EntityBrowserTreeNodeViewModel> children)
+        IReadOnlyCollection<EntityListNodeViewModel> children)
     {
         this.Children.Clear();
         foreach (var child in children)
@@ -79,6 +110,8 @@ public sealed class EntityBrowserTreeNodeViewModel : ViewModelBase
         this.ToggleExpandCommand.RaiseCanExecuteChanged();
         this.RaisePropertyChanged(nameof(this.HasChildren));
         this.RaisePropertyChanged(nameof(this.ExpandArrow));
+        this.RaisePropertyChanged(nameof(this.ContentCornerRadius));
+        this.RaisePropertyChanged(nameof(this.ExpandSectionCornerRadius));
 
         if (!this.IsExpanded)
         {
@@ -106,18 +139,6 @@ public sealed class EntityBrowserTreeNodeViewModel : ViewModelBase
         }
 
         var firstName = names[0];
-        if (firstName.ValueKind == JsonValueKind.String)
-        {
-            var text = firstName.GetString();
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            entityName = new EntityName(text);
-            return true;
-        }
-
         var parsedName = firstName.TryReadEntityName();
         if (parsedName is null)
         {

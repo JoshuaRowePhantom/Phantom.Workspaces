@@ -647,10 +647,16 @@ public static class DataAccessLayerJsonExtensions
     }
 
     /// <summary>
-    /// Reads an array of strings from a JsonElement and returns them as an EntityName.
+    /// Reads a string or array of strings from a JsonElement and returns an EntityName.
     /// </summary>
     public static EntityName? TryReadEntityName(this JsonElement element)
     {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var component = element.GetString();
+            return string.IsNullOrWhiteSpace(component) ? null : new EntityName(component);
+        }
+
         if (element.ValueKind != JsonValueKind.Array)
         {
             return null;

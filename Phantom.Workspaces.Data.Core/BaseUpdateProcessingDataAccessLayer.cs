@@ -13,6 +13,7 @@ public abstract class BaseUpdateProcessingDataAccessLayer : IDataAccessLayer
 
     protected IDataAccessLayer UnderlyingDataAccessLayer { get; }
 
+    [Obsolete("ExportAsync is very expensive and should only be used for full enumeration in rare cases.")]
     public virtual Task<ExportResult> ExportAsync(
         ExportRequest request,
         CancellationToken cancellationToken = default)
