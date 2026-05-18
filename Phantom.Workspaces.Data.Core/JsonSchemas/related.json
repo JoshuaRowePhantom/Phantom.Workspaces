@@ -1,7 +1,8 @@
 {
   "entity-id": "7b8b63f5-4dd5-4c15-8f5a-34b8d1b1b7d1",
   "entity-types": [
-    "entity-type"
+    "entity-type",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "related"
     ]
   ],
+  "display-name": {
+    "default": "Related Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/related-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/related.json",
     "type": "object",

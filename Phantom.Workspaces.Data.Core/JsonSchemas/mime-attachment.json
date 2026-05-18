@@ -1,7 +1,8 @@
 {
   "entity-id": "d2a1c83b-2d83-4d5c-9f48-8f7d4e3b0f4b",
   "entity-types": [
-    "json-schema"
+    "json-schema",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "mime-attachment"
     ]
   ],
+  "display-name": {
+    "default": "MIME Attachment Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/mime-attachment-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/mime-attachment.json",
     "anyOf": [

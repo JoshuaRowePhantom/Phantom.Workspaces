@@ -537,8 +537,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
         UpdateResult result,
         UpdateState expectedState)
     {
-        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
-        var entityResult = result.EntityResults.Single();
+        var entityResult = Assert.Single(result.EntityResults, entityResult => entityResult.RequestedEntityId == SampleEntityId);
+        Assert.DoesNotContain(result.EntityResults, static entityResult => entityResult.UpdateState == UpdateState.Failed);
         Assert.True(entityResult.UpdateState == expectedState, UpdateResultDiagnostics.Describe(result));
         Assert.True(entityResult.ConcurrencyMatchState == ConcurrencyMatchState.Matched, UpdateResultDiagnostics.Describe(result));
         Assert.True(entityResult.RequestedEntityId == SampleEntityId, UpdateResultDiagnostics.Describe(result));
@@ -817,7 +817,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
                         document.RootElement.Clone(),
                         EntityChangeMode.Replace),
                 }));
-        var entityResult = Assert.Single(result.EntityResults);
+        var entityResult = Assert.Single(result.EntityResults, entityResult => entityResult.RequestedEntityId == entityId);
         Assert.Equal(UpdateState.Added, entityResult.UpdateState);
     }
 
@@ -852,7 +852,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
                         document.RootElement.Clone(),
                         EntityChangeMode.Replace),
                 }));
-        var entityResult = Assert.Single(result.EntityResults);
+        var entityResult = Assert.Single(result.EntityResults, entityResult => entityResult.RequestedEntityId == entityId);
         Assert.Equal(UpdateState.Added, entityResult.UpdateState);
     }
 

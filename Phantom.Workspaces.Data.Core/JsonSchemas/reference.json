@@ -1,7 +1,8 @@
 {
   "entity-id": "2e80c5d7-6a77-4b9b-8d55-6e9b2e44f1da",
   "entity-types": [
-    "entity-type"
+    "entity-type",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "reference"
     ]
   ],
+  "display-name": {
+    "default": "Reference Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/reference-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
     "allOf": [

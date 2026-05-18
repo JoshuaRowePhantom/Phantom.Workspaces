@@ -406,14 +406,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (selectedView.IsEntityBrowser)
         {
-            var allSnapshots = await this.EntityBroker.ExportEntitySnapshotsAsync();
-            var allEntities = await this.EntityBroker.GetEntitiesAsync(allSnapshots.Keys.ToArray());
-            foreach (var entity in allEntities.OrderBy(static entity => entity.EntityId.Value))
-            {
-                selectedView.Entities.Add(new ViewEntityViewModel(entity, indentLevel: 0));
-            }
-
-            this.StickyParentContextText = "Entity Browser";
+            await this.OpenEntityBrowserTabAsync();
+            this.StickyParentContextText = "Entity Browser (tab)";
             return;
         }
 
@@ -600,6 +594,44 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         selectedRegion.Tabs.Add(tab);
         selectedRegion.SelectedTab = tab;
+    }
+
+    private async Task OpenEntityBrowserTabAsync()
+    {
+        const string entityBrowserTabId = "entity-browser-tab";
+        var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
+        var existingTab = selectedRegion.Tabs
+            .OfType<EntityBrowserWorkspaceTabViewModel>()
+            .FirstOrDefault(tab => string.Equals(tab.Id, entityBrowserTabId, StringComparison.Ordinal));
+        if (existingTab is not null)
+        {
+            selectedRegion.SelectedTab = existingTab;
+            return;
+        }
+
+        var subscribedGet = await this.EntityBroker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = new EntityName(Array.Empty<string>()),
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+                    },
+                ],
+                Timestamps = [null],
+            });
+
+        var entityBrowserTab = new EntityBrowserWorkspaceTabViewModel(subscribedGet)
+        {
+            Id = entityBrowserTabId,
+            Title = "Entity Browser",
+            DockRegion = "full",
+        };
+
+        selectedRegion.Tabs.Add(entityBrowserTab);
+        selectedRegion.SelectedTab = entityBrowserTab;
     }
 
     private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(

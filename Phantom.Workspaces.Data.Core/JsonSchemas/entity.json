@@ -1,7 +1,8 @@
 {
   "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e002",
   "entity-types": [
-    "entity-type"
+    "entity-type",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "entity"
     ]
   ],
+  "display-name": {
+    "default": "Entity Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/entity-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json",
     "$comment": "The DAL composes this base schema with all applicable entity-type schemas and enforces unevaluatedProperties=false at the final composed-schema level.",

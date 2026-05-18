@@ -1,7 +1,8 @@
 {
   "entity-id": "a6f07bf2-a690-43ef-bd31-e93e53b2f5c8",
   "entity-types": [
-    "json-schema"
+    "json-schema",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "workspace"
     ]
   ],
+  "display-name": {
+    "default": "Workspace Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/workspace-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace.json",
     "type": "object",

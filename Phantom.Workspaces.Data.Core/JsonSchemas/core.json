@@ -1,7 +1,8 @@
 {
   "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e001",
   "entity-types": [
-    "json-schema"
+    "json-schema",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "core"
     ]
   ],
+  "display-name": {
+    "default": "Core Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/core-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json",
     "$defs": {

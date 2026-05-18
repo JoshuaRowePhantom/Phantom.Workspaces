@@ -49,15 +49,31 @@ public sealed class SchemaPopulatorTests
                                 && resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         Assert.NotEmpty(embeddedSchemaResources);
-        var expectedSchemaEntityCount = embeddedSchemaResources.Length;
+        var expectedEntityIds = new HashSet<EntityId>();
+        foreach (var resourceName in embeddedSchemaResources)
+        {
+            await using var stream = Assembly.GetAssembly(typeof(SchemaPopulator))!.GetManifestResourceStream(resourceName);
+            Assert.NotNull(stream);
+            using var document = await JsonDocument.ParseAsync(stream!);
+            Assert.True(document.RootElement.TryGetProperty("entity-id", out var entityIdElement));
+            Assert.True(entityIdElement.ValueKind == JsonValueKind.String);
+            expectedEntityIds.Add(new EntityId(entityIdElement.GetString()!));
+        }
 
         var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
-        var distinctEntityIds = exportResult.ChangeBatches
+        var latestEntitiesById = exportResult.ChangeBatches
             .SelectMany(static changeBatch => changeBatch.Entities)
-            .Select(static entity => entity.EntityId)
-            .Distinct()
-            .Count();
-        Assert.Equal(expectedSchemaEntityCount, distinctEntityIds);
+            .GroupBy(static entity => entity.EntityId)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.OrderByDescending(entity => entity.ModifiedTime.DateTime).First());
+        Assert.True(expectedEntityIds.IsSubsetOf(latestEntitiesById.Keys));
+
+        var extraEntities = latestEntitiesById
+            .Where(pair => !expectedEntityIds.Contains(pair.Key))
+            .Select(static pair => pair.Value)
+            .ToArray();
+        Assert.All(extraEntities, static entity => Assert.True(IsFolderEntity(entity.Data)));
     }
 
     [Fact]
@@ -144,6 +160,16 @@ public sealed class SchemaPopulatorTests
     {
         return new SchemaValidatingDataAccessLayer(
             new ReferentialIntegrityDataAccessLayer(underlyingDataAccessLayer));
+    }
+
+    private static bool IsFolderEntity(
+        JsonElement? data)
+    {
+        return data is JsonElement entityData
+            && entityData.TryGetProperty("entity-types", out var entityTypes)
+            && entityTypes.ValueKind == JsonValueKind.Array
+            && entityTypes.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), "folder", StringComparison.Ordinal));
     }
 
     private sealed class CountingDataAccessLayer : BaseUpdateProcessingDataAccessLayer

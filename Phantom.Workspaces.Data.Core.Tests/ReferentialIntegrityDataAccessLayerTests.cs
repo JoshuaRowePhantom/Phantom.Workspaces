@@ -65,6 +65,131 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     }
 
     [Fact]
+    public async Task CreateEntity_WithMultiComponentName_CreatesFolderPrefixes()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("14fcceea-04dc-4ed0-a7e2-54649f23ad99");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create nested entity"),
+                new[]
+                {
+                    CreateNamedEntityChange(entityId, null, new[] { "projects", "alpha", "task-1" }),
+                }));
+
+        var firstPrefix = await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects"));
+        var secondPrefix = await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha"));
+        Assert.Single(firstPrefix);
+        Assert.Single(secondPrefix);
+        Assert.True(HasEntityType(firstPrefix.Single(), "folder"));
+        Assert.True(HasEntityType(secondPrefix.Single(), "folder"));
+    }
+
+    [Fact]
+    public async Task CreateEntity_WithMultipleNames_CreatesFolderPrefixesForEachName()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("d301f7ce-b323-46bc-ae98-a03f47866d6c");
+        var serializedNames = JsonSerializer.Serialize(
+            new[]
+            {
+                new[] { "projects", "alpha", "task-1" },
+                new[] { "users", "upn", "user@example.com" },
+            });
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity"],
+              "names": {{serializedNames}}
+            }
+            """);
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create entity with multiple names"),
+                new[]
+                {
+                    CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace),
+                }));
+
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects"))).Single(), "folder"));
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha"))).Single(), "folder"));
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("users"))).Single(), "folder"));
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("users", "upn"))).Single(), "folder"));
+    }
+
+    [Fact]
+    public async Task CreateEntity_WithSingleComponentName_DoesNotCreateFolderWithSameName()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("bc9e4f0d-4fd4-4f90-8ecf-96ee8e87095e");
+        var entityName = new EntityName("single-component-name");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create single-component named entity"),
+                new[]
+                {
+                    CreateNamedEntityChange(entityId, null, entityName.Components),
+                }));
+
+        var snapshots = await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, entityName);
+        var snapshot = Assert.Single(snapshots);
+        Assert.False(HasEntityType(snapshot, "folder"));
+    }
+
+    [Fact]
+    public async Task DeleteEntities_DoesNotRemoveExistingFolderEntities()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var firstEntityId = new EntityId("fd464969-b642-42e1-97df-c2ded3aefea2");
+        var secondEntityId = new EntityId("5ff79d5e-0800-4836-8ec0-8f52115f3b80");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create nested entities"),
+                new[]
+                {
+                    CreateNamedEntityChange(firstEntityId, null, new[] { "projects", "alpha", "task-1" }),
+                    CreateNamedEntityChange(secondEntityId, null, new[] { "projects", "beta", "task-2" }),
+                }));
+
+        var firstSnapshot = await this.GetEntitySnapshotByIdAsync(dataAccessLayer, firstEntityId);
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Delete first nested entity"),
+                new[]
+                {
+                    CreateEntityChange(firstEntityId, firstSnapshot.ConcurrencyTag, null, EntityChangeMode.Replace),
+                }));
+
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha")));
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "beta")));
+
+        var secondSnapshot = await this.GetEntitySnapshotByIdAsync(dataAccessLayer, secondEntityId);
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Delete second nested entity"),
+                new[]
+                {
+                    CreateEntityChange(secondEntityId, secondSnapshot.ConcurrencyTag, null, EntityChangeMode.Replace),
+                }));
+
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha")));
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "beta")));
+    }
+
+    [Fact]
     public async Task TypedEntityReferences_RequireExistingEntityAndMatchingType()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -298,6 +423,54 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 }));
         var updateRelationshipFailure = updateRelationshipResult.EntityResults.Single(result => result.RequestedEntityId == relationshipEntityId);
         Assert.Equal(UpdateState.Failed, updateRelationshipFailure.UpdateState);
+    }
+
+    [Fact]
+    public async Task RelationshipEntities_DoNotGenerateManagedReferenceRelationships()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var sourceEntityId = new EntityId("3e16e8c8-51e0-494f-9fc3-b9f3f2f76417");
+        var destinationEntityId = new EntityId("f2f4d45b-f328-4c59-9b5c-c95b0ad96be0");
+        var referencedEntityId = new EntityId("5ecf03d3-8d52-4ad2-9b9a-ae71f18a91a2");
+        var relationshipEntityId = new EntityId("a5eef23b-a4a8-4291-9d78-4ab1099a1ba5");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create participants and reference target"),
+                new[]
+                {
+                    this.CreateEntityChange(sourceEntityId, "source"),
+                    this.CreateEntityChange(destinationEntityId, "destination"),
+                    this.CreateEntityChange(referencedEntityId, "reference-target"),
+                }));
+
+        using var relationshipDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{relationshipEntityId}}",
+              "entity-types": ["relationship", "related"],
+              "names": ["relationship-with-reference-field"],
+              "participants": {
+                "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
+              },
+              "first-entity-id": "{{referencedEntityId}}"
+            }
+            """);
+        var relationshipCreateResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create relationship with additional reference-like field"),
+                new[]
+                {
+                    CreateEntityChange(relationshipEntityId, null, relationshipDocument.RootElement.Clone(), EntityChangeMode.Replace),
+                }));
+        Assert.DoesNotContain(relationshipCreateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+
+        Assert.Empty(await this.GetReferenceRelationshipsAsync(dataAccessLayer, relationshipEntityId));
+        Assert.Empty(await this.GetReferenceRelationshipsAsync(dataAccessLayer, sourceEntityId));
+        Assert.Empty(await this.GetReferenceRelationshipsAsync(dataAccessLayer, destinationEntityId));
+        Assert.Empty(await this.GetReferenceRelationshipsAsync(dataAccessLayer, referencedEntityId));
     }
 
     [Fact]
@@ -601,6 +774,21 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         return Assert.Single(Assert.Single(getResult.Batches).Entities);
     }
 
+    private async Task<IReadOnlyCollection<EntitySnapshot>> GetEntitySnapshotsByNameAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityName entityName)
+    {
+        var getResult = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new[]
+                {
+                    CreateGetEntityRequest(null, entityName, null, null),
+                },
+                null,
+                new Timestamp?[] { null }));
+        return Assert.Single(getResult.Batches).Entities;
+    }
+
     private async Task<IReadOnlyCollection<EntitySnapshot>> GetReferenceRelationshipsAsync(
         IDataAccessLayer dataAccessLayer,
         EntityId sourceEntityId)
@@ -657,6 +845,34 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             Data = data,
             EntityChangeMode = entityChangeMode,
         };
+    }
+
+    private static EntityChange CreateNamedEntityChange(
+        EntityId entityId,
+        ConcurrencyTag? concurrencyTag,
+        IReadOnlyCollection<string> nameComponents)
+    {
+        var serializedName = JsonSerializer.Serialize(new[] { nameComponents });
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity"],
+              "names": {{serializedName}}
+            }
+            """);
+        return CreateEntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);
+    }
+
+    private static bool HasEntityType(
+        EntitySnapshot snapshot,
+        string entityType)
+    {
+        return snapshot.Data is JsonElement data
+            && data.TryGetProperty("entity-types", out var entityTypes)
+            && entityTypes.ValueKind == JsonValueKind.Array
+            && entityTypes.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), entityType, StringComparison.Ordinal));
     }
 
     private static GetRequest CreateGetRequest(

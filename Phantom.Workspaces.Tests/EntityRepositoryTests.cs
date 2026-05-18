@@ -88,7 +88,7 @@ public sealed class EntityRepositoryTests
                 ],
             });
 
-        var entityResult = Assert.Single(updateResult.EntityResults);
+        var entityResult = Assert.Single(updateResult.EntityResults, entityResult => entityResult.RequestedEntityId == entityId);
         Assert.Empty(entityResult.Errors);
         return entityResult.ConcurrencyTag;
     }

@@ -1,7 +1,8 @@
 {
   "entity-id": "bb4a6d1e-4f2c-4a52-8f1d-9a7c3f28ec11",
   "entity-types": [
-    "entity-type"
+    "entity-type",
+    "note"
   ],
   "names": [
     [
@@ -13,6 +14,15 @@
       "relationship"
     ]
   ],
+  "display-name": {
+    "default": "Relationship Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/relationship-schema.md"
+    }
+  },
   "schema": {
     "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json",
     "type": "object",

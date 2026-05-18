@@ -507,6 +507,74 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             UpdateResultDiagnostics.Describe(result));
     }
 
+    [Fact]
+    public async Task Update_Succeeds_WhenUserEntityNamesStartWithUsersPrefix()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var userEntityId = new EntityId("b8ad4f1a-ec7a-4d18-a4b9-a14e39c2f5fd");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add valid user entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        userEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{userEntityId}}",
+                              "entity-types": ["user"],
+                              "names": [
+                                ["users","upn","user@example.com"],
+                                ["users","web","github.com","user@github.com"]
+                              ],
+                              "display-name": { "default": "Sample User" }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var entityResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
+        Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenUserEntityNameDoesNotStartWithUsersPrefix()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var userEntityId = new EntityId("03c39067-1c08-4cf8-b76b-dbe955211375");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add invalid user entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        userEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{userEntityId}}",
+                              "entity-types": ["user"],
+                              "names": [
+                                ["people","upn","user@example.com"]
+                              ]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+    }
+
     private static EntityChange CreateSchemaEntityChange(
         EntityId entityId,
         string schemaName)
