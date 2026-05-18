@@ -376,6 +376,15 @@ public readonly struct EntityName : IEquatable<EntityName>
     }
 }
 
+public readonly record struct EntityReference
+{
+    public EntityId? EntityId { get; init; }
+
+    public EntityName? EntityName { get; init; }
+
+    public bool IsNameArray { get; init; }
+}
+
 public readonly record struct ConcurrencyTag(string Value);
 
 public readonly record struct Timestamp(
@@ -569,6 +578,65 @@ public enum UpdateState
 /// </summary>
 public static class DataAccessLayerJsonExtensions
 {
+    /// <summary>
+    /// Reads an entity reference value and returns either EntityId or EntityName.
+    /// Supports schema entity-reference values: UUID string, name string, or name string-array.
+    /// </summary>
+    public static EntityReference? TryReadEntityReference(this JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var stringValue = element.GetString();
+            if (Guid.TryParse(stringValue, out var entityGuid))
+            {
+                return new EntityReference
+                {
+                    EntityId = new EntityId(entityGuid),
+                };
+            }
+
+            if (!string.IsNullOrWhiteSpace(stringValue))
+            {
+                return new EntityReference
+                {
+                    EntityName = new EntityName(stringValue),
+                    IsNameArray = false,
+                };
+            }
+
+            return null;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var entityName = element.TryReadEntityName();
+            if (entityName is not null)
+            {
+                return new EntityReference
+                {
+                    EntityName = entityName.Value,
+                    IsNameArray = true,
+                };
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads an entity reference by property name from an object JsonElement.
+    /// </summary>
+    public static EntityReference? TryReadEntityReference(this JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(propertyName, out var propertyValue))
+        {
+            return null;
+        }
+
+        return propertyValue.TryReadEntityReference();
+    }
+
     /// <summary>
     /// Reads an array of strings from a JsonElement and returns them as an EntityName.
     /// </summary>

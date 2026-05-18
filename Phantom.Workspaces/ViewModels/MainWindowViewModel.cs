@@ -15,6 +15,7 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class MainWindowViewModel : ViewModelBase
 {
     private const string PlaceholderWorkspaceId = "loading-workspace";
+    private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
     private static readonly ViewDefinitionViewModel EmptyView = new()
     {
         Id = "empty",
@@ -43,7 +44,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.VisibleEntities = new ObservableCollection<EntityVisualViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>
         {
-            CreatePlaceholderWorkspacePane(),
+            CreatePlaceholderWorkspacePane(PlaceholderWorkspaceId, "Loading workspace..."),
         };
 
         this.selectedWorkspacePane = this.WorkspacePanes[0];
@@ -173,14 +174,16 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public string SelectedThemeName => this.selectedThemeName;
 
-    private static WorkspacePaneViewModel CreatePlaceholderWorkspacePane()
+    private static WorkspacePaneViewModel CreatePlaceholderWorkspacePane(
+        string paneId,
+        string displayName)
     {
         using var document = JsonDocument.Parse(
-            """
+            $$"""
             {
               "entity-id": "00000000-0000-0000-0000-000000000000",
               "entity-types": ["workspace"],
-              "display-name": "Loading Workspace"
+              "display-name": "{{displayName}}"
             }
             """);
 
@@ -192,7 +195,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Data = document.RootElement.Clone(),
                 Relationships = Array.Empty<EntitySnapshot>(),
             });
-        return new WorkspacePaneViewModel(entity);
+        return new WorkspacePaneViewModel(entity, paneId);
     }
 
     private async Task RebuildViewsFromRepositoryAsync()
@@ -386,6 +389,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     private async Task OpenWorkspaceAsync(
         GetEntityRequest workspaceRequest)
     {
+        var loadingWorkspacePane = this.GetOrCreateLoadingWorkspacePane(workspaceRequest);
+        this.SelectedWorkspacePane = loadingWorkspacePane;
+
         var workspaceSnapshot = await this.LoadSingleEntitySnapshotAsync(workspaceRequest);
         if (workspaceSnapshot?.Data is not JsonElement workspaceData)
         {
@@ -396,6 +402,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             pane => string.Equals(pane.Id, workspaceSnapshot.EntityId.ToString(), StringComparison.Ordinal));
         if (existingWorkspace is not null)
         {
+            if (this.WorkspacePanes.Contains(loadingWorkspacePane))
+            {
+                this.WorkspacePanes.Remove(loadingWorkspacePane);
+            }
+
             this.SelectedWorkspacePane = existingWorkspace;
             return;
         }
@@ -414,15 +425,42 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (this.WorkspacePanes.Count == 1
-            && string.Equals(this.WorkspacePanes[0].Id, PlaceholderWorkspaceId, StringComparison.Ordinal))
+        var workspacePane = this.CreateWorkspacePane(workspaceEntity, workspaceData);
+        var loadingPaneIndex = this.WorkspacePanes.IndexOf(loadingWorkspacePane);
+        if (loadingPaneIndex >= 0)
         {
-            this.WorkspacePanes.Clear();
+            this.WorkspacePanes[loadingPaneIndex] = workspacePane;
+        }
+        else
+        {
+            this.WorkspacePanes.Add(workspacePane);
         }
 
-        var workspacePane = this.CreateWorkspacePane(workspaceEntity, workspaceData);
-        this.WorkspacePanes.Add(workspacePane);
         this.SelectedWorkspacePane = workspacePane;
+    }
+
+    private WorkspacePaneViewModel GetOrCreateLoadingWorkspacePane(
+        GetEntityRequest workspaceRequest)
+    {
+        var paneId = $"{LoadingWorkspaceIdPrefix}{GetWorkspaceRequestKey(workspaceRequest)}";
+        var existingPane = this.WorkspacePanes.FirstOrDefault(
+            pane => string.Equals(pane.Id, paneId, StringComparison.Ordinal));
+        if (existingPane is not null)
+        {
+            return existingPane;
+        }
+
+        var placeholderPane = this.WorkspacePanes.FirstOrDefault(
+            pane => string.Equals(pane.Id, PlaceholderWorkspaceId, StringComparison.Ordinal));
+        if (placeholderPane is not null)
+        {
+            this.WorkspacePanes.Remove(placeholderPane);
+        }
+
+        var displayName = $"Loading {GetWorkspaceRequestDisplayText(workspaceRequest)}...";
+        var loadingPane = CreatePlaceholderWorkspacePane(paneId, displayName);
+        this.WorkspacePanes.Add(loadingPane);
+        return loadingPane;
     }
 
     private async Task OpenEntityTabAsync(
@@ -847,26 +885,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         return null;
     }
 
-    private static string? ReadEntityReferenceText(
-        JsonElement property)
-    {
-        if (property.ValueKind == JsonValueKind.String)
-        {
-            return property.GetString();
-        }
-
-        if (property.ValueKind == JsonValueKind.Array)
-        {
-            var parts = property.EnumerateArray()
-                .Where(static item => item.ValueKind == JsonValueKind.String)
-                .Select(static item => item.GetString())
-                .Where(static value => !string.IsNullOrWhiteSpace(value));
-            return string.Join("/", parts!);
-        }
-
-        return null;
-    }
-
     private static EntityName? ReadEntityName(
         JsonElement property)
     {
@@ -888,6 +906,38 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         return null;
+    }
+
+    private static string GetWorkspaceRequestDisplayText(
+        GetEntityRequest request)
+    {
+        if (request.EntityName is EntityName entityName)
+        {
+            return string.Join("/", entityName.Components);
+        }
+
+        if (request.EntityId is EntityId entityId)
+        {
+            return entityId.ToString();
+        }
+
+        return "workspace";
+    }
+
+    private static string GetWorkspaceRequestKey(
+        GetEntityRequest request)
+    {
+        if (request.EntityName is EntityName entityName)
+        {
+            return JsonSerializer.Serialize(entityName.Components);
+        }
+
+        if (request.EntityId is EntityId entityId)
+        {
+            return entityId.ToString();
+        }
+
+        return "unknown";
     }
 
     private static bool TryReadEntityRequest(
@@ -989,10 +1039,4 @@ public sealed class MainWindowViewModel : ViewModelBase
         return null;
     }
 
-    private readonly record struct EntityReference
-    {
-        public EntityId? EntityId { get; init; }
-
-        public string? NameKey { get; init; }
-    }
 }

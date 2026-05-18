@@ -834,35 +834,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         IReadOnlyCollection<string> requiredTypes,
         ICollection<ReferenceConstraint> references)
     {
-        if (value.ValueKind == JsonValueKind.String)
+        var singleReference = value.TryReadEntityReference();
+        if (singleReference is not null && value.ValueKind == JsonValueKind.String)
         {
-            var valueText = value.GetString();
-            if (string.IsNullOrWhiteSpace(valueText))
-            {
-                return;
-            }
-
-            if (Guid.TryParse(valueText, out var targetEntityGuid))
-            {
-                references.Add(
-                    new ReferenceConstraint
-                    {
-                        TargetEntityId = new EntityId(targetEntityGuid),
-                        TargetEntityName = null,
-                        RequiredTypes = requiredTypes,
-                    });
-            }
-            else
-            {
-                references.Add(
-                    new ReferenceConstraint
-                    {
-                        TargetEntityId = null,
-                        TargetEntityName = valueText,
-                        RequiredTypes = requiredTypes,
-                    });
-            }
-
+            this.AddReferenceConstraint(singleReference.Value, requiredTypes, references);
             return;
         }
 
@@ -872,64 +847,57 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         }
 
         var isCollectionSchema = this.IsCollectionReferenceSchema(resolvedSchema);
-        if (!isCollectionSchema && this.TryGetCanonicalNameFromArray(value, out var canonicalName))
+        if (!isCollectionSchema
+            && singleReference is not null)
         {
-            references.Add(
-                new ReferenceConstraint
-                {
-                    TargetEntityId = null,
-                    TargetEntityName = canonicalName,
-                    RequiredTypes = requiredTypes,
-                });
+            this.AddReferenceConstraint(singleReference.Value, requiredTypes, references);
             return;
         }
 
         foreach (var item in value.EnumerateArray())
         {
-            if (item.ValueKind == JsonValueKind.String)
+            var itemReference = item.TryReadEntityReference();
+            if (itemReference is null)
             {
-                var itemText = item.GetString();
-                if (string.IsNullOrWhiteSpace(itemText))
-                {
-                    continue;
-                }
-
-                if (Guid.TryParse(itemText, out var itemGuid))
-                {
-                    references.Add(
-                        new ReferenceConstraint
-                        {
-                            TargetEntityId = new EntityId(itemGuid),
-                            TargetEntityName = null,
-                            RequiredTypes = requiredTypes,
-                        });
-                }
-                else
-                {
-                    references.Add(
-                        new ReferenceConstraint
-                        {
-                            TargetEntityId = null,
-                            TargetEntityName = itemText,
-                            RequiredTypes = requiredTypes,
-                        });
-                }
-
                 continue;
             }
 
-            if (item.ValueKind == JsonValueKind.Array
-                && this.TryGetCanonicalNameFromArray(item, out var nestedCanonicalName))
-            {
-                references.Add(
-                    new ReferenceConstraint
-                    {
-                        TargetEntityId = null,
-                        TargetEntityName = nestedCanonicalName,
-                        RequiredTypes = requiredTypes,
-                    });
-            }
+            this.AddReferenceConstraint(itemReference.Value, requiredTypes, references);
         }
+    }
+
+    private void AddReferenceConstraint(
+        EntityReference reference,
+        IReadOnlyCollection<string> requiredTypes,
+        ICollection<ReferenceConstraint> references)
+    {
+        if (reference.EntityId is EntityId entityId)
+        {
+            references.Add(
+                new ReferenceConstraint
+                {
+                    TargetEntityId = entityId,
+                    TargetEntityName = null,
+                    RequiredTypes = requiredTypes,
+                });
+            return;
+        }
+
+        if (reference.EntityName is not EntityName entityName)
+        {
+            return;
+        }
+
+        var targetName = reference.IsNameArray
+            ? JsonSerializer.Serialize(entityName.Components)
+            : entityName.Components[0];
+        references.Add(
+            new ReferenceConstraint
+            {
+                TargetEntityId = null,
+                TargetEntityName = targetName,
+                RequiredTypes = requiredTypes,
+            });
     }
 
     private bool IsCollectionReferenceSchema(

@@ -63,6 +63,45 @@ public sealed class DataAccessLayerJsonExtensionsTests
     }
 
     [Fact]
+    public void TryReadEntityReference_WithGuidString_ReturnsEntityId()
+    {
+        var json = JsonDocument.Parse("\"5a48c0ee-4a39-4d1b-9c6c-c3de6e67ce27\"").RootElement;
+
+        var result = json.TryReadEntityReference();
+
+        Assert.NotNull(result);
+        Assert.Equal(new EntityId("5a48c0ee-4a39-4d1b-9c6c-c3de6e67ce27"), result.Value.EntityId);
+        Assert.Null(result.Value.EntityName);
+        Assert.False(result.Value.IsNameArray);
+    }
+
+    [Fact]
+    public void TryReadEntityReference_WithNameString_ReturnsEntityName()
+    {
+        var json = JsonDocument.Parse("\"docs/intro\"").RootElement;
+
+        var result = json.TryReadEntityReference();
+
+        Assert.NotNull(result);
+        Assert.Null(result.Value.EntityId);
+        Assert.Equal(new EntityName("docs/intro"), result.Value.EntityName);
+        Assert.False(result.Value.IsNameArray);
+    }
+
+    [Fact]
+    public void TryReadEntityReference_WithNameArray_ReturnsEntityName()
+    {
+        var json = JsonDocument.Parse("[\"docs\",\"intro\"]").RootElement;
+
+        var result = json.TryReadEntityReference();
+
+        Assert.NotNull(result);
+        Assert.Null(result.Value.EntityId);
+        Assert.Equal(new EntityName("docs", "intro"), result.Value.EntityName);
+        Assert.True(result.Value.IsNameArray);
+    }
+
+    [Fact]
     public void TryReadEntityTypeNames_WithValidStringArray_ReturnsEntityTypeNames()
     {
         var json = JsonDocument.Parse("[\"entity\",\"workspace\"]").RootElement;

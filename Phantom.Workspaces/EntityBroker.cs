@@ -67,14 +67,15 @@ public sealed class EntityBroker
     {
         entity = null;
 
-        if (!TryReadEntityReference(element, propertyName, out var reference))
+        var reference = element.TryReadEntityReference(propertyName);
+        if (reference is null)
         {
             return false;
         }
 
         lock (this.gate)
         {
-            var snapshot = this.ResolveEntityReference(reference);
+            var snapshot = this.ResolveEntityReference(reference.Value);
             if (snapshot?.EntityId is EntityId entityId)
             {
                 entity = this.GetOrCreateSubscribedEntity(snapshot);
@@ -83,6 +84,44 @@ public sealed class EntityBroker
         }
 
         return false;
+    }
+
+    public async Task<UpdateResult> UpdateAsync(
+        UpdateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var updateResult = await this.entityRepository.DataAccessLayer.UpdateAsync(request, cancellationToken);
+
+        var changedEntityIds = new HashSet<EntityId>();
+        lock (this.gate)
+        {
+            foreach (var entityResult in updateResult.EntityResults)
+            {
+                if (entityResult.CurrentEntity is not EntitySnapshot currentEntity)
+                {
+                    continue;
+                }
+
+                if (this.subscribedEntitiesById.TryGetValue(currentEntity.EntityId, out var weakRef)
+                    && weakRef.TryGetTarget(out var entity))
+                {
+                    entity.UpdateSnapshot(currentEntity);
+                    changedEntityIds.Add(currentEntity.EntityId);
+                }
+            }
+        }
+
+        if (changedEntityIds.Count > 0)
+        {
+            this.Changed?.Invoke(
+                this,
+                new EntityBrokerChangedEventArgs
+                {
+                    ChangedEntityIds = changedEntityIds.ToArray(),
+                });
+        }
+
+        return updateResult;
     }
 
     public SubscribedEntityViewModel? GetEntity(EntityId entityId)
@@ -180,63 +219,6 @@ public sealed class EntityBroker
             .ToDictionary(static snapshot => snapshot.EntityId, static snapshot => snapshot);
     }
 
-    private static bool TryReadEntityReference(
-        JsonElement parent,
-        string propertyName,
-        out EntityReference reference)
-    {
-        reference = default;
-        if (!parent.TryGetProperty(propertyName, out var value))
-        {
-            return false;
-        }
-
-        if (value.ValueKind == JsonValueKind.String)
-        {
-            var stringValue = value.GetString();
-            if (Guid.TryParse(stringValue, out var entityGuid))
-            {
-                reference = new EntityReference
-                {
-                    EntityId = new EntityId(entityGuid),
-                };
-                return true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(stringValue))
-            {
-                reference = new EntityReference
-                {
-                    NameKey = stringValue,
-                };
-                return true;
-            }
-
-            return false;
-        }
-
-        if (value.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
-
-        var components = value.EnumerateArray()
-            .Where(static item => item.ValueKind == JsonValueKind.String)
-            .Select(static item => item.GetString())
-            .Where(static text => !string.IsNullOrWhiteSpace(text))
-            .ToArray();
-        if (components.Length == 0)
-        {
-            return false;
-        }
-
-        reference = new EntityReference
-        {
-            NameKey = string.Join("/", components!),
-        };
-        return true;
-    }
-
     private EntitySnapshot? ResolveEntityReference(
         EntityReference reference)
     {
@@ -247,7 +229,7 @@ public sealed class EntityBroker
             return entity.Snapshot;
         }
 
-        if (reference.NameKey is not null)
+        if (reference.EntityName is EntityName entityName)
         {
             foreach (var entityRef in this.subscribedEntitiesById.Values)
             {
@@ -267,7 +249,7 @@ public sealed class EntityBroker
                     continue;
                 }
 
-                if (nameKeys.Contains(reference.NameKey, StringComparer.Ordinal))
+                if (nameKeys.Contains(entityName))
                 {
                     return snapshot;
                 }
@@ -279,9 +261,9 @@ public sealed class EntityBroker
 
     private static bool TryReadNames(
         JsonElement entityData,
-        out IReadOnlyCollection<string> names)
+        out IReadOnlyCollection<EntityName> names)
     {
-        var resolved = new List<string>();
+        var resolved = new List<EntityName>();
         if (!entityData.TryGetProperty("names", out var namesElement)
             || namesElement.ValueKind != JsonValueKind.Array)
         {
@@ -291,30 +273,13 @@ public sealed class EntityBroker
 
         foreach (var nameElement in namesElement.EnumerateArray())
         {
-            if (nameElement.ValueKind == JsonValueKind.String)
-            {
-                var value = nameElement.GetString();
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    resolved.Add(value);
-                }
-                continue;
-            }
-
-            if (nameElement.ValueKind != JsonValueKind.Array)
+            var nameReference = nameElement.TryReadEntityReference();
+            if (nameReference is not { EntityName: EntityName parsedName })
             {
                 continue;
             }
 
-            var components = nameElement.EnumerateArray()
-                .Where(static item => item.ValueKind == JsonValueKind.String)
-                .Select(static item => item.GetString())
-                .Where(static item => !string.IsNullOrWhiteSpace(item))
-                .ToArray();
-            if (components.Length > 0)
-            {
-                resolved.Add(string.Join("/", components!));
-            }
+            resolved.Add(parsedName);
         }
 
         names = resolved;
@@ -365,11 +330,3 @@ public sealed class EntityBrokerChangedEventArgs : EventArgs
 {
     public required IReadOnlyCollection<EntityId> ChangedEntityIds { get; init; }
 }
-
-internal readonly record struct EntityReference
-{
-    public EntityId? EntityId { get; init; }
-
-    public string? NameKey { get; init; }
-}
-

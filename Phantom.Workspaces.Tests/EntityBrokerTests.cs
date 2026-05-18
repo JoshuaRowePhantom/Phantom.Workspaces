@@ -147,6 +147,65 @@ public sealed class EntityBrokerTests
         Assert.Empty(dataAccessLayer.GetChangedEntitiesRequests);
     }
 
+    [Fact]
+    public async Task UpdateAsync_UpdatesSubscribedEntityWithoutRefreshAsync()
+    {
+        var entityId = new EntityId("44444444-4444-4444-4444-444444444444");
+        var initialTimestamp = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1");
+        var initialSnapshot = CreateSnapshot(
+            entityId,
+            initialTimestamp,
+            """
+            {
+              "entity-id": "44444444-4444-4444-4444-444444444444",
+              "entity-types": ["entity"],
+              "names": ["live-updated-entity"],
+              "title": "Before Update"
+            }
+            """);
+        var dataAccessLayer = new TrackingDataAccessLayer
+        {
+            CurrentSnapshotsById =
+            {
+                [entityId] = initialSnapshot,
+            },
+        };
+        var broker = CreateBroker(dataAccessLayer);
+        var entities = await broker.GetEntitiesAsync([entityId]);
+        var entity = Assert.Single(entities);
+
+        var changedEntityIds = new List<EntityId>();
+        broker.Changed += (_, args) => changedEntityIds.AddRange(args.ChangedEntityIds);
+
+        var updateResult = await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Update title",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entityId,
+                        ConcurrencyTag = entity.ConcurrencyTag,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = null,
+                    },
+                ],
+            });
+
+        var entityResult = Assert.Single(updateResult.EntityResults);
+        Assert.Equal(UpdateState.Removed, entityResult.UpdateState);
+        Assert.Null(entity.Data);
+        Assert.Contains(entityId, changedEntityIds);
+        Assert.Empty(dataAccessLayer.GetChangedEntitiesRequests);
+    }
+
     private static EntityBroker CreateBroker(
         IDataAccessLayer dataAccessLayer)
     {
@@ -208,7 +267,48 @@ public sealed class EntityBrokerTests
             UpdateRequest request,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            var results = new List<EntityUpdateResult>(request.Changes.Count);
+            foreach (var change in request.Changes)
+            {
+                if (change.EntityId is not EntityId entityId)
+                {
+                    throw new InvalidOperationException("Test update requires EntityId.");
+                }
+
+                var current = this.CurrentSnapshotsById.GetValueOrDefault(entityId);
+                var nextChangeId = current is null
+                    ? "1"
+                    : (long.TryParse(current.ModifiedTime.ChangeId, out var parsed) ? (parsed + 1).ToString() : "1");
+                var nextSnapshot = new EntitySnapshot
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = new ConcurrencyTag(nextChangeId),
+                    ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, nextChangeId),
+                    Data = change.Data?.Clone(),
+                    Relationships = Array.Empty<EntitySnapshot>(),
+                };
+                this.CurrentSnapshotsById[entityId] = nextSnapshot;
+
+                results.Add(
+                    new EntityUpdateResult
+                    {
+                        UpdateState = change.Data is null
+                            ? UpdateState.Removed
+                            : current is null ? UpdateState.Added : UpdateState.Updated,
+                        RequestedEntityId = entityId,
+                        ResultingEntityId = entityId,
+                        ConcurrencyTag = nextSnapshot.ConcurrencyTag,
+                        ConcurrencyMatchState = ConcurrencyMatchState.Matched,
+                        CurrentEntity = nextSnapshot,
+                        Errors = Array.Empty<UpdateError>(),
+                    });
+            }
+
+            return Task.FromResult(
+                new UpdateResult
+                {
+                    EntityResults = results,
+                });
         }
 
         public Task<GetResult> GetAsync(
@@ -255,7 +355,37 @@ public sealed class EntityBrokerTests
             ExportRequest request,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            var entities = this.CurrentSnapshotsById.Values
+                .OrderBy(snapshot => snapshot.ModifiedTime.DateTime)
+                .ThenBy(snapshot => snapshot.ModifiedTime.ChangeId, StringComparer.Ordinal)
+                .ToArray();
+            var finalSnapshotTime = entities.LastOrDefault().ModifiedTime;
+
+            return Task.FromResult(
+                new ExportResult
+                {
+                    ChangeBatches = entities
+                        .Select(
+                            snapshot => new ExportChangeBatch
+                            {
+                                ChangeTime = snapshot.ModifiedTime,
+                                Entities =
+                                [
+                                    new QueryEntitySnapshot
+                                    {
+                                        EntityId = snapshot.EntityId,
+                                        ConcurrencyTag = snapshot.ConcurrencyTag,
+                                        ModifiedTime = snapshot.ModifiedTime,
+                                        Data = snapshot.Data,
+                                        Relationships = snapshot.Relationships,
+                                        MatchingClauseIdentifiers = Array.Empty<QueryClauseIdentifier>(),
+                                        FullTextQueryScores = Array.Empty<FullTextQueryScore>(),
+                                    },
+                                ],
+                            })
+                        .ToArray(),
+                    FinalSnapshotTime = entities.Length == 0 ? new Timestamp(DateTimeOffset.UnixEpoch, "0") : finalSnapshotTime,
+                });
         }
 
         public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(

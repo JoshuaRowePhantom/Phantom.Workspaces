@@ -11,11 +11,12 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     private WorkspaceRegionViewModel? selectedRegion;
 
     public WorkspacePaneViewModel(
-        SubscribedEntityViewModel entity)
+        SubscribedEntityViewModel entity,
+        string? id = null)
     {
         this.Entity = entity;
         this.title = entity.DisplayName;
-        this.Id = entity.EntityId.ToString();
+        this.Id = id ?? entity.EntityId.ToString();
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
     }
 
