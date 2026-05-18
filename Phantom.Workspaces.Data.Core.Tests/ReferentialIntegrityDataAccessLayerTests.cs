@@ -123,6 +123,36 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     }
 
     [Fact]
+    public async Task CreateEntity_WithMultipleNames_CreatesFolderPrefixesForEntityTypesAndJsonSchemas()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("85d2c332-f75d-4c23-8c79-3c9ec4c0a928");
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity"],
+              "names": [
+                ["entity-types", "custom-type"],
+                ["json-schemas", "https://schemas.workspaces.phantom.to/workspaces/custom/custom-type.json"]
+              ]
+            }
+            """);
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create entity-type with multiple names"),
+                new[]
+                {
+                    CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace),
+                }));
+
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("entity-types"))).Single(), "folder"));
+        Assert.True(HasEntityType((await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("json-schemas"))).Single(), "folder"));
+    }
+
+    [Fact]
     public async Task CreateEntity_WithSingleComponentName_DoesNotCreateFolderWithSameName()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -187,6 +217,79 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
         Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha")));
         Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "beta")));
+    }
+
+    [Fact]
+    public async Task DeleteFolder_WithExistingDescendants_Fails()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var childEntityId = new EntityId("768d4dbb-5f4e-4773-a8b7-b6f168272f70");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create nested entity"),
+                new[]
+                {
+                    CreateNamedEntityChange(childEntityId, null, new[] { "projects", "alpha", "task-1" }),
+                }));
+
+        var projectsFolder = Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
+        var deleteFolderResult = await RequireUpdateFailsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Delete non-empty folder"),
+                new[]
+                {
+                    CreateEntityChange(
+                        projectsFolder.EntityId,
+                        projectsFolder.ConcurrencyTag,
+                        null,
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.Contains(
+            deleteFolderResult.EntityResults,
+            result => result.RequestedEntityId == projectsFolder.EntityId && result.UpdateState == UpdateState.Failed);
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha")));
+        Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha", "task-1")));
+    }
+
+    [Fact]
+    public async Task DeleteFolder_WithDescendantsDeletedInSameTransaction_Succeeds()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var childEntityId = new EntityId("a2f5f82e-9a8a-425f-938d-2122b9b4a467");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create nested entity"),
+                new[]
+                {
+                    CreateNamedEntityChange(childEntityId, null, new[] { "projects", "alpha", "task-1" }),
+                }));
+
+        var childEntity = await this.GetEntitySnapshotByIdAsync(dataAccessLayer, childEntityId);
+        var alphaFolder = Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha")));
+        var projectsFolder = Assert.Single(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
+
+        var deleteResult = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Delete nested tree in one transaction"),
+                new[]
+                {
+                    CreateEntityChange(childEntity.EntityId, childEntity.ConcurrencyTag, null, EntityChangeMode.Replace),
+                    CreateEntityChange(alphaFolder.EntityId, alphaFolder.ConcurrencyTag, null, EntityChangeMode.Replace),
+                    CreateEntityChange(projectsFolder.EntityId, projectsFolder.ConcurrencyTag, null, EntityChangeMode.Replace),
+                }));
+
+        Assert.DoesNotContain(deleteResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+        Assert.Empty(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects")));
+        Assert.Empty(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha")));
+        Assert.Empty(await this.GetEntitySnapshotsByNameAsync(dataAccessLayer, new EntityName("projects", "alpha", "task-1")));
     }
 
     [Fact]
@@ -450,7 +553,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "related"],
-              "names": ["relationship-with-reference-field"],
+              "names": [["relationship-with-reference-field"]],
               "participants": {
                 "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
               },
@@ -568,7 +671,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["{{entityType}}"],
-              "names": ["{{name}}"]
+              "names": [["{{name}}"]]
             }
             """);
         return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
@@ -585,7 +688,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "related"],
-              "names": ["source-to-destination"],
+              "names": [["source-to-destination"]],
               "participants": {
                 "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
               }
@@ -617,7 +720,9 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                   },
                   "names": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": {
+                      "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-name"
+                    }
                   },
                   "target-entity-id": {
                     "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-id",
@@ -642,7 +747,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "$schema": "{{schemaName}}",
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"],
+              "names": [["{{name}}"]],
               "target-entity-id": "{{targetEntityId}}"
             }
             """);
@@ -668,7 +773,9 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                   },
                   "entity-types": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": {
+                      "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-type-id"
+                    }
                   },
                   "names": {
                     "type": "array",
@@ -699,8 +806,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
               "$schema": "{{schemaName}}",
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"],
-              "target-entity-name": "{{targetName}}"
+              "names": [["{{name}}"]],
+              "target-entity-name": ["{{targetName}}"]
             }
             """);
         return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
@@ -717,7 +824,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"],
+              "names": [["{{name}}"]],
               "first-entity-id": "{{firstReferenceEntityId}}",
               "second-entity-id": "{{secondReferenceEntityId}}"
             }
@@ -736,7 +843,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"],
+              "names": [["{{name}}"]],
               "first-entity-id": "{{referenceEntityId}}"
             }
             """);
@@ -753,7 +860,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"]
+              "names": [["{{name}}"]]
             }
             """);
         return CreateEntityChange(entityId, concurrencyTag, document.RootElement.Clone(), EntityChangeMode.Replace);

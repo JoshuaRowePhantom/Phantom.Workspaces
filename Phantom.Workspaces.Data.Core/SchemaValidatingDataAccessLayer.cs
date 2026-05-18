@@ -564,13 +564,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         var names = new List<string>();
         foreach (var nameElement in namesElement.EnumerateArray())
         {
-            if (nameElement.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(nameElement.GetString()))
-            {
-                names.Add(nameElement.GetString()!);
-                continue;
-            }
-
             if (nameElement.ValueKind == JsonValueKind.Array
                 && this.TryGetCanonicalNameFromArray(nameElement, out var canonicalName))
             {

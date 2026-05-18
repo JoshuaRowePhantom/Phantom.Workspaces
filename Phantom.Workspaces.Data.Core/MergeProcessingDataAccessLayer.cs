@@ -237,14 +237,6 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
 
         processedChanges.AddRange(passthroughChanges);
 
-        if (processedChanges.Count == 0)
-        {
-            return new UpdateResult
-            {
-                EntityResults = noOpEntityResults,
-            };
-        }
-
         var updateResult = await this.UnderlyingDataAccessLayer.UpdateAsync(
             new UpdateRequest
             {

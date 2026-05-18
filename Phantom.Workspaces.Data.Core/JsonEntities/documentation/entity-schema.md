@@ -8,7 +8,7 @@ Defines the common object shape for nearly all persisted entities.
 {
   "entity-id": "<uuid>",
   "entity-types": ["entity", "<derived-type>", "..."],
-  "names": ["or", ["multi", "part"]],
+  "names": [["single"], ["multi", "part"]],
   "display-name": { "default": "Human readable name" }
 }
 ```

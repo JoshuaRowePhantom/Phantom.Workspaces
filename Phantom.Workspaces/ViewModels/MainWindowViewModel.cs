@@ -617,13 +617,13 @@ public sealed class MainWindowViewModel : ViewModelBase
                     new GetEntityRequest
                     {
                         EntityName = new EntityName(Array.Empty<string>()),
-                        EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
                     },
                 ],
                 Timestamps = [null],
             });
 
-        var entityBrowserTab = new EntityBrowserWorkspaceTabViewModel(subscribedGet)
+        var entityBrowserTab = new EntityBrowserWorkspaceTabViewModel(this.EntityBroker, subscribedGet)
         {
             Id = entityBrowserTabId,
             Title = "Entity Browser",

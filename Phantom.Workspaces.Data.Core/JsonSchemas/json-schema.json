@@ -54,44 +54,28 @@
         ]
       },
       "entity-type-name": {
-        "anyOf": [
+        "type": "array",
+        "minItems": 1,
+        "prefixItems": [
           {
-            "type": "string",
-            "pattern": "^entity-types(?:/|$)"
-          },
-          {
-            "type": "array",
-            "minItems": 1,
-            "prefixItems": [
-              {
-                "const": "entity-types"
-              }
-            ],
-            "items": {
-              "type": "string"
-            }
+            "const": "entity-types"
           }
-        ]
+        ],
+        "items": {
+          "type": "string"
+        }
       },
       "json-schema-name": {
-        "anyOf": [
+        "type": "array",
+        "minItems": 1,
+        "prefixItems": [
           {
-            "type": "string",
-            "pattern": "^json-schemas(?:/|$)"
-          },
-          {
-            "type": "array",
-            "minItems": 1,
-            "prefixItems": [
-              {
-                "const": "json-schemas"
-              }
-            ],
-            "items": {
-              "type": "string"
-            }
+            "const": "json-schemas"
           }
-        ]
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     }
   }

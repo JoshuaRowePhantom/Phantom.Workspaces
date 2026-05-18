@@ -48,6 +48,16 @@ public sealed class MainWindowIntegrationTests
                 || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindow_ConstructsWithoutTemplateCastErrors()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var window = new MainWindow(viewModel);
+
+        Assert.NotNull(window);
+        Assert.Empty(window.DataTemplates);
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new RepositorySource(RepositorySourceType.Unknown, "(none)");

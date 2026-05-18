@@ -97,6 +97,16 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         this.ApplyManagedReferenceRelationshipChanges(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
         this.ApplyRelationshipDeleteCascade(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
+        var folderDeleteFailures = await this.ValidateFolderDeletesAsync(changesByEntityId, currentSnapshotsById, cancellationToken);
+        if (folderDeleteFailures.Count > 0)
+        {
+            return new RewriteState
+            {
+                Changes = Array.Empty<EntityChange>(),
+                Failures = folderDeleteFailures,
+            };
+        }
+
         order = await this.ApplyFolderPrefixEntityChangesAsync(changesByEntityId, orderedChangesByEntityId, order, cancellationToken);
         await this.ApplyDuplicateRelationshipCoalescingAsync(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, cancellationToken);
         var requestSchemasByName = this.GetSchemasFromRequest(
@@ -429,13 +439,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 continue;
             }
 
-            var entityTypes = this.GetEntityTypeNames(entityData);
-            if (entityTypes.Contains(EntityTypeType, StringComparer.Ordinal)
-                || entityTypes.Contains(JsonSchemaType, StringComparer.Ordinal))
-            {
-                continue;
-            }
-
             foreach (var name in names)
             {
                 for (var componentCount = 1; componentCount < name.Components.Length; componentCount++)
@@ -600,6 +603,78 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
                     CurrentEntity = currentEntity,
                     Errors = errors,
+                });
+        }
+
+        return failures;
+    }
+
+    private async Task<IReadOnlyCollection<EntityUpdateResult>> ValidateFolderDeletesAsync(
+        IReadOnlyDictionary<EntityId, EntityChange> changesByEntityId,
+        IReadOnlyDictionary<EntityId, EntitySnapshot> currentSnapshotsById,
+        CancellationToken cancellationToken)
+    {
+        var folderDeleteEntityIds = changesByEntityId
+            .Where(static pair => pair.Value.Data is null)
+            .Select(static pair => pair.Key)
+            .Where(
+                entityId => currentSnapshotsById.TryGetValue(entityId, out var currentSnapshot)
+                    && currentSnapshot.Data is { ValueKind: JsonValueKind.Object } currentData
+                    && this.IsFolderEntity(currentData))
+            .ToArray();
+        if (folderDeleteEntityIds.Length == 0)
+        {
+            return Array.Empty<EntityUpdateResult>();
+        }
+
+        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken);
+        var projectedEntitiesById = latestSnapshotsById.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.Data);
+        foreach (var pair in changesByEntityId)
+        {
+            projectedEntitiesById[pair.Key] = pair.Value.Data;
+        }
+
+        var projectedNames = projectedEntitiesById.Values
+            .Where(static data => data is { ValueKind: JsonValueKind.Object })
+            .SelectMany(data => this.GetEntityNameValues(data!.Value))
+            .ToArray();
+
+        var failures = new List<EntityUpdateResult>();
+        foreach (var folderDeleteEntityId in folderDeleteEntityIds)
+        {
+            var currentSnapshot = currentSnapshotsById[folderDeleteEntityId];
+            if (currentSnapshot.Data is not { ValueKind: JsonValueKind.Object } folderData)
+            {
+                continue;
+            }
+
+            var folderNames = this.GetEntityNameValues(folderData);
+            var hasRemainingDescendants = folderNames.Any(
+                folderName => projectedNames.Any(name => IsDescendantName(name, folderName)));
+            if (!hasRemainingDescendants)
+            {
+                continue;
+            }
+
+            failures.Add(
+                new EntityUpdateResult
+                {
+                    UpdateState = UpdateState.Failed,
+                    RequestedEntityId = folderDeleteEntityId,
+                    ResultingEntityId = folderDeleteEntityId,
+                    ConcurrencyTag = currentSnapshot.ConcurrencyTag,
+                    ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                    CurrentEntity = currentSnapshot,
+                    Errors =
+                    [
+                        new UpdateError
+                        {
+                            Message = "Folder entities with descendants cannot be deleted. Delete descendant entities in the same transaction.",
+                            RelatedEntityId = folderDeleteEntityId,
+                        },
+                    ],
                 });
         }
 
@@ -1484,6 +1559,14 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return JsonSerializer.Serialize(name.Components);
     }
 
+    private static bool IsDescendantName(
+        EntityName candidate,
+        EntityName parent)
+    {
+        return candidate.Components.Length > parent.Components.Length
+            && candidate.Components.Take(parent.Components.Length).SequenceEqual(parent.Components, StringComparer.Ordinal);
+    }
+
     private static EntityId GetFolderEntityId(
         EntityName folderName)
     {
@@ -1528,13 +1611,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var names = new List<EntityName>();
         foreach (var nameElement in namesElement.EnumerateArray())
         {
-            if (nameElement.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(nameElement.GetString()))
-            {
-                names.Add(new EntityName(nameElement.GetString()!));
-                continue;
-            }
-
             var entityName = nameElement.TryReadEntityName();
             if (entityName is not null)
             {

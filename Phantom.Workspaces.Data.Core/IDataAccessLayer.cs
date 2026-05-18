@@ -589,7 +589,7 @@ public static class DataAccessLayerJsonExtensions
 {
     /// <summary>
     /// Reads an entity reference value and returns either EntityId or EntityName.
-    /// Supports schema entity-reference values: UUID string, name string, or name string-array.
+    /// Supports schema entity-reference values: UUID string or entity-name string-array.
     /// </summary>
     public static EntityReference? TryReadEntityReference(this JsonElement element)
     {
@@ -601,15 +601,6 @@ public static class DataAccessLayerJsonExtensions
                 return new EntityReference
                 {
                     EntityId = new EntityId(entityGuid),
-                };
-            }
-
-            if (!string.IsNullOrWhiteSpace(stringValue))
-            {
-                return new EntityReference
-                {
-                    EntityName = new EntityName(stringValue),
-                    IsNameArray = false,
                 };
             }
 
@@ -647,16 +638,10 @@ public static class DataAccessLayerJsonExtensions
     }
 
     /// <summary>
-    /// Reads a string or array of strings from a JsonElement and returns an EntityName.
+    /// Reads an array of strings from a JsonElement and returns an EntityName.
     /// </summary>
     public static EntityName? TryReadEntityName(this JsonElement element)
     {
-        if (element.ValueKind == JsonValueKind.String)
-        {
-            var component = element.GetString();
-            return string.IsNullOrWhiteSpace(component) ? null : new EntityName(component);
-        }
-
         if (element.ValueKind != JsonValueKind.Array)
         {
             return null;

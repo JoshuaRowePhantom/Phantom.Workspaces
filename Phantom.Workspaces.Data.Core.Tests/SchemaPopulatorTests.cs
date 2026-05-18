@@ -252,6 +252,115 @@ public sealed class SchemaPopulatorTests
             && string.Equals(restoredTheme.GetString(), "dark", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Populate_WhenEntityTypesFolderIsDeletedInUnderlyingStore_RecreatesFolder()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var pipelineDataAccessLayer = new MergeProcessingDataAccessLayer(
+            new ReferentialIntegrityDataAccessLayer(inMemoryDataAccessLayer));
+        var schemaPopulator = new SchemaPopulator(pipelineDataAccessLayer);
+
+        var firstPopulateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            firstPopulateErrors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                firstPopulateErrors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var firstExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var entityTypesFolder = firstExport.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .First(
+                snapshot =>
+                    snapshot.Data is JsonElement data
+                    && IsFolderEntity(data)
+                    && data.TryGetProperty("names", out var names)
+                    && names.ValueKind == JsonValueKind.Array
+                    && names.EnumerateArray().Any(
+                        name =>
+                        {
+                            var entityName = name.TryReadEntityName();
+                            return entityName is not null
+                                && entityName.Value.Components.SequenceEqual(["entity-types"], StringComparer.Ordinal);
+                        }));
+        Assert.NotNull(entityTypesFolder.ConcurrencyTag);
+
+        var directDeleteResult = await inMemoryDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Delete entity-types folder directly in underlying store.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entityTypesFolder.EntityId,
+                        ConcurrencyTag = entityTypesFolder.ConcurrencyTag,
+                        Data = null,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+        Assert.DoesNotContain(directDeleteResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+
+        var afterDeleteExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var latestAfterDelete = afterDeleteExport.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .GroupBy(static snapshot => snapshot.EntityId)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Last());
+        Assert.DoesNotContain(
+            latestAfterDelete.Values,
+            snapshot =>
+                snapshot.Data is JsonElement data
+                && data.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(
+                    name =>
+                    {
+                        var entityName = name.TryReadEntityName();
+                        return entityName is not null
+                            && entityName.Value.Components.SequenceEqual(["entity-types"], StringComparer.Ordinal);
+                    }));
+
+        var secondPopulateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            secondPopulateErrors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                secondPopulateErrors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var secondExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var latestAfterRepopulate = secondExport.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .GroupBy(static snapshot => snapshot.EntityId)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Last());
+        Assert.Contains(
+            latestAfterRepopulate.Values,
+            snapshot =>
+                snapshot.Data is JsonElement data
+                && IsFolderEntity(data)
+                && data.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(
+                    name =>
+                    {
+                        var entityName = name.TryReadEntityName();
+                        return entityName is not null
+                            && entityName.Value.Components.SequenceEqual(["entity-types"], StringComparer.Ordinal);
+                    }));
+    }
+
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {

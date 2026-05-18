@@ -3,7 +3,6 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
-        xmlns:templates="using:Phantom.Workspaces.Templates"
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -15,10 +14,6 @@
         FontSize="{DynamicResource Theme.FontSize.Base}"
         Foreground="{DynamicResource Theme.Class.normal.Foreground}"
         Title="Phantom.Workspaces">
-    <Window.DataTemplates>
-        <templates:WorkspaceDataTemplates />
-    </Window.DataTemplates>
-
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
             <Grid ColumnDefinitions="Auto,*,Auto">

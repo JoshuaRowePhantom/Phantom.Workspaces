@@ -1,6 +1,4 @@
-using System.Text.Json;
 using Avalonia;
-using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -8,35 +6,33 @@ namespace Phantom.Workspaces.Tests;
 public sealed class EntityListViewModelTests
 {
     [Fact]
-    public void PopulateFromEntities_WithRootNode_BuildsHierarchyFromRoot()
+    public void SetItems_OrdersByOrderAndPreservesHierarchyLevel()
     {
-        var entities = new[]
-        {
-            CreateEntity(
-                entityId: "11111111-1111-1111-1111-111111111111",
-                namesJson: """[["z"]]""",
-                displayName: "Z"),
-            CreateEntity(
-                entityId: "22222222-2222-2222-2222-222222222222",
-                namesJson: """[["a"]]""",
-                displayName: "A"),
-            CreateEntity(
-                entityId: "33333333-3333-3333-3333-333333333333",
-                namesJson: """[["a","child"]]""",
-                displayName: "A child"),
-        };
         var list = new EntityListViewModel();
+        var first = new EntityListNodeViewModel(
+            displayName: "First",
+            entityType: "folder",
+            nameComponents: ["first"],
+            sortKey: "[\"first\"]");
+        var second = new EntityListNodeViewModel(
+            displayName: "Second",
+            entityType: "entity",
+            nameComponents: ["second"],
+            sortKey: "[\"second\"]");
 
-        list.PopulateFromEntities(entities, includeRootNode: true);
+        list.SetItems(
+        [
+            new EntityListItemViewModel(second, order: 2, level: 1, itemKey: "[\"second\"]", parentItemKey: "[\"first\"]"),
+            new EntityListItemViewModel(first, order: 1, level: 0, itemKey: "[\"first\"]", childItemKeys: ["[\"second\"]"], isExpanded: true),
+        ]);
 
-        var root = Assert.Single(list.RootEntities);
-        Assert.Equal("Root", root.DisplayName);
-        Assert.True(root.IsExpanded);
-        Assert.Equal(2, root.VisibleChildren.Count);
-        Assert.Equal("A", root.VisibleChildren[0].DisplayName);
-        Assert.Equal("Z", root.VisibleChildren[1].DisplayName);
-        Assert.Single(root.VisibleChildren[0].Children);
-        Assert.Equal("A child", root.VisibleChildren[0].Children[0].DisplayName);
+        Assert.Equal(2, list.Items.Count);
+        Assert.Same(first, list.Items[0].Node);
+        Assert.Equal(0, list.Items[0].Level);
+        Assert.Same(second, list.Items[1].Node);
+        Assert.Equal(1, list.Items[1].Level);
+        Assert.Equal("[\"first\"]", list.Items[1].ParentItemKey);
+        Assert.True(list.Items[0].IsExpanded);
     }
 
     [Fact]
@@ -65,36 +61,4 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▴", parent.ExpandArrow);
     }
 
-    private static SubscribedEntityViewModel CreateEntity(
-        string entityId,
-        string namesJson,
-        string displayName)
-    {
-        var snapshot = CreateSnapshot(
-            entityId,
-            $$"""
-            {
-              "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
-              "names": {{namesJson}},
-              "display-name": { "default": "{{displayName}}" }
-            }
-            """);
-        return new SubscribedEntityViewModel(snapshot);
-    }
-
-    private static EntitySnapshot CreateSnapshot(
-        string entityId,
-        string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        return new EntitySnapshot
-        {
-            EntityId = new EntityId(entityId),
-            ConcurrencyTag = new ConcurrencyTag("1"),
-            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-            Data = document.RootElement.Clone(),
-            Relationships = Array.Empty<EntitySnapshot>(),
-        };
-    }
 }

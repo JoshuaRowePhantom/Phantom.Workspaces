@@ -62,7 +62,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             {
                               "entity-id": "{{entityId}}",
                               "entity-types": ["profile"],
-                              "names": ["unknown-typed-entity"]
+                              "names": [["unknown-typed-entity"]]
                             }
                             """).RootElement.Clone(),
                         EntityChangeMode.Replace),
@@ -185,7 +185,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                               "$schema": "{{schemaName}}",
                               "entity-id": "{{entityId}}",
                               "entity-types": ["entity"],
-                              "names": ["validated-entity"],
+                              "names": [["validated-entity"]],
                               "title": "valid"
                             }
                             """).RootElement.Clone(),
@@ -264,7 +264,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             {
                               "entity-id": "{{entityId}}",
                               "entity-types": ["entity"],
-                              "names": ["entity-with-extra-property"],
+                              "names": [["entity-with-extra-property"]],
                               "unexpected-property": "should-fail"
                             }
                             """).RootElement.Clone(),
@@ -378,7 +378,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             {
                               "$schema": "{{TestSchemaName}}",
                               "entity-id": "{{invalidEntityId}}",
-                              "names": ["invalid-work-item"],
+                              "names": [["invalid-work-item"]],
                               "title": 123
                             }
                             """).RootElement.Clone(),
@@ -467,7 +467,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             {
                               "entity-id": "24a2ab29-2d0e-4a0c-9f0e-2a1a5c37e5a5",
                               "entity-types": ["workspace"],
-                              "names": ["workspaces/workspace-one"],
+                              "names": [["workspaces/workspace-one"]],
                               "display-name": "Workspace One",
                               "regions": [
                                 {
@@ -614,7 +614,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
               "$schema": "{{schemaName}}",
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["validated-entity"],
+              "names": [["validated-entity"]],
               "title": {{JsonSerializer.Serialize(title)}}
             }
             """);

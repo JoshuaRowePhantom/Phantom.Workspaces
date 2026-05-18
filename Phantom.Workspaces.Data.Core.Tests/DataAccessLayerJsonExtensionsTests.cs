@@ -40,14 +40,13 @@ public sealed class DataAccessLayerJsonExtensionsTests
     }
 
     [Fact]
-    public void TryReadEntityName_WithStringElement_ReturnsSingleComponentEntityName()
+    public void TryReadEntityName_WithStringElement_ReturnsNull()
     {
         var json = JsonDocument.Parse("\"string\"").RootElement;
         
         var result = json.TryReadEntityName();
         
-        Assert.NotNull(result);
-        Assert.Single(result.Value.Components, "string");
+        Assert.Null(result);
     }
 
     [Fact]
@@ -87,16 +86,13 @@ public sealed class DataAccessLayerJsonExtensionsTests
     }
 
     [Fact]
-    public void TryReadEntityReference_WithNameString_ReturnsEntityName()
+    public void TryReadEntityReference_WithNameString_ReturnsNull()
     {
         var json = JsonDocument.Parse("\"docs/intro\"").RootElement;
 
         var result = json.TryReadEntityReference();
 
-        Assert.NotNull(result);
-        Assert.Null(result.Value.EntityId);
-        Assert.Equal(new EntityName("docs/intro"), result.Value.EntityName);
-        Assert.False(result.Value.IsNameArray);
+        Assert.Null(result);
     }
 
     [Fact]

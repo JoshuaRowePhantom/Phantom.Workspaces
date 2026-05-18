@@ -48,7 +48,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["tracked-entity"]
+              "names": [["tracked-entity"]]
             }
             """);
 
@@ -95,7 +95,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["initial"]
+              "names": [["initial"]]
             }
             """);
         var createResult = await RequireUpdateSucceedsAsync(
@@ -130,7 +130,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["manual-edit"],
+              "names": [["manual-edit"]],
               "manual-only": true
             }
             """);
@@ -140,7 +140,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["requested-change"]
+              "names": [["requested-change"]]
             }
             """);
         var updateResult = await RequireUpdateSucceedsAsync(
@@ -191,7 +191,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["v1"]
+              "names": [["v1"]]
             }
             """);
         var createResult = await RequireUpdateSucceedsAsync(
@@ -222,7 +222,7 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["v2"]
+              "names": [["v2"]]
             }
             """);
         await RequireUpdateSucceedsAsync(
@@ -411,7 +411,7 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["remote-check"]
+              "names": [["remote-check"]]
             }
             """);
 
@@ -465,7 +465,7 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
             {
               "entity-id": "{{entityId}}",
               "entity-types": ["entity"],
-              "names": ["remote-divergence"]
+              "names": [["remote-divergence"]]
             }
             """);
 

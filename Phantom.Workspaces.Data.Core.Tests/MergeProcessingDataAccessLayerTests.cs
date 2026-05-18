@@ -300,7 +300,7 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
             {
               "entity-id": "{{SampleEntityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"],
+              "names": [["{{name}}"]],
               "title": "{{title}}"
             }
             """);
@@ -318,7 +318,7 @@ public sealed class MergeProcessingDataAccessLayerTests : DataAccessLayerNonQuer
             {
               "entity-id": "{{SampleEntityId}}",
               "entity-types": ["entity"],
-              "names": ["{{name}}"],
+              "names": [["{{name}}"]],
               "tags": [{{tagList}}]
             }
             """);

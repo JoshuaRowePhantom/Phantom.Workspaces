@@ -30,7 +30,7 @@ public sealed class EntityBrokerTests
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
               "entity-types": ["entity"],
-              "names": ["loaded-entity"],
+              "names": [["loaded-entity"]],
               "display-name": { "default": "Loaded" }
             }
             """);
@@ -58,7 +58,7 @@ public sealed class EntityBrokerTests
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
               "entity-types": ["entity"],
-              "names": ["loaded-entity"],
+              "names": [["loaded-entity"]],
               "display-name": { "default": "Loaded" }
             }
             """);
@@ -70,7 +70,7 @@ public sealed class EntityBrokerTests
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
               "entity-types": ["entity"],
-              "names": ["loaded-entity"],
+              "names": [["loaded-entity"]],
               "display-name": { "default": "Updated" }
             }
             """);
@@ -101,7 +101,7 @@ public sealed class EntityBrokerTests
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
               "entity-types": ["entity"],
-              "names": ["collected-entity"],
+              "names": [["collected-entity"]],
               "display-name": { "default": "Collected" }
             }
             """);
@@ -113,7 +113,7 @@ public sealed class EntityBrokerTests
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
               "entity-types": ["entity"],
-              "names": ["collected-entity"],
+              "names": [["collected-entity"]],
               "display-name": { "default": "Updated" }
             }
             """);
@@ -143,7 +143,7 @@ public sealed class EntityBrokerTests
             {
               "entity-id": "44444444-4444-4444-4444-444444444444",
               "entity-types": ["entity"],
-              "names": ["live-updated-entity"],
+              "names": [["live-updated-entity"]],
               "display-name": { "default": "Before Update" }
             }
             """);

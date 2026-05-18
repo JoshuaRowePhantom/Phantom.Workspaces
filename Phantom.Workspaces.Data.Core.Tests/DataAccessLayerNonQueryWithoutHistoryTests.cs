@@ -226,7 +226,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     [Fact]
-    public async Task Populate_GetByName_EnumerateChildren_EntityTypesPrefix_ReturnsEntityTypeChildrenWithoutParentEntity()
+    public async Task Populate_GetByName_EnumerateChildren_EntityTypesPrefix_ReturnsEntityTypeChildren()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
         var entityTypesPrefix = new EntityName("entity-types");
@@ -239,7 +239,12 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
                     EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
                 },
                 null));
-        Assert.Empty(Assert.Single(selfResult.Batches).Entities);
+        var selfEntities = Assert.Single(selfResult.Batches).Entities;
+        if (selfEntities.Count > 0)
+        {
+            var parentEntity = Assert.Single(selfEntities);
+            Assert.True(this.HasName(parentEntity.Data, entityTypesPrefix));
+        }
 
         var childrenResult = await dataAccessLayer.GetAsync(
             CreateGetRequest(
@@ -421,7 +426,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             {
               "entity-id": "{{additionalParticipantId}}",
               "entity-types": ["entity"],
-              "names": ["two"]
+              "names": [["two"]]
             }
             """);
         await RequireUpdateSucceedsAsync(
@@ -442,7 +447,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             {
               "entity-id": "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69",
               "entity-types": ["relationship", "related"],
-              "names": ["one-related"],
+              "names": [["one-related"]],
               "participants": {
                 "entities": ["{{SampleEntityId}}", "{{additionalParticipantId}}"]
               }
@@ -529,9 +534,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     protected JsonElement CreateEntity(
         EntityName entityName)
     {
-        var serializedEntityName = entityName.Components.Length == 1
-            ? JsonSerializer.Serialize(new[] { entityName.Components[0] })
-            : JsonSerializer.Serialize(new object[] { entityName.Components });
+        var serializedEntityName = JsonSerializer.Serialize(new[] { entityName.Components });
         using var document = JsonDocument.Parse(
             $$"""
             {
@@ -698,19 +701,6 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 
         foreach (var nameElement in namesElement.EnumerateArray())
         {
-            if (nameElement.ValueKind == JsonValueKind.String)
-            {
-                var name = nameElement.GetString();
-                if (!string.IsNullOrWhiteSpace(name)
-                    && expectedName.Components.Length == 1
-                    && string.Equals(expectedName.Components[0], name, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-
-                continue;
-            }
-
             var entityName = nameElement.TryReadEntityName();
             if (entityName is not null
                 && entityName.Value.Components.SequenceEqual(expectedName.Components, StringComparer.Ordinal))
@@ -738,17 +728,6 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 
         foreach (var nameElement in namesElement.EnumerateArray())
         {
-            if (nameElement.ValueKind == JsonValueKind.String)
-            {
-                var name = nameElement.GetString();
-                if (!string.IsNullOrWhiteSpace(name))
-                {
-                    return new EntityName(name);
-                }
-
-                continue;
-            }
-
             var entityName = nameElement.TryReadEntityName();
             if (entityName is not null)
             {

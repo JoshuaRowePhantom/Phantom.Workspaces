@@ -60,19 +60,12 @@
         }
       },
       "entity-name": {
-        "anyOf": [
-          {
-            "$comment": "A simple string, when no further structure is required.",
-            "type": "string"
-          },
-          {
-            "$comment": "An array of strings, used when the name consists of multiple parts that need to be kept separate (e.g. a pull request id in a specific repository)",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        ]
+        "$comment": "An array of strings, used when the name consists of one or more parts that need to be kept separate (e.g. a pull request id in a specific repository).",
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1
       },
       "entity-reference": {
         "anyOf": [
