@@ -5,7 +5,6 @@ using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Collections.ObjectModel;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -17,7 +16,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingSubscriptions = new(StringComparer.Ordinal);
-    private string? stickyFocusItemKey;
 
     public EntityBrowserWorkspaceTabViewModel(
         EntityBroker entityBroker,
@@ -30,22 +28,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     }
 
     public EntityListViewModel EntityList => this.entityList;
-
-    public ObservableCollection<EntityHierarchyContextItemViewModel> StickyParentItems { get; } = [];
-
-    public bool HasStickyParentItems => this.StickyParentItems.Count > 0;
-
-    public void UpdateStickyContextFromVisibleItem(
-        string? itemKey)
-    {
-        if (string.Equals(this.stickyFocusItemKey, itemKey, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        this.stickyFocusItemKey = itemKey;
-        this.RebuildStickyParentItems();
-    }
 
     private void OnSubscribedResultsChanged(
         object? sender,
@@ -65,12 +47,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         var rootChildren = this.BuildChildren(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
         var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
         this.entityList.SetItems(items);
-        if (this.stickyFocusItemKey is null)
-        {
-            this.stickyFocusItemKey = this.entityList.Items.FirstOrDefault()?.ItemKey;
-        }
-
-        this.RebuildStickyParentItems();
     }
 
     private IReadOnlyCollection<EntityListNodeViewModel> BuildChildren(
@@ -229,45 +205,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         }
 
         this.RebuildTree();
-    }
-
-    private void RebuildStickyParentItems()
-    {
-        this.StickyParentItems.Clear();
-
-        if (string.IsNullOrWhiteSpace(this.stickyFocusItemKey))
-        {
-            this.RaisePropertyChanged(nameof(this.HasStickyParentItems));
-            return;
-        }
-
-        var itemsByKey = this.entityList.Items.ToDictionary(item => item.ItemKey, StringComparer.Ordinal);
-        if (!itemsByKey.TryGetValue(this.stickyFocusItemKey, out var focusedItem))
-        {
-            this.RaisePropertyChanged(nameof(this.HasStickyParentItems));
-            return;
-        }
-
-        var ancestorStack = new Stack<EntityListItemViewModel>();
-        var parentKey = focusedItem.ParentItemKey;
-        while (parentKey is not null && itemsByKey.TryGetValue(parentKey, out var ancestor))
-        {
-            ancestorStack.Push(ancestor);
-            parentKey = ancestor.ParentItemKey;
-        }
-
-        while (ancestorStack.Count > 0)
-        {
-            var ancestor = ancestorStack.Pop();
-            this.StickyParentItems.Add(
-                new EntityHierarchyContextItemViewModel(
-                    ancestor.DisplayName,
-                    ancestor.EntityType,
-                    ancestor.Level,
-                    ancestor.DisplayItems));
-        }
-
-        this.RaisePropertyChanged(nameof(this.HasStickyParentItems));
     }
 
     private void EnsureChildSubscription(

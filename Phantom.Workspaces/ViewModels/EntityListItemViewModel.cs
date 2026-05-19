@@ -44,6 +44,8 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public bool HasChildren => this.ChildItemKeys.Count > 0;
 
+    public int? StickyRow => this.HasChildren ? this.Level : null;
+
     public RelayCommand ToggleExpandCommand { get; }
 
     public Thickness IndentMargin => new(this.Level * 22, 0, 0, 4);
