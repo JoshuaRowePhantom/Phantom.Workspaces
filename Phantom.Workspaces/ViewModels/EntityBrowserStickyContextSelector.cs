@@ -62,7 +62,17 @@ public static class EntityBrowserStickyContextSelector
         var initialAncestorKeys = GetAncestorKeys(initialSelection.ItemKey, parentItemKeysByItemKey);
         var initialAnchor = ComputeAnchorHeight(initialAncestorKeys, visibleItems, heightsByItemKey);
 
-        var selection = SelectFocusedItem(visibleItems, initialAnchor);
+        // Scope the second pass to items from the same root hierarchy so that items in a
+        // separately stacked list sharing the same scroll viewport cannot incorrectly
+        // take focus just because they happen to align with the computed anchor offset.
+        var rootKey = GetRootKey(initialSelection.ItemKey, parentItemKeysByItemKey);
+        var sameRootItems = rootKey is not null
+            ? (IReadOnlyCollection<VisibleEntityListItemPosition>)visibleItems
+                .Where(item => string.Equals(GetRootKey(item.ItemKey, parentItemKeysByItemKey), rootKey, StringComparison.Ordinal))
+                .ToArray()
+            : visibleItems;
+
+        var selection = SelectFocusedItem(sameRootItems, initialAnchor);
         var ancestorKeys = GetAncestorKeys(selection.ItemKey, parentItemKeysByItemKey);
         var pinnedItems = new List<StickyPinnedItemPosition>();
         var stickyOffset = 0d;
@@ -84,6 +94,24 @@ public static class EntityBrowserStickyContextSelector
         }
 
         return new StickyLayoutSelection(selection.ItemKey, pinnedItems);
+    }
+
+    private static string? GetRootKey(
+        string? itemKey,
+        IReadOnlyDictionary<string, string?> parentItemKeysByItemKey)
+    {
+        if (string.IsNullOrEmpty(itemKey))
+        {
+            return null;
+        }
+
+        var current = itemKey;
+        while (parentItemKeysByItemKey.TryGetValue(current, out var parent) && parent is not null)
+        {
+            current = parent;
+        }
+
+        return current;
     }
 
     private static IReadOnlyCollection<string> GetAncestorKeys(

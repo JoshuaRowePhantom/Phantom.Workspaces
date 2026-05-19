@@ -118,6 +118,103 @@ public sealed class EntityBrowserStickyContextSelectorTests
     }
 
     [Fact]
+    public void SelectPinnedItems_WithTwoStackedLists_PinsOnlyList1AncestorsWhenFocusedOnList1()
+    {
+        // List 1 ancestors are scrolled above viewport; list 1 child is at top.
+        // List 2 items are below. Only list 1 ancestors should be pinned.
+        var layout = EntityBrowserStickyContextSelector.SelectPinnedItems(
+        [
+            new VisibleEntityListItemPosition("list1-root", Top: -104, Bottom: -52),
+            new VisibleEntityListItemPosition("list1-parent", Top: -52, Bottom: 0),
+            new VisibleEntityListItemPosition("list1-child", Top: 0, Bottom: 52),
+            new VisibleEntityListItemPosition("list2-root", Top: 52, Bottom: 104),
+            new VisibleEntityListItemPosition("list2-parent", Top: 104, Bottom: 156),
+            new VisibleEntityListItemPosition("list2-child", Top: 156, Bottom: 208),
+        ],
+        new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["list1-root"] = null,
+            ["list1-parent"] = "list1-root",
+            ["list1-child"] = "list1-parent",
+            ["list2-root"] = null,
+            ["list2-parent"] = "list2-root",
+            ["list2-child"] = "list2-parent",
+        },
+        new Dictionary<string, double>(StringComparer.Ordinal)
+        {
+            ["list1-root"] = 52,
+            ["list1-parent"] = 52,
+            ["list1-child"] = 52,
+            ["list2-root"] = 52,
+            ["list2-parent"] = 52,
+            ["list2-child"] = 52,
+        });
+
+        Assert.Equal("list1-child", layout.FocusedItemKey);
+        Assert.Collection(
+            layout.PinnedItems,
+            root =>
+            {
+                Assert.Equal("list1-root", root.ItemKey);
+                Assert.Equal(0, root.Top);
+            },
+            parent =>
+            {
+                Assert.Equal("list1-parent", parent.ItemKey);
+                Assert.Equal(52, parent.Top);
+            });
+    }
+
+    [Fact]
+    public void SelectPinnedItems_WithTwoStackedLists_PinsOnlyList2AncestorsWhenFocusedOnList2()
+    {
+        // User has scrolled past all of list 1 and into list 2.
+        // List 2 ancestors are scrolled above viewport; list 2 child is at top.
+        // Only list 2 ancestors should be pinned.
+        var layout = EntityBrowserStickyContextSelector.SelectPinnedItems(
+        [
+            new VisibleEntityListItemPosition("list1-root", Top: -416, Bottom: -364),
+            new VisibleEntityListItemPosition("list1-parent", Top: -364, Bottom: -312),
+            new VisibleEntityListItemPosition("list1-child", Top: -312, Bottom: -260),
+            new VisibleEntityListItemPosition("list2-root", Top: -104, Bottom: -52),
+            new VisibleEntityListItemPosition("list2-parent", Top: -52, Bottom: 0),
+            new VisibleEntityListItemPosition("list2-child", Top: 0, Bottom: 52),
+        ],
+        new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["list1-root"] = null,
+            ["list1-parent"] = "list1-root",
+            ["list1-child"] = "list1-parent",
+            ["list2-root"] = null,
+            ["list2-parent"] = "list2-root",
+            ["list2-child"] = "list2-parent",
+        },
+        new Dictionary<string, double>(StringComparer.Ordinal)
+        {
+            ["list1-root"] = 52,
+            ["list1-parent"] = 52,
+            ["list1-child"] = 52,
+            ["list2-root"] = 52,
+            ["list2-parent"] = 52,
+            ["list2-child"] = 52,
+        });
+
+        Assert.Equal("list2-child", layout.FocusedItemKey);
+        Assert.Collection(
+            layout.PinnedItems,
+            root =>
+            {
+                Assert.Equal("list2-root", root.ItemKey);
+                Assert.Equal(0, root.Top);
+            },
+            parent =>
+            {
+                Assert.Equal("list2-parent", parent.ItemKey);
+                Assert.Equal(52, parent.Top);
+            });
+    }
+
+    [Fact]
     public void SelectPinnedItems_WhenItemsHaveNotReachedViewportTop_ReturnsNoPinnedItems()
     {
         var layout = EntityBrowserStickyContextSelector.SelectPinnedItems(
