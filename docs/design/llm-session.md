@@ -290,6 +290,7 @@ Agent
 ```text
 AgentSession
   LlmSession: LlmSession
+  TrustProfile: AgentSessionTrustProfile
   ExecutionEnvironment: IAgentExecutionEnvironment
   LlmProvider: ILlmProvider
   Process(input: IAsyncEnumerable<SessionInputEvent>, cancellationToken?): IAsyncEnumerable<AgentSessionUpdate>
@@ -349,6 +350,12 @@ SessionInputEvent
 AgentSessionUpdate
   LlmSession: LlmSession
   LlmStreamingEvent?: LlmStreamEvent
+```
+
+```text
+AgentSessionTrustProfile
+  ToolExecutionEnvironments: IReadOnlyDictionary<string, IAgentExecutionEnvironment>
+  CreateExecutionEnvironment(): IAgentExecutionEnvironment
 ```
 
 ## Tool execution architecture
@@ -652,14 +659,15 @@ Proposed classes and interfaces:
 18. `SessionInputEvent`
 19. `AgentSessionUpdate`
 20. `AgentToolSet`
-21. `LlmMcpServerConfig`
-22. `LlmMcpHostConfig`
-23. `ILlmToolRuntime`
-24. `ILlmContainerBuilder`
-25. `LlmContainerBuildRequest`
-26. `LlmContainerDefinition`
-27. `LlmContainerInstance`
-28. `IMcpServer`
+21. `AgentSessionTrustProfile`
+22. `LlmMcpServerConfig`
+23. `LlmMcpHostConfig`
+24. `ILlmToolRuntime`
+25. `ILlmContainerBuilder`
+26. `LlmContainerBuildRequest`
+27. `LlmContainerDefinition`
+28. `LlmContainerInstance`
+29. `IMcpServer`
 
 ### `Phantom.Workspaces.Llm.Docker` (Docker implementation)
 
