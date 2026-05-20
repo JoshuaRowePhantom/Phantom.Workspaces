@@ -93,7 +93,7 @@ public sealed class LlmConversationBuilder
     public LlmConversation Build()
     {
         var updatedAt = this.Events.Count > 0
-            ? this.Events[^1].Timestamp
+            ? this.Events[^1].EndTime
             : this.CreatedAt;
         return LlmConversation.Create(
             this.Events,

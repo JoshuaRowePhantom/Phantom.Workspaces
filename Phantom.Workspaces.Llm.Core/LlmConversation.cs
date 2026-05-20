@@ -17,7 +17,7 @@ public sealed record LlmConversation
     {
         var eventList = events?.ToImmutableList() ?? ImmutableList<LlmEvent>.Empty;
         var created = createdAt ?? DateTimeOffset.UtcNow;
-        var updated = updatedAt ?? (eventList.Count > 0 ? eventList[^1].Timestamp : created);
+        var updated = updatedAt ?? (eventList.Count > 0 ? eventList[^1].EndTime : created);
         return new LlmConversation
         {
             Events = eventList,

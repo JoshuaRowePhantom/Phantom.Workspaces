@@ -21,7 +21,11 @@ public static class LlmEventKinds
 
 public sealed class LlmEvent : IEquatable<LlmEvent>
 {
-    public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset StartTime { get; init; } = DateTimeOffset.UtcNow;
+
+    public DateTimeOffset EndTime { get; init; } = DateTimeOffset.UtcNow;
+
+    public string? Model { get; init; }
 
     public required string EventKind { get; init; }
 
@@ -68,6 +72,7 @@ public sealed class LlmEvent : IEquatable<LlmEvent>
         }
 
         return string.Equals(this.EventKind, other.EventKind, StringComparison.Ordinal)
+               && string.Equals(this.Model, other.Model, StringComparison.Ordinal)
                && string.Equals(this.Role, other.Role, StringComparison.Ordinal)
                && string.Equals(this.Content, other.Content, StringComparison.Ordinal)
                && string.Equals(this.ExternalContent, other.ExternalContent, StringComparison.Ordinal)
@@ -89,6 +94,7 @@ public sealed class LlmEvent : IEquatable<LlmEvent>
     {
         var hashCode = new HashCode();
         hashCode.Add(this.EventKind, StringComparer.Ordinal);
+        hashCode.Add(this.Model, StringComparer.Ordinal);
         hashCode.Add(this.Role, StringComparer.Ordinal);
         hashCode.Add(this.Content, StringComparer.Ordinal);
         hashCode.Add(this.ExternalContent, StringComparer.Ordinal);

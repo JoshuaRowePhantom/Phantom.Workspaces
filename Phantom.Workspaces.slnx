@@ -17,6 +17,7 @@
   <Project Path="Phantom.Workspaces.Llm.Core.Tests/Phantom.Workspaces.Llm.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core/Phantom.Workspaces.Llm.Core.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Echo/Phantom.Workspaces.Llm.Echo.csproj" />
+  <Project Path="Phantom.Workspaces.Llm.Provider.Llama.Tests/Phantom.Workspaces.Llm.Provider.Llama.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Provider.Llama/Phantom.Workspaces.Llm.Provider.Llama.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Provider.OpenAI/Phantom.Workspaces.Llm.Provider.OpenAI.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Tools.Tests/Phantom.Workspaces.Llm.Tools.Tests.csproj" />

@@ -72,7 +72,8 @@ public sealed class ProjectorLlmProvider : ILlmProvider
         }
 
         if (!string.Equals(previous.EventKind, current.EventKind, StringComparison.Ordinal)
-            || !string.Equals(previous.Role, current.Role, StringComparison.Ordinal))
+            || !string.Equals(previous.Role, current.Role, StringComparison.Ordinal)
+            || !string.Equals(previous.Model, current.Model, StringComparison.Ordinal))
         {
             merged = current;
             return false;
@@ -80,7 +81,9 @@ public sealed class ProjectorLlmProvider : ILlmProvider
 
         merged = new LlmEvent
         {
-            Timestamp = current.Timestamp,
+            StartTime = previous.StartTime <= current.StartTime ? previous.StartTime : current.StartTime,
+            EndTime = previous.EndTime >= current.EndTime ? previous.EndTime : current.EndTime,
+            Model = current.Model ?? previous.Model,
             EventKind = current.EventKind,
             Role = current.Role,
             Content = Concat(previous.Content, current.Content),

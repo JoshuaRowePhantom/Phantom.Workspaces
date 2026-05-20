@@ -97,4 +97,49 @@ public sealed class ProjectorLlmProviderTests
             });
     }
 
+    [Fact]
+    public async Task StreamAsync_DoesNotCoalesceAcrossDifferentModels()
+    {
+        var provider = new ProjectorLlmProvider(new TestProvider(
+            new LlmStreamEvent
+            {
+                Event = new LlmEvent
+                {
+                    EventKind = LlmEventKinds.Turn,
+                    Role = LlmRoles.Assistant,
+                    Model = "qwen3.6",
+                    Content = "Hel",
+                },
+            },
+            new LlmStreamEvent
+            {
+                Event = new LlmEvent
+                {
+                    EventKind = LlmEventKinds.Turn,
+                    Role = LlmRoles.Assistant,
+                    Model = "qwen3.7",
+                    Content = "lo",
+                },
+            }));
+
+        var streamEvents = new List<LlmStreamEvent>();
+        await foreach (var streamEvent in provider.StreamAsync(LlmConversation.Create()))
+        {
+            streamEvents.Add(streamEvent);
+        }
+
+        Assert.Collection(
+            streamEvents,
+            first =>
+            {
+                Assert.Equal("Hel", first.Event?.Content);
+                Assert.Equal("qwen3.6", first.Event?.Model);
+            },
+            second =>
+            {
+                Assert.Equal("lo", second.Event?.Content);
+                Assert.Equal("qwen3.7", second.Event?.Model);
+            });
+    }
+
 }
