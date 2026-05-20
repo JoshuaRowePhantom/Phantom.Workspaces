@@ -51,7 +51,7 @@
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
     </Style>
-    <Style Selector="Border.entity-card.context-pinned">
+    <Style Selector="StackPanel.sticky-pinned > Border.entity-card">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
         <Setter Property="Opacity" Value="0.92" />

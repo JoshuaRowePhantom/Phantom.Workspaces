@@ -95,21 +95,9 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Equal(2, childItem.Level);
         Assert.Equal(parentItem.ItemKey, childItem.ParentItemKey);
 
-        viewModel.UpdateStickyContextFromVisibleItem(childItem.ItemKey);
-        Assert.Collection(
-            viewModel.StickyParentItems,
-            root =>
-            {
-                Assert.Equal("root", root.DisplayName);
-                Assert.Equal("folder", root.EntityType);
-                Assert.Equal(0, root.Level);
-            },
-            entityTypes =>
-            {
-                Assert.Equal("Entity Types", entityTypes.DisplayName);
-                Assert.Equal("folder", entityTypes.EntityType);
-                Assert.Equal(1, entityTypes.Level);
-            });
+        Assert.Equal(0, rootItem.StickyRow);
+        Assert.Equal(1, parentItem.StickyRow);
+        Assert.Null(childItem.StickyRow);
     }
 
     private static Task<EntityBroker> CreateBrokerAsync()
