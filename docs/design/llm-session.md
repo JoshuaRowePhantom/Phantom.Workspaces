@@ -289,25 +289,27 @@ Agent
 
 ```text
 AgentSession
-  Id
   LlmSession: LlmSession
   ExecutionEnvironment: IAgentExecutionEnvironment
-  AvailableToolSets: IReadOnlyList<AgentToolSet>
-  InputQueue: IReadOnlyList<AgentSessionInputQueue>
-  ImmediateQueue: AgentSessionInputQueue  // built-in highest-priority queue with Immediacy=Immediate, used by execution-path events
-  Interrupt(queue: AgentSessionInputQueue)
-  CreatedAt / UpdatedAt
+  LlmProvider: ILlmProvider
+  Process(input: IAsyncEnumerable<SessionInputEvent>, cancellationToken?): IAsyncEnumerable<AgentSessionUpdate>
 ```
 
 ```text
 AgentSession constructors/factories
-  AgentSession(llmSession: LlmSession, executionEnvironment: IAgentExecutionEnvironment)
-  AgentSession.Create(llmSession, executionEnvironment)
+  AgentSession(llmSession: LlmSession, executionEnvironment: IAgentExecutionEnvironment, llmProvider: ILlmProvider)
+  AgentSession.Create(llmSession, executionEnvironment, llmProvider)
 ```
 
 ```text
 IAgentExecutionEnvironment
-  ExecuteToolCallAsync(toolCall: LlmToolCall, cancellationToken?): Task<LlmToolResult>
+  ExecuteToolCallAsync(toolCall: LlmEvent, cancellationToken?): Task<LlmEvent>
+```
+
+```text
+IMcpServer
+  GetDescription(): string
+  GetAgentExecutionEnvironment(): IAgentExecutionEnvironment
 ```
 
 ```text
@@ -317,20 +319,36 @@ AgentToolSet
 ```
 
 ```text
-AgentSessionInputQueue
-  Id
-  McpQueueName
-  Items: ImmutableList<AgentSessionInputItem>
+AgentInputQueue
+  Items: ImmutableList<LlmEvent>
   Priority
   Immediacy (Immediate | Queue | Held)
   CoalescingKey?
-  Update(existingItems: ImmutableList<AgentSessionInputItem>, newItems: ImmutableList<AgentSessionInputItem>): bool
+  Update(existingItems: ImmutableList<LlmEvent>, newItems: ImmutableList<LlmEvent>): bool
 ```
 
 ```text
-AgentSessionInputItem
-  Kind (Message | SystemNote | ToolResult | ActionRequest)
-  Payload
+AgentInputQueueManager
+  ImmediateQueue: AgentInputQueue
+  InputQueue: IReadOnlyList<AgentInputQueue>
+  Process(cancellationToken?): IAsyncEnumerable<AgentSessionUpdate>
+  RegisterInputQueue(queue: AgentInputQueue)
+  Enqueue(queue: AgentInputQueue, events: IEnumerable<LlmEvent>, interrupt?: bool)
+  ServiceQueues(modelTurnIncludedToolCalls: bool)
+  Interrupt(queue: AgentInputQueue)
+  RequestInterrupt()  // interrupt without queue payload (e.g. ESC)
+```
+
+```text
+SessionInputEvent
+  LlmEvents: LlmEvent[]
+  InterruptCurrentResponse: bool
+```
+
+```text
+AgentSessionUpdate
+  LlmSession: LlmSession
+  LlmStreamingEvent?: LlmStreamEvent
 ```
 
 ## Tool execution architecture
@@ -594,7 +612,8 @@ LlmConversation -> ILlmProvider (for model interaction)
 Agent -> AgentTrustProfile (indexed by name)
 AgentSession -> IAgentExecutionEnvironment (runtime)
 AgentSession/LlmSession/LlmConversation -> RPC Tool Runtime (Docker, policy-scoped)
-AgentSession 1 --- * AgentSessionInputQueue 1 --- * AgentSessionInputItem
+AgentSession 1 --- 1 AgentInputQueueManager 1 --- * AgentInputQueue
+AgentInputQueueManager -> SessionInputEvent -> AgentSession.Process(...)
 ```
 
 ## Initial implementation notes
@@ -628,16 +647,19 @@ Proposed classes and interfaces:
 13. `IAgentExecutionEnvironment`
 14. `AgentTrustProfileEntity`
 15. `AgentTrustProfile`
-16. `AgentSessionInputQueue`
-17. `AgentSessionInputItem`
-18. `AgentToolSet`
-19. `LlmMcpServerConfig`
-20. `LlmMcpHostConfig`
-21. `ILlmToolRuntime`
-22. `ILlmContainerBuilder`
-23. `LlmContainerBuildRequest`
-24. `LlmContainerDefinition`
-25. `LlmContainerInstance`
+16. `AgentInputQueue`
+17. `AgentInputQueueManager`
+18. `SessionInputEvent`
+19. `AgentSessionUpdate`
+20. `AgentToolSet`
+21. `LlmMcpServerConfig`
+22. `LlmMcpHostConfig`
+23. `ILlmToolRuntime`
+24. `ILlmContainerBuilder`
+25. `LlmContainerBuildRequest`
+26. `LlmContainerDefinition`
+27. `LlmContainerInstance`
+28. `IMcpServer`
 
 ### `Phantom.Workspaces.Llm.Docker` (Docker implementation)
 
@@ -672,6 +694,23 @@ Proposed classes:
 6. `AgentMcpServer` (agent-session manipulation tools)
 7. `MetaMcpServer` (`list_tools`, `stop_tool`)
 
+### `Phantom.Workspaces.Agent.Cli` (interactive terminal agent)
+
+Primary responsibility: local interactive host for agent sessions using `AgentSession` + `AgentInputQueueManager`.
+
+Command-line shape:
+
+1. `--provider ollama --model <name> --think <value> --endpoint <url>`
+2. `--provider echo`
+
+Behavior:
+
+1. Uses `AgentExecutionEnvironmentDispatcher.Empty` as execution environment.
+2. Uses `AgentInputQueueManager.Process()` to drive `AgentSession.Process(...)`.
+3. Reads one user line per prompt (` > `), enqueues as `LlmEvent` turn input.
+4. SIGINT/Ctrl+C requests interruption via queue-manager interrupt signal.
+5. Renders stream updates live; handles `LlmReplaceEvent` by replacing previously rendered assistant text in-place.
+
 ## Proposed runtime flow
 
 1. `Agent` starts an `AgentSession`; `LlmSession` is created as its wrapped conversation container.
@@ -683,4 +722,4 @@ Proposed classes:
 7. Container launches `Phantom.Workspaces.Llm.Mcp.Host`, which starts configured MCP servers including agent-session and meta-tool-management servers.
 8. `LlmConversation` tool calls are dispatched as HTTP requests to the proxy, which forwards them to the host.
 9. Tool results return through the proxy to conversation state and are submitted to `ILlmProvider`.
-10. At the end of each turn, `AgentSession` services named queues by priority + immediacy (`Immediate`/`Queue`/`Held`) and emits the next-turn input payload.
+10. `AgentInputQueueManager` services queues and feeds `SessionInputEvent` batches into `AgentSession.Process(...)`.

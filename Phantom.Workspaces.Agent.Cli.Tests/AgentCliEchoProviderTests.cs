@@ -1,0 +1,85 @@
+using System.Diagnostics;
+
+namespace Phantom.Workspaces.Agent.Cli.Tests;
+
+public sealed class AgentCliEchoProviderTests
+{
+    [Fact]
+    public async Task Run_WithEchoProvider_RespondsToUserInput()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var cliExePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Agent.Cli",
+            "bin",
+            "Debug",
+            "net10.0",
+            "Phantom.Workspaces.Agent.Cli.exe");
+        Assert.True(File.Exists(cliExePath), $"Expected CLI executable at '{cliExePath}'.");
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = cliExePath,
+                Arguments = "--provider echo",
+                WorkingDirectory = repositoryRoot.FullName,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+        };
+
+        process.Start();
+
+        await process.StandardInput.WriteLineAsync("hello");
+        await process.StandardInput.FlushAsync();
+        await Task.Delay(500);
+        await process.StandardInput.WriteLineAsync("/exit");
+        await process.StandardInput.FlushAsync();
+        process.StandardInput.Close();
+
+        var waitTask = process.WaitForExitAsync();
+        var completed = await Task.WhenAny(waitTask, Task.Delay(TimeSpan.FromSeconds(30)));
+        if (!ReferenceEquals(completed, waitTask))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.Fail("CLI process did not exit within timeout.");
+        }
+
+        var standardOutput = await process.StandardOutput.ReadToEndAsync();
+        var standardError = await process.StandardError.ReadToEndAsync();
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Expected zero exit code. ExitCode={process.ExitCode}, stderr={standardError}");
+        Assert.Contains("Provider: Echo", standardOutput, StringComparison.Ordinal);
+        Assert.Contains("assistant > hello", standardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unhandled exception", standardError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DirectoryInfo FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return current;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
+}
