@@ -6,25 +6,8 @@ public sealed class ProjectorLlmProviderTests
     public async Task StreamAsync_CoalescesAssistantContentChunks()
     {
         var provider = new ProjectorLlmProvider(new TestProvider(
-            Stream(
-                new LlmStreamEvent
-                {
-                    Event = new LlmEvent
-                    {
-                        EventKind = LlmEventKinds.Turn,
-                        Role = LlmRoles.Assistant,
-                        Content = "Hel",
-                    },
-                },
-                new LlmStreamEvent
-                {
-                    Event = new LlmEvent
-                    {
-                        EventKind = LlmEventKinds.Turn,
-                        Role = LlmRoles.Assistant,
-                        Content = "lo",
-                    },
-                })));
+            TestProvider.Content("Hel"),
+            TestProvider.Content("lo")));
 
         var streamEvents = new List<LlmStreamEvent>();
         await foreach (var streamEvent in provider.StreamAsync(LlmConversation.Create()))
@@ -53,25 +36,14 @@ public sealed class ProjectorLlmProviderTests
     public async Task StreamAsync_CoalescesAssistantThinkingChunks()
     {
         var provider = new ProjectorLlmProvider(new TestProvider(
-            Stream(
-                new LlmStreamEvent
-                {
-                    Event = new LlmEvent
-                    {
-                        EventKind = LlmEventKinds.Turn,
-                        Role = LlmRoles.Assistant,
-                        Thinking = "Thin",
-                    },
-                },
-                new LlmStreamEvent
-                {
-                    Event = new LlmEvent
-                    {
-                        EventKind = LlmEventKinds.Turn,
-                        Role = LlmRoles.Assistant,
-                        Thinking = "king",
-                    },
-                })));
+            new LlmStreamEvent
+            {
+                Event = TestProvider.AssistantTurn(thinking: "Thin"),
+            },
+            new LlmStreamEvent
+            {
+                Event = TestProvider.AssistantTurn(thinking: "king"),
+            }));
 
         var streamEvents = new List<LlmStreamEvent>();
         await foreach (var streamEvent in provider.StreamAsync(LlmConversation.Create()))
@@ -101,32 +73,12 @@ public sealed class ProjectorLlmProviderTests
     {
         var checkpointConversation = LlmConversation.Create(
             [
-                new LlmEvent
-                {
-                    EventKind = LlmEventKinds.Turn,
-                    Role = LlmRoles.User,
-                    Content = "hello",
-                },
+                TestProvider.UserTurn("hello"),
             ]);
 
         var provider = new ProjectorLlmProvider(new TestProvider(
-            Stream(
-                new LlmStreamEvent
-                {
-                    Event = new LlmEvent
-                    {
-                        EventKind = LlmEventKinds.Turn,
-                        Role = LlmRoles.Assistant,
-                        Content = "Hel",
-                    },
-                },
-                new LlmStreamEvent
-                {
-                    Checkpoint = new LlmCheckpointEvent
-                    {
-                        Conversation = checkpointConversation,
-                    },
-                })));
+            TestProvider.Content("Hel"),
+            TestProvider.Checkpoint(checkpointConversation)));
 
         var streamEvents = new List<LlmStreamEvent>();
         await foreach (var streamEvent in provider.StreamAsync(LlmConversation.Create()))
@@ -145,24 +97,4 @@ public sealed class ProjectorLlmProviderTests
             });
     }
 
-    private static async IAsyncEnumerable<LlmStreamEvent> Stream(
-        params LlmStreamEvent[] streamEvents)
-    {
-        foreach (var streamEvent in streamEvents)
-        {
-            yield return streamEvent;
-            await Task.Yield();
-        }
-    }
-
-    private sealed class TestProvider(
-        IAsyncEnumerable<LlmStreamEvent> streamEvents) : ILlmProvider
-    {
-        public IAsyncEnumerable<LlmStreamEvent> StreamAsync(
-            LlmConversation conversation,
-            CancellationToken cancellationToken = default)
-        {
-            return streamEvents;
-        }
-    }
 }
