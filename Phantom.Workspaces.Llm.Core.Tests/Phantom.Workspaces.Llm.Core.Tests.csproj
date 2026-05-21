@@ -24,4 +24,9 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\docs\examples\qwen-local-chat.yaml" Link="qwen-local-chat.yaml" />
+    <EmbeddedResource Include="..\docs\examples\qwen-local-chat.json" Link="qwen-local-chat.json" />
+  </ItemGroup>
+
 </Project>

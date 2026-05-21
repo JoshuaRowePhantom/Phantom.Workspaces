@@ -1,0 +1,33 @@
+{
+  "kind": "prompt",
+  "name": "qwen-local-chat",
+  "displayName": "Qwen 3.6 Local Chat",
+  "description": "A simple chat agent using Qwen 3.6 running locally on Ollama with thinking disabled",
+  "model": {
+    "id": "qwen-3.6",
+    "provider": "ollama",
+    "apiType": "Ollama",
+    "connection": {
+      "kind": "Anonymous",
+      "endpoint": "http://localhost:11434"
+    },
+    "options": {
+      "temperature": 0.7,
+      "topP": 0.9,
+      "frequencyPenalty": 0.0,
+      "presencePenalty": 0.0,
+      "maxOutputTokens": 2048,
+      "topK": 40,
+      "additionalProperties": {
+        "thinking": false
+      }
+    }
+  },
+  "instructions": "You are a helpful AI assistant powered by Qwen 3.6.\nRespond to user queries clearly and concisely.\nYou have no special tools available, so focus on providing thoughtful answers through conversation.",
+  "tools": [],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": ["local", "ollama", "chat-only"]
+  }
+}

@@ -1,5 +1,6 @@
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
+using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OllamaSharp;
@@ -27,12 +28,18 @@ var thinkingOption = new Option<string>("--think", ["--thinking"])
     DefaultValueFactory = _ => "true",
 };
 
+var agentSchemaOption = new Option<string?>("--agent-schema", ["-s"])
+{
+    Description = "Path to AgentSchema definition file (.json or .yaml) to load an agent from schema",
+};
+
 var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
 {
     providerOption,
     ollamaUrlOption,
     ollamaModelOption,
     thinkingOption,
+    agentSchemaOption,
 };
 
 rootCommand.SetAction(async (parseResult, ct) =>
@@ -41,8 +48,9 @@ rootCommand.SetAction(async (parseResult, ct) =>
     var ollamaUrl = parseResult.GetValue(ollamaUrlOption);
     var ollamaModel = parseResult.GetValue(ollamaModelOption);
     var thinkingLevel = ParseThinkingLevel(parseResult.GetValue(thinkingOption));
+    var agentSchemaPath = parseResult.GetValue(agentSchemaOption);
 
-    using var app = new AgentCliApp(provider, ollamaUrl, ollamaModel, thinkingLevel);
+    using var app = new AgentCliApp(provider, ollamaUrl, ollamaModel, thinkingLevel, agentSchemaPath);
     await app.RunAsync();
 });
 
@@ -91,20 +99,68 @@ internal sealed class AgentCliApp : IDisposable
         ? $"  assistant {SpinnerFrames[this.spinnerFrame]}:"
         : "  assistant:";
 
-    public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, ReasoningEffort? thinkingLevel = ReasoningEffort.High)
+    public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, ReasoningEffort? thinkingLevel = ReasoningEffort.High, string? agentSchemaPath = null)
     {
-        (this.chatClient, this.clientDisplayName) = CreateChatClient(provider, ollamaUrl, ollamaModel);
         this.supportsInteractiveRendering = !Console.IsOutputRedirected && !Console.IsInputRedirected;
-        var agent = new ChatClientAgent(
-            this.chatClient,
-            new ChatClientAgentOptions
+        
+        var chatOptions = new ChatClientAgentOptions
+        {
+            ChatOptions = new ChatOptions
             {
-                ChatOptions = new ChatOptions
+                Reasoning = new ReasoningOptions { Effort = thinkingLevel },
+            },
+        };
+
+        AgentDefinition? agentDef = null;
+
+        // Load agent schema if provided
+        if (!string.IsNullOrEmpty(agentSchemaPath))
+        {
+            try
+            {
+                agentDef = AgentSchemaLoader.LoadAgent(agentSchemaPath);
+                AgentFactory.StoreAgentDefinition(agentDef, chatOptions.ChatOptions);
+
+                var instructions = AgentFactory.GetSystemInstructions(agentDef);
+                if (!string.IsNullOrEmpty(instructions) && chatOptions.ChatOptions.AdditionalProperties != null)
                 {
-                    Reasoning = new ReasoningOptions { Effort = thinkingLevel },
-                },
-            });
+                    // Store instructions for use by the agent
+                    chatOptions.ChatOptions.AdditionalProperties["system_instructions"] = instructions;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error loading agent schema: {ex.Message}");
+                throw;
+            }
+        }
+
+        // Create chat client from agent definition or CLI parameters
+        (this.chatClient, this.clientDisplayName) = agentDef != null
+            ? CreateChatClientFromAgentDefinition(agentDef)
+            : CreateChatClient(provider, ollamaUrl, ollamaModel);
+
+        if (!string.IsNullOrEmpty(agentSchemaPath))
+        {
+            this.clientDisplayName = $"{this.clientDisplayName} [from {Path.GetFileName(agentSchemaPath)}]";
+        }
+
+        var agent = new ChatClientAgent(this.chatClient, chatOptions);
         this.inputQueueManager = new AgentInputQueueManager(agent);
+    }
+
+    private static (IChatClient, string displayName) CreateChatClientFromAgentDefinition(AgentDefinition agentDef)
+    {
+        var modelId = AgentFactory.GetModelId(agentDef);
+        if (string.IsNullOrEmpty(modelId))
+        {
+            throw new InvalidOperationException("Agent definition does not specify a model ID.");
+        }
+
+        // For now, default to echo client since model resolution from agent definition is complex
+        // In a full implementation, this would parse the model's provider and connection details
+        Console.Error.WriteLine($"Warning: Agent specifies model '{modelId}' but model resolution from agent definition is not yet implemented. Using echo client.");
+        return (new EchoChatClient(), $"Echo Chat Client (from agent model: {modelId})");
     }
 
     private static (IChatClient, string displayName) CreateChatClient(string provider, string? ollamaUrl, string? ollamaModel)
