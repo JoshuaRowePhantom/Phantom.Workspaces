@@ -62,15 +62,19 @@ internal sealed class AgentCliApp : IDisposable
     private readonly object consoleLock = new();
     private readonly IChatClient chatClient;
     private readonly AgentInputQueueManager inputQueueManager;
-    private readonly CancellationTokenSource cancellationTokenSource = new();
-    private readonly CancellationTokenSource processCancellationTokenSource = new();
-    private readonly bool supportsInPlaceRendering = !Console.IsOutputRedirected;
-    private int? assistantLineTop;
+    private readonly CancellationTokenSource appCts = new();
+    private readonly bool supportsInteractiveRendering;
     private readonly string clientDisplayName;
+
+    // Console layout state — all accessed under consoleLock
+    private int assistantRow = -1;  // row of "assistant > ..." line; -1 when none active
+    private int inputRow = -1;      // row of " > ..." prompt line
+    private string currentInput = "";
 
     public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, ReasoningEffort? thinkingLevel = ReasoningEffort.High)
     {
         (this.chatClient, this.clientDisplayName) = CreateChatClient(provider, ollamaUrl, ollamaModel);
+        this.supportsInteractiveRendering = !Console.IsOutputRedirected && !Console.IsInputRedirected;
         var agent = new ChatClientAgent(
             this.chatClient,
             new ChatClientAgentOptions
@@ -99,167 +103,213 @@ internal sealed class AgentCliApp : IDisposable
     private static (IChatClient, string displayName) CreateOllamaClient(string baseUrl, string? model)
     {
         var modelName = model ?? "mistral";
-        var uri = new Uri(baseUrl);
-        var client = new OllamaApiClient(uri, modelName);
+        var client = new OllamaApiClient(new Uri(baseUrl), modelName);
         return (client, $"Ollama ({modelName} at {baseUrl})");
     }
 
     public async Task RunAsync()
     {
-        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        ConsoleCancelEventHandler cancelHandler = (_, e) =>
         {
-            eventArgs.Cancel = true;
+            e.Cancel = true;
             this.inputQueueManager.RequestInterrupt();
         };
         Console.CancelKeyPress += cancelHandler;
 
-        WriteLine($"{this.clientDisplayName} - Press Ctrl+C to interrupt. Type /exit to quit.");
+        Console.WriteLine($"{this.clientDisplayName} - Press Ctrl+C to interrupt. Type /exit to quit.");
 
-        var processTask = Task.Run(
-            () => this.ProcessUpdatesAsync(this.processCancellationTokenSource.Token),
-            this.cancellationTokenSource.Token);
+        using var processCts = CancellationTokenSource.CreateLinkedTokenSource(this.appCts.Token);
+        var processTask = Task.Run(() => this.ProcessUpdatesAsync(processCts.Token));
 
         try
         {
-            while (!this.cancellationTokenSource.IsCancellationRequested)
+            while (!this.appCts.IsCancellationRequested)
             {
-                lock (this.consoleLock)
-                {
-                    Console.Write(" > ");
-                }
-
-                var line = Console.ReadLine();
-                if (line is null
-                    || string.Equals(line, "/exit", StringComparison.OrdinalIgnoreCase))
-                {
+                var input = await this.ReadInputAsync(this.appCts.Token);
+                if (input is null || string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase))
                     break;
-                }
-
-                if (string.IsNullOrWhiteSpace(line))
-                {
+                if (string.IsNullOrWhiteSpace(input))
                     continue;
-                }
+
+                if (this.supportsInteractiveRendering)
+                    this.SetupAssistantLayout(input);
 
                 this.inputQueueManager.Enqueue(
                     this.inputQueueManager.ImmediateQueue,
-                    [new ChatMessage(ChatRole.User, line)]);
+                    [new ChatMessage(ChatRole.User, input)]);
             }
         }
         finally
         {
             Console.CancelKeyPress -= cancelHandler;
-            this.cancellationTokenSource.Cancel();
+            this.appCts.Cancel();
             this.inputQueueManager.Complete();
-            this.processCancellationTokenSource.Cancel();
-            try
-            {
-                await processTask;
-            }
-            catch (OperationCanceledException)
-            {
-            }
+            processCts.Cancel();
+            try { await processTask; } catch (OperationCanceledException) { }
         }
     }
 
     public void Dispose()
     {
-        this.cancellationTokenSource.Dispose();
-        this.processCancellationTokenSource.Dispose();
+        this.appCts.Dispose();
         this.chatClient?.Dispose();
     }
 
-    private async Task ProcessUpdatesAsync(
-        CancellationToken cancellationToken)
+    private async Task<string?> ReadInputAsync(CancellationToken ct)
+    {
+        if (!this.supportsInteractiveRendering)
+        {
+            Console.Write(" > ");
+            return Console.ReadLine();
+        }
+
+        lock (this.consoleLock)
+        {
+            this.inputRow = Console.CursorTop;
+            Console.Write(" > ");
+        }
+
+        var buffer = new System.Text.StringBuilder();
+
+        while (!ct.IsCancellationRequested)
+        {
+            if (!Console.KeyAvailable)
+            {
+                await Task.Delay(20, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            var key = Console.ReadKey(intercept: true);
+
+            switch (key.Key)
+            {
+                case ConsoleKey.Enter:
+                    return buffer.ToString();
+
+                case ConsoleKey.Backspace when buffer.Length > 0:
+                    buffer.Remove(buffer.Length - 1, 1);
+                    lock (this.consoleLock)
+                    {
+                        this.currentInput = buffer.ToString();
+                        this.RedrawInputLine();
+                    }
+                    break;
+
+                default:
+                    if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
+                    {
+                        buffer.Append(key.KeyChar);
+                        lock (this.consoleLock)
+                        {
+                            this.currentInput = buffer.ToString();
+                            this.RedrawInputLine();
+                        }
+                    }
+                    break;
+            }
+        }
+
+        return null;
+    }
+
+    // Sets up a blank assistant line and a new input prompt below the submitted line.
+    // Must only be called from the input loop (not under consoleLock).
+    private void SetupAssistantLayout(string submittedInput)
+    {
+        lock (this.consoleLock)
+        {
+            // Finalise the submitted input line in place
+            var submittedLine = $" > {submittedInput}";
+            Console.SetCursorPosition(0, this.inputRow);
+            Console.Write(submittedLine + new string(' ', Math.Max(0, Console.BufferWidth - submittedLine.Length - 1)));
+
+            // Emit two new lines: one blank (agent), one for next input.
+            // Console.CursorTop after these tells us the real rows after any scroll.
+            Console.WriteLine();
+            Console.WriteLine();
+
+            this.inputRow = Console.CursorTop;
+            this.assistantRow = this.inputRow - 1;
+            this.currentInput = "";
+
+            Console.Write(" > ");
+        }
+    }
+
+    // Must be called under consoleLock.
+    private void RedrawInputLine()
+    {
+        if (this.inputRow < 0)
+            return;
+        var line = $" > {this.currentInput}";
+        Console.SetCursorPosition(0, this.inputRow);
+        Console.Write(line + new string(' ', Math.Max(0, Console.BufferWidth - line.Length - 1)));
+        Console.SetCursorPosition(Math.Min(line.Length, Console.BufferWidth - 1), this.inputRow);
+    }
+
+    private async Task ProcessUpdatesAsync(CancellationToken ct)
     {
         var accumulated = new System.Text.StringBuilder();
 
-        await foreach (var update in this.inputQueueManager.Process(cancellationToken).WithCancellation(cancellationToken))
+        await foreach (var update in this.inputQueueManager.Process(ct).WithCancellation(ct))
         {
             if (!string.IsNullOrEmpty(update.Text))
             {
                 accumulated.Append(update.Text);
-                this.RenderAssistantUpdate(accumulated.ToString());
+                this.RenderAssistantChunk(accumulated.ToString());
             }
 
             if (update.FinishReason is not null)
             {
-                this.FinishAssistantTurn();
+                this.FinalizeAssistantTurn();
                 accumulated.Clear();
             }
         }
     }
 
-    private void FinishAssistantTurn()
+    private void RenderAssistantChunk(string accumulatedText)
     {
-        lock (this.consoleLock)
+        if (!this.supportsInteractiveRendering)
         {
-            if (this.assistantLineTop is not null)
+            // Non-interactive: overwrite same line with \r until turn ends
+            lock (this.consoleLock)
             {
-                // Move cursor to end of the assistant line so the next output starts below it
-                Console.SetCursorPosition(0, this.assistantLineTop.Value + 1);
-                this.assistantLineTop = null;
+                Console.Write($"\rassistant > {accumulatedText}");
             }
-        }
-    }
-
-    private void RenderAssistantUpdate(
-        string text)
-    {
-        if (!this.supportsInPlaceRendering)
-        {
-            this.WriteLine($"assistant > {text}");
             return;
         }
 
         lock (this.consoleLock)
         {
-            if (this.assistantLineTop is null)
-            {
-                Console.WriteLine($"assistant > {text}");
-                this.assistantLineTop = Console.CursorTop - 1;
+            if (this.assistantRow < 0)
                 return;
-            }
-        }
 
-        this.ReplaceAssistantLine(text);
+            var line = $"assistant > {accumulatedText}";
+            if (line.Length > Console.BufferWidth - 1)
+                line = line[..(Console.BufferWidth - 1)];
+
+            Console.SetCursorPosition(0, this.assistantRow);
+            Console.Write(line + new string(' ', Math.Max(0, Console.BufferWidth - line.Length - 1)));
+
+            // Restore cursor to end of the user's current input
+            this.RedrawInputLine();
+        }
     }
 
-    private void ReplaceAssistantLine(
-        string text)
+    private void FinalizeAssistantTurn()
     {
-        if (!this.supportsInPlaceRendering)
+        if (!this.supportsInteractiveRendering)
         {
-            this.WriteLine($"assistant > {text}");
+            lock (this.consoleLock)
+            {
+                Console.WriteLine();
+            }
             return;
         }
 
         lock (this.consoleLock)
         {
-            if (this.assistantLineTop is null)
-            {
-                Console.WriteLine($"assistant > {text}");
-                this.assistantLineTop = Console.CursorTop - 1;
-                return;
-            }
-
-            var restoreLeft = Console.CursorLeft;
-            var restoreTop = Console.CursorTop;
-            var lineTop = Math.Clamp(this.assistantLineTop.Value, 0, Console.BufferHeight - 1);
-            Console.SetCursorPosition(0, lineTop);
-            Console.Write(new string(' ', Math.Max(1, Console.BufferWidth - 1)));
-            Console.SetCursorPosition(0, lineTop);
-            Console.Write($"assistant > {text}");
-            Console.SetCursorPosition(restoreLeft, restoreTop);
-        }
-    }
-
-    private void WriteLine(
-        string line)
-    {
-        lock (this.consoleLock)
-        {
-            Console.WriteLine(line);
+            this.assistantRow = -1;
         }
     }
 }
-
