@@ -1,5 +1,16 @@
 namespace Phantom.Workspaces.Llm;
 
+/// <summary>
+/// Registry of tools that can be executed during agent sessions.
+/// </summary>
+public interface IToolRegistry
+{
+    Task<string> ExecuteToolAsync(
+        string toolName,
+        IReadOnlyDictionary<string, object?>? arguments = null,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class ToolRegistry : IToolRegistry
 {
     public static ToolRegistry Empty { get; } =

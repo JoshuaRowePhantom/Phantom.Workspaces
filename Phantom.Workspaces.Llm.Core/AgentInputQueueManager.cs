@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm;
@@ -9,11 +11,12 @@ public sealed class AgentInputQueueManager
     private readonly object syncLock = new();
     private readonly List<AgentInputQueue> inputQueues;
     private readonly Channel<SessionInputEvent> inputEvents;
+    private readonly ChatClientAgent agent;
 
     public AgentInputQueueManager(
-        AgentSession session)
+        ChatClientAgent agent)
     {
-        this.Session = session ?? throw new ArgumentNullException(nameof(session));
+        this.agent = agent ?? throw new ArgumentNullException(nameof(agent));
         this.ImmediateQueue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
@@ -24,7 +27,7 @@ public sealed class AgentInputQueueManager
         this.inputEvents = Channel.CreateUnbounded<SessionInputEvent>();
     }
 
-    public AgentSession Session { get; }
+    public ChatClientAgent Agent => this.agent;
 
     public AgentInputQueue ImmediateQueue { get; }
 
@@ -39,12 +42,146 @@ public sealed class AgentInputQueueManager
         }
     }
 
-    public IAsyncEnumerable<AgentSessionUpdate> Process(
-        CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<AgentResponseUpdate> Process(
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        return this.Session.Process(
-            this.inputEvents.Reader.ReadAllAsync(cancellationToken),
-            cancellationToken);
+        var agentSession = await this.agent.CreateSessionAsync(cancellationToken);
+
+        var inputEnumerator = this.inputEvents.Reader.ReadAllAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
+        var pendingInputs = new Queue<SessionInputEvent>();
+        IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator = null;
+        CancellationTokenSource? providerCts = null;
+        var nextInputTask = inputEnumerator.MoveNextAsync().AsTask();
+
+        try
+        {
+            while (true)
+            {
+                if (providerEnumerator is null && pendingInputs.Count == 0)
+                {
+                    var hasNextInput = await nextInputTask;
+                    if (!hasNextInput)
+                    {
+                        yield break;
+                    }
+
+                    pendingInputs.Enqueue(inputEnumerator.Current);
+                    nextInputTask = inputEnumerator.MoveNextAsync().AsTask();
+                }
+
+                if (providerEnumerator is null && pendingInputs.Count > 0)
+                {
+                    var nextInput = pendingInputs.Dequeue();
+                    if (nextInput.Messages.Length > 0)
+                    {
+                        (providerEnumerator, providerCts) = this.StartRun(nextInput.Messages, agentSession, cancellationToken);
+                    }
+
+                    continue;
+                }
+
+                if (providerEnumerator is null)
+                {
+                    continue;
+                }
+
+                var moveNextProviderTask = providerEnumerator.MoveNextAsync().AsTask();
+                var completedTask = await Task.WhenAny(moveNextProviderTask, nextInputTask);
+
+                if (completedTask == nextInputTask)
+                {
+                    var interruptRequested = false;
+                    var hasNextInput = await nextInputTask;
+                    if (hasNextInput)
+                    {
+                        var input = inputEnumerator.Current;
+                        if (input.InterruptCurrentResponse)
+                        {
+                            interruptRequested = true;
+                            providerCts?.Cancel();
+                        }
+
+                        pendingInputs.Enqueue(input);
+                        nextInputTask = inputEnumerator.MoveNextAsync().AsTask();
+                    }
+                    else
+                    {
+                        nextInputTask = Task.FromResult(false);
+                    }
+
+                    var hasStreamEvent = false;
+                    try
+                    {
+                        hasStreamEvent = await moveNextProviderTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        hasStreamEvent = false;
+                    }
+
+                    if (hasStreamEvent)
+                    {
+                        yield return providerEnumerator.Current;
+                        continue;
+                    }
+
+                    if (interruptRequested || (nextInputTask.IsCompletedSuccessfully && !nextInputTask.Result))
+                    {
+                        await providerEnumerator.DisposeAsync();
+                        providerEnumerator = null;
+                        providerCts?.Dispose();
+                        providerCts = null;
+                    }
+
+                    continue;
+                }
+
+                var hasResponse = false;
+                try
+                {
+                    hasResponse = await moveNextProviderTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    hasResponse = false;
+                }
+
+                if (hasResponse)
+                {
+                    yield return providerEnumerator.Current;
+                    continue;
+                }
+
+                await providerEnumerator.DisposeAsync();
+                providerEnumerator = null;
+                providerCts?.Dispose();
+                providerCts = null;
+
+                if (nextInputTask.IsCompletedSuccessfully
+                    && !nextInputTask.Result
+                    && pendingInputs.Count == 0)
+                {
+                    yield break;
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                await inputEnumerator.DisposeAsync();
+            }
+            catch (NotSupportedException)
+            {
+            }
+
+            if (providerEnumerator is not null)
+            {
+                await providerEnumerator.DisposeAsync();
+            }
+
+            providerCts?.Dispose();
+        }
     }
 
     public void Complete()
@@ -144,6 +281,18 @@ public sealed class AgentInputQueueManager
         };
     }
 
+    private (IAsyncEnumerator<AgentResponseUpdate> Enumerator, CancellationTokenSource Cts) StartRun(
+        ChatMessage[] messages,
+        AgentSession agentSession,
+        CancellationToken cancellationToken)
+    {
+        var providerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var providerEnumerator = this.agent
+            .RunStreamingAsync(messages, agentSession, cancellationToken: providerCts.Token)
+            .GetAsyncEnumerator(providerCts.Token);
+        return (providerEnumerator, providerCts);
+    }
+
     private int PublishQueue(
         AgentInputQueue queue,
         bool interruptCurrentResponse)
@@ -184,5 +333,11 @@ public sealed class AgentInputQueueManager
             }
         }
     }
-}
 
+    private record SessionInputEvent
+    {
+        public required ChatMessage[] Messages { get; init; }
+
+        public bool InterruptCurrentResponse { get; init; }
+    }
+}

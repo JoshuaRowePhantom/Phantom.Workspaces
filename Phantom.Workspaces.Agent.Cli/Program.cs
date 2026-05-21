@@ -1,26 +1,98 @@
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using OllamaSharp;
+using System.CommandLine;
 
-var app = new AgentCliApp();
-await app.RunAsync();
+var providerOption = new Option<string>("--provider", ["-p"])
+{
+    Description = "LLM provider: 'echo' (default), 'ollama-local', or 'ollama-remote'",
+    DefaultValueFactory = _ => "echo",
+};
+
+var ollamaUrlOption = new Option<string?>("--ollama-url", ["-u"])
+{
+    Description = "URL for remote Ollama instance (e.g., http://192.168.1.100:11434)",
+};
+
+var ollamaModelOption = new Option<string?>("--model", ["-m"])
+{
+    Description = "Model name for Ollama (e.g., 'mistral', 'llama2')",
+};
+
+var thinkingOption = new Option<bool>("--thinking", ["--think"])
+{
+    Description = "Enable thinking/reasoning (default: true). Use --no-thinking to disable",
+    DefaultValueFactory = _ => true,
+};
+
+var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
+{
+    providerOption,
+    ollamaUrlOption,
+    ollamaModelOption,
+    thinkingOption,
+};
+
+rootCommand.SetAction(async (parseResult, ct) =>
+{
+    var provider = parseResult.GetValue(providerOption)!;
+    var ollamaUrl = parseResult.GetValue(ollamaUrlOption);
+    var ollamaModel = parseResult.GetValue(ollamaModelOption);
+    var enableThinking = parseResult.GetValue(thinkingOption);
+
+    using var app = new AgentCliApp(provider, ollamaUrl, ollamaModel, enableThinking);
+    await app.RunAsync();
+});
+
+await rootCommand.Parse(args).InvokeAsync();
 
 internal sealed class AgentCliApp : IDisposable
 {
     private readonly object consoleLock = new();
     private readonly IChatClient chatClient;
     private readonly AgentInputQueueManager inputQueueManager;
-    private readonly AgentSession session;
     private readonly CancellationTokenSource cancellationTokenSource = new();
     private readonly CancellationTokenSource processCancellationTokenSource = new();
     private readonly bool supportsInPlaceRendering = !Console.IsOutputRedirected;
     private int? assistantLineTop;
+    private readonly string clientDisplayName;
 
-    public AgentCliApp()
+    public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, bool enableThinking = true)
     {
-        this.chatClient = new EchoChatClient();
-        this.session = AgentSession.Create(this.chatClient);
-        this.inputQueueManager = new AgentInputQueueManager(this.session);
+        (this.chatClient, this.clientDisplayName) = CreateChatClient(provider, ollamaUrl, ollamaModel);
+        var agent = new ChatClientAgent(
+            this.chatClient,
+            new ChatClientAgentOptions
+            {
+                ChatOptions = new ChatOptions
+                {
+                    AdditionalProperties = new() { ["think"] = (bool?)enableThinking },
+                },
+            });
+        this.inputQueueManager = new AgentInputQueueManager(agent);
+    }
+
+    private static (IChatClient, string displayName) CreateChatClient(string provider, string? ollamaUrl, string? ollamaModel)
+    {
+        return provider.ToLowerInvariant() switch
+        {
+            "echo" => (new EchoChatClient(), "Echo Chat Client"),
+            "ollama-local" => CreateOllamaClient("http://localhost:11434", ollamaModel),
+            "ollama-remote" when !string.IsNullOrWhiteSpace(ollamaUrl) => CreateOllamaClient(ollamaUrl, ollamaModel),
+            "ollama-remote" => throw new InvalidOperationException(
+                "ollama-remote provider requires --ollama-url option. Example: --provider ollama-remote --ollama-url http://192.168.1.100:11434"),
+            _ => throw new InvalidOperationException($"Unknown provider: {provider}. Use 'echo', 'ollama-local', or 'ollama-remote'.")
+        };
+    }
+
+    private static (IChatClient, string displayName) CreateOllamaClient(string baseUrl, string? model)
+    {
+        var modelName = model ?? "mistral";
+        var uri = new Uri(baseUrl);
+        var client = new OllamaApiClient(uri, modelName);
+        return (client, $"Ollama ({modelName} at {baseUrl})");
     }
 
     public async Task RunAsync()
@@ -32,7 +104,8 @@ internal sealed class AgentCliApp : IDisposable
         };
         Console.CancelKeyPress += cancelHandler;
 
-        WriteLine("Echo Chat Client - Press Ctrl+C to interrupt. Type /exit to quit.");
+        WriteLine($"{this.clientDisplayName} - Press Ctrl+C to interrupt. Type /exit to quit.");
+
         var processTask = Task.Run(
             () => this.ProcessUpdatesAsync(this.processCancellationTokenSource.Token),
             this.cancellationTokenSource.Token);
@@ -91,13 +164,12 @@ internal sealed class AgentCliApp : IDisposable
     {
         await foreach (var update in this.inputQueueManager.Process(cancellationToken).WithCancellation(cancellationToken))
         {
-            var responseUpdate = update.ResponseUpdate;
-            if (responseUpdate is null || string.IsNullOrWhiteSpace(responseUpdate.Text))
+            if (string.IsNullOrWhiteSpace(update.Text))
             {
                 continue;
             }
 
-            this.RenderAssistantUpdate(responseUpdate.Text);
+            this.RenderAssistantUpdate(update.Text);
         }
     }
 
@@ -161,3 +233,4 @@ internal sealed class AgentCliApp : IDisposable
         }
     }
 }
+

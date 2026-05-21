@@ -1,15 +1,20 @@
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentInputQueueManagerTests
 {
+    private static AgentInputQueueManager CreateManager(params ChatResponseUpdate[] updates)
+        => new AgentInputQueueManager(
+            new ChatClientAgent(
+                new TestChatClient(updates),
+                new ChatClientAgentOptions { UseProvidedChatClientAsIs = true }));
+
     [Fact]
-    public async Task Enqueue_ImmediateQueue_IsProcessedByAgentSessionProcess()
+    public async Task Enqueue_ImmediateQueue_IsProcessedByAgent()
     {
-        var session = AgentSession.Create(
-            new TestChatClient());
-        var manager = new AgentInputQueueManager(session);
+        var manager = CreateManager(new ChatResponseUpdate(ChatRole.Assistant, "response"));
 
         await using var updates = manager.Process().GetAsyncEnumerator();
         manager.Enqueue(
@@ -17,7 +22,7 @@ public sealed class AgentInputQueueManagerTests
             [new ChatMessage(ChatRole.User, "immediate")]);
 
         Assert.True(await updates.MoveNextAsync());
-        Assert.Equal("immediate", updates.Current.Messages[^1].Text);
+        Assert.Equal("response", updates.Current.Text);
 
         manager.Complete();
     }
@@ -25,9 +30,7 @@ public sealed class AgentInputQueueManagerTests
     [Fact]
     public async Task ServiceQueues_HonorsImmediacyRules()
     {
-        var session = AgentSession.Create(
-            new TestChatClient());
-        var manager = new AgentInputQueueManager(session);
+        var manager = CreateManager(new ChatResponseUpdate(ChatRole.Assistant, "response"));
         var queuedQueue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
@@ -43,29 +46,24 @@ public sealed class AgentInputQueueManagerTests
         manager.RegisterInputQueue(queuedQueue);
         manager.RegisterInputQueue(heldQueue);
 
-        await using var updates = manager.Process().GetAsyncEnumerator();
-
         manager.Enqueue(queuedQueue, [new ChatMessage(ChatRole.User, "queued")]);
         manager.Enqueue(heldQueue, [new ChatMessage(ChatRole.System, "held")]);
         var publishedWithToolCall = manager.ServiceQueues(modelTurnIncludedToolCalls: true);
         Assert.Equal(0, publishedWithToolCall);
-        Assert.Equal(0, publishedWithToolCall);
         var publishedWithoutToolCall = manager.ServiceQueues(modelTurnIncludedToolCalls: false);
         Assert.Equal(1, publishedWithoutToolCall);
-        Assert.Equal(1, publishedWithoutToolCall);
-        Assert.True(await updates.MoveNextAsync());
+
+        await using var updates = manager.Process().GetAsyncEnumerator();
         Assert.True(await updates.MoveNextAsync());
         Assert.Single(heldQueue.Items);
-        Assert.Single(heldQueue.Items);
+
         manager.Complete();
     }
 
     [Fact]
     public async Task Interrupt_PublishesInterruptInputAndDrainsQueue()
     {
-        var session = AgentSession.Create(
-            new TestChatClient());
-        var manager = new AgentInputQueueManager(session);
+        var manager = CreateManager(new ChatResponseUpdate(ChatRole.Assistant, "response"));
         var queue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
@@ -82,7 +80,7 @@ public sealed class AgentInputQueueManagerTests
         Assert.Equal(1, interruptedItems);
         Assert.Empty(queue.Items);
         Assert.True(await updates.MoveNextAsync());
-        Assert.Equal("interrupt me", updates.Current.Messages[^1].Text);
+        Assert.Equal("response", updates.Current.Text);
 
         manager.Complete();
     }
