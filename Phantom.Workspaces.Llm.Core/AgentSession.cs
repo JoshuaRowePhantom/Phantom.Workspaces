@@ -1,43 +1,51 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm;
+
+/// <summary>
+/// Registry of tools that can be executed during agent sessions.
+/// </summary>
+public interface IToolRegistry
+{
+    Task<string> ExecuteToolAsync(
+        string toolName,
+        IReadOnlyDictionary<string, object?>? arguments = null,
+        CancellationToken cancellationToken = default);
+}
 
 public sealed class AgentSession
 {
     private readonly object syncLock = new();
-    private LlmSession llmSession;
+    private List<ChatMessage> messages = new();
+    private readonly IToolRegistry? toolRegistry;
 
     public AgentSession(
-        LlmSession llmSession,
-        IAgentExecutionEnvironment executionEnvironment,
-        ILlmProvider llmProvider)
+        IChatClient chatClient,
+        IToolRegistry? toolRegistry = null)
     {
-        this.llmSession = llmSession ?? throw new ArgumentNullException(nameof(llmSession));
-        this.ExecutionEnvironment = executionEnvironment ?? throw new ArgumentNullException(nameof(executionEnvironment));
-        this.LlmProvider = llmProvider ?? throw new ArgumentNullException(nameof(llmProvider));
+        this.ChatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
+        this.toolRegistry = toolRegistry;
     }
 
-    public IAgentExecutionEnvironment ExecutionEnvironment { get; }
+    public IChatClient ChatClient { get; }
 
-    public ILlmProvider LlmProvider { get; }
-
-    public LlmSession LlmSession
+    public IReadOnlyList<ChatMessage> Messages
     {
         get
         {
             lock (this.syncLock)
             {
-                return this.llmSession;
+                return this.messages.AsReadOnly();
             }
         }
     }
 
     public static AgentSession Create(
-        LlmSession llmSession,
-        IAgentExecutionEnvironment executionEnvironment,
-        ILlmProvider llmProvider)
+        IChatClient chatClient,
+        IToolRegistry? toolRegistry = null)
     {
-        return new AgentSession(llmSession, executionEnvironment, llmProvider);
+        return new AgentSession(chatClient, toolRegistry);
     }
 
     public async IAsyncEnumerable<AgentSessionUpdate> Process(
@@ -48,7 +56,7 @@ public sealed class AgentSession
 
         var inputEnumerator = inputEvents.GetAsyncEnumerator(cancellationToken);
         var pendingInputs = new Queue<SessionInputEvent>();
-        IAsyncEnumerator<LlmStreamEvent>? providerEnumerator = null;
+        IAsyncEnumerator<ChatResponseUpdate>? providerEnumerator = null;
         CancellationTokenSource? providerCts = null;
         var nextInputTask = inputEnumerator.MoveNextAsync().AsTask();
 
@@ -71,13 +79,13 @@ public sealed class AgentSession
                 if (providerEnumerator is null && pendingInputs.Count > 0)
                 {
                     var nextInput = pendingInputs.Dequeue();
-                    if (nextInput.LlmEvents.Length > 0)
+                    if (nextInput.Messages.Length > 0)
                     {
-                        this.AppendEvents(nextInput.LlmEvents);
+                        this.AppendMessages(nextInput.Messages);
                         yield return new AgentSessionUpdate
                         {
-                            LlmSession = this.LlmSession,
-                            LlmStreamingEvent = null,
+                            Messages = this.Messages,
+                            ResponseUpdate = null,
                         };
                         (providerEnumerator, providerCts) = this.StartProvider(cancellationToken);
                     }
@@ -114,24 +122,24 @@ public sealed class AgentSession
                         nextInputTask = Task.FromResult(false);
                     }
 
-                    var hasStreamEventAfterInput = false;
+                    var hasStreamEvent = false;
                     try
                     {
-                        hasStreamEventAfterInput = await moveNextProviderTask;
+                        hasStreamEvent = await moveNextProviderTask;
                     }
                     catch (OperationCanceledException)
                     {
-                        hasStreamEventAfterInput = false;
+                        hasStreamEvent = false;
                     }
 
-                    if (hasStreamEventAfterInput)
+                    if (hasStreamEvent)
                     {
-                        var streamEvent = providerEnumerator.Current;
-                        this.ApplyStreamEvent(streamEvent);
+                        var update = providerEnumerator.Current;
+                        this.AppendResponseUpdate(update);
                         yield return new AgentSessionUpdate
                         {
-                            LlmSession = this.LlmSession,
-                            LlmStreamingEvent = streamEvent,
+                            Messages = this.Messages,
+                            ResponseUpdate = update,
                         };
                         continue;
                     }
@@ -147,24 +155,24 @@ public sealed class AgentSession
                     continue;
                 }
 
-                var hasStreamEvent = false;
+                var hasResponse = false;
                 try
                 {
-                    hasStreamEvent = await moveNextProviderTask;
+                    hasResponse = await moveNextProviderTask;
                 }
                 catch (OperationCanceledException)
                 {
-                    hasStreamEvent = false;
+                    hasResponse = false;
                 }
 
-                if (hasStreamEvent)
+                if (hasResponse)
                 {
-                    var streamEvent = providerEnumerator.Current;
-                    this.ApplyStreamEvent(streamEvent);
+                    var update = providerEnumerator.Current;
+                    this.AppendResponseUpdate(update);
                     yield return new AgentSessionUpdate
                     {
-                        LlmSession = this.LlmSession,
-                        LlmStreamingEvent = streamEvent,
+                        Messages = this.Messages,
+                        ResponseUpdate = update,
                     };
                     continue;
                 }
@@ -201,48 +209,56 @@ public sealed class AgentSession
         }
     }
 
-    private (IAsyncEnumerator<LlmStreamEvent> Enumerator, CancellationTokenSource Cts) StartProvider(
+    private (IAsyncEnumerator<ChatResponseUpdate> Enumerator, CancellationTokenSource Cts) StartProvider(
         CancellationToken cancellationToken)
     {
         var providerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var conversation = this.GetCurrentConversation();
-        var providerEnumerator = this.LlmProvider
-            .StreamAsync(conversation, providerCts.Token)
+        var currentMessages = this.GetCurrentMessages();
+        var providerEnumerator = this.ChatClient
+            .GetStreamingResponseAsync(currentMessages, cancellationToken: providerCts.Token)
             .GetAsyncEnumerator(providerCts.Token);
         return (providerEnumerator, providerCts);
     }
 
-    private LlmConversation GetCurrentConversation()
+    private IReadOnlyList<ChatMessage> GetCurrentMessages()
     {
         lock (this.syncLock)
         {
-            return this.llmSession.Conversations.Count > 0
-                ? this.llmSession.Conversations[^1]
-                : LlmConversation.Create();
+            return this.messages.AsReadOnly();
         }
     }
 
-    private void AppendEvents(
-        IEnumerable<LlmEvent> events)
+    private void AppendMessages(
+        IEnumerable<ChatMessage> messages)
     {
         lock (this.syncLock)
         {
-            this.llmSession = LlmSessionBuilder
-                .FromSession(this.llmSession)
-                .AddEvents(events)
-                .Build();
+            this.messages.AddRange(messages);
         }
     }
 
-    private void ApplyStreamEvent(
-        LlmStreamEvent streamEvent)
+    private void AppendResponseUpdate(
+        ChatResponseUpdate update)
     {
+        if (string.IsNullOrWhiteSpace(update.Text))
+        {
+            return;
+        }
+
         lock (this.syncLock)
         {
-            this.llmSession = LlmSessionBuilder
-                .FromSession(this.llmSession)
-                .AddStreamEvent(streamEvent)
-                .Build();
+            var lastMessage = this.messages.FirstOrDefault(m => m.Role == ChatRole.Assistant);
+            if (lastMessage is not null && lastMessage.Text is not null)
+            {
+                var index = this.messages.IndexOf(lastMessage);
+                this.messages[index] = new ChatMessage(ChatRole.Assistant, lastMessage.Text + update.Text);
+            }
+            else
+            {
+                this.messages.Add(new ChatMessage(ChatRole.Assistant, update.Text));
+            }
         }
     }
 }
+
+

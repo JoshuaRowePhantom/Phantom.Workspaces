@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Threading.Channels;
+using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -56,7 +57,7 @@ public sealed class AgentInputQueueManager
         if (!this.inputEvents.Writer.TryWrite(
                 new SessionInputEvent
                 {
-                    LlmEvents = [],
+                    Messages = [],
                     InterruptCurrentResponse = true,
                 }))
         {
@@ -78,16 +79,16 @@ public sealed class AgentInputQueueManager
         }
     }
 
-    public ImmutableList<LlmEvent> Enqueue(
+    public ImmutableList<ChatMessage> Enqueue(
         AgentInputQueue queue,
-        IEnumerable<LlmEvent> events,
+        IEnumerable<ChatMessage> messages,
         bool interrupt = false)
     {
         ArgumentNullException.ThrowIfNull(queue);
-        ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(messages);
 
         this.RegisterInputQueue(queue);
-        var queuedItems = queue.Enqueue(events);
+        var queuedItems = queue.Enqueue(messages);
         if (interrupt)
         {
             this.Interrupt(queue);
@@ -156,7 +157,7 @@ public sealed class AgentInputQueueManager
         if (!this.inputEvents.Writer.TryWrite(
                 new SessionInputEvent
                 {
-                    LlmEvents = drained.ToArray(),
+                    Messages = drained.ToArray(),
                     InterruptCurrentResponse = interruptCurrentResponse,
                 }))
         {
@@ -166,7 +167,7 @@ public sealed class AgentInputQueueManager
         return drained.Count;
     }
 
-    private ImmutableList<LlmEvent> DrainQueue(
+    private ImmutableList<ChatMessage> DrainQueue(
         AgentInputQueue queue)
     {
         while (true)
@@ -177,10 +178,11 @@ public sealed class AgentInputQueueManager
                 return existingItems;
             }
 
-            if (queue.Update(existingItems, ImmutableList<LlmEvent>.Empty))
+            if (queue.Update(existingItems, ImmutableList<ChatMessage>.Empty))
             {
                 return existingItems;
             }
         }
     }
 }
+

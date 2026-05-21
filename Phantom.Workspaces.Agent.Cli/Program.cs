@@ -1,16 +1,14 @@
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
-using Phantom.Workspaces.Llm.Provider.Llama;
+using Microsoft.Extensions.AI;
 
-var options = CliOptions.Parse(args);
-using var app = new AgentCliApp(options);
+var app = new AgentCliApp();
 await app.RunAsync();
 
 internal sealed class AgentCliApp : IDisposable
 {
-    private readonly CliOptions options;
     private readonly object consoleLock = new();
-    private HttpClient? httpClient;
+    private readonly IChatClient chatClient;
     private readonly AgentInputQueueManager inputQueueManager;
     private readonly AgentSession session;
     private readonly CancellationTokenSource cancellationTokenSource = new();
@@ -18,31 +16,15 @@ internal sealed class AgentCliApp : IDisposable
     private readonly bool supportsInPlaceRendering = !Console.IsOutputRedirected;
     private int? assistantLineTop;
 
-    public AgentCliApp(
-        CliOptions options)
+    public AgentCliApp()
     {
-        this.options = options;
-        var provider = this.CreateProvider();
-        this.session = AgentSession.Create(
-            LlmSessionBuilder.Create().Build(),
-            AgentExecutionEnvironmentDispatcher.Empty,
-            new ProjectorLlmProvider(provider));
+        this.chatClient = new EchoChatClient();
+        this.session = AgentSession.Create(this.chatClient);
         this.inputQueueManager = new AgentInputQueueManager(this.session);
     }
 
     public async Task RunAsync()
     {
-        WriteLine($"Provider: {this.options.Provider}");
-        if (this.options.Provider == ProviderKind.Ollama)
-        {
-            WriteLine($"Model: {this.options.Model}");
-            WriteLine($"Endpoint: {this.options.Endpoint}");
-            if (!string.IsNullOrWhiteSpace(this.options.Think))
-            {
-                WriteLine($"Think: {this.options.Think}");
-            }
-        }
-
         ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
@@ -50,7 +32,7 @@ internal sealed class AgentCliApp : IDisposable
         };
         Console.CancelKeyPress += cancelHandler;
 
-        WriteLine("Press Ctrl+C to interrupt the current response. Type /exit to quit.");
+        WriteLine("Echo Chat Client - Press Ctrl+C to interrupt. Type /exit to quit.");
         var processTask = Task.Run(
             () => this.ProcessUpdatesAsync(this.processCancellationTokenSource.Token),
             this.cancellationTokenSource.Token);
@@ -78,12 +60,7 @@ internal sealed class AgentCliApp : IDisposable
 
                 this.inputQueueManager.Enqueue(
                     this.inputQueueManager.ImmediateQueue,
-                    [new LlmEvent
-                    {
-                        EventKind = LlmEventKinds.Turn,
-                        Role = LlmRoles.User,
-                        Content = line,
-                    }]);
+                    [new ChatMessage(ChatRole.User, line)]);
             }
         }
         finally
@@ -106,7 +83,7 @@ internal sealed class AgentCliApp : IDisposable
     {
         this.cancellationTokenSource.Dispose();
         this.processCancellationTokenSource.Dispose();
-        this.httpClient?.Dispose();
+        this.chatClient?.Dispose();
     }
 
     private async Task ProcessUpdatesAsync(
@@ -114,53 +91,19 @@ internal sealed class AgentCliApp : IDisposable
     {
         await foreach (var update in this.inputQueueManager.Process(cancellationToken).WithCancellation(cancellationToken))
         {
-            var streamEvent = update.LlmStreamingEvent;
-            if (streamEvent is null)
+            var responseUpdate = update.ResponseUpdate;
+            if (responseUpdate is null || string.IsNullOrWhiteSpace(responseUpdate.Text))
             {
                 continue;
             }
 
-            if (streamEvent.Replace?.Events is { Count: > 0 } replacementEvents)
-            {
-                var replacement = replacementEvents[^1];
-                if (string.Equals(replacement.Role, LlmRoles.Assistant, StringComparison.Ordinal))
-                {
-                    this.ReplaceAssistantLine(FormatAssistant(replacement));
-                    if (replacement.Done == true)
-                    {
-                        this.assistantLineTop = null;
-                    }
-                }
-
-                continue;
-            }
-
-            if (streamEvent.Event is null)
-            {
-                continue;
-            }
-
-            var llmEvent = streamEvent.Event;
-            if (string.Equals(llmEvent.Role, LlmRoles.Assistant, StringComparison.Ordinal))
-            {
-                this.RenderAssistantEvent(llmEvent);
-                if (llmEvent.Done == true)
-                {
-                    this.assistantLineTop = null;
-                }
-
-                continue;
-            }
-
-            this.WriteLine(FormatEvent(llmEvent));
-            this.assistantLineTop = null;
+            this.RenderAssistantUpdate(responseUpdate.Text);
         }
     }
 
-    private void RenderAssistantEvent(
-        LlmEvent llmEvent)
+    private void RenderAssistantUpdate(
+        string text)
     {
-        var text = FormatAssistant(llmEvent);
         if (!this.supportsInPlaceRendering)
         {
             this.WriteLine($"assistant > {text}");
@@ -209,54 +152,6 @@ internal sealed class AgentCliApp : IDisposable
         }
     }
 
-    private static string FormatAssistant(
-        LlmEvent llmEvent)
-    {
-        var content = llmEvent.Content ?? string.Empty;
-        var thinking = llmEvent.Thinking ?? string.Empty;
-        if (!string.IsNullOrWhiteSpace(content) && !string.IsNullOrWhiteSpace(thinking))
-        {
-            return $"{content} [thinking: {thinking}]";
-        }
-
-        return !string.IsNullOrWhiteSpace(content)
-            ? content
-            : !string.IsNullOrWhiteSpace(thinking)
-                ? $"[thinking: {thinking}]"
-                : "(empty)";
-    }
-
-    private static string FormatEvent(
-        LlmEvent llmEvent)
-    {
-        var role = llmEvent.Role ?? "event";
-        var content = llmEvent.Content ?? llmEvent.Thinking ?? string.Empty;
-        return $"{role} > {content}";
-    }
-
-    private ILlmProvider CreateProvider()
-    {
-        return this.options.Provider switch
-        {
-            ProviderKind.Echo => new EchoLlmProvider(),
-            ProviderKind.Ollama => this.CreateOllamaProvider(),
-            _ => throw new ArgumentOutOfRangeException(),
-        };
-    }
-
-    private ILlmProvider CreateOllamaProvider()
-    {
-        this.httpClient = new HttpClient();
-        return new OllamaHttpLlmProvider(
-            this.httpClient,
-            new OllamaOptions
-            {
-                Model = this.options.Model!,
-                Endpoint = new Uri(this.options.Endpoint!),
-                ThinkingLevel = this.options.Think,
-            });
-    }
-
     private void WriteLine(
         string line)
     {
@@ -264,112 +159,5 @@ internal sealed class AgentCliApp : IDisposable
         {
             Console.WriteLine(line);
         }
-    }
-}
-
-internal enum ProviderKind
-{
-    Ollama,
-    Echo,
-}
-
-internal sealed record CliOptions
-{
-    public required ProviderKind Provider { get; init; }
-
-    public string? Model { get; init; }
-
-    public string? Think { get; init; }
-
-    public string? Endpoint { get; init; }
-
-    public static CliOptions Parse(
-        string[] args)
-    {
-        string? provider = null;
-        string? model = null;
-        string? think = null;
-        string? endpoint = null;
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            var arg = args[i];
-            if (string.Equals(arg, "--provider", StringComparison.OrdinalIgnoreCase))
-            {
-                provider = ReadValue(args, ref i, "--provider");
-                continue;
-            }
-
-            if (string.Equals(arg, "--model", StringComparison.OrdinalIgnoreCase))
-            {
-                model = ReadValue(args, ref i, "--model");
-                continue;
-            }
-
-            if (string.Equals(arg, "--think", StringComparison.OrdinalIgnoreCase))
-            {
-                think = ReadValue(args, ref i, "--think");
-                continue;
-            }
-
-            if (string.Equals(arg, "--endpoint", StringComparison.OrdinalIgnoreCase))
-            {
-                endpoint = ReadValue(args, ref i, "--endpoint");
-                continue;
-            }
-        }
-
-        if (!TryParseProvider(provider, out var providerKind))
-        {
-            throw new InvalidOperationException("Expected --provider with value 'ollama' or 'echo'.");
-        }
-
-        if (providerKind == ProviderKind.Ollama)
-        {
-            model ??= "qwen3.6";
-            endpoint ??= OllamaOptions.LocalEndpoint;
-        }
-
-        return new CliOptions
-        {
-            Provider = providerKind,
-            Model = model,
-            Think = think,
-            Endpoint = endpoint,
-        };
-    }
-
-    private static string ReadValue(
-        string[] args,
-        ref int index,
-        string optionName)
-    {
-        if (index + 1 >= args.Length)
-        {
-            throw new InvalidOperationException($"Missing value for {optionName}.");
-        }
-
-        index++;
-        return args[index];
-    }
-
-    private static bool TryParseProvider(
-        string? provider,
-        out ProviderKind providerKind)
-    {
-        if (string.Equals(provider, "ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            providerKind = ProviderKind.Ollama;
-            return true;
-        }
-
-        if (string.Equals(provider, "echo", StringComparison.OrdinalIgnoreCase))
-        {
-            providerKind = ProviderKind.Echo;
-            return true;
-        }
-
-        providerKind = default;
-        return false;
     }
 }

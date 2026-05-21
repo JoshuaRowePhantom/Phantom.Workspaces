@@ -22,7 +22,6 @@ public sealed class AgentCliEchoProviderTests
             StartInfo = new ProcessStartInfo
             {
                 FileName = cliExePath,
-                Arguments = "--provider echo",
                 WorkingDirectory = repositoryRoot.FullName,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -62,7 +61,7 @@ public sealed class AgentCliEchoProviderTests
         Assert.True(
             process.ExitCode == 0,
             $"Expected zero exit code. ExitCode={process.ExitCode}, stderr={standardError}");
-        Assert.Contains("Provider: Echo", standardOutput, StringComparison.Ordinal);
+        Assert.Contains("Echo Chat Client", standardOutput, StringComparison.Ordinal);
         Assert.Contains("assistant > hello", standardOutput, StringComparison.Ordinal);
         Assert.DoesNotContain("Unhandled exception", standardError, StringComparison.OrdinalIgnoreCase);
     }
@@ -83,3 +82,4 @@ public sealed class AgentCliEchoProviderTests
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
     }
 }
+

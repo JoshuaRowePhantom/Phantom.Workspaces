@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Threading;
+using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -21,7 +22,7 @@ public sealed class AgentInputQueue
         public string? CoalescingKey { get; init; }
     }
 
-    private ImmutableList<LlmEvent> items;
+    private ImmutableList<ChatMessage> items;
 
     public AgentInputQueue(
         Parameters? parameters = null)
@@ -31,7 +32,7 @@ public sealed class AgentInputQueue
         this.Priority = parameters.Priority;
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;
-        this.items = ImmutableList<LlmEvent>.Empty;
+        this.items = ImmutableList<ChatMessage>.Empty;
     }
 
     public int Priority { get; private set; }
@@ -40,7 +41,7 @@ public sealed class AgentInputQueue
 
     public string? CoalescingKey { get; private set; }
 
-    public ImmutableList<LlmEvent> Items => Volatile.Read(ref this.items);
+    public ImmutableList<ChatMessage> Items => Volatile.Read(ref this.items);
 
     public void Configure(
         Parameters parameters)
@@ -51,8 +52,8 @@ public sealed class AgentInputQueue
         this.CoalescingKey = parameters.CoalescingKey;
     }
 
-    public ImmutableList<LlmEvent> Enqueue(
-        IEnumerable<LlmEvent> newItems)
+    public ImmutableList<ChatMessage> Enqueue(
+        IEnumerable<ChatMessage> newItems)
     {
         ArgumentNullException.ThrowIfNull(newItems);
 
@@ -74,8 +75,8 @@ public sealed class AgentInputQueue
     }
 
     public bool Update(
-        ImmutableList<LlmEvent> existingItems,
-        ImmutableList<LlmEvent> newItems)
+        ImmutableList<ChatMessage> existingItems,
+        ImmutableList<ChatMessage> newItems)
     {
         ArgumentNullException.ThrowIfNull(existingItems);
         ArgumentNullException.ThrowIfNull(newItems);
@@ -86,3 +87,4 @@ public sealed class AgentInputQueue
                    existingItems) == existingItems;
     }
 }
+

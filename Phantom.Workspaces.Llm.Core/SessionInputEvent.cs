@@ -1,8 +1,10 @@
+using Microsoft.Extensions.AI;
+
 namespace Phantom.Workspaces.Llm;
 
 public sealed record SessionInputEvent
 {
-    public required LlmEvent[] LlmEvents { get; init; }
+    public required ChatMessage[] Messages { get; init; }
 
     public bool InterruptCurrentResponse { get; init; }
 }

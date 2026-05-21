@@ -5,46 +5,42 @@ namespace Phantom.Workspaces.Llm;
 public sealed class AgentSessionTrustProfile
 {
     public static AgentSessionTrustProfile Empty { get; } =
-        new(Array.Empty<KeyValuePair<string, IAgentExecutionEnvironment>>());
+        new(Array.Empty<KeyValuePair<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>>>());
 
-    private readonly IReadOnlyDictionary<string, IAgentExecutionEnvironment> toolExecutionEnvironments;
+    private readonly IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>> tools;
 
     private readonly JsonSchema? allowedToolCallSchema;
-    private readonly Action<SchemaRegistry>? schemaResolver;
 
     public AgentSessionTrustProfile(
-        IEnumerable<KeyValuePair<string, IAgentExecutionEnvironment>> toolExecutionEnvironments,
-        JsonSchema? allowedToolCallSchema = null,
-        Action<SchemaRegistry>? schemaResolver = null)
+        IEnumerable<KeyValuePair<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>>> tools,
+        JsonSchema? allowedToolCallSchema = null)
     {
-        ArgumentNullException.ThrowIfNull(toolExecutionEnvironments);
+        ArgumentNullException.ThrowIfNull(tools);
 
-        this.toolExecutionEnvironments = toolExecutionEnvironments.ToDictionary(
+        this.tools = tools.ToDictionary(
             static pair => !string.IsNullOrWhiteSpace(pair.Key)
                 ? pair.Key
-                : throw new ArgumentException("Tool name cannot be null or whitespace.", nameof(toolExecutionEnvironments)),
+                : throw new ArgumentException("Tool name cannot be null or whitespace.", nameof(tools)),
             static pair => pair.Value
-                ?? throw new ArgumentException("Tool execution environment cannot be null.", nameof(toolExecutionEnvironments)),
+                ?? throw new ArgumentException("Tool implementation cannot be null.", nameof(tools)),
             StringComparer.Ordinal);
         this.allowedToolCallSchema = allowedToolCallSchema;
-        this.schemaResolver = schemaResolver;
     }
 
-    public IReadOnlyDictionary<string, IAgentExecutionEnvironment> ToolExecutionEnvironments =>
-        this.toolExecutionEnvironments;
+    public IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>> Tools =>
+        this.tools;
 
-    public IAgentExecutionEnvironment CreateExecutionEnvironment()
+    public IToolRegistry CreateToolRegistry()
     {
-        IAgentExecutionEnvironment executionEnvironment =
-            new AgentExecutionEnvironmentDispatcher(this.toolExecutionEnvironments);
+        var toolRegistry = new ToolRegistry(this.tools);
         if (this.allowedToolCallSchema is null)
         {
-            return executionEnvironment;
+            return toolRegistry;
         }
 
-        return new SchemaValidatingAgentExecutionEnvironment(
-            executionEnvironment,
-            this.allowedToolCallSchema,
-            this.schemaResolver);
+        return new SchemaValidatingToolRegistry(
+            toolRegistry,
+            this.allowedToolCallSchema);
     }
 }
+
