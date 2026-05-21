@@ -171,14 +171,34 @@ internal sealed class AgentCliApp : IDisposable
     private async Task ProcessUpdatesAsync(
         CancellationToken cancellationToken)
     {
+        var accumulated = new System.Text.StringBuilder();
+
         await foreach (var update in this.inputQueueManager.Process(cancellationToken).WithCancellation(cancellationToken))
         {
-            if (string.IsNullOrWhiteSpace(update.Text))
+            if (!string.IsNullOrEmpty(update.Text))
             {
-                continue;
+                accumulated.Append(update.Text);
+                this.RenderAssistantUpdate(accumulated.ToString());
             }
 
-            this.RenderAssistantUpdate(update.Text);
+            if (update.FinishReason is not null)
+            {
+                this.FinishAssistantTurn();
+                accumulated.Clear();
+            }
+        }
+    }
+
+    private void FinishAssistantTurn()
+    {
+        lock (this.consoleLock)
+        {
+            if (this.assistantLineTop is not null)
+            {
+                // Move cursor to end of the assistant line so the next output starts below it
+                Console.SetCursorPosition(0, this.assistantLineTop.Value + 1);
+                this.assistantLineTop = null;
+            }
         }
     }
 
