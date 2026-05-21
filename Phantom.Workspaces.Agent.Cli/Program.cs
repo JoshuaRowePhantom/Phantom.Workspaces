@@ -21,10 +21,10 @@ var ollamaModelOption = new Option<string?>("--model", ["-m"])
     Description = "Model name for Ollama (e.g., 'mistral', 'llama2')",
 };
 
-var thinkingOption = new Option<bool>("--thinking", ["--think"])
+var thinkingOption = new Option<string>("--think", ["--thinking"])
 {
-    Description = "Enable thinking/reasoning (default: true). Use --no-thinking to disable",
-    DefaultValueFactory = _ => true,
+    Description = "Thinking level: true/on/high (default), medium, low, false/off/none",
+    DefaultValueFactory = _ => "true",
 };
 
 var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
@@ -40,13 +40,22 @@ rootCommand.SetAction(async (parseResult, ct) =>
     var provider = parseResult.GetValue(providerOption)!;
     var ollamaUrl = parseResult.GetValue(ollamaUrlOption);
     var ollamaModel = parseResult.GetValue(ollamaModelOption);
-    var enableThinking = parseResult.GetValue(thinkingOption);
+    var thinkingLevel = ParseThinkingLevel(parseResult.GetValue(thinkingOption));
 
-    using var app = new AgentCliApp(provider, ollamaUrl, ollamaModel, enableThinking);
+    using var app = new AgentCliApp(provider, ollamaUrl, ollamaModel, thinkingLevel);
     await app.RunAsync();
 });
 
 await rootCommand.Parse(args).InvokeAsync();
+
+static ReasoningEffort? ParseThinkingLevel(string? value) => value?.ToLowerInvariant() switch
+{
+    null or "true" or "on" or "high" => ReasoningEffort.High,
+    "medium" or "med" => ReasoningEffort.Medium,
+    "low" => ReasoningEffort.Low,
+    "false" or "off" or "none" => ReasoningEffort.None,
+    _ => throw new InvalidOperationException($"Unknown thinking level '{value}'. Use: true, false, low, medium, high"),
+};
 
 internal sealed class AgentCliApp : IDisposable
 {
@@ -59,7 +68,7 @@ internal sealed class AgentCliApp : IDisposable
     private int? assistantLineTop;
     private readonly string clientDisplayName;
 
-    public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, bool enableThinking = true)
+    public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, ReasoningEffort? thinkingLevel = ReasoningEffort.High)
     {
         (this.chatClient, this.clientDisplayName) = CreateChatClient(provider, ollamaUrl, ollamaModel);
         var agent = new ChatClientAgent(
@@ -68,7 +77,7 @@ internal sealed class AgentCliApp : IDisposable
             {
                 ChatOptions = new ChatOptions
                 {
-                    AdditionalProperties = new() { ["think"] = (bool?)enableThinking },
+                    Reasoning = new ReasoningOptions { Effort = thinkingLevel },
                 },
             });
         this.inputQueueManager = new AgentInputQueueManager(agent);
