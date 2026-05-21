@@ -1,5 +1,6 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using OllamaSharp;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -112,5 +113,54 @@ public static class AgentFactory
 
         return promptAgent.Model
             ?? throw new InvalidOperationException("Agent definition does not specify a model.");
+    }
+
+    /// <summary>
+    /// Creates a ChatClient from an AgentDefinition, resolving the provider and connection.
+    /// </summary>
+    /// <param name="agent">The agent definition to create a client from.</param>
+    /// <returns>A tuple of (ChatClient, display name).</returns>
+    /// <exception cref="InvalidOperationException">If the agent is invalid or provider is unsupported.</exception>
+    public static (IChatClient client, string displayName) CreateChatClient(AgentDefinition agent)
+    {
+        var model = GetModel(agent);
+        if (string.IsNullOrEmpty(model.Id))
+        {
+            throw new InvalidOperationException("Agent definition does not specify a model ID.");
+        }
+
+        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
+
+        return provider switch
+        {
+            "ollama" => CreateOllamaClient(model),
+            "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
+            "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
+            _ => throw new InvalidOperationException(
+                $"Unknown or unsupported provider: {provider}. Supported: ollama, openai, azure")
+        };
+    }
+
+    private static (IChatClient client, string displayName) CreateOllamaClient(Model model)
+    {
+        var connection = model.Connection as AgentSchema.AnonymousConnection
+            ?? throw new InvalidOperationException("Ollama model requires an AnonymousConnection.");
+
+        var endpoint = connection.Endpoint
+            ?? throw new InvalidOperationException("Ollama connection requires an endpoint URL.");
+
+        var modelId = model.Id ?? "mistral";
+
+        try
+        {
+            var client = new OllamaApiClient(new Uri(endpoint), modelId);
+            var displayName = $"Ollama ({modelId} at {endpoint})";
+            return (client, displayName);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to create Ollama client for model '{modelId}' at '{endpoint}': {ex.Message}", ex);
+        }
     }
 }

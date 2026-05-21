@@ -151,16 +151,7 @@ internal sealed class AgentCliApp : IDisposable
 
     private static (IChatClient, string displayName) CreateChatClientFromAgentDefinition(AgentDefinition agentDef)
     {
-        var modelId = AgentFactory.GetModelId(agentDef);
-        if (string.IsNullOrEmpty(modelId))
-        {
-            throw new InvalidOperationException("Agent definition does not specify a model ID.");
-        }
-
-        // For now, default to echo client since model resolution from agent definition is complex
-        // In a full implementation, this would parse the model's provider and connection details
-        Console.Error.WriteLine($"Warning: Agent specifies model '{modelId}' but model resolution from agent definition is not yet implemented. Using echo client.");
-        return (new EchoChatClient(), $"Echo Chat Client (from agent model: {modelId})");
+        return AgentFactory.CreateChatClient(agentDef);
     }
 
     private static (IChatClient, string displayName) CreateChatClient(string provider, string? ollamaUrl, string? ollamaModel)
