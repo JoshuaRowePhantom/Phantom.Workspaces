@@ -11,4 +11,12 @@
     <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Remove="JsonSchemas\*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="JsonSchemas\*.json" />
+  </ItemGroup>
+
 </Project>

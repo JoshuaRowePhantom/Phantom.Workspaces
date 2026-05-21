@@ -4,7 +4,7 @@ using ModelContextProtocol.Protocol;
 
 namespace Phantom.Workspaces.Llm;
 
-public sealed class DelegatingMcpServer : IMcpServer, IAsyncDisposable
+public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
 {
     private readonly IClientTransport delegatedClientTransport;
     private readonly McpClientOptions? delegatedClientOptions;
@@ -20,16 +20,16 @@ public sealed class DelegatingMcpServer : IMcpServer, IAsyncDisposable
         this.delegatedClientOptions = delegatedClientOptions;
     }
 
-    public string GetDescription()
-    {
-        return $"Delegates MCP messages to client transport '{this.delegatedClientTransport.Name}'.";
-    }
+    public string Name => $"Delegating ({this.delegatedClientTransport.Name})";
 
     public IAgentExecutionEnvironment GetAgentExecutionEnvironment()
     {
-        return new McpClientTransportAgentExecutionEnvironment(
-            this.delegatedClientTransport,
-            this.delegatedClientOptions);
+        return new McpClientTransportAgentExecutionEnvironment(this, this.delegatedClientOptions);
+    }
+
+    public Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default)
+    {
+        return this.delegatedClientTransport.ConnectAsync(cancellationToken);
     }
 
     public async Task RunAsync(
@@ -38,7 +38,7 @@ public sealed class DelegatingMcpServer : IMcpServer, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(incomingServerTransport);
 
-        var delegatedTransport = await this.delegatedClientTransport.ConnectAsync(cancellationToken);
+        var delegatedTransport = await this.ConnectAsync(cancellationToken);
         lock (this.syncLock)
         {
             this.activeDelegatedTransport = delegatedTransport;

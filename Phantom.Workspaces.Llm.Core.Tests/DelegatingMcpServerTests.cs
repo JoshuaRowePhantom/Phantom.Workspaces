@@ -8,6 +8,18 @@ namespace Phantom.Workspaces.Llm.Tests;
 public sealed class DelegatingMcpServerTests
 {
     [Fact]
+    public async Task ConnectAsync_ReturnsTransportFromUnderlyingClientTransport()
+    {
+        var (_, upstreamTransport) = InMemoryTransportPair.Create();
+        IClientTransport server = new DelegatingMcpServer(new InMemoryClientTransport(upstreamTransport));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var transport = await server.ConnectAsync(cts.Token);
+
+        Assert.Same(upstreamTransport, transport);
+    }
+
+    [Fact]
     public async Task RunAsync_ForwardsIncomingClientRequestsToDelegatedTransport()
     {
         var (downstreamClientTransport, proxyServerTransport) = InMemoryTransportPair.Create();

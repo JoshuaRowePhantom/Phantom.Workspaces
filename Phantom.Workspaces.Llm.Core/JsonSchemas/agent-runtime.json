@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trustDomains"
+  ],
+  "properties": {
+    "trustDomains": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/trustDomain"
+      }
+    }
+  },
+  "$defs": {
+    "trustDomain": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "container": {
+          "oneOf": [
+            {
+              "const": "host"
+            },
+            {
+              "$ref": "#/$defs/containerDefinition"
+            }
+          ]
+        },
+        "availableServers": {
+          "$ref": "#/$defs/availableServers"
+        }
+      },
+      "required": [
+        "container"
+      ]
+    },
+    "containerDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseContainerReference"
+      ],
+      "properties": {
+        "baseContainerReference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mountPoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mountPoint"
+          }
+        },
+        "networkConfiguration": {
+          "$ref": "#/$defs/networkConfiguration"
+        },
+        "dockerOptions": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "mountPoint": {
+      "type": "object",
+      "required": [
+        "target"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "bind",
+            "volume",
+            "tmpfs",
+            "npipe"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "dockerOptions": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "networkConfiguration": {
+      "type": "object",
+      "properties": {
+        "networkMode": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extraHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dockerOptions": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "availableServers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/availableServer"
+      }
+    },
+    "availableServer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/stdioServer"
+        },
+        {
+          "$ref": "#/$defs/remoteServer"
+        }
+      ]
+    },
+    "stdioServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "command"
+      ],
+      "properties": {
+        "kind": {
+          "const": "stdio"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workingDirectory": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "startupOptions": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stdioMcpServerTag": {
+          "type": "string",
+          "pattern": "^stdio-mcp-server:\\s*.+$"
+        }
+      }
+    },
+    "remoteServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "url"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "http",
+            "sse"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}
