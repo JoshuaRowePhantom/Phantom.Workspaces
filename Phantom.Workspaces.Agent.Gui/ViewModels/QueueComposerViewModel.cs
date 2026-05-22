@@ -33,6 +33,8 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public string SubmitButtonText => this.IsDefaultComposer ? "Send" : "Add";
 
+    public string SubmitButtonGlyph => "↵";
+
     public bool CanCreateQueues => this.IsDefaultComposer;
 
     public bool HasAttachments => this.attachments.Count > 0;

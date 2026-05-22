@@ -180,6 +180,22 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queue);
     }
 
+    public bool RemoveInputQueue(AgentChatQueue queue)
+    {
+        if (!this.agentChat.RemoveInputQueue(queue))
+        {
+            return false;
+        }
+
+        if (this.mostRecentlyCreatedQueue == queue)
+        {
+            this.mostRecentlyCreatedQueue = this.DefaultInputQueue;
+        }
+
+        this.RebuildQueues();
+        return true;
+    }
+
     public void UpdateQueueItem(AgentChatQueue queue, int index, string text)
     {
         if (!this.agentChat.UpdateQueueItem(queue, index, text))

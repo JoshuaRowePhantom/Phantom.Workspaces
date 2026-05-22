@@ -10,6 +10,7 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue queue;
     private readonly RelayCommand toggleComposerCommand;
+    private readonly RelayCommand removeQueueCommand;
     private readonly RelayCommand<QueueImmediacyOption> setImmediacyCommand;
     private bool isComposerVisible;
 
@@ -20,6 +21,7 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
         this.Composer = composer;
         this.Items = [];
         this.toggleComposerCommand = new RelayCommand(this.ToggleComposer);
+        this.removeQueueCommand = new RelayCommand(this.RemoveQueue);
         this.setImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetImmediacy);
         this.Refresh();
     }
@@ -40,6 +42,8 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
 
     public bool CanToggleComposer => !this.IsDefault;
 
+    public bool CanRemoveQueue => !this.IsDefault;
+
     public int ItemCount => this.Items.Count;
 
     public string ItemCountText => this.ItemCount == 1 ? "1 item" : $"{this.ItemCount} items";
@@ -51,6 +55,8 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
     public ObservableCollection<InputQueueEntryViewModel> Items { get; }
 
     public ICommand ToggleComposerCommand => this.toggleComposerCommand;
+
+    public ICommand RemoveQueueCommand => this.removeQueueCommand;
 
     public ICommand SetImmediacyCommand => this.setImmediacyCommand;
 
@@ -107,6 +113,16 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
 
     public void SetImmediacy(QueueImmediacyOption option) => this.SelectedImmediacyOption = option;
 
+    private void RemoveQueue()
+    {
+        if (this.IsDefault)
+        {
+            return;
+        }
+
+        this.parent.RemoveInputQueue(this.queue);
+    }
+
     public void Refresh()
     {
         if (this.Items.Count > 0)
@@ -137,5 +153,6 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.SelectedImmediacyOption));
         this.RaisePropertyChanged(nameof(this.HasComposer));
         this.RaisePropertyChanged(nameof(this.CanToggleComposer));
+        this.RaisePropertyChanged(nameof(this.CanRemoveQueue));
     }
 }
