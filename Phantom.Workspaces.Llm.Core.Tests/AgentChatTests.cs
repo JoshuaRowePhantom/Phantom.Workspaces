@@ -14,6 +14,15 @@ public sealed class AgentChatTests
         return new AgentChat(manager);
     }
 
+    private static AgentChat CreateBusyChat(IChatClient client)
+    {
+        var manager = new AgentInputQueueManager(
+            new ChatClientAgent(
+                client,
+                new ChatClientAgentOptions { UseProvidedChatClientAsIs = true }));
+        return new AgentChat(manager);
+    }
+
     [Fact]
     public async Task EnqueueUserContents_AcceptsTextAndImageContent()
     {
@@ -93,5 +102,125 @@ public sealed class AgentChatTests
 
         Assert.False(removed);
         Assert.Single(chat.InputQueues);
+    }
+
+    [Fact]
+    public async Task EnqueueUserMessage_ToQueuedQueue_PublishesImmediatelyWhenIdle()
+    {
+        await using var chat = CreateChat();
+        var queue = chat.CreateInputQueue();
+
+        chat.EnqueueUserMessage("queued later", queue);
+
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("queued later", chat.History[0].Text);
+        Assert.Empty(queue.Items);
+    }
+
+    [Fact]
+    public async Task EnqueueUserMessage_ToQueuedQueue_WaitsWhileBusy()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var chat = CreateBusyChat(new BusyTestChatClient(
+            started,
+            release,
+            new ChatResponseUpdate(ChatRole.Assistant, "working "),
+            new ChatResponseUpdate(ChatRole.Assistant, "done")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            }));
+
+        var queue = chat.CreateInputQueue();
+        chat.EnqueueUserMessage("start");
+
+        await started.Task;
+
+        chat.EnqueueUserMessage("queued while busy", queue);
+
+        Assert.Single(queue.Items);
+        Assert.Equal(2, chat.History.Count);
+
+        release.SetResult();
+        await Task.Delay(100);
+
+        Assert.Empty(queue.Items);
+        Assert.Equal(4, chat.History.Count);
+        Assert.Equal("queued while busy", chat.History[2].Text);
+    }
+
+    [Fact]
+    public void AgentInputQueue_RaisesChangedWhenItemsMutate()
+    {
+        var queue = new AgentInputQueue();
+        var changedCount = 0;
+        queue.Changed += (_, _) => changedCount++;
+
+        queue.Enqueue([new ChatMessage(ChatRole.User, "hello")]);
+        var items = queue.Items;
+        queue.TryRemoveAt(ref items, 0);
+
+        Assert.Equal(2, changedCount);
+    }
+
+    private sealed class BusyTestChatClient : IChatClient
+    {
+        private readonly TaskCompletionSource started;
+        private readonly TaskCompletionSource release;
+        private readonly IReadOnlyCollection<ChatResponseUpdate> updates;
+
+        public BusyTestChatClient(
+            TaskCompletionSource started,
+            TaskCompletionSource release,
+            params ChatResponseUpdate[] updates)
+        {
+            this.started = started;
+            this.release = release;
+            this.updates = updates;
+        }
+
+        public async Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            var content = string.Empty;
+            await foreach (var update in this.GetStreamingResponseAsync(messages, options, cancellationToken))
+            {
+                content += update.Text;
+            }
+
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, content));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var update in this.updates.Take(1))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return update;
+                this.started.TrySetResult();
+                await Task.Yield();
+            }
+
+            await this.release.Task.WaitAsync(cancellationToken);
+
+            foreach (var update in this.updates.Skip(1))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return update;
+                await Task.Yield();
+            }
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
+
+        public void Dispose()
+        {
+        }
     }
 }

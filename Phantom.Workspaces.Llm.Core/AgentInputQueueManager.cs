@@ -8,10 +8,20 @@ namespace Phantom.Workspaces.Llm;
 
 public sealed class AgentInputQueueManager
 {
+    public sealed record QueuePublishedEventArgs
+    {
+        public required ImmutableList<ChatMessage> Messages { get; init; }
+
+        public bool InterruptCurrentResponse { get; init; }
+    }
+
     private readonly object syncLock = new();
     private readonly List<AgentInputQueue> inputQueues;
     private readonly Channel<SessionInputEvent> inputEvents;
     private readonly ChatClientAgent agent;
+    private bool isBusy;
+
+    public event EventHandler<QueuePublishedEventArgs>? QueuePublished;
 
     public AgentInputQueueManager(
         ChatClientAgent agent)
@@ -25,11 +35,14 @@ public sealed class AgentInputQueueManager
             });
         this.inputQueues = [this.ImmediateQueue];
         this.inputEvents = Channel.CreateUnbounded<SessionInputEvent>();
+        this.ImmediateQueue.Changed += this.OnQueueChanged;
     }
 
     public ChatClientAgent Agent => this.agent;
 
     public AgentInputQueue ImmediateQueue { get; }
+
+    public bool IsBusy => this.isBusy;
 
     public IReadOnlyList<AgentInputQueue> InputQueue
     {
@@ -74,6 +87,7 @@ public sealed class AgentInputQueueManager
                     var nextInput = pendingInputs.Dequeue();
                     if (nextInput.Messages.Length > 0)
                     {
+                        this.isBusy = true;
                         (providerEnumerator, providerCts) = this.StartRun(nextInput.Messages, agentSession, cancellationToken);
                     }
 
@@ -131,6 +145,8 @@ public sealed class AgentInputQueueManager
                         providerEnumerator = null;
                         providerCts?.Dispose();
                         providerCts = null;
+                        this.isBusy = false;
+                        this.ServiceQueues(false);
                     }
 
                     continue;
@@ -156,6 +172,8 @@ public sealed class AgentInputQueueManager
                 providerEnumerator = null;
                 providerCts?.Dispose();
                 providerCts = null;
+                this.isBusy = false;
+                this.ServiceQueues(false);
 
                 if (nextInputTask.IsCompletedSuccessfully
                     && !nextInputTask.Result
@@ -179,8 +197,9 @@ public sealed class AgentInputQueueManager
             {
                 await DisposeProviderEnumeratorAsync(providerEnumerator);
             }
-
             providerCts?.Dispose();
+            providerCts?.Dispose();
+            this.isBusy = false;
         }
 
     }
@@ -225,6 +244,7 @@ public sealed class AgentInputQueueManager
             if (!this.inputQueues.Contains(queue))
             {
                 this.inputQueues.Add(queue);
+                queue.Changed += this.OnQueueChanged;
             }
         }
     }
@@ -241,7 +261,13 @@ public sealed class AgentInputQueueManager
                 return false;
             }
 
-            return this.inputQueues.Remove(queue);
+            var removed = this.inputQueues.Remove(queue);
+            if (removed)
+            {
+                queue.Changed -= this.OnQueueChanged;
+            }
+
+            return removed;
         }
     }
 
@@ -270,6 +296,11 @@ public sealed class AgentInputQueueManager
     public int ServiceQueues(
         bool modelTurnIncludedToolCalls)
     {
+        if (this.isBusy)
+        {
+            return 0;
+        }
+
         IReadOnlyList<AgentInputQueue> queues;
         lock (this.syncLock)
         {
@@ -342,7 +373,20 @@ public sealed class AgentInputQueueManager
             throw new InvalidOperationException("Unable to publish queue items to session processor.");
         }
 
+        this.QueuePublished?.Invoke(
+            this,
+            new QueuePublishedEventArgs
+            {
+                Messages = drained,
+                InterruptCurrentResponse = interruptCurrentResponse,
+            });
+
         return drained.Count;
+    }
+
+    private void OnQueueChanged(object? sender, EventArgs e)
+    {
+        this.ServiceQueues(false);
     }
 
     private ImmutableList<ChatMessage> DrainQueue(

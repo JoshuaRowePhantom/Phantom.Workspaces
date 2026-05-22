@@ -65,6 +65,7 @@ public sealed class AgentChatQueue
         this.Queue = queue;
         this.Name = name;
         this.IsDefault = isDefault;
+        this.Queue.Changed += this.OnQueueChanged;
     }
 
     internal AgentInputQueue Queue { get; }
@@ -75,7 +76,13 @@ public sealed class AgentChatQueue
 
     public bool IsHeld => this.Queue.Immediacy == AgentInputQueueImmediacy.Held;
 
+    public AgentInputQueueImmediacy Immediacy => this.Queue.Immediacy;
+
     public IReadOnlyList<ChatMessage> Items => this.Queue.Items;
+
+    public event EventHandler? Changed;
+
+    private void OnQueueChanged(object? sender, EventArgs e) => this.Changed?.Invoke(this, EventArgs.Empty);
 }
 
 /// <summary>
@@ -103,6 +110,7 @@ public sealed class AgentChat : IAsyncDisposable
         this.queueManager = queueManager;
         this.DefaultInputQueue = new AgentChatQueue(queueManager.ImmediateQueue, "Default Queue", isDefault: true);
         this.InputQueues.Add(this.DefaultInputQueue);
+        this.queueManager.QueuePublished += this.OnQueuePublished;
         this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
     }
 
@@ -139,7 +147,7 @@ public sealed class AgentChat : IAsyncDisposable
     public AgentInputQueueManager InputQueueManager => this.queueManager;
 
     /// <summary>
-    /// Adds a user message to history immediately and enqueues it for processing.
+    /// Adds a user message to the target queue and waits for submission before history is created.
     /// </summary>
     public void EnqueueUserMessage(string text)
     {
@@ -172,36 +180,19 @@ public sealed class AgentChat : IAsyncDisposable
 
         targetQueue ??= this.DefaultInputQueue;
 
-        this.History.Add(new AgentChatHistoryItem
-        {
-            Role = ChatRole.User,
-            Text = FormatContentAsText(contents),
-            Contents = contents.ToArray(),
-        });
-
-        var assistantIndex = this.History.Count;
-        this.History.Add(new AgentChatHistoryItem
-        {
-            Role = ChatRole.Assistant,
-            Text = string.Empty,
-            Contents = [new TextContent(string.Empty)],
-            ReasoningText = string.Empty,
-            IsInProgress = true,
-        });
-        this.pendingAssistantHistoryIndexes.Enqueue(assistantIndex);
-
         var message = new ChatMessage(ChatRole.User, contents.ToList());
         this.queueManager.Enqueue(targetQueue.Queue, [message]);
-        this.queueManager.ServiceQueues(false);
     }
 
-    public AgentChatQueue CreateInputQueue(string? name = null)
+    public AgentChatQueue CreateInputQueue(
+        string? name = null,
+        AgentInputQueueImmediacy immediacy = AgentInputQueueImmediacy.Queue)
     {
         var queue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
                 Priority = this.nextUserQueuePriority++,
-                Immediacy = AgentInputQueueImmediacy.Queue,
+                Immediacy = immediacy,
             });
         var queueName = string.IsNullOrWhiteSpace(name)
             ? $"Queue {this.userQueueSequence++}"
@@ -231,17 +222,21 @@ public sealed class AgentChat : IAsyncDisposable
 
     public void SetQueueHeld(AgentChatQueue queue, bool held)
     {
-        ArgumentNullException.ThrowIfNull(queue);
-        var nextImmediacy = held
+        this.SetQueueImmediacy(queue, held
             ? AgentInputQueueImmediacy.Held
-            : queue.IsDefault ? AgentInputQueueImmediacy.Immediate : AgentInputQueueImmediacy.Queue;
+            : queue.IsDefault ? AgentInputQueueImmediacy.Immediate : AgentInputQueueImmediacy.Queue);
+    }
+
+    public void SetQueueImmediacy(AgentChatQueue queue, AgentInputQueueImmediacy immediacy)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
         queue.Queue.Configure(new AgentInputQueue.Parameters
         {
             Priority = queue.Queue.Priority,
-            Immediacy = nextImmediacy,
+            Immediacy = immediacy,
             CoalescingKey = queue.Queue.CoalescingKey,
         });
-        if (!held)
+        if (immediacy != AgentInputQueueImmediacy.Held)
         {
             this.queueManager.ServiceQueues(false);
         }
@@ -283,6 +278,29 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
+    public bool UpdateQueueItem(AgentChatQueue queue, int index, string text)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        while (true)
+        {
+            var expected = queue.Queue.Items;
+            if (index < 0 || index >= expected.Count)
+            {
+                return false;
+            }
+
+            if (queue.Queue.TryUpdateAt(ref expected, index, new ChatMessage(ChatRole.User, text)))
+            {
+                return true;
+            }
+        }
+    }
+
     /// <summary>
     /// Requests an interrupt of the current streaming response.
     /// </summary>
@@ -290,6 +308,7 @@ public sealed class AgentChat : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        this.queueManager.QueuePublished -= this.OnQueuePublished;
         await this.cts.CancelAsync();
         try
         {
@@ -392,6 +411,41 @@ public sealed class AgentChat : IAsyncDisposable
                 this.activeAssistantHistoryIndex = null;
             }
         }
+    }
+
+    private void OnQueuePublished(object? sender, AgentInputQueueManager.QueuePublishedEventArgs e)
+    {
+        if (e.Messages.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var message in e.Messages)
+        {
+            if (message.Role != ChatRole.User)
+            {
+                continue;
+            }
+
+            var contents = message.Contents.ToArray();
+            this.History.Add(new AgentChatHistoryItem
+            {
+                Role = ChatRole.User,
+                Text = FormatContentAsText(contents),
+                Contents = contents,
+            });
+        }
+
+        var assistantIndex = this.History.Count;
+        this.History.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Text = string.Empty,
+            Contents = [new TextContent(string.Empty)],
+            ReasoningText = string.Empty,
+            IsInProgress = true,
+        });
+        this.pendingAssistantHistoryIndexes.Enqueue(assistantIndex);
     }
 
     private void EnsureActiveAssistantHistoryIndex()

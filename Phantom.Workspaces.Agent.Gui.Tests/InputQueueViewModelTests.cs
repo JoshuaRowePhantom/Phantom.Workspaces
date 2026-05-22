@@ -57,7 +57,129 @@ public sealed class InputQueueViewModelTests
         viewModel.SubmitToNewQueue();
 
         Assert.Equal(2, chat.InputQueues.Count);
+        Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued", chat.History[0].Text);
+        Assert.Empty(viewModel.Queues[1].Items);
+        Assert.Equal(2, viewModel.Queues.Count);
+        Assert.Equal("queued", viewModel.Queues[1].SelectedImmediacyOption.Label);
+    }
+
+    [Fact]
+    public async Task SubmitToNewQueue_ProvidesRemoveCommandForQueuedItems()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "remove me");
+
+        var item = Assert.Single(viewModel.Queues[1].Items);
+        item.RemoveCommand.Execute(null);
+
+        Assert.Empty(viewModel.Queues[1].Items);
+    }
+
+    [Fact]
+    public async Task QueueComposer_AppendsTextToExistingQueue()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+
+        var queueVm = viewModel.Queues[1];
+        queueVm.ToggleComposerCommand.Execute(null);
+        queueVm.Composer.InputText = "more";
+        queueVm.Composer.Submit();
+
+        Assert.False(queueVm.IsComposerVisible);
+        Assert.Empty(queueVm.Composer.InputText);
+        Assert.Equal(2, queueVm.Items.Count);
+        Assert.Equal("original", queueVm.Items[0].Text);
+        Assert.Equal("more", queueVm.Items[1].Text);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public async Task SubmitToNewQueue_WhenQueuesAreHeld_CreatesHeldQueue()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "held queue";
+        viewModel.HoldAllQueues();
+
+        viewModel.SubmitToNewQueue();
+
+        var queue = viewModel.Queues[1];
+        Assert.True(queue.IsHeld);
+        Assert.Single(queue.Items);
+        Assert.Equal("held queue", queue.Items[0].Text);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public async Task QueueImmediacy_CanBeChangedInPlace()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "one";
+        viewModel.SubmitToNewQueue();
+
+        var queue = viewModel.Queues[1];
+        queue.SelectedImmediacyOption = QueueImmediacyOption.All.First(option => option.Value == AgentInputQueueImmediacy.Held);
+
+        Assert.True(queue.IsHeld);
+        Assert.Equal("held", queue.SelectedImmediacyOption.Label);
+    }
+
+    [Fact]
+    public async Task SingleQueue_HidesNameUntilSecondQueueExists()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+
+        Assert.False(viewModel.Queues[0].ShowName);
+
+        viewModel.InputText = "two";
+        viewModel.SubmitToNewQueue();
+
+        Assert.True(viewModel.Queues[0].ShowName);
+        Assert.True(viewModel.Queues[1].ShowName);
+    }
+    [Fact]
+    public async Task QueueItem_CanBeEditedInPlace()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.CreateInputQueue();
+        chat.SetQueueHeld(queue, held: true);
+        viewModel.AppendToQueue(queue, "original");
+
+        var queueItem = Assert.Single(viewModel.Queues[1].Items);
+        queueItem.EditCommand.Execute(null);
+        queueItem.EditText = "edited";
+        queueItem.SaveEditCommand.Execute(null);
+
+        Assert.Equal("edited", viewModel.Queues[1].Items[0].Text);
+        Assert.Equal("edited", chat.InputQueues[1].Items[0].Text);
+        Assert.Empty(chat.History);
     }
 
     [Fact]
@@ -104,6 +226,7 @@ public sealed class InputQueueViewModelTests
         viewModel.HoldAllQueues();
 
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
+        Assert.All(viewModel.Queues, queue => Assert.Equal("held", queue.SelectedImmediacyOption.Label));
     }
 
     [Fact]

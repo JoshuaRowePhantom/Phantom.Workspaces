@@ -13,6 +13,8 @@ public enum AgentInputQueueImmediacy
 
 public sealed class AgentInputQueue
 {
+    public event EventHandler? Changed;
+
     public sealed record Parameters
     {
         public int Priority { get; init; }
@@ -50,6 +52,7 @@ public sealed class AgentInputQueue
         this.Priority = parameters.Priority;
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;
+        this.OnChanged();
     }
 
     public ImmutableList<ChatMessage> Enqueue(
@@ -89,6 +92,10 @@ public sealed class AgentInputQueue
 
         var succeeded = observedItems == existingItems;
         existingItems = observedItems;
+        if (succeeded)
+        {
+            this.OnChanged();
+        }
         return succeeded;
     }
 
@@ -111,5 +118,26 @@ public sealed class AgentInputQueue
 
         var newItems = existingItems.RemoveAt(index);
         return this.Update(ref existingItems, newItems);
+    }
+
+    public bool TryUpdateAt(
+        ref ImmutableList<ChatMessage> existingItems,
+        int index,
+        ChatMessage newItem)
+    {
+        ArgumentNullException.ThrowIfNull(existingItems);
+        ArgumentNullException.ThrowIfNull(newItem);
+        if (index < 0 || index >= existingItems.Count)
+        {
+            return false;
+        }
+
+        var newItems = existingItems.SetItem(index, newItem);
+        return this.Update(ref existingItems, newItems);
+    }
+
+    private void OnChanged()
+    {
+        this.Changed?.Invoke(this, EventArgs.Empty);
     }
 }

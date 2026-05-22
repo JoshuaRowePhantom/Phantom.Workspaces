@@ -48,14 +48,13 @@ public sealed class AgentInputQueueManagerTests
 
         manager.Enqueue(queuedQueue, [new ChatMessage(ChatRole.User, "queued")]);
         manager.Enqueue(heldQueue, [new ChatMessage(ChatRole.System, "held")]);
-        var publishedWithToolCall = manager.ServiceQueues(modelTurnIncludedToolCalls: true);
-        Assert.Equal(0, publishedWithToolCall);
-        var publishedWithoutToolCall = manager.ServiceQueues(modelTurnIncludedToolCalls: false);
-        Assert.Equal(1, publishedWithoutToolCall);
+        Assert.Empty(queuedQueue.Items);
+        Assert.Single(heldQueue.Items);
+        Assert.Equal(0, manager.ServiceQueues(modelTurnIncludedToolCalls: true));
+        Assert.Equal(0, manager.ServiceQueues(modelTurnIncludedToolCalls: false));
 
         await using var updates = manager.Process().GetAsyncEnumerator();
         Assert.True(await updates.MoveNextAsync());
-        Assert.Single(heldQueue.Items);
 
         manager.Complete();
     }
@@ -68,7 +67,7 @@ public sealed class AgentInputQueueManagerTests
             new AgentInputQueue.Parameters
             {
                 Priority = 1,
-                Immediacy = AgentInputQueueImmediacy.Queue,
+                Immediacy = AgentInputQueueImmediacy.Held,
             });
         manager.RegisterInputQueue(queue);
         queue.Enqueue([new ChatMessage(ChatRole.User, "interrupt me")]);
@@ -85,4 +84,3 @@ public sealed class AgentInputQueueManagerTests
         manager.Complete();
     }
 }
-

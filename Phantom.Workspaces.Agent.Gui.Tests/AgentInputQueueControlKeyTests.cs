@@ -30,6 +30,7 @@ public sealed class AgentInputQueueControlKeyTests
         await using var chat = created.Chat;
         using var _ = created.Client;
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
         var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.H, KeyModifiers.Control | KeyModifiers.Shift);
@@ -45,6 +46,7 @@ public sealed class AgentInputQueueControlKeyTests
         await using var chat = created.Chat;
         using var _ = created.Client;
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
         viewModel.HoldAllQueues();
 
@@ -61,12 +63,31 @@ public sealed class AgentInputQueueControlKeyTests
         await using var chat = created.Chat;
         using var _ = created.Client;
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
         var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.H, KeyModifiers.Control);
 
         Assert.True(handled);
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
+    }
+
+    [Fact]
+    public async Task HandleInputKey_CtrlShiftQ_WhenQueuesAreHeld_CreatesHeldQueue()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "create";
+        viewModel.HoldAllQueues();
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Q, KeyModifiers.Control | KeyModifiers.Shift);
+
+        Assert.True(handled);
+        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.True(chat.InputQueues[1].IsHeld);
+        Assert.Single(viewModel.Queues[1].Items);
     }
 
     [Fact]
@@ -80,7 +101,7 @@ public sealed class AgentInputQueueControlKeyTests
             InputText = "hello from return",
         };
 
-        var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.Return, KeyModifiers.None);
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Return, KeyModifiers.None);
 
         Assert.True(handled);
         Assert.Equal(2, chat.History.Count);
