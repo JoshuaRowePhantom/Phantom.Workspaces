@@ -37,6 +37,7 @@ public sealed class EchoChatClient : IChatClient
             var toolName = separatorIndex >= 0 ? toolUseText[..separatorIndex] : toolUseText;
             var arguments = separatorIndex >= 0 ? toolUseText[(separatorIndex + 1)..] : string.Empty;
 
+            yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextReasoningContent($"Calling tool {toolName}")]);
             yield return new ChatResponseUpdate(ChatRole.Assistant, $"[tool: {toolName} {arguments}]");
             yield break;
         }
@@ -60,7 +61,7 @@ public sealed class EchoChatClient : IChatClient
             foreach (var token in thinking)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return new ChatResponseUpdate(ChatRole.Assistant, $"[thinking: {token}]");
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextReasoningContent(token.ToString())]);
                 await Task.Yield();
             }
 

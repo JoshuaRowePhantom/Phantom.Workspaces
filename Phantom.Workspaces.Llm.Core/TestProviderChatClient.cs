@@ -12,7 +12,7 @@ public sealed class TestProviderChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var responseText = this.BuildResponse(messages);
+        var responseText = BuildResponse(GetLatestUserText(messages));
         return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, responseText)));
     }
 
@@ -22,7 +22,35 @@ public sealed class TestProviderChatClient : IChatClient
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        yield return new ChatResponseUpdate(ChatRole.Assistant, this.BuildResponse(messages))
+        var latestUserText = GetLatestUserText(messages);
+        if (latestUserText.StartsWith("reasoning-tokens: ", StringComparison.Ordinal))
+        {
+            var reasoning = latestUserText["reasoning-tokens: ".Length..];
+            foreach (var token in reasoning)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextReasoningContent(token.ToString())]);
+                await Task.Yield();
+            }
+
+            yield break;
+        }
+
+        if (latestUserText.StartsWith("thinking-tokens: ", StringComparison.Ordinal))
+        {
+            var reasoning = latestUserText["thinking-tokens: ".Length..];
+            foreach (var token in reasoning)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextReasoningContent(token.ToString())]);
+                await Task.Yield();
+            }
+
+            yield break;
+        }
+
+        var requestedOutput = BuildResponse(latestUserText);
+        yield return new ChatResponseUpdate(ChatRole.Assistant, requestedOutput)
         {
             FinishReason = ChatFinishReason.Stop,
         };
@@ -36,7 +64,7 @@ public sealed class TestProviderChatClient : IChatClient
     {
     }
 
-    private string BuildResponse(IEnumerable<ChatMessage> messages)
+    private static string GetLatestUserText(IEnumerable<ChatMessage> messages)
     {
         var latestUserText = messages
             .Where(static m => m.Role == ChatRole.User)
@@ -45,6 +73,11 @@ public sealed class TestProviderChatClient : IChatClient
             .Select(static c => c.Text)
             .LastOrDefault();
 
+        return latestUserText ?? string.Empty;
+    }
+
+    private static string BuildResponse(string latestUserText)
+    {
         return string.IsNullOrWhiteSpace(latestUserText)
             ? "test"
             : $"test: {latestUserText}";
