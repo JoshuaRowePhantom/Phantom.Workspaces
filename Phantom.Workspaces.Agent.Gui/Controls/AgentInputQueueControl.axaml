@@ -141,6 +141,7 @@
                                                     Background="#262626"
                                                     CornerRadius="3">
                                                 <Grid ColumnDefinitions="*,Auto"
+                                                      RowDefinitions="Auto,Auto"
                                                       ColumnSpacing="8">
                                                     <StackPanel IsVisible="{Binding IsEditing}"
                                                                 Spacing="6">
@@ -173,6 +174,44 @@
                                                                          Foreground="#D0D0D0"
                                                                          FontFamily="Cascadia Code,Consolas,Courier New,monospace"
                                                                          FontSize="12"/>
+
+                                                    <ItemsControl Grid.Row="1"
+                                                                  Grid.ColumnSpan="2"
+                                                                  Margin="0,6,0,0"
+                                                                  ItemsSource="{Binding Attachments}"
+                                                                  IsVisible="{Binding HasAttachments}">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <StackPanel Orientation="Horizontal"
+                                                                           Spacing="6"
+                                                                           HorizontalAlignment="Left"/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate DataType="vm:InputQueueEntryAttachmentViewModel">
+                                                                <Border Background="#5A3A1A"
+                                                                        BorderBrush="#8A5A20"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="999"
+                                                                        Padding="8,3">
+                                                                    <StackPanel Orientation="Horizontal"
+                                                                               Spacing="6">
+                                                                        <TextBlock Text="{Binding Label}"
+                                                                                  Foreground="#F6D7A7"
+                                                                                  FontSize="11"/>
+                                                                        <Button Command="{Binding RemoveCommand}"
+                                                                               Content="X"
+                                                                               Background="Transparent"
+                                                                               BorderThickness="0"
+                                                                               Foreground="#FFB7B7"
+                                                                               MinWidth="18"
+                                                                               MinHeight="18"
+                                                                               Padding="0"/>
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
 
                                                     <StackPanel Grid.Column="1"
                                                                 Orientation="Horizontal"

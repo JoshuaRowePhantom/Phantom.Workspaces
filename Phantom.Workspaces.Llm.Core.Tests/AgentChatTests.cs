@@ -150,6 +150,22 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task UpdateQueueItem_PreservesImageAttachments()
+    {
+        await using var chat = CreateChat();
+        var queue = chat.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
+        chat.EnqueueUserContents([new TextContent("hello"), new DataContent(png, "image/png")], chat.InputQueues[1]);
+
+        var updated = chat.UpdateQueueItem(queue, 0, "edited");
+
+        Assert.True(updated);
+        Assert.Equal(2, queue.Items[0].Contents.Count);
+        Assert.Equal("edited", queue.Items[0].Contents.OfType<TextContent>().Single().Text);
+        Assert.IsType<DataContent>(queue.Items[0].Contents[1]);
+    }
+
+    [Fact]
     public void AgentInputQueue_RaisesChangedWhenItemsMutate()
     {
         var queue = new AgentInputQueue();

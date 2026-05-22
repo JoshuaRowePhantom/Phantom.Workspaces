@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using System.Windows.Input;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -15,13 +17,14 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         InputQueueViewModel parent,
         AgentChatQueue queue,
         int index,
-        string text)
+        ChatMessage message)
     {
         this.parent = parent;
         this.queue = queue;
         this.index = index;
-        this.Text = text;
-        this.editText = text;
+        this.Text = message.Text;
+        this.editText = this.Text;
+        this.Attachments = this.CreateAttachments(message);
         this.RemoveCommand = new RelayCommand(this.Remove);
         this.EditCommand = new RelayCommand(this.BeginEdit);
         this.SaveEditCommand = new RelayCommand(this.SaveEdit);
@@ -29,6 +32,10 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
     }
 
     public string Text { get; private set; }
+
+    public ObservableCollection<InputQueueEntryAttachmentViewModel> Attachments { get; }
+
+    public bool HasAttachments => this.Attachments.Count > 0;
 
     public bool IsEditing
     {
@@ -70,6 +77,8 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
 
     private void Remove() => this.parent.RemoveQueueItem(this.queue, this.index);
 
+    private void RemoveAttachment(int contentIndex) => this.parent.RemoveQueueItemContent(this.queue, this.index, contentIndex);
+
     private void BeginEdit()
     {
         this.EditText = this.Text;
@@ -86,5 +95,29 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
     {
         this.EditText = this.Text;
         this.IsEditing = false;
+    }
+
+    private ObservableCollection<InputQueueEntryAttachmentViewModel> CreateAttachments(ChatMessage message)
+    {
+        var attachments = new ObservableCollection<InputQueueEntryAttachmentViewModel>();
+        for (var contentIndex = 0; contentIndex < message.Contents.Count; contentIndex++)
+        {
+            if (message.Contents[contentIndex] is not DataContent dataContent)
+            {
+                continue;
+            }
+
+            var attachmentIndex = contentIndex;
+            attachments.Add(new InputQueueEntryAttachmentViewModel(
+                this.FormatDataContentLabel(dataContent),
+                new RelayCommand(() => this.RemoveAttachment(attachmentIndex))));
+        }
+
+        return attachments;
+    }
+
+    private string FormatDataContentLabel(DataContent dataContent)
+    {
+        return string.IsNullOrWhiteSpace(dataContent.MediaType) ? "image" : dataContent.MediaType;
     }
 }

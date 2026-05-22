@@ -134,13 +134,7 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
         for (var index = 0; index < queueItems.Count; index++)
         {
             var message = queueItems[index];
-            var text = message.Text;
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                text = "(empty)";
-            }
-
-            this.Items.Add(new InputQueueEntryViewModel(this.parent, this.queue, index, text));
+            this.Items.Add(new InputQueueEntryViewModel(this.parent, this.queue, index, message));
         }
 
         this.RaisePropertyChanged(nameof(this.ItemCount));

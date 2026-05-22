@@ -206,6 +206,16 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queue);
     }
 
+    public void RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
+    {
+        if (!this.agentChat.RemoveQueueItemContent(queue, index, contentIndex))
+        {
+            return;
+        }
+
+        this.RefreshQueue(queue);
+    }
+
     public void AppendToQueue(AgentChatQueue queue, string text)
     {
         if (string.IsNullOrWhiteSpace(text))

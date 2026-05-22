@@ -230,6 +230,29 @@ public sealed class InputQueueViewModelTests
     }
 
     [Fact]
+    public async Task QueueItem_CanRemoveImageAttachment()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.CreateInputQueue();
+        chat.SetQueueHeld(queue, held: true);
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
+        viewModel.AppendToQueue(queue, [new TextContent("hello"), new DataContent(png, "image/png")]);
+
+        var queueItem = Assert.Single(viewModel.Queues[1].Items);
+        var attachment = Assert.Single(queueItem.Attachments);
+        attachment.RemoveCommand.Execute(null);
+
+        Assert.Equal("hello", viewModel.Queues[1].Items[0].Text);
+        Assert.Empty(viewModel.Queues[1].Items[0].Attachments);
+        Assert.Equal("hello", chat.InputQueues[1].Items[0].Text);
+        Assert.Equal(1, chat.InputQueues[1].Items[0].Contents.Count);
+    }
+
+    [Fact]
     public async Task ToggleHoldAllQueues_WhenAnyNotHeld_HoldsAllQueues()
     {
         var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());

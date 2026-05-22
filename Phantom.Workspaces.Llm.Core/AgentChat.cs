@@ -294,7 +294,73 @@ public sealed class AgentChat : IAsyncDisposable
                 return false;
             }
 
-            if (queue.Queue.TryUpdateAt(ref expected, index, new ChatMessage(ChatRole.User, text)))
+            var existingMessage = expected[index];
+            var contents = existingMessage.Contents.ToList();
+            var textContentIndex = contents.FindIndex(static content => content is TextContent);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                if (textContentIndex >= 0)
+                {
+                    contents.RemoveAt(textContentIndex);
+                }
+            }
+            else if (textContentIndex >= 0)
+            {
+                contents[textContentIndex] = new TextContent(text);
+            }
+            else
+            {
+                contents.Insert(0, new TextContent(text));
+            }
+
+            if (contents.Count == 0)
+            {
+                if (queue.Queue.TryRemoveAt(ref expected, index))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (queue.Queue.TryUpdateAt(ref expected, index, new ChatMessage(ChatRole.User, contents)))
+            {
+                return true;
+            }
+        }
+    }
+
+    public bool RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+
+        while (true)
+        {
+            var expected = queue.Queue.Items;
+            if (index < 0 || index >= expected.Count)
+            {
+                return false;
+            }
+
+            var existingMessage = expected[index];
+            var contents = existingMessage.Contents.ToList();
+            if (contentIndex < 0 || contentIndex >= contents.Count)
+            {
+                return false;
+            }
+
+            contents.RemoveAt(contentIndex);
+            if (contents.Count == 0)
+            {
+                if (queue.Queue.TryRemoveAt(ref expected, index))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (queue.Queue.TryUpdateAt(ref expected, index, new ChatMessage(ChatRole.User, contents)))
             {
                 return true;
             }
