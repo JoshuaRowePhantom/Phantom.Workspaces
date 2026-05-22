@@ -21,6 +21,8 @@
         <Button Grid.Column="1"
                 Command="{Binding SubmitCommand}"
                 Content="{Binding SubmitButtonGlyph}"
+                HorizontalContentAlignment="Center"
+                VerticalContentAlignment="Center"
                 MinHeight="36"
                 Padding="12,0"
                 VerticalAlignment="Bottom"/>

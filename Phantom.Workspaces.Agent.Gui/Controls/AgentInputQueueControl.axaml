@@ -127,11 +127,6 @@
                                     <controls:QueueComposerControl DataContext="{Binding Composer}"/>
                                 </Border>
 
-                                <TextBlock Text="No pending items"
-                                           Foreground="#606060"
-                                           FontSize="11"
-                                           IsVisible="{Binding HasNoItems}"/>
-
                                 <ItemsControl ItemsSource="{Binding Items}"
                                               IsVisible="{Binding HasItems}">
                                     <ItemsControl.ItemTemplate>

@@ -57,7 +57,7 @@ public sealed class AgentInputQueueControlKeyTests
     }
 
     [Fact]
-    public async Task HandleInputKey_CtrlH_TogglesHoldState()
+    public async Task HandleInputKey_Pause_TogglesHoldState()
     {
         var created = AgentFactory.CreateAgentChat(CreateAgentDefinition());
         await using var chat = created.Chat;
@@ -66,7 +66,7 @@ public sealed class AgentInputQueueControlKeyTests
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
-        var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.H, KeyModifiers.Control);
+        var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.Pause, KeyModifiers.None);
 
         Assert.True(handled);
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));

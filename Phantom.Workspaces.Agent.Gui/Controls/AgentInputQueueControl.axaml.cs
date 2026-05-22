@@ -35,7 +35,7 @@ public partial class AgentInputQueueControl : UserControl
             return true;
         }
 
-        if (key == Key.H && keyModifiers.HasFlag(KeyModifiers.Control))
+        if (key == Key.Pause)
         {
             vm.ToggleHoldAllQueues();
             return true;

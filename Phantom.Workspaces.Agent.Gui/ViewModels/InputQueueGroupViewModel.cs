@@ -50,8 +50,6 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
 
     public bool HasItems => this.ItemCount > 0;
 
-    public bool HasNoItems => !this.HasItems;
-
     public ObservableCollection<InputQueueEntryViewModel> Items { get; }
 
     public ICommand ToggleComposerCommand => this.toggleComposerCommand;
@@ -140,7 +138,6 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.ItemCount));
         this.RaisePropertyChanged(nameof(this.ItemCountText));
         this.RaisePropertyChanged(nameof(this.HasItems));
-        this.RaisePropertyChanged(nameof(this.HasNoItems));
         this.RaisePropertyChanged(nameof(this.IsHeld));
         this.RaisePropertyChanged(nameof(this.IsImmediate));
         this.RaisePropertyChanged(nameof(this.IsQueued));

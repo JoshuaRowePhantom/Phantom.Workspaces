@@ -22,7 +22,7 @@ public partial class QueueComposerControl : UserControl
             handledEventsToo: true);
         this.InputBox.AddHandler(
             TextBox.PastingFromClipboardEvent,
-            (_, e) => this.InputBox_PastingFromClipboard(e),
+            this.InputBox_PastingFromClipboard,
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
             handledEventsToo: true);
         DragDrop.AddDropHandler(this.InputBox, this.InputBox_Drop);
@@ -56,26 +56,19 @@ public partial class QueueComposerControl : UserControl
         e.Handled = HandleInputKey(vm, e.Key, e.KeyModifiers);
     }
 
-    private async void InputBox_PastingFromClipboard(object eventArgs)
+    private async void InputBox_PastingFromClipboard(object? sender, RoutedEventArgs e)
     {
         if (this.DataContext is not QueueComposerViewModel vm)
         {
             return;
         }
 
-        if (eventArgs is not RoutedEventArgs routedEventArgs)
+        var handled = await this.TryAppendImagesAsync(vm, this.GetDataTransfer(e));
+        if (handled)
         {
-            return;
+            this.TrySetHandled(e);
+            this.SyncTextBoxText(vm);
         }
-
-        var handled = await this.TryAppendImagesAsync(vm, this.GetDataTransfer(eventArgs));
-        if (!handled)
-        {
-            return;
-        }
-
-        routedEventArgs.Handled = true;
-        this.SyncTextBoxText(vm);
     }
 
     private async void InputBox_Drop(object? sender, DragEventArgs e)
@@ -151,6 +144,15 @@ public partial class QueueComposerControl : UserControl
         }
 
         return null;
+    }
+
+    private void TrySetHandled(object eventArgs)
+    {
+        var property = eventArgs.GetType().GetProperty("Handled", BindingFlags.Instance | BindingFlags.Public);
+        if (property?.CanWrite == true && property.PropertyType == typeof(bool))
+        {
+            property.SetValue(eventArgs, true);
+        }
     }
 
     private async Task<bool> TryAppendImagesAsync(QueueComposerViewModel vm, IDataTransfer? dataTransfer)
