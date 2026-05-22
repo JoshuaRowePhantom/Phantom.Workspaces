@@ -201,6 +201,17 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queue);
     }
 
+    public void AppendToQueue(AgentChatQueue queue, IReadOnlyList<AIContent> contents)
+    {
+        if (contents.Count == 0)
+        {
+            return;
+        }
+
+        this.agentChat.EnqueueUserContents(contents, queue);
+        this.RefreshQueue(queue);
+    }
+
     public void HideQueueComposer(AgentChatQueue queue)
     {
         if (this.queueViewModels.TryGetValue(queue, out var viewModel))

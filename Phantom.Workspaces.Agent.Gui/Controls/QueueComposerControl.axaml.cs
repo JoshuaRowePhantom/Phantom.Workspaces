@@ -1,7 +1,11 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using System.IO;
+using System.Reflection;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
@@ -10,11 +14,18 @@ public partial class QueueComposerControl : UserControl
     public QueueComposerControl()
     {
         this.InitializeComponent();
+        DragDrop.SetAllowDrop(this.InputBox, true);
         this.InputBox.AddHandler(
             InputElement.KeyDownEvent,
             this.InputBox_KeyDown,
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
             handledEventsToo: true);
+        this.InputBox.AddHandler(
+            TextBox.PastingFromClipboardEvent,
+            (_, e) => this.InputBox_PastingFromClipboard(e),
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
+            handledEventsToo: true);
+        DragDrop.AddDropHandler(this.InputBox, this.InputBox_Drop);
     }
 
     private void InputBox_KeyDown(object? sender, KeyEventArgs e)
@@ -30,6 +41,42 @@ public partial class QueueComposerControl : UserControl
         }
 
         e.Handled = HandleInputKey(vm, e.Key, e.KeyModifiers);
+    }
+
+    private async void InputBox_PastingFromClipboard(object eventArgs)
+    {
+        if (this.DataContext is not QueueComposerViewModel vm)
+        {
+            return;
+        }
+
+        if (eventArgs is not RoutedEventArgs routedEventArgs)
+        {
+            return;
+        }
+
+        var handled = await this.TryAppendImagesAsync(vm, this.GetDataTransfer(eventArgs));
+        if (!handled)
+        {
+            return;
+        }
+
+        routedEventArgs.Handled = true;
+        this.SyncTextBoxText(vm);
+    }
+
+    private async void InputBox_Drop(object? sender, DragEventArgs e)
+    {
+        if (this.DataContext is not QueueComposerViewModel vm)
+        {
+            return;
+        }
+
+        if (await this.TryAppendImagesAsync(vm, e.DataTransfer))
+        {
+            e.Handled = true;
+            this.SyncTextBoxText(vm);
+        }
     }
 
     internal static bool HandleInputKey(QueueComposerViewModel vm, Key key, KeyModifiers keyModifiers)
@@ -76,5 +123,116 @@ public partial class QueueComposerControl : UserControl
         }
 
         return false;
+    }
+
+    private IDataTransfer? GetDataTransfer(object eventArgs)
+    {
+        var eventArgsType = eventArgs.GetType();
+        foreach (var propertyName in new[] { "DataObject", "DataTransfer", "Data" })
+        {
+            var property = eventArgsType.GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+            if (property?.GetValue(eventArgs) is IDataTransfer dataTransfer)
+            {
+                return dataTransfer;
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<bool> TryAppendImagesAsync(QueueComposerViewModel vm, IDataTransfer? dataTransfer)
+    {
+        if (dataTransfer is null)
+        {
+            return false;
+        }
+
+        var handled = false;
+
+        var bitmap = dataTransfer.TryGetBitmap();
+        if (bitmap is not null)
+        {
+            using (bitmap)
+            {
+                handled = true;
+                vm.AppendImageAttachment(
+                    this.BitmapToBytes(bitmap),
+                    "image/png",
+                    bitmap.PixelSize.Width,
+                    bitmap.PixelSize.Height);
+            }
+        }
+
+        var files = dataTransfer.TryGetFiles();
+        if (files is not null)
+        {
+            foreach (var fileItem in files)
+            {
+                using (fileItem)
+                {
+                    if (fileItem is IStorageFile file
+                        && await this.TryAppendImageFileAsync(vm, file))
+                    {
+                        handled = true;
+                    }
+                }
+            }
+        }
+
+        return handled;
+    }
+
+    private async Task<bool> TryAppendImageFileAsync(QueueComposerViewModel vm, IStorageFile file)
+    {
+        using var stream = await file.OpenReadAsync();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+
+        var bytes = memory.ToArray();
+        try
+        {
+            using var bitmap = new Bitmap(new MemoryStream(bytes));
+            vm.AppendImageAttachment(
+                bytes,
+                this.GetMediaType(file.Name),
+                bitmap.PixelSize.Width,
+                bitmap.PixelSize.Height,
+                file.Name);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private byte[] BitmapToBytes(Bitmap bitmap)
+    {
+        using var memory = new MemoryStream();
+        bitmap.Save(memory);
+        return memory.ToArray();
+    }
+
+    private string GetMediaType(string? fileName)
+    {
+        var extension = Path.GetExtension(fileName ?? string.Empty).ToLowerInvariant();
+        return extension switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            ".png" => "image/png",
+            _ => "image/png",
+        };
+    }
+
+    private void SyncTextBoxText(QueueComposerViewModel vm)
+    {
+        this.InputBox.Text = vm.InputText;
     }
 }

@@ -106,6 +106,30 @@ public sealed class InputQueueViewModelTests
     }
 
     [Fact]
+    public async Task QueueComposer_CanAttachImageAndSubmitStructuredContent()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.DefaultComposer.AppendImageAttachment([0x01, 0x02, 0x03], "image/png", 640, 480, "shot.png");
+
+        Assert.Equal("[image 640x480 shot.png]", viewModel.InputText);
+        Assert.True(viewModel.DefaultComposer.HasAttachments);
+
+        viewModel.SubmitToDefaultQueue();
+
+        Assert.False(viewModel.DefaultComposer.HasAttachments);
+        Assert.Equal(string.Empty, viewModel.InputText);
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("[image 640x480 shot.png][image/png]", chat.History[0].Text);
+        Assert.Equal(2, chat.History[0].Contents.Count);
+        Assert.IsType<TextContent>(chat.History[0].Contents[0]);
+        Assert.IsType<DataContent>(chat.History[0].Contents[1]);
+    }
+
+    [Fact]
     public async Task SubmitToNewQueue_WhenQueuesAreHeld_CreatesHeldQueue()
     {
         var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
