@@ -4,7 +4,7 @@ displayName: Qwen 3.6 Local Chat
 description: A simple chat agent using Qwen 3.6 running locally on Ollama with thinking disabled
 
 model:
-  id: qwen-3.6
+  id: qwen3.6
   provider: ollama
   apiType: Ollama
   connection:
