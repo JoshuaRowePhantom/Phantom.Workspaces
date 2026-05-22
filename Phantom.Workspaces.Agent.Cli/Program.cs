@@ -1,69 +1,23 @@
 using Phantom.Workspaces.Llm;
-using Phantom.Workspaces.Llm.Echo;
 using AgentSchema;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using OllamaSharp;
 using System.CommandLine;
+using Phantom.Workspaces.Agent.Cli;
 
-var providerOption = new Option<string>("--provider", ["-p"])
-{
-    Description = "LLM provider: 'echo' (default), 'ollama-local', or 'ollama-remote'",
-    DefaultValueFactory = _ => "echo",
-};
-
-var ollamaUrlOption = new Option<string?>("--ollama-url", ["-u"])
-{
-    Description = "URL for remote Ollama instance (e.g., http://192.168.1.100:11434)",
-};
-
-var ollamaModelOption = new Option<string?>("--model", ["-m"])
-{
-    Description = "Model name for Ollama (e.g., 'mistral', 'llama2')",
-};
-
-var thinkingOption = new Option<string>("--think", ["--thinking"])
-{
-    Description = "Thinking level: true/on/high (default), medium, low, false/off/none",
-    DefaultValueFactory = _ => "true",
-};
-
-var agentSchemaOption = new Option<string?>("--agent-schema", ["-s"])
-{
-    Description = "Path to AgentSchema definition file (.json or .yaml) to load an agent from schema",
-};
+var definitionParser = new AgentDefinitionCommandLineParser();
 
 var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
-{
-    providerOption,
-    ollamaUrlOption,
-    ollamaModelOption,
-    thinkingOption,
-    agentSchemaOption,
-};
+{};
+definitionParser.AddOptions(rootCommand);
 
 rootCommand.SetAction(async (parseResult, ct) =>
 {
-    var provider = parseResult.GetValue(providerOption)!;
-    var ollamaUrl = parseResult.GetValue(ollamaUrlOption);
-    var ollamaModel = parseResult.GetValue(ollamaModelOption);
-    var thinkingLevel = ParseThinkingLevel(parseResult.GetValue(thinkingOption));
-    var agentSchemaPath = parseResult.GetValue(agentSchemaOption);
-
-    using var app = new AgentCliApp(provider, ollamaUrl, ollamaModel, thinkingLevel, agentSchemaPath);
+    var cliParseResult = definitionParser.Parse(parseResult);
+    using var app = new AgentCliApp(cliParseResult);
     await app.RunAsync();
 });
 
 await rootCommand.Parse(args).InvokeAsync();
-
-static ReasoningEffort? ParseThinkingLevel(string? value) => value?.ToLowerInvariant() switch
-{
-    null or "true" or "on" or "high" => ReasoningEffort.High,
-    "medium" or "med" => ReasoningEffort.Medium,
-    "low" => ReasoningEffort.Low,
-    "false" or "off" or "none" => ReasoningEffort.None,
-    _ => throw new InvalidOperationException($"Unknown thinking level '{value}'. Use: true, false, low, medium, high"),
-};
 
 internal sealed class AgentCliApp : IDisposable
 {
@@ -99,79 +53,21 @@ internal sealed class AgentCliApp : IDisposable
         ? $"  assistant {SpinnerFrames[this.spinnerFrame]}:"
         : "  assistant:";
 
-    public AgentCliApp(string provider, string? ollamaUrl = null, string? ollamaModel = null, ReasoningEffort? thinkingLevel = ReasoningEffort.High, string? agentSchemaPath = null)
+    public AgentCliApp(AgentDefinitionParseResult parseResult)
     {
         this.supportsInteractiveRendering = !Console.IsOutputRedirected && !Console.IsInputRedirected;
-        
-        var chatOptions = new ChatClientAgentOptions
+
+        var created = AgentFactory.CreateAgent(parseResult.AgentDefinition);
+
+        this.chatClient = created.Client;
+        this.clientDisplayName = created.DisplayName;
+
+        if (!string.IsNullOrEmpty(parseResult.AgentSchemaPath))
         {
-            ChatOptions = new ChatOptions
-            {
-                Reasoning = new ReasoningOptions { Effort = thinkingLevel },
-            },
-        };
-
-        AgentDefinition? agentDef = null;
-
-        // Load agent schema if provided
-        if (!string.IsNullOrEmpty(agentSchemaPath))
-        {
-            try
-            {
-                agentDef = AgentSchemaLoader.LoadAgent(agentSchemaPath);
-                AgentFactory.StoreAgentDefinition(agentDef, chatOptions.ChatOptions);
-
-                var instructions = AgentFactory.GetSystemInstructions(agentDef);
-                if (!string.IsNullOrEmpty(instructions) && chatOptions.ChatOptions.AdditionalProperties != null)
-                {
-                    // Store instructions for use by the agent
-                    chatOptions.ChatOptions.AdditionalProperties["system_instructions"] = instructions;
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Error loading agent schema: {ex.Message}");
-                throw;
-            }
+            this.clientDisplayName = $"{this.clientDisplayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        // Create chat client from agent definition or CLI parameters
-        (this.chatClient, this.clientDisplayName) = agentDef != null
-            ? CreateChatClientFromAgentDefinition(agentDef)
-            : CreateChatClient(provider, ollamaUrl, ollamaModel);
-
-        if (!string.IsNullOrEmpty(agentSchemaPath))
-        {
-            this.clientDisplayName = $"{this.clientDisplayName} [from {Path.GetFileName(agentSchemaPath)}]";
-        }
-
-        var agent = new ChatClientAgent(this.chatClient, chatOptions);
-        this.inputQueueManager = new AgentInputQueueManager(agent);
-    }
-
-    private static (IChatClient, string displayName) CreateChatClientFromAgentDefinition(AgentDefinition agentDef)
-    {
-        return AgentFactory.CreateChatClient(agentDef);
-    }
-
-    private static (IChatClient, string displayName) CreateChatClient(string provider, string? ollamaUrl, string? ollamaModel)
-    {
-        return provider.ToLowerInvariant() switch
-        {
-            "echo" => (new EchoChatClient(), "Echo Chat Client"),
-            "ollama-local" => CreateOllamaClient("http://localhost:11434", ollamaModel),
-            "ollama-remote" when !string.IsNullOrWhiteSpace(ollamaUrl) => CreateOllamaClient(ollamaUrl, ollamaModel),
-            "ollama-remote" => throw new InvalidOperationException(
-                "ollama-remote provider requires --ollama-url option. Example: --provider ollama-remote --ollama-url http://192.168.1.100:11434"),
-            _ => throw new InvalidOperationException($"Unknown provider: {provider}. Use 'echo', 'ollama-local', or 'ollama-remote'.")
-        };
-    }
-
-    private static (IChatClient, string displayName) CreateOllamaClient(string baseUrl, string? model)
-    {
-        var modelName = model ?? "mistral";
-        var client = new OllamaApiClient(new Uri(baseUrl), modelName);
-        return (client, $"Ollama ({modelName} at {baseUrl})");
+        this.inputQueueManager = new AgentInputQueueManager(created.Agent);
     }
 
     public async Task RunAsync()

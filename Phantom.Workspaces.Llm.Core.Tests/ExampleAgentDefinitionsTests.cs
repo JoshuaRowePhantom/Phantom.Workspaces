@@ -31,7 +31,7 @@ public class ExampleAgentDefinitionsTests
     public void LoadQwenLocalChatYaml_ValidatesSuccessfully()
     {
         var yaml = GetEmbeddedResourceContent("qwen-local-chat.yaml");
-        var agent = AgentSchemaLoader.LoadAgentFromYaml(yaml);
+        var agent = AgentDefinitionLoader.LoadAgentFromYaml(yaml);
         
         Assert.NotNull(agent);
         Assert.Equal("prompt", agent.Kind);
@@ -39,7 +39,7 @@ public class ExampleAgentDefinitionsTests
         var promptAgent = agent as PromptAgent;
         Assert.NotNull(promptAgent);
         Assert.Equal("qwen-local-chat", promptAgent.Name);
-        Assert.Equal("qwen-3.6", promptAgent.Model?.Id);
+        Assert.Equal("qwen3.6", promptAgent.Model?.Id);
         Assert.Equal("ollama", promptAgent.Model?.Provider);
     }
 
@@ -47,7 +47,7 @@ public class ExampleAgentDefinitionsTests
     public void LoadQwenLocalChatJson_ValidatesSuccessfully()
     {
         var json = GetEmbeddedResourceContent("qwen-local-chat.json");
-        var agent = AgentSchemaLoader.LoadAgentFromJson(json);
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
         
         Assert.NotNull(agent);
         Assert.Equal("prompt", agent.Kind);
@@ -55,7 +55,7 @@ public class ExampleAgentDefinitionsTests
         var promptAgent = agent as PromptAgent;
         Assert.NotNull(promptAgent);
         Assert.Equal("qwen-local-chat", promptAgent.Name);
-        Assert.Equal("qwen-3.6", promptAgent.Model?.Id);
+        Assert.Equal("qwen3.6", promptAgent.Model?.Id);
         Assert.Equal("ollama", promptAgent.Model?.Provider);
     }
 
@@ -63,7 +63,7 @@ public class ExampleAgentDefinitionsTests
     public void QwenLocalChatAgent_HasValidInstructions()
     {
         var yaml = GetEmbeddedResourceContent("qwen-local-chat.yaml");
-        var agent = AgentSchemaLoader.LoadAgentFromYaml(yaml);
+        var agent = AgentDefinitionLoader.LoadAgentFromYaml(yaml);
         var promptAgent = agent as PromptAgent;
         
         Assert.NotNull(promptAgent?.Instructions);
@@ -75,12 +75,29 @@ public class ExampleAgentDefinitionsTests
     public void QwenLocalChatAgent_HasCorrectModelOptions()
     {
         var yaml = GetEmbeddedResourceContent("qwen-local-chat.yaml");
-        var agent = AgentSchemaLoader.LoadAgentFromYaml(yaml);
+        var agent = AgentDefinitionLoader.LoadAgentFromYaml(yaml);
         var promptAgent = agent as PromptAgent;
         
         Assert.NotNull(promptAgent?.Model?.Options);
         Assert.NotNull(promptAgent.Model.Options.Temperature);
         Assert.NotNull(promptAgent.Model.Options.TopP);
         Assert.Equal(2048, promptAgent.Model.Options.MaxOutputTokens);
+    }
+
+    [Fact]
+    public void LoadAgentFromJson_InvalidAgainstSupportedSchema_Throws()
+    {
+        const string invalidJson = """
+        {
+          "kind": "workflow",
+          "name": "unsupported",
+          "model": {
+            "id": "qwen-3.6"
+          }
+        }
+        """;
+
+        var ex = Assert.Throws<InvalidOperationException>(() => AgentDefinitionLoader.LoadAgentFromJson(invalidJson));
+        Assert.Contains("does not match supported AgentDefinition schema", ex.Message);
     }
 }

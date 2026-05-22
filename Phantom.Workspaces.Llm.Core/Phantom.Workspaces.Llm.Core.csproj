@@ -17,6 +17,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="JsonSchemas\*.json" />
   </ItemGroup>
 

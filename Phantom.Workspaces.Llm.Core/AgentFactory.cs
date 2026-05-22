@@ -1,6 +1,8 @@
 using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OllamaSharp;
+using Phantom.Workspaces.Llm.Echo;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -10,6 +12,30 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public static class AgentFactory
 {
+    /// <summary>
+    /// Applies agent-definition-specific settings to chat options.
+    /// </summary>
+    /// <param name="agent">The agent definition to apply.</param>
+    /// <param name="chatOptions">The chat options to update.</param>
+    /// <exception cref="ArgumentNullException">If <paramref name="chatOptions"/> is null.</exception>
+    public static void ConfigureChatOptions(AgentDefinition agent, ChatOptions chatOptions)
+    {
+        ArgumentNullException.ThrowIfNull(chatOptions);
+
+        chatOptions.Reasoning = new ReasoningOptions
+        {
+            Effort = ResolveReasoningEffort(agent),
+        };
+
+        StoreAgentDefinition(agent, chatOptions);
+
+        var instructions = GetSystemInstructions(agent);
+        if (!string.IsNullOrEmpty(instructions) && chatOptions.AdditionalProperties != null)
+        {
+            chatOptions.AdditionalProperties["system_instructions"] = instructions;
+        }
+    }
+
     /// <summary>
     /// Stores an AgentSchema definition in ChatOptions additional properties for later reference.
     /// </summary>
@@ -133,13 +159,68 @@ public static class AgentFactory
 
         return provider switch
         {
+            "echo" => (new EchoChatClient(), "Echo Chat Client"),
             "ollama" => CreateOllamaClient(model),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: ollama, openai, azure")
+                $"Unknown or unsupported provider: {provider}. Supported: echo, ollama, openai, azure")
         };
     }
+
+    /// <summary>
+    /// Creates a <see cref="ChatClientAgent"/> and underlying client from an agent definition.
+    /// </summary>
+    /// <param name="agent">Agent definition to materialize.</param>
+    /// <returns>Tuple of created agent, underlying chat client, and display name.</returns>
+    public static (ChatClientAgent Agent, IChatClient Client, string DisplayName) CreateAgent(
+        AgentDefinition agent)
+    {
+        var chatOptions = new ChatClientAgentOptions
+        {
+            ChatOptions = new ChatOptions(),
+        };
+        ConfigureChatOptions(agent, chatOptions.ChatOptions);
+
+        var clientInfo = CreateChatClient(agent);
+
+        var createdAgent = new ChatClientAgent(clientInfo.client, chatOptions);
+        return (createdAgent, clientInfo.client, clientInfo.displayName);
+    }
+
+    private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
+    {
+        var model = GetModel(agent);
+        var additionalProperties = model.Options?.AdditionalProperties;
+        if (additionalProperties is null)
+        {
+            return ReasoningEffort.High;
+        }
+
+        if (!additionalProperties.TryGetValue("thinking", out var thinkingValue) || thinkingValue is null)
+        {
+            return ReasoningEffort.High;
+        }
+
+        return thinkingValue switch
+        {
+            bool b => b ? ReasoningEffort.High : ReasoningEffort.None,
+            string s => ParseReasoningEffort(s),
+            System.Text.Json.JsonElement jsonElement when jsonElement.ValueKind == System.Text.Json.JsonValueKind.True => ReasoningEffort.High,
+            System.Text.Json.JsonElement jsonElement when jsonElement.ValueKind == System.Text.Json.JsonValueKind.False => ReasoningEffort.None,
+            System.Text.Json.JsonElement jsonElement when jsonElement.ValueKind == System.Text.Json.JsonValueKind.String => ParseReasoningEffort(jsonElement.GetString() ?? "high"),
+            _ => ReasoningEffort.High,
+        };
+    }
+
+    private static ReasoningEffort ParseReasoningEffort(string value) => value.ToLowerInvariant() switch
+    {
+        "true" or "on" or "high" => ReasoningEffort.High,
+        "medium" or "med" => ReasoningEffort.Medium,
+        "low" => ReasoningEffort.Low,
+        "false" or "off" or "none" => ReasoningEffort.None,
+        _ => ReasoningEffort.High,
+    };
 
     private static (IChatClient client, string displayName) CreateOllamaClient(Model model)
     {

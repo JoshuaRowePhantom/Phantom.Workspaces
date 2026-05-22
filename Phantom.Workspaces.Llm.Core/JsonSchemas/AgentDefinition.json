@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phantom-workspaces/schemas/agent-definition.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "name",
+    "model"
+  ],
+  "properties": {
+    "kind": {
+      "const": "prompt"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "displayName": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "instructions": {
+      "type": "string"
+    },
+    "additionalInstructions": {
+      "type": "string"
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "echo",
+            "ollama",
+            "openai",
+            "azure"
+          ]
+        },
+        "apiType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "key": {
+              "type": "string"
+            }
+          }
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "temperature": {
+              "type": "number"
+            },
+            "topP": {
+              "type": "number"
+            },
+            "topK": {
+              "type": "integer"
+            },
+            "frequencyPenalty": {
+              "type": "number"
+            },
+            "presencePenalty": {
+              "type": "number"
+            },
+            "maxOutputTokens": {
+              "type": "integer"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}
