@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using OllamaSharp;
 using Phantom.Workspaces.Llm.Echo;
 
@@ -9,6 +10,8 @@ namespace Phantom.Workspaces.Llm;
 /// <summary>
 /// Factory for creating Agent components from AgentSchema definitions.
 /// Converts AgentSchema PromptAgent definitions to ChatClient configuration, model details, and tools.
+/// Philosophy: configure all fields represented by the supported schema; if we need to
+/// support more definition fields/shapes, expand schema+mapping together.
 /// </summary>
 public static class AgentFactory
 {
@@ -21,6 +24,7 @@ public static class AgentFactory
     public static void ConfigureChatOptions(AgentDefinition agent, ChatOptions chatOptions)
     {
         ArgumentNullException.ThrowIfNull(chatOptions);
+        chatOptions.AdditionalProperties ??= [];
 
         chatOptions.Reasoning = new ReasoningOptions
         {
@@ -29,10 +33,21 @@ public static class AgentFactory
 
         StoreAgentDefinition(agent, chatOptions);
 
-        var instructions = GetSystemInstructions(agent);
-        if (!string.IsNullOrEmpty(instructions) && chatOptions.AdditionalProperties != null)
+        if (agent is not PromptAgent promptAgent)
         {
-            chatOptions.AdditionalProperties["system_instructions"] = instructions;
+            return;
+        }
+
+        ConfigureChatOptions_Internal(promptAgent, chatOptions);
+    }
+
+    private static void ConfigureChatOptions_Internal(PromptAgent promptAgent, ChatOptions chatOptions)
+    {
+        chatOptions.Instructions = promptAgent.Instructions;
+
+        if (!string.IsNullOrEmpty(promptAgent.AdditionalInstructions))
+        {
+            chatOptions.AdditionalProperties["additionalInstructions"] = promptAgent.AdditionalInstructions;
         }
     }
 
@@ -41,104 +56,50 @@ public static class AgentFactory
     /// </summary>
     /// <param name="agent">The agent definition to store.</param>
     /// <param name="chatOptions">The ChatOptions to update with agent metadata.</param>
-    /// <exception cref="InvalidOperationException">If the agent is not a PromptAgent.</exception>
     public static void StoreAgentDefinition(AgentDefinition agent, ChatOptions chatOptions)
     {
-        if (agent.Kind != "prompt")
-        {
-            throw new InvalidOperationException(
-                $"Only PromptAgent (kind: 'prompt') is currently supported. Got: {agent.Kind}");
-        }
-
-        var promptAgent = agent as PromptAgent
-            ?? throw new InvalidOperationException("Failed to cast agent to PromptAgent.");
-
-        // Store the agent definition itself for later access
-        if (chatOptions.AdditionalProperties != null)
-        {
-            chatOptions.AdditionalProperties["agent_definition"] = agent;
-        }
+        chatOptions.AdditionalProperties ??= [];
+        chatOptions.AdditionalProperties["agent_definition"] = agent;
     }
 
     /// <summary>
     /// Extracts tool definitions from a PromptAgent for registration with ChatClient.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract tools from.</param>
-    /// <returns>List of tools defined in the agent.</returns>
-    /// <exception cref="InvalidOperationException">If the agent is not a PromptAgent.</exception>
+    /// <returns>List of tools defined in the agent, or empty when tools are not applicable.</returns>
     public static IList<Tool>? ExtractTools(AgentDefinition agent)
     {
-        if (agent.Kind != "prompt")
-        {
-            throw new InvalidOperationException(
-                $"Only PromptAgent (kind: 'prompt') is currently supported. Got: {agent.Kind}");
-        }
-
-        var promptAgent = agent as PromptAgent
-            ?? throw new InvalidOperationException("Failed to cast agent to PromptAgent.");
-
-        return promptAgent.Tools;
+        return (agent as PromptAgent)?.Tools ?? [];
     }
 
     /// <summary>
     /// Gets the system instructions from a PromptAgent.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract instructions from.</param>
-    /// <returns>The system instructions, or empty string if not defined.</returns>
-    /// <exception cref="InvalidOperationException">If the agent is not a PromptAgent.</exception>
+    /// <returns>The system instructions, or empty string if not defined/applicable.</returns>
     public static string GetSystemInstructions(AgentDefinition agent)
     {
-        if (agent.Kind != "prompt")
-        {
-            throw new InvalidOperationException(
-                $"Only PromptAgent (kind: 'prompt') is currently supported. Got: {agent.Kind}");
-        }
-
-        var promptAgent = agent as PromptAgent
-            ?? throw new InvalidOperationException("Failed to cast agent to PromptAgent.");
-
-        return promptAgent.Instructions ?? string.Empty;
+        return (agent as PromptAgent)?.Instructions ?? string.Empty;
     }
 
     /// <summary>
     /// Gets the model ID from a PromptAgent.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract the model from.</param>
-    /// <returns>The model ID, or null if not defined.</returns>
-    /// <exception cref="InvalidOperationException">If the agent is not a PromptAgent.</exception>
+    /// <returns>The model ID, or null if not defined/applicable.</returns>
     public static string? GetModelId(AgentDefinition agent)
     {
-        if (agent.Kind != "prompt")
-        {
-            throw new InvalidOperationException(
-                $"Only PromptAgent (kind: 'prompt') is currently supported. Got: {agent.Kind}");
-        }
-
-        var promptAgent = agent as PromptAgent
-            ?? throw new InvalidOperationException("Failed to cast agent to PromptAgent.");
-
-        return promptAgent.Model?.Id;
+        return (agent as PromptAgent)?.Model?.Id;
     }
 
     /// <summary>
     /// Gets the model definition from a PromptAgent.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract the model from.</param>
-    /// <returns>The model definition containing ID, provider, API type, connection, and options.</returns>
-    /// <exception cref="InvalidOperationException">If the agent is not a PromptAgent or has no model defined.</exception>
-    public static Model GetModel(AgentDefinition agent)
+    /// <returns>The model definition containing ID, provider, API type, connection, and options, if available.</returns>
+    public static Model? GetModel(AgentDefinition agent)
     {
-        if (agent.Kind != "prompt")
-        {
-            throw new InvalidOperationException(
-                $"Only PromptAgent (kind: 'prompt') is currently supported. Got: {agent.Kind}");
-        }
-
-        var promptAgent = agent as PromptAgent
-            ?? throw new InvalidOperationException("Failed to cast agent to PromptAgent.");
-
-        return promptAgent.Model
-            ?? throw new InvalidOperationException("Agent definition does not specify a model.");
+        return (agent as PromptAgent)?.Model;
     }
 
     /// <summary>
@@ -148,9 +109,20 @@ public static class AgentFactory
     /// <returns>A tuple of (ChatClient, display name).</returns>
     /// <exception cref="InvalidOperationException">If the agent is invalid or provider is unsupported.</exception>
     public static (IChatClient client, string displayName) CreateChatClient(AgentDefinition agent)
+        => CreateChatClient(agent, services: null);
+
+    /// <summary>
+    /// Creates a ChatClient from an AgentDefinition, resolving provider and optional service integrations.
+    /// </summary>
+    /// <param name="agent">The agent definition to create a client from.</param>
+    /// <param name="services">Optional service integrations for runtime behavior.</param>
+    /// <returns>A tuple of (ChatClient, display name).</returns>
+    public static (IChatClient client, string displayName) CreateChatClient(
+        AgentDefinition agent,
+        AgentServices? services)
     {
         var model = GetModel(agent);
-        if (string.IsNullOrEmpty(model.Id))
+        if (model is null || string.IsNullOrEmpty(model.Id))
         {
             throw new InvalidOperationException("Agent definition does not specify a model ID.");
         }
@@ -160,7 +132,7 @@ public static class AgentFactory
         return provider switch
         {
             "echo" => (new EchoChatClient(), "Echo Chat Client"),
-            "ollama" => CreateOllamaClient(model),
+            "ollama" => CreateOllamaClient(model, services),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
@@ -174,23 +146,40 @@ public static class AgentFactory
     /// <param name="agent">Agent definition to materialize.</param>
     /// <returns>Tuple of created agent, underlying chat client, and display name.</returns>
     public static (ChatClientAgent Agent, IChatClient Client, string DisplayName) CreateAgent(
-        AgentDefinition agent)
+        AgentDefinition agent,
+        AgentServices? services = null)
     {
+        if ((services?.LogChat == true || services?.LogHttpRequests == true) && services.LoggerFactory is null)
+        {
+            throw new InvalidOperationException(
+                "AgentServices.LoggerFactory is required when AgentServices.LogChat or AgentServices.LogHttpRequests is enabled.");
+        }
+
         var chatOptions = new ChatClientAgentOptions
         {
             ChatOptions = new ChatOptions(),
         };
         ConfigureChatOptions(agent, chatOptions.ChatOptions);
 
-        var clientInfo = CreateChatClient(agent);
+        var clientInfo = CreateChatClient(agent, services);
+        var client = clientInfo.client;
+        if (services?.LogChat == true)
+        {
+            client = client.AsBuilder().UseLogging(services.LoggerFactory).Build();
+        }
 
-        var createdAgent = new ChatClientAgent(clientInfo.client, chatOptions);
-        return (createdAgent, clientInfo.client, clientInfo.displayName);
+        var createdAgent = new ChatClientAgent(client, chatOptions);
+        return (createdAgent, client, clientInfo.displayName);
     }
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
     {
-        var model = GetModel(agent);
+        if (agent is not PromptAgent promptAgent || promptAgent.Model is null)
+        {
+            return ReasoningEffort.High;
+        }
+
+        var model = promptAgent.Model;
         var additionalProperties = model.Options?.AdditionalProperties;
         if (additionalProperties is null)
         {
@@ -222,7 +211,7 @@ public static class AgentFactory
         _ => ReasoningEffort.High,
     };
 
-    private static (IChatClient client, string displayName) CreateOllamaClient(Model model)
+    private static (IChatClient client, string displayName) CreateOllamaClient(Model model, AgentServices? services)
     {
         var connection = model.Connection as AgentSchema.AnonymousConnection
             ?? throw new InvalidOperationException("Ollama model requires an AnonymousConnection.");
@@ -234,7 +223,25 @@ public static class AgentFactory
 
         try
         {
-            var client = new OllamaApiClient(new Uri(endpoint), modelId);
+            IChatClient client;
+            if (services?.LogHttpRequests == true)
+            {
+                var logger = services.LoggerFactory!.CreateLogger<HttpRequestLoggingHandler>();
+                var handler = new HttpRequestLoggingHandler(logger)
+                {
+                    InnerHandler = new HttpClientHandler(),
+                };
+                var httpClient = new HttpClient(handler)
+                {
+                    BaseAddress = new Uri(endpoint),
+                };
+                client = new OllamaApiClient(httpClient, modelId, jsonSerializerContext: null);
+            }
+            else
+            {
+                client = new OllamaApiClient(new Uri(endpoint), modelId);
+            }
+
             var displayName = $"Ollama ({modelId} at {endpoint})";
             return (client, displayName);
         }

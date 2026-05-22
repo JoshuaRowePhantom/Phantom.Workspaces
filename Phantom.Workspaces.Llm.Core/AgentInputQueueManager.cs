@@ -127,7 +127,7 @@ public sealed class AgentInputQueueManager
 
                     if (interruptRequested || (nextInputTask.IsCompletedSuccessfully && !nextInputTask.Result))
                     {
-                        await providerEnumerator.DisposeAsync();
+                        await DisposeProviderEnumeratorAsync(providerEnumerator);
                         providerEnumerator = null;
                         providerCts?.Dispose();
                         providerCts = null;
@@ -152,7 +152,7 @@ public sealed class AgentInputQueueManager
                     continue;
                 }
 
-                await providerEnumerator.DisposeAsync();
+                await DisposeProviderEnumeratorAsync(providerEnumerator);
                 providerEnumerator = null;
                 providerCts?.Dispose();
                 providerCts = null;
@@ -177,10 +177,23 @@ public sealed class AgentInputQueueManager
 
             if (providerEnumerator is not null)
             {
-                await providerEnumerator.DisposeAsync();
+                await DisposeProviderEnumeratorAsync(providerEnumerator);
             }
 
             providerCts?.Dispose();
+        }
+
+    }
+
+    private static async Task DisposeProviderEnumeratorAsync(
+        IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
+    {
+        try
+        {
+            await providerEnumerator.DisposeAsync();
+        }
+        catch (NotSupportedException)
+        {
         }
     }
 

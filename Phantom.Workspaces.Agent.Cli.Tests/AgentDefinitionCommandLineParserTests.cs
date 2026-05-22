@@ -17,6 +17,8 @@ public sealed class AgentDefinitionCommandLineParserTests
         var additionalProperties = prompt.Model?.Options?.AdditionalProperties;
 
         Assert.Null(result.AgentSchemaPath);
+        Assert.False(result.LogChat);
+        Assert.False(result.LogHttpRequests);
         Assert.Equal("echo", prompt.Model?.Provider);
         Assert.Equal("echo", prompt.Model?.Id);
         Assert.NotNull(additionalProperties);
@@ -28,7 +30,7 @@ public sealed class AgentDefinitionCommandLineParserTests
     public void Parse_OllamaRemoteArgs_ReturnsConstructedOllamaDefinition()
     {
         var parser = new AgentDefinitionCommandLineParser();
-        var parseResult = Parse(parser, ["--provider", "ollama-remote", "--ollama-url", "http://127.0.0.1:11434", "--model", "qwen3.6", "--think", "low"]);
+        var parseResult = Parse(parser, ["--provider", "ollama-remote", "--ollama-url", "http://127.0.0.1:11434", "--model", "qwen3.6", "--think", "low", "--log-chat", "--log-http-requests"]);
 
         var result = parser.Parse(parseResult);
         var prompt = Assert.IsType<PromptAgent>(result.AgentDefinition);
@@ -38,6 +40,8 @@ public sealed class AgentDefinitionCommandLineParserTests
         Assert.Equal("ollama", prompt.Model?.Provider);
         Assert.Equal("qwen3.6", prompt.Model?.Id);
         Assert.Equal("http://127.0.0.1:11434", connection.Endpoint);
+        Assert.True(result.LogChat);
+        Assert.True(result.LogHttpRequests);
         Assert.NotNull(additionalProperties);
         Assert.True(additionalProperties!.TryGetValue("thinking", out var thinkingValue));
         Assert.Equal("low", thinkingValue);

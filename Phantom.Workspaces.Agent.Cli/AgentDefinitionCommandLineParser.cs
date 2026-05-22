@@ -33,6 +33,18 @@ public sealed class AgentDefinitionCommandLineParser
         Description = "Path to AgentSchema definition file (.json or .yaml) to load an agent from schema",
     };
 
+    private readonly Option<bool> logChatOption = new("--log-chat")
+    {
+        Description = "Log chat messages sent to and received from IChatClient",
+        DefaultValueFactory = _ => false,
+    };
+
+    private readonly Option<bool> logHttpRequestsOption = new("--log-http-requests")
+    {
+        Description = "Log provider HTTP requests/responses when supported (currently Ollama)",
+        DefaultValueFactory = _ => false,
+    };
+
     public void AddOptions(Command command)
     {
         command.Add(this.providerOption);
@@ -40,12 +52,16 @@ public sealed class AgentDefinitionCommandLineParser
         command.Add(this.ollamaModelOption);
         command.Add(this.thinkingOption);
         command.Add(this.agentSchemaOption);
+        command.Add(this.logChatOption);
+        command.Add(this.logHttpRequestsOption);
     }
 
     public AgentDefinitionParseResult Parse(ParseResult parseResult)
     {
         var thinking = NormalizeThinkingSetting(parseResult.GetValue(this.thinkingOption) ?? "high");
         var agentSchemaPath = parseResult.GetValue(this.agentSchemaOption);
+        var logChat = parseResult.GetValue(this.logChatOption);
+        var logHttpRequests = parseResult.GetValue(this.logHttpRequestsOption);
         var provider = parseResult.GetValue(this.providerOption)!;
         var ollamaUrl = parseResult.GetValue(this.ollamaUrlOption);
         var ollamaModel = parseResult.GetValue(this.ollamaModelOption);
@@ -72,6 +88,8 @@ public sealed class AgentDefinitionCommandLineParser
         return new AgentDefinitionParseResult(
             definition,
             agentSchemaPath,
+            logChat,
+            logHttpRequests,
             parseResult.UnmatchedTokens.ToArray());
     }
 
@@ -149,4 +167,6 @@ public sealed class AgentDefinitionCommandLineParser
 public sealed record AgentDefinitionParseResult(
     AgentDefinition AgentDefinition,
     string? AgentSchemaPath,
+    bool LogChat,
+    bool LogHttpRequests,
     IReadOnlyList<string> UnmatchedArguments);

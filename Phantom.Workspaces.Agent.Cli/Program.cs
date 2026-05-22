@@ -1,6 +1,7 @@
 using Phantom.Workspaces.Llm;
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using System.CommandLine;
 using Phantom.Workspaces.Agent.Cli;
 
@@ -27,6 +28,7 @@ internal sealed class AgentCliApp : IDisposable
     private readonly CancellationTokenSource appCts = new();
     private readonly bool supportsInteractiveRendering;
     private readonly string clientDisplayName;
+    private readonly ILoggerFactory? loggerFactory;
 
     // Console layout state — all accessed under consoleLock
     // Layout (when assistant is active):
@@ -48,6 +50,8 @@ internal sealed class AgentCliApp : IDisposable
     private int spinnerFrame = 0;
     private bool isStreaming = false;
     private string lastAccumulatedText = "";
+    private readonly System.Text.StringBuilder assistantAccumulatedText = new();
+    private readonly List<string> currentLogLines = [];
 
     private string AssistantHeaderLine => this.isStreaming
         ? $"  assistant {SpinnerFrames[this.spinnerFrame]}:"
@@ -57,7 +61,17 @@ internal sealed class AgentCliApp : IDisposable
     {
         this.supportsInteractiveRendering = !Console.IsOutputRedirected && !Console.IsInputRedirected;
 
-        var created = AgentFactory.CreateAgent(parseResult.AgentDefinition);
+        this.loggerFactory = (parseResult.LogChat || parseResult.LogHttpRequests)
+            ? CreateConsoleLoggerFactory(this.WriteLogLine)
+            : null;
+        var services = new AgentServices
+        {
+            LogChat = parseResult.LogChat,
+            LogHttpRequests = parseResult.LogHttpRequests,
+            LoggerFactory = this.loggerFactory,
+        };
+
+        var created = AgentFactory.CreateAgent(parseResult.AgentDefinition, services);
 
         this.chatClient = created.Client;
         this.clientDisplayName = created.DisplayName;
@@ -75,6 +89,7 @@ internal sealed class AgentCliApp : IDisposable
         ConsoleCancelEventHandler cancelHandler = (_, e) =>
         {
             e.Cancel = true;
+            this.ResetAssistantStreamAfterInterrupt();
             this.inputQueueManager.RequestInterrupt();
         };
         Console.CancelKeyPress += cancelHandler;
@@ -94,6 +109,8 @@ internal sealed class AgentCliApp : IDisposable
                     break;
                 if (string.IsNullOrWhiteSpace(input))
                     continue;
+
+                this.ClearAssistantAccumulatedText();
 
                 if (this.supportsInteractiveRendering)
                     this.SetupAssistantLayout(input);
@@ -118,6 +135,43 @@ internal sealed class AgentCliApp : IDisposable
     {
         this.appCts.Dispose();
         this.chatClient?.Dispose();
+        this.loggerFactory?.Dispose();
+    }
+
+    private ILoggerFactory CreateConsoleLoggerFactory(Action<string> onLogLine)
+    {
+        return LoggerFactory.Create(builder =>
+        {
+            builder.SetMinimumLevel(LogLevel.Trace);
+            builder.AddFilter("Microsoft.Extensions.AI", LogLevel.Trace);
+            builder.AddFilter("Phantom.Workspaces.Llm", LogLevel.Trace);
+            builder.ClearProviders();
+            builder.AddProvider(new InteractiveConsoleLoggerProvider(onLogLine));
+        });
+    }
+
+    private void WriteLogLine(string logLine)
+    {
+        var normalizedLogLine = logLine.Replace("\r", string.Empty);
+        if (!this.supportsInteractiveRendering)
+        {
+            Console.WriteLine(normalizedLogLine);
+            return;
+        }
+
+        lock (this.consoleLock)
+        {
+            if (this.assistantBlockRow < 0)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine(normalizedLogLine);
+                Console.ResetColor();
+                return;
+            }
+
+            this.currentLogLines.Add(normalizedLogLine);
+            this.RenderAssistantContentLocked();
+        }
     }
 
     private async Task SpinnerAsync(CancellationToken ct)
@@ -211,28 +265,14 @@ internal sealed class AgentCliApp : IDisposable
         lock (this.consoleLock)
         {
             // Overwrite the current input line with the submitted text in white.
-            var lineWidth = Console.BufferWidth - 1;
-            Console.SetCursorPosition(0, this.inputRow);
+            var lineWidth = GetLineWidth();
+            SetCursorPositionSafe(0, this.inputRow);
             Console.ForegroundColor = ConsoleColor.White;
             Console.Write(submittedInput + new string(' ', Math.Max(0, lineWidth - submittedInput.Length)));
             Console.ResetColor();
 
-            // Emit 8 rows to lay out:
-            //   [0] end of submitted-text row      → old inputRow (submitted text)
-            //   [1] blank before assistant header  → assistantBlockRow + 0
-            //   [2] assistant header placeholder   → assistantBlockRow + 1
-            //   [3] blank after assistant header   → assistantBlockRow + 2
-            //   [4] first content row placeholder  → assistantBlockRow + 3
-            //   [5] blank separator after content  → inputRow - 3
-            //   [6] user header placeholder        → inputRow - 2
-            //   [7] blank after user header        → inputRow - 1
-            // After all 8, CursorTop becomes the new inputRow.
-            for (var i = 0; i < 8; i++)
-                Console.WriteLine();
-
-            this.inputRow = Console.CursorTop;
-            this.assistantBlockRow = this.inputRow - 7;
             this.assistantContentLines = 1;
+            this.ReserveAssistantAndInputRegionLocked();
             this.isStreaming = true;
             this.spinnerFrame = 0;
             this.lastAccumulatedText = "";
@@ -246,51 +286,89 @@ internal sealed class AgentCliApp : IDisposable
     // Must be called under consoleLock.
     private void RedrawInputLine()
     {
+        this.inputRow = ClampRow(this.inputRow);
         if (this.inputRow < 3)
             return;
 
-        var lineWidth = Console.BufferWidth - 1;
+        var lineWidth = GetLineWidth();
 
         // Blank separator before user header (also clears any stale content when region expands).
-        Console.SetCursorPosition(0, this.inputRow - 3);
+        SetCursorPositionSafe(0, this.inputRow - 3);
         Console.Write(new string(' ', lineWidth));
 
         // "  user:" header in green.
-        Console.SetCursorPosition(0, this.inputRow - 2);
+        SetCursorPositionSafe(0, this.inputRow - 2);
         Console.ForegroundColor = ConsoleColor.Green;
         Console.Write("  user:" + new string(' ', Math.Max(0, lineWidth - 7)));
         Console.ResetColor();
 
         // Blank after user header.
-        Console.SetCursorPosition(0, this.inputRow - 1);
+        SetCursorPositionSafe(0, this.inputRow - 1);
         Console.Write(new string(' ', lineWidth));
 
         // Current input text in white.
-        Console.SetCursorPosition(0, this.inputRow);
+        SetCursorPositionSafe(0, this.inputRow);
         Console.ForegroundColor = ConsoleColor.White;
         Console.Write(this.currentInput + new string(' ', Math.Max(0, lineWidth - this.currentInput.Length)));
         Console.ResetColor();
 
-        Console.SetCursorPosition(Math.Min(this.currentInput.Length, Console.BufferWidth - 1), this.inputRow);
+        SetCursorPositionSafe(Math.Min(this.currentInput.Length, Console.BufferWidth - 1), this.inputRow);
     }
 
     private async Task ProcessUpdatesAsync(CancellationToken ct)
     {
-        var accumulated = new System.Text.StringBuilder();
-
         await foreach (var update in this.inputQueueManager.Process(ct).WithCancellation(ct))
         {
             if (!string.IsNullOrEmpty(update.Text))
             {
-                accumulated.Append(update.Text);
-                this.RenderAssistantChunk(accumulated.ToString());
+                string renderedText;
+                lock (this.consoleLock)
+                {
+                    this.assistantAccumulatedText.Append(update.Text);
+                    renderedText = this.assistantAccumulatedText.ToString();
+                }
+
+                this.RenderAssistantChunk(renderedText);
             }
 
             if (update.FinishReason is not null)
             {
                 this.FinalizeAssistantTurn();
-                accumulated.Clear();
+                this.ClearAssistantAccumulatedText();
             }
+        }
+    }
+
+    private void ClearAssistantAccumulatedText()
+    {
+        lock (this.consoleLock)
+        {
+            this.assistantAccumulatedText.Clear();
+            this.lastAccumulatedText = string.Empty;
+            this.currentLogLines.Clear();
+        }
+    }
+
+    private void ResetAssistantStreamAfterInterrupt()
+    {
+        this.ClearAssistantAccumulatedText();
+
+        if (!this.supportsInteractiveRendering)
+        {
+            return;
+        }
+
+        lock (this.consoleLock)
+        {
+            this.isStreaming = false;
+
+            if (this.assistantBlockRow >= 0)
+            {
+                this.RenderAssistantContentLocked();
+            }
+
+            this.assistantBlockRow = -1;
+            this.assistantContentLines = 0;
         }
     }
 
@@ -318,10 +396,17 @@ internal sealed class AgentCliApp : IDisposable
             return;
 
         // Leave the last column empty to prevent forced terminal wrapping.
-        var lineWidth = Console.BufferWidth - 1;
+        var lineWidth = GetLineWidth();
+        this.FlushPendingLogLinesLocked(lineWidth);
+        this.assistantBlockRow = ClampRow(this.assistantBlockRow);
+        this.inputRow = ClampRow(this.inputRow);
 
         // Split the raw content into display rows — no prefix; header is a separate row.
         var displayRows = GetDisplayRows(this.lastAccumulatedText, lineWidth);
+        if (displayRows.Count == 0)
+        {
+            displayRows.Add(string.Empty);
+        }
         var requiredLines = Math.Max(1, displayRows.Count);
 
         // Expand the assistant region downward if the response has grown.
@@ -329,7 +414,7 @@ internal sealed class AgentCliApp : IDisposable
         while (requiredLines > this.assistantContentLines)
         {
             var prevInputRow = this.inputRow;
-            Console.SetCursorPosition(0, this.inputRow);
+            SetCursorPositionSafe(0, this.inputRow);
             Console.WriteLine();
             var afterRow = Console.CursorTop;
 
@@ -348,7 +433,7 @@ internal sealed class AgentCliApp : IDisposable
         }
 
         // Write the "  assistant [spinner]:" header in blue.
-        Console.SetCursorPosition(0, this.assistantBlockRow + 1);
+        SetCursorPositionSafe(0, this.assistantBlockRow + 1);
         Console.ForegroundColor = ConsoleColor.Blue;
         var header = this.AssistantHeaderLine;
         Console.Write(header + new string(' ', Math.Max(0, lineWidth - header.Length)));
@@ -357,22 +442,111 @@ internal sealed class AgentCliApp : IDisposable
         // Clear the content region.
         for (var i = 0; i < this.assistantContentLines; i++)
         {
-            Console.SetCursorPosition(0, this.assistantBlockRow + 3 + i);
+            SetCursorPositionSafe(0, this.assistantBlockRow + 3 + i);
             Console.Write(new string(' ', lineWidth));
         }
 
         // Write content rows in white, showing the last assistantContentLines rows when the
         // content overflows the allocated region (sliding window).
         var skipRows = Math.Max(0, displayRows.Count - this.assistantContentLines);
-        Console.ForegroundColor = ConsoleColor.White;
         for (var i = 0; i < Math.Min(this.assistantContentLines, displayRows.Count); i++)
         {
-            Console.SetCursorPosition(0, this.assistantBlockRow + 3 + i);
+            SetCursorPositionSafe(0, this.assistantBlockRow + 3 + i);
+            Console.ForegroundColor = ConsoleColor.White;
             Console.Write(displayRows[skipRows + i]);
         }
         Console.ResetColor();
 
         this.RedrawInputLine();
+    }
+
+    // Writes pending log lines above the assistant region, then re-anchors the
+    // assistant/input block so the next render paints fresh assistant + user text.
+    // Must be called under consoleLock.
+    private void FlushPendingLogLinesLocked(int lineWidth)
+    {
+        if (this.currentLogLines.Count == 0 || this.assistantBlockRow < 0)
+        {
+            return;
+        }
+
+        var logRows = new List<string>();
+        foreach (var line in this.currentLogLines)
+        {
+            logRows.AddRange(GetDisplayRows(line, lineWidth));
+        }
+
+        if (logRows.Count == 0)
+        {
+            this.currentLogLines.Clear();
+            return;
+        }
+
+        this.ClearAssistantAndInputRegionLocked(lineWidth);
+
+        SetCursorPositionSafe(0, this.assistantBlockRow);
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        foreach (var row in logRows)
+        {
+            Console.Write(row + new string(' ', Math.Max(0, lineWidth - row.Length)));
+            Console.WriteLine();
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+
+        this.currentLogLines.Clear();
+
+        // Recreate assistant/user region directly beneath newly emitted logs.
+        this.assistantBlockRow = Console.CursorTop;
+        this.ReserveAssistantAndInputRegionLocked();
+    }
+
+    // Clears the currently allocated assistant content area and user prompt area.
+    // Must be called under consoleLock.
+    private void ClearAssistantAndInputRegionLocked(int lineWidth)
+    {
+        if (this.assistantBlockRow < 0)
+        {
+            return;
+        }
+
+        var top = ClampRow(this.assistantBlockRow);
+        var bottom = ClampRow(this.inputRow);
+        if (bottom < top)
+        {
+            (top, bottom) = (bottom, top);
+        }
+
+        for (var row = top; row <= bottom; row++)
+        {
+            SetCursorPositionSafe(0, row);
+            Console.Write(new string(' ', lineWidth));
+        }
+    }
+
+    // Reserves layout rows for assistant + user prompt sections and updates anchors.
+    // Must be called under consoleLock.
+    private void ReserveAssistantAndInputRegionLocked()
+    {
+        var rowsToReserve = this.assistantContentLines + 7;
+        for (var i = 0; i < rowsToReserve; i++)
+        {
+            Console.WriteLine();
+        }
+
+        this.inputRow = ClampRow(Console.CursorTop);
+        this.assistantBlockRow = ClampRow(this.inputRow - (this.assistantContentLines + 7));
+    }
+
+    private static int GetLineWidth() => Math.Max(1, Console.BufferWidth - 1);
+
+    private static int ClampRow(int row) => Math.Clamp(row, 0, Math.Max(0, Console.BufferHeight - 1));
+
+    private static void SetCursorPositionSafe(int left, int top)
+    {
+        var safeLeft = Math.Clamp(left, 0, Math.Max(0, Console.BufferWidth - 1));
+        var safeTop = ClampRow(top);
+        Console.SetCursorPosition(safeLeft, safeTop);
     }
 
     // Splits text into terminal-width display rows, honouring embedded newlines.
@@ -420,5 +594,48 @@ internal sealed class AgentCliApp : IDisposable
             this.assistantBlockRow = -1;
             this.assistantContentLines = 0;
         }
+    }
+}
+
+internal sealed class InteractiveConsoleLoggerProvider(Action<string> onLogLine) : ILoggerProvider
+{
+    public ILogger CreateLogger(string categoryName) => new InteractiveConsoleLogger(categoryName, onLogLine);
+
+    public void Dispose()
+    {
+    }
+}
+
+internal sealed class InteractiveConsoleLogger(string categoryName, Action<string> onLogLine) : ILogger
+{
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Trace;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (!this.IsEnabled(logLevel))
+        {
+            return;
+        }
+
+        var message = formatter(state, exception);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        var line = $"{DateTime.Now:HH:mm:ss} {logLevel.ToString().ToLowerInvariant(),-5}: {categoryName} {message}";
+        if (exception is not null)
+        {
+            line = $"{line} {exception.GetType().Name}: {exception.Message}";
+        }
+
+        onLogLine(line);
     }
 }
