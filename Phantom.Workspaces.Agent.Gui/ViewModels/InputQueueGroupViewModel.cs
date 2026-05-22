@@ -10,6 +10,7 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue queue;
     private readonly RelayCommand toggleComposerCommand;
+    private readonly RelayCommand<QueueImmediacyOption> setImmediacyCommand;
     private bool isComposerVisible;
 
     public InputQueueGroupViewModel(InputQueueViewModel parent, AgentChatQueue queue, QueueComposerViewModel composer)
@@ -19,6 +20,7 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
         this.Composer = composer;
         this.Items = [];
         this.toggleComposerCommand = new RelayCommand(this.ToggleComposer);
+        this.setImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetImmediacy);
         this.Refresh();
     }
 
@@ -49,6 +51,8 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
     public ObservableCollection<InputQueueEntryViewModel> Items { get; }
 
     public ICommand ToggleComposerCommand => this.toggleComposerCommand;
+
+    public ICommand SetImmediacyCommand => this.setImmediacyCommand;
 
     public bool IsComposerVisible
     {
@@ -94,6 +98,14 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
     }
 
     public IReadOnlyList<QueueImmediacyOption> ImmediacyOptions => QueueImmediacyOption.All;
+
+    public QueueImmediacyOption ImmediateImmediacyOption => QueueImmediacyOption.All[0];
+
+    public QueueImmediacyOption QueuedImmediacyOption => QueueImmediacyOption.All[1];
+
+    public QueueImmediacyOption HeldImmediacyOption => QueueImmediacyOption.All[2];
+
+    public void SetImmediacy(QueueImmediacyOption option) => this.SelectedImmediacyOption = option;
 
     public void Refresh()
     {

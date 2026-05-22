@@ -53,4 +53,5 @@ public partial class AgentInputQueueControl : UserControl
 
         e.Handled = HandleInputKey(vm, e.Key, e.KeyModifiers);
     }
+
 }

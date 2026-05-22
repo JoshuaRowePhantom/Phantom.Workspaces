@@ -39,16 +39,78 @@
                                                    Foreground="#8A8A8A"
                                                    FontSize="11"
                                                    VerticalAlignment="Center"/>
-                                        <ComboBox SelectedItem="{Binding SelectedImmediacyOption, Mode=TwoWay}"
-                                                  ItemsSource="{Binding ImmediacyOptions}"
-                                                  Width="110"
-                                                  MinHeight="24">
-                                            <ComboBox.ItemTemplate>
-                                                <DataTemplate DataType="vm:QueueImmediacyOption">
-                                                    <TextBlock Text="{Binding Label}"/>
-                                                </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
+                                        <Border Background="{Binding SelectedImmediacyOption.Background}"
+                                                BorderBrush="{Binding SelectedImmediacyOption.BorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="999">
+                                            <Button Background="Transparent"
+                                                    BorderThickness="0"
+                                                    Padding="10,2"
+                                                    MinHeight="24">
+                                                <Button.Flyout>
+                                                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                                                  CommandParameter="{Binding ImmediateImmediacyOption}"
+                                                                  Tag="{Binding ImmediateImmediacyOption}"
+                                                                  Padding="0">
+                                                            <MenuItem.Header>
+                                                                <Border Background="{Binding ImmediateImmediacyOption.Background}"
+                                                                        BorderBrush="{Binding ImmediateImmediacyOption.BorderBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="999"
+                                                                        Padding="10,4">
+                                                                    <TextBlock Text="{Binding ImmediateImmediacyOption.Label}"
+                                                                               Foreground="{Binding ImmediateImmediacyOption.Foreground}"
+                                                                               FontSize="11"/>
+                                                                </Border>
+                                                            </MenuItem.Header>
+                                                        </MenuItem>
+                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                                                  CommandParameter="{Binding QueuedImmediacyOption}"
+                                                                  Tag="{Binding QueuedImmediacyOption}"
+                                                                  Padding="0">
+                                                            <MenuItem.Header>
+                                                                <Border Background="{Binding QueuedImmediacyOption.Background}"
+                                                                        BorderBrush="{Binding QueuedImmediacyOption.BorderBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="999"
+                                                                        Padding="10,4">
+                                                                    <TextBlock Text="{Binding QueuedImmediacyOption.Label}"
+                                                                               Foreground="{Binding QueuedImmediacyOption.Foreground}"
+                                                                               FontSize="11"/>
+                                                                </Border>
+                                                            </MenuItem.Header>
+                                                        </MenuItem>
+                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                                                  CommandParameter="{Binding HeldImmediacyOption}"
+                                                                  Tag="{Binding HeldImmediacyOption}"
+                                                                  Padding="0">
+                                                            <MenuItem.Header>
+                                                                <Border Background="{Binding HeldImmediacyOption.Background}"
+                                                                        BorderBrush="{Binding HeldImmediacyOption.BorderBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="999"
+                                                                        Padding="10,4">
+                                                                    <TextBlock Text="{Binding HeldImmediacyOption.Label}"
+                                                                               Foreground="{Binding HeldImmediacyOption.Foreground}"
+                                                                               FontSize="11"/>
+                                                                </Border>
+                                                            </MenuItem.Header>
+                                                        </MenuItem>
+                                                    </MenuFlyout>
+                                                </Button.Flyout>
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="6"
+                                                            VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding SelectedImmediacyOption.Label}"
+                                                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
+                                                               FontSize="11"/>
+                                                    <TextBlock Text="▾"
+                                                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
+                                                               FontSize="10"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </Border>
                                     </StackPanel>
                                 </DockPanel>
 
