@@ -75,6 +75,52 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.HasAttachments));
     }
 
+    public bool TryRemoveImageAttachmentBeforeCaret(
+        string text,
+        int caretIndex,
+        out string updatedText,
+        out int updatedCaretIndex)
+    {
+        updatedText = text;
+        updatedCaretIndex = caretIndex;
+
+        if (caretIndex <= 0 || caretIndex > text.Length || this.attachmentPlaceholders.Count == 0)
+        {
+            return false;
+        }
+
+        for (var index = this.attachmentPlaceholders.Count - 1; index >= 0; index--)
+        {
+            var placeholder = this.attachmentPlaceholders[index];
+            var startIndex = caretIndex - placeholder.Length;
+            if (startIndex < 0)
+            {
+                continue;
+            }
+
+            if (!string.Equals(text.Substring(startIndex, placeholder.Length), placeholder, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var removeStart = startIndex;
+            if (removeStart > 0 && text[removeStart - 1] == ' ')
+            {
+                removeStart--;
+            }
+
+            updatedText = text.Remove(removeStart, caretIndex - removeStart);
+            updatedCaretIndex = removeStart;
+            this.attachments.RemoveAt(index);
+            this.attachmentPlaceholders.RemoveAt(index);
+            this.InputText = updatedText;
+            this.RaisePropertyChanged(nameof(this.HasAttachments));
+            return true;
+        }
+
+        return false;
+    }
+
     public void Submit()
     {
         var text = this.SanitizeText(this.InputText);

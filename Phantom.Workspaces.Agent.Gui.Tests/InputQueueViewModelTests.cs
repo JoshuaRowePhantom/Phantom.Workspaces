@@ -129,6 +129,30 @@ public sealed class InputQueueViewModelTests
     }
 
     [Fact]
+    public async Task QueueComposer_BackspaceRemovesImageAttachment()
+    {
+        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
+        await using var chat = created.Chat;
+        using var _ = created.Client;
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "hello";
+        viewModel.DefaultComposer.AppendImageAttachment([0x01, 0x02, 0x03], "image/png", 640, 480, "shot.png");
+
+        var removed = viewModel.DefaultComposer.TryRemoveImageAttachmentBeforeCaret(
+            viewModel.InputText,
+            viewModel.InputText.Length,
+            out var updatedText,
+            out var updatedCaretIndex);
+
+        Assert.True(removed);
+        Assert.Equal("hello", updatedText);
+        Assert.Equal(5, updatedCaretIndex);
+        Assert.Equal("hello", viewModel.InputText);
+        Assert.False(viewModel.DefaultComposer.HasAttachments);
+    }
+
+    [Fact]
     public async Task SubmitToNewQueue_WhenQueuesAreHeld_CreatesHeldQueue()
     {
         var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());

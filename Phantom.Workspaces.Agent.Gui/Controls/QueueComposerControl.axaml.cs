@@ -38,6 +38,19 @@ public partial class QueueComposerControl : UserControl
         if (sender is TextBox textBox)
         {
             vm.InputText = textBox.Text ?? string.Empty;
+
+            if (e.Key == Key.Back
+                && vm.TryRemoveImageAttachmentBeforeCaret(
+                    textBox.Text ?? string.Empty,
+                    textBox.CaretIndex,
+                    out var updatedText,
+                    out var updatedCaretIndex))
+            {
+                textBox.Text = updatedText;
+                textBox.CaretIndex = updatedCaretIndex;
+                e.Handled = true;
+                return;
+            }
         }
 
         e.Handled = HandleInputKey(vm, e.Key, e.KeyModifiers);
