@@ -1,5 +1,7 @@
 <Solution>
   <Project Path="Phantom.Workspaces.Data.Core.Tests/Phantom.Workspaces.Data.Core.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Agent.Gui.Tests/Phantom.Workspaces.Agent.Gui.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Agent.Gui/Phantom.Workspaces.Agent.Gui.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Cli/Phantom.Workspaces.Agent.Cli.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Cli.Tests/Phantom.Workspaces.Agent.Cli.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.Core/Phantom.Workspaces.Data.Core.csproj" />

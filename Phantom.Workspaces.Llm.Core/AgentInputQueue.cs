@@ -67,7 +67,8 @@ public sealed class AgentInputQueue
         {
             var existingItems = this.Items;
             var updatedItems = existingItems.AddRange(appendedItems);
-            if (this.Update(existingItems, updatedItems))
+            var expectedItems = existingItems;
+            if (this.Update(ref expectedItems, updatedItems))
             {
                 return updatedItems;
             }
@@ -75,16 +76,40 @@ public sealed class AgentInputQueue
     }
 
     public bool Update(
-        ImmutableList<ChatMessage> existingItems,
+        ref ImmutableList<ChatMessage> existingItems,
         ImmutableList<ChatMessage> newItems)
     {
         ArgumentNullException.ThrowIfNull(existingItems);
         ArgumentNullException.ThrowIfNull(newItems);
 
-        return Interlocked.CompareExchange(
+        var observedItems = Interlocked.CompareExchange(
                    ref this.items,
                    newItems,
-                   existingItems) == existingItems;
+                   existingItems);
+
+        var succeeded = observedItems == existingItems;
+        existingItems = observedItems;
+        return succeeded;
+    }
+
+    public bool Clear(
+        ref ImmutableList<ChatMessage> existingItems)
+    {
+        ArgumentNullException.ThrowIfNull(existingItems);
+        return this.Update(ref existingItems, ImmutableList<ChatMessage>.Empty);
+    }
+
+    public bool TryRemoveAt(
+        ref ImmutableList<ChatMessage> existingItems,
+        int index)
+    {
+        ArgumentNullException.ThrowIfNull(existingItems);
+        if (index < 0 || index >= existingItems.Count)
+        {
+            return false;
+        }
+
+        var newItems = existingItems.RemoveAt(index);
+        return this.Update(ref existingItems, newItems);
     }
 }
-

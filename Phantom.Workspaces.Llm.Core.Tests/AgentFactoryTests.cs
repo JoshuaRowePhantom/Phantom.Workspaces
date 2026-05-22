@@ -168,6 +168,29 @@ public class AgentFactoryTests
     }
 
     [Fact]
+    public void CreateChatClient_TestProvider_ReturnsTestProviderClient()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var (client, displayName) = AgentFactory.CreateChatClient(agent);
+
+        Assert.IsType<TestProviderChatClient>(client);
+        Assert.Equal("Test Chat Client", displayName);
+    }
+
+    [Fact]
     public void CreateAgent_EchoProvider_ReturnsChatClientAgentAndEchoClient()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(

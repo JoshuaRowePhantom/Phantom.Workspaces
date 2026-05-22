@@ -1,0 +1,61 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+             xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
+             x:Class="Phantom.Workspaces.Agent.Gui.Controls.ChatAgentOutputControl"
+             x:DataType="vm:AgentViewModel"
+             Background="#1E1E1E">
+
+    <DockPanel>
+        <!-- History (virtualized) -->
+        <ScrollViewer x:Name="HistoryScroll"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="HistoryList"
+                          ItemsSource="{Binding History}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:ChatHistoryItemViewModel">
+                        <Border Padding="12,8"
+                                BorderBrush="#2A2A2A"
+                                BorderThickness="0,0,0,1">
+                            <DockPanel>
+                                <!-- Role label -->
+                                <TextBlock DockPanel.Dock="Top"
+                                           Text="{Binding RoleLabel}"
+                                           FontWeight="SemiBold"
+                                           FontSize="11"
+                                           Margin="0,0,0,4"
+                                           Foreground="{Binding IsUser, Converter={x:Static converters:RoleToColorConverter.Instance}}"/>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Text="{Binding ReasoningDisplayText}"
+                                           IsVisible="{Binding HasReasoningLine}"
+                                           FontSize="11"
+                                           FontStyle="Italic"
+                                           Margin="0,0,0,4"
+                                           Foreground="#8F8F8F"/>
+                                <ProgressBar DockPanel.Dock="Top"
+                                            IsVisible="{Binding IsInProgress}"
+                                            IsIndeterminate="True"
+                                            Height="2"
+                                            Margin="0,0,0,6"
+                                            Background="Transparent"
+                                            Foreground="#4080FF"/>
+                                <!-- Message text -->
+                                <SelectableTextBlock Text="{Binding Text}"
+                                                     TextWrapping="Wrap"
+                                                     Foreground="#D0D0D0"
+                                                     FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                                     FontSize="13"/>
+                            </DockPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

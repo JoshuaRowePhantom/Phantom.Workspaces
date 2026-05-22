@@ -3,7 +3,6 @@ using AgentSchema;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using System.CommandLine;
-using Phantom.Workspaces.Agent.Cli;
 
 var definitionParser = new AgentDefinitionCommandLineParser();
 
@@ -24,7 +23,7 @@ internal sealed class AgentCliApp : IDisposable
 {
     private readonly object consoleLock = new();
     private readonly IChatClient chatClient;
-    private readonly AgentInputQueueManager inputQueueManager;
+    private readonly AgentChat agentChat;
     private readonly CancellationTokenSource appCts = new();
     private readonly bool supportsInteractiveRendering;
     private readonly string clientDisplayName;
@@ -71,7 +70,7 @@ internal sealed class AgentCliApp : IDisposable
             LoggerFactory = this.loggerFactory,
         };
 
-        var created = AgentFactory.CreateAgent(parseResult.AgentDefinition, services);
+        var created = AgentFactory.CreateAgentChat(parseResult.AgentDefinition, services);
 
         this.chatClient = created.Client;
         this.clientDisplayName = created.DisplayName;
@@ -81,24 +80,25 @@ internal sealed class AgentCliApp : IDisposable
             this.clientDisplayName = $"{this.clientDisplayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        this.inputQueueManager = new AgentInputQueueManager(created.Agent);
+        this.agentChat = created.Chat;
     }
 
     public async Task RunAsync()
     {
+        this.agentChat.TextChunkReceived += this.OnTextChunkReceived;
+        this.agentChat.TurnCompleted += this.OnTurnCompleted;
+
         ConsoleCancelEventHandler cancelHandler = (_, e) =>
         {
             e.Cancel = true;
             this.ResetAssistantStreamAfterInterrupt();
-            this.inputQueueManager.RequestInterrupt();
+            this.agentChat.RequestInterrupt();
         };
         Console.CancelKeyPress += cancelHandler;
 
         Console.WriteLine($"{this.clientDisplayName} - Press Ctrl+C to interrupt. Type /exit to quit.");
 
-        using var processCts = CancellationTokenSource.CreateLinkedTokenSource(this.appCts.Token);
-        var processTask = Task.Run(() => this.ProcessUpdatesAsync(processCts.Token));
-        var spinnerTask = Task.Run(() => this.SpinnerAsync(processCts.Token));
+        var spinnerTask = Task.Run(() => this.SpinnerAsync(this.appCts.Token));
 
         try
         {
@@ -115,18 +115,16 @@ internal sealed class AgentCliApp : IDisposable
                 if (this.supportsInteractiveRendering)
                     this.SetupAssistantLayout(input);
 
-                this.inputQueueManager.Enqueue(
-                    this.inputQueueManager.ImmediateQueue,
-                    [new ChatMessage(ChatRole.User, input)]);
+                this.agentChat.EnqueueUserMessage(input);
             }
         }
         finally
         {
             Console.CancelKeyPress -= cancelHandler;
+            this.agentChat.TextChunkReceived -= this.OnTextChunkReceived;
+            this.agentChat.TurnCompleted -= this.OnTurnCompleted;
             this.appCts.Cancel();
-            this.inputQueueManager.Complete();
-            processCts.Cancel();
-            try { await processTask; } catch (OperationCanceledException) { }
+            await this.agentChat.DisposeAsync();
             try { await spinnerTask; } catch (OperationCanceledException) { }
         }
     }
@@ -315,28 +313,22 @@ internal sealed class AgentCliApp : IDisposable
         SetCursorPositionSafe(Math.Min(this.currentInput.Length, Console.BufferWidth - 1), this.inputRow);
     }
 
-    private async Task ProcessUpdatesAsync(CancellationToken ct)
+    private void OnTextChunkReceived(object? sender, string chunk)
     {
-        await foreach (var update in this.inputQueueManager.Process(ct).WithCancellation(ct))
+        string renderedText;
+        lock (this.consoleLock)
         {
-            if (!string.IsNullOrEmpty(update.Text))
-            {
-                string renderedText;
-                lock (this.consoleLock)
-                {
-                    this.assistantAccumulatedText.Append(update.Text);
-                    renderedText = this.assistantAccumulatedText.ToString();
-                }
-
-                this.RenderAssistantChunk(renderedText);
-            }
-
-            if (update.FinishReason is not null)
-            {
-                this.FinalizeAssistantTurn();
-                this.ClearAssistantAccumulatedText();
-            }
+            this.assistantAccumulatedText.Append(chunk);
+            renderedText = this.assistantAccumulatedText.ToString();
         }
+
+        this.RenderAssistantChunk(renderedText);
+    }
+
+    private void OnTurnCompleted(object? sender, AgentChatHistoryItem _)
+    {
+        this.FinalizeAssistantTurn();
+        this.ClearAssistantAccumulatedText();
     }
 
     private void ClearAssistantAccumulatedText()

@@ -1,15 +1,14 @@
 using System.CommandLine;
 using System.Text.Json;
 using AgentSchema;
-using Phantom.Workspaces.Llm;
 
-namespace Phantom.Workspaces.Agent.Cli;
+namespace Phantom.Workspaces.Llm;
 
 public sealed class AgentDefinitionCommandLineParser
 {
     private readonly Option<string> providerOption = new("--provider", ["-p"])
     {
-        Description = "LLM provider: 'echo' (default), 'ollama-local', or 'ollama-remote'",
+        Description = "LLM provider: 'echo' (default), 'test', 'ollama-local', or 'ollama-remote'",
         DefaultValueFactory = _ => "echo",
     };
 
@@ -77,11 +76,12 @@ public sealed class AgentDefinitionCommandLineParser
             definition = provider.ToLowerInvariant() switch
             {
                 "echo" => BuildEchoDefinition(thinking),
+                "test" => BuildTestDefinition(thinking),
                 "ollama-local" => BuildOllamaDefinition("http://localhost:11434", ollamaModel, thinking),
                 "ollama-remote" when !string.IsNullOrWhiteSpace(ollamaUrl) => BuildOllamaDefinition(ollamaUrl!, ollamaModel, thinking),
                 "ollama-remote" => throw new InvalidOperationException(
                     "ollama-remote provider requires --ollama-url option. Example: --provider ollama-remote --ollama-url http://192.168.1.100:11434"),
-                _ => throw new InvalidOperationException($"Unknown provider: {provider}. Use 'echo', 'ollama-local', or 'ollama-remote'.")
+                _ => throw new InvalidOperationException($"Unknown provider: {provider}. Use 'echo', 'test', 'ollama-local', or 'ollama-remote'.")
             };
         }
 
@@ -140,6 +140,33 @@ public sealed class AgentDefinitionCommandLineParser
                     kind = "Anonymous",
                     endpoint,
                 },
+                options = new
+                {
+                    additionalProperties = new
+                    {
+                        thinking,
+                    },
+                },
+            },
+            tools = Array.Empty<object>(),
+        });
+
+        return AgentDefinitionLoader.LoadAgentFromJson(json);
+    }
+
+    private static AgentDefinition BuildTestDefinition(string thinking)
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            kind = "prompt",
+            name = "cli-test-agent",
+            description = "CLI test provider agent definition",
+            instructions = "Respond deterministically for tests.",
+            model = new
+            {
+                id = "test",
+                provider = "echo",
+                apiType = "Echo",
                 options = new
                 {
                     additionalProperties = new

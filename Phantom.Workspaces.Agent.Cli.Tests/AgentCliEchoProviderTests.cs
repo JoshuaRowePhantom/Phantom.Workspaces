@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace Phantom.Workspaces.Agent.Cli.Tests;
 
@@ -33,9 +34,23 @@ public sealed class AgentCliEchoProviderTests
 
         process.Start();
 
+        var standardOutputBuilder = new StringBuilder();
+
+        await ReadUntilContainsAsync(
+            process.StandardOutput,
+            standardOutputBuilder,
+            "Type /exit to quit.",
+            TimeSpan.FromSeconds(10));
+
         await process.StandardInput.WriteLineAsync("hello");
         await process.StandardInput.FlushAsync();
-        await Task.Delay(500);
+
+        await ReadUntilContainsAsync(
+            process.StandardOutput,
+            standardOutputBuilder,
+            "assistant > hello",
+            TimeSpan.FromSeconds(10));
+
         await process.StandardInput.WriteLineAsync("/exit");
         await process.StandardInput.FlushAsync();
         process.StandardInput.Close();
@@ -55,7 +70,7 @@ public sealed class AgentCliEchoProviderTests
             Assert.Fail("CLI process did not exit within timeout.");
         }
 
-        var standardOutput = await process.StandardOutput.ReadToEndAsync();
+        var standardOutput = standardOutputBuilder.ToString() + await process.StandardOutput.ReadToEndAsync();
         var standardError = await process.StandardError.ReadToEndAsync();
 
         Assert.True(
@@ -64,6 +79,32 @@ public sealed class AgentCliEchoProviderTests
         Assert.Contains("Echo Chat Client", standardOutput, StringComparison.Ordinal);
         Assert.Contains("assistant > hello", standardOutput, StringComparison.Ordinal);
         Assert.DoesNotContain("Unhandled exception", standardError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task ReadUntilContainsAsync(
+        StreamReader reader,
+        StringBuilder buffer,
+        string expectedText,
+        TimeSpan timeout)
+    {
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        var singleChar = new char[1];
+
+        while (true)
+        {
+            timeoutCts.Token.ThrowIfCancellationRequested();
+            var charsRead = await reader.ReadAsync(singleChar.AsMemory(0, 1), timeoutCts.Token);
+            if (charsRead == 0)
+            {
+                throw new InvalidOperationException($"Stream ended before seeing expected text: '{expectedText}'.");
+            }
+
+            buffer.Append(singleChar[0]);
+            if (buffer.ToString().Contains(expectedText, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
     }
 
     private static DirectoryInfo FindRepositoryRoot()
@@ -82,4 +123,3 @@ public sealed class AgentCliEchoProviderTests
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
     }
 }
-

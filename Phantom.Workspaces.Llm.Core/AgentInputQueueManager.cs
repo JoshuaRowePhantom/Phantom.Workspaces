@@ -229,6 +229,22 @@ public sealed class AgentInputQueueManager
         }
     }
 
+    public bool UnregisterInputQueue(
+        AgentInputQueue queue)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+
+        lock (this.syncLock)
+        {
+            if (ReferenceEquals(queue, this.ImmediateQueue))
+            {
+                return false;
+            }
+
+            return this.inputQueues.Remove(queue);
+        }
+    }
+
     public ImmutableList<ChatMessage> Enqueue(
         AgentInputQueue queue,
         IEnumerable<ChatMessage> messages,
@@ -340,7 +356,8 @@ public sealed class AgentInputQueueManager
                 return existingItems;
             }
 
-            if (queue.Update(existingItems, ImmutableList<ChatMessage>.Empty))
+            var expectedItems = existingItems;
+            if (queue.Update(ref expectedItems, ImmutableList<ChatMessage>.Empty))
             {
                 return existingItems;
             }

@@ -89,7 +89,8 @@ public sealed class AgentInputQueueTests
         var oldItems = queue.Items;
         var newItems = oldItems.Add(new ChatMessage(ChatRole.User, "test"));
 
-        var result = queue.Update(oldItems, newItems);
+        var expectedItems = oldItems;
+        var result = queue.Update(ref expectedItems, newItems);
 
         Assert.True(result);
         Assert.Equal(newItems, queue.Items);
@@ -104,11 +105,13 @@ public sealed class AgentInputQueueTests
         var wrongExpectedItems = ImmutableList<ChatMessage>.Empty;
         var newItems = wrongExpectedItems.Add(new ChatMessage(ChatRole.User, "test"));
 
-        var result = queue.Update(wrongExpectedItems, newItems);
+        var expectedItems = wrongExpectedItems;
+        var result = queue.Update(ref expectedItems, newItems);
 
         Assert.False(result);
         Assert.Single(queue.Items);
         Assert.Equal("existing", queue.Items[0].Text);
+        Assert.Equal(queue.Items, expectedItems);
     }
 
     [Fact]
@@ -131,6 +134,39 @@ public sealed class AgentInputQueueTests
     }
 
     [Fact]
+    public void Clear_RemovesAllItems()
+    {
+        var queue = new AgentInputQueue();
+        queue.Enqueue([
+            new ChatMessage(ChatRole.User, "first"),
+            new ChatMessage(ChatRole.User, "second"),
+        ]);
+
+        var expectedItems = queue.Items;
+        var cleared = queue.Clear(ref expectedItems);
+
+        Assert.True(cleared);
+        Assert.Empty(queue.Items);
+    }
+
+    [Fact]
+    public void TryRemoveAt_RemovesIndexedItem()
+    {
+        var queue = new AgentInputQueue();
+        queue.Enqueue([
+            new ChatMessage(ChatRole.User, "first"),
+            new ChatMessage(ChatRole.User, "second"),
+        ]);
+
+        var expectedItems = queue.Items;
+        var removed = queue.TryRemoveAt(ref expectedItems, 0);
+
+        Assert.True(removed);
+        Assert.Single(queue.Items);
+        Assert.Equal("second", queue.Items[0].Text);
+    }
+
+    [Fact]
     public void Enqueue_WithNullArgument_ThrowsArgumentNullException()
     {
         var queue = new AgentInputQueue();
@@ -145,7 +181,8 @@ public sealed class AgentInputQueueTests
         var queue = new AgentInputQueue();
         var newItems = ImmutableList<ChatMessage>.Empty;
 
-        var ex = Assert.Throws<ArgumentNullException>(() => queue.Update(null!, newItems));
+        var nullItems = (ImmutableList<ChatMessage>)null!;
+        var ex = Assert.Throws<ArgumentNullException>(() => queue.Update(ref nullItems, newItems));
         Assert.Equal("existingItems", ex.ParamName);
     }
 
@@ -155,7 +192,8 @@ public sealed class AgentInputQueueTests
         var queue = new AgentInputQueue();
         var existingItems = queue.Items;
 
-        var ex = Assert.Throws<ArgumentNullException>(() => queue.Update(existingItems, null!));
+        var expectedItems = existingItems;
+        var ex = Assert.Throws<ArgumentNullException>(() => queue.Update(ref expectedItems, null!));
         Assert.Equal("newItems", ex.ParamName);
     }
 

@@ -107,18 +107,101 @@ The control should support two views of the same data:
 
 It should render only the events that have occurred, including the currently active turn while it is still streaming, and be able to rehydrate prior turns from stored history.
 
+#### Two-zone layout
+
+The control is split into two vertical zones stacked from top to bottom:
+
+1. **History zone** — completed turns, virtualized, scroll-anchored at the bottom.
+2. **Active items zone** — currently running items, non-virtualized, always visible below the history zone.
+
+The active items zone is never virtualized because there are at most a handful of items running at any time.
+
+#### Rendering primitive: `SelectableTextBlock` with `Inlines`
+
+Both zones render each item using an Avalonia `SelectableTextBlock` with an `InlineCollection`.
+This gives:
+
+- mouse-drag text selection and keyboard copy within each item
+- rich inline formatting via `Run` and `Span` elements: per-run `Foreground`, `FontWeight`, `FontStyle`, `FontSize`, `FontFamily`
+- streaming word-by-word updates by appending `Run` inlines in place rather than replacing the full text
+
+**Selection trade-off:** `SelectableTextBlock` provides per-item selection. Cross-item drag selection (spanning from one chat message to another) is not supported without discarding virtualization. This is the same model used by most chat applications. The trade-off is accepted: virtualization of history is required for long conversations and takes priority over cross-item selection.
+
+#### History zone rendering
+
+- Rendered as a virtualizing `ItemsControl` (backed by `VirtualizingStackPanel`) so only items in the viewport are live.
+- Each history entry is a `DataTemplate` containing a `SelectableTextBlock` with pre-built `InlineCollection`.
+- Scroll is anchored to the bottom; new entries cause the view to scroll down unless the user has scrolled up.
+
+#### Active items zone rendering
+
+Each active item renders two things side by side:
+
+1. **Animation indicator** — a looping Avalonia `Animation` (keyframe-driven opacity or rotation) on a small icon or shape, indicating the item is in progress. The animation stops and the indicator changes state when the item completes or errors.
+2. **State text** — a `SelectableTextBlock` with `Inlines` showing the item's current state:
+   - For a streaming chat or thinking response: words are appended as `Run` inlines as they arrive from the model, producing a live word-by-word display.
+   - For a tool call: shows "calling *tool name*…", then the result or error when finished.
+   - For a sub-agent invocation: shows the sub-agent name and its current status.
+
+When an active item completes, it transitions from the active items zone into the history zone (moved to the bottom of the history list and the active item row is removed).
+
 ### Input queue control
 
 Working name: `AgentInputQueueControl`.
 
 Responsibilities:
 
-- show pending inputs and their ordering
-- allow enqueueing new actions/prompts
-- support interrupt / immediate / held queue behavior
-- expose queue state clearly enough for debugging and authoring
+- provide a text input box for composing messages
+- enqueue composed text into the appropriate queue based on the keyboard gesture used
+- display all active queues in their injection order
+- allow per-queue management: hold, clear items, remove queue, reprioritize
 
 This control should reflect the queue as a live work list, not just a text box.
+
+#### Text input and keyboard gestures
+
+A single text box sits at the bottom of the control. The text box operates in one of two modes.
+
+**Normal mode** (default):
+
+| Gesture | Action |
+|---|---|
+| **Enter** | Append the composed text to the **default input queue** (the immediate/first queue). |
+| **Ctrl+Q** | Append the composed text to the **most recently created queue**. |
+| **Ctrl+Shift+Q** | **Create a new queue** and append the composed text to it. The new queue becomes the most recently created queue for subsequent Ctrl+Q presses. |
+| **Shift+Enter** | Switch to **formatted mode** without enqueuing. The text box expands to show multiple lines. |
+
+After any enqueue gesture the text box is cleared and focus returns to it.
+
+**Formatted mode** (entered via Shift+Enter):
+
+In formatted mode the text box accepts multi-line input. The enqueue gestures change:
+
+| Gesture | Action |
+|---|---|
+| **Enter** | Insert a newline at the cursor. |
+| **Ctrl+Enter** | Enqueue the composed text into the **default input queue** and return to normal mode. |
+| **Ctrl+Q** | Enqueue the composed text into the **most recently created queue** and return to normal mode. |
+| **Ctrl+Shift+Q** | **Create a new queue**, enqueue the composed text into it, and return to normal mode. |
+| **Esc** | Return to normal mode without enqueuing. The composed text is preserved in the text box. |
+
+The text box should show a visible indicator (e.g., a label or border change) when in formatted mode so the user knows Enter will not immediately submit.
+
+#### Queue list layout
+
+All active queues are shown stacked in the order their items will be injected into the agent session (highest priority at the top). Each queue row contains:
+
+1. **Queue label** — a name or auto-generated index identifying the queue.
+2. **Items list** — the pending messages in that queue, shown in submission order.
+3. **Per-item controls** — next to each item: a remove (×) button to delete that individual item.
+4. **Queue action buttons** — on each queue row header:
+   - **Hold** — toggles the held state; a held queue's items are not sent until released.
+   - **Clear** — removes all items from the queue without deleting the queue itself.
+   - **Remove queue** — deletes the queue and all its items entirely (not available on the default queue).
+   - **↑ Top** — reprioritizes this queue above all others.
+   - **↓ Bottom** — reprioritizes this queue below all others (but above the default queue).
+
+The default queue cannot be removed or repositioned below the user-created queues; it is always the lowest-priority named queue.
 
 ### Combined agent workspace control
 
@@ -132,6 +215,61 @@ Responsibilities:
 - provide a single workspace for authoring, running, and inspecting an agent
 
 This is the main UI surface for the agent design tool.
+
+### Agent definition editor control
+
+Working name: `AgentDefinitionEditorControl`.
+
+Responsibilities:
+
+- display and edit an `AgentDefinition` as JSON text
+- expose a `DefinitionChanged` event so host controls can react to edits
+- validate JSON on change and surface parse errors inline
+
+The editor is JSON-first: typed sub-editors for specific fields (model options, tools, instructions) are projections of the same underlying JSON and will be added incrementally.
+
+### Agent control
+
+Working name: `AgentControl`.
+
+Responsibilities:
+
+- accept an `AgentDefinition` as its primary input
+- embed an `AgentDefinitionEditorControl` showing the current definition
+- create and start an `AgentChat` session from the definition on load
+- for prompt and chat agents: compose the output control, input queue control, and active items view
+- subscribe to `AgentDefinitionEditorControl.DefinitionChanged`: stop the current session, recreate it from the updated definition, and restart
+
+When the GUI is opened with an agent definition document:
+
+1. The `AgentControl` receives the definition.
+2. It populates the embedded `AgentDefinitionEditorControl` with that definition.
+3. It starts the `AgentChat` session immediately.
+4. Edits made in the `AgentDefinitionEditorControl` propagate back to the `AgentControl`, which restarts the session with the new definition.
+
+### Runtime agent browser control
+
+Working name: `AgentRuntimeBrowserControl`.
+
+Responsibilities:
+
+- display the live runtime entities created when an agent runs as a navigable tree
+- show the agent itself as the top-level node
+- expand into sub-levels for runtime-realized entities such as:
+  - tools registered and available to the agent
+  - sub-agents spawned or referenced at runtime
+  - MCP servers that are currently connected
+  - active sessions and their state
+- reflect the live state of the runtime: nodes appear and disappear as entities are created and destroyed
+- allow selection of a node to inspect its details in a companion panel
+
+The browser is a read-only runtime view, not an editor. It is the complement to `AgentDefinitionEditorControl`: the editor shows what was configured, the browser shows what actually exists at runtime.
+
+The runtime model backing this control should be a bindable tree rooted at an `AgentRuntimeNode`. Each node carries:
+
+- a display name and kind label (agent, tool, sub-agent, server, session, …)
+- a reference to the underlying runtime object where available
+- an observable children collection so the tree refreshes without full rebuilds
 
 ## GUI project structure
 
@@ -203,9 +341,9 @@ Example template composition:
 
 The first version should stay simple:
 
-- left/top: agent output and structured JSON
-- right/bottom: input queue and queue controls
-- optional inspector panel for templates and selected fragments
+- left panel: `AgentRuntimeBrowserControl` (runtime tree)
+- center: `AgentControl` (definition editor + output + input queue)
+- optional right/bottom inspector panel for templates and selected fragments
 
 The layout should make it obvious that the GUI is both:
 
@@ -215,16 +353,21 @@ The layout should make it obvious that the GUI is both:
 ## Suggested implementation slices
 
 1. Add the core `AgentChat` session model in `Phantom.Workspaces.Llm.Core`.
-2. Add an output control for assistant / JSON rendering.
-3. Add an input queue control.
-4. Add a composite session control.
-5. Add the `Phantom.Workspaces.Agent.Gui` app around those shared controls.
-6. Add template extraction plumbing and storage for extracted fragments.
-7. Add editing surfaces for MCP servers, trust profiles, extra agents, and skills.
-8. Add editing surfaces for tools and AI context providers.
+2. Add the `AgentRuntimeNode` bindable tree model in `Phantom.Workspaces.Llm.Core`.
+3. Add `AgentDefinitionEditorControl` (JSON text editor + `DefinitionChanged` event).
+4. Add an output control for assistant / JSON rendering.
+5. Add an input queue control.
+6. Add `AgentRuntimeBrowserControl` (tree view of live runtime entities).
+7. Add `AgentControl` composing the definition editor, output, input queue, and runtime browser.
+8. Add the `Phantom.Workspaces.Agent.Gui` app around those shared controls.
+9. Add template extraction plumbing and storage for extracted fragments.
+10. Add editing surfaces for MCP servers, trust profiles, extra agents, and skills.
+11. Add editing surfaces for tools and AI context providers.
 
 ## Open questions
 
 - Whether templates should be stored inline in the agent manifest or as separate entities first.
 - How much of the JSON should be editable directly versus via typed sub-editors.
 - Whether the output control should default to raw JSON, a tree view, or a split view.
+- How `AgentRuntimeNode` gets notified when the agent framework creates or destroys runtime entities (polling vs. events vs. framework hooks).
+- Whether restarting the session on definition change should preserve history or start fresh.

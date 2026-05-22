@@ -1,8 +1,8 @@
 using AgentSchema;
-using Phantom.Workspaces.Agent.Cli;
 using System.CommandLine;
+using Phantom.Workspaces.Llm;
 
-namespace Phantom.Workspaces.Agent.Cli.Tests;
+namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class AgentDefinitionCommandLineParserTests
 {
@@ -24,6 +24,23 @@ public sealed class AgentDefinitionCommandLineParserTests
         Assert.NotNull(additionalProperties);
         Assert.True(additionalProperties!.TryGetValue("thinking", out var thinkingValue));
         Assert.Equal("high", thinkingValue);
+    }
+
+    [Fact]
+    public void Parse_TestProviderArgs_ReturnsConstructedTestDefinition()
+    {
+        var parser = new AgentDefinitionCommandLineParser();
+        var parseResult = Parse(parser, ["--provider", "test", "--think", "low"]);
+
+        var result = parser.Parse(parseResult);
+        var prompt = Assert.IsType<PromptAgent>(result.AgentDefinition);
+        var additionalProperties = prompt.Model?.Options?.AdditionalProperties;
+
+        Assert.Equal("echo", prompt.Model?.Provider);
+        Assert.Equal("test", prompt.Model?.Id);
+        Assert.NotNull(additionalProperties);
+        Assert.True(additionalProperties!.TryGetValue("thinking", out var thinkingValue));
+        Assert.Equal("low", thinkingValue);
     }
 
     [Fact]

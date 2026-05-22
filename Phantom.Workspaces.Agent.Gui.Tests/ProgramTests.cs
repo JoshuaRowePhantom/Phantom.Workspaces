@@ -1,0 +1,29 @@
+using Phantom.Workspaces.Agent.Gui;
+
+namespace Phantom.Workspaces.Agent.Gui.Tests;
+
+public sealed class ProgramTests
+{
+    [Fact]
+    public void TryParseArguments_WithValidArgs_ReturnsParsedDefinition()
+    {
+        var success = Program.TryParseArguments(
+            ["--provider", "echo", "--think", "low"],
+            out var parseResult);
+
+        Assert.True(success);
+        Assert.NotNull(parseResult);
+        Assert.NotNull(parseResult!.AgentDefinition);
+    }
+
+    [Fact]
+    public void TryParseArguments_WithUnknownOption_ReturnsFalse()
+    {
+        var success = Program.TryParseArguments(
+            ["--not-a-real-option"],
+            out var parseResult);
+
+        Assert.False(success);
+        Assert.Null(parseResult);
+    }
+}

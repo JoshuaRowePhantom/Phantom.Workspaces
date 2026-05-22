@@ -127,6 +127,11 @@ public static class AgentFactory
             throw new InvalidOperationException("Agent definition does not specify a model ID.");
         }
 
+        if (string.Equals(model.Id, "test", StringComparison.OrdinalIgnoreCase))
+        {
+            return (new TestProviderChatClient(), "Test Chat Client");
+        }
+
         var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
 
         return provider switch
@@ -136,7 +141,7 @@ public static class AgentFactory
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, ollama, openai, azure")
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, ollama, openai, azure")
         };
     }
 
@@ -170,6 +175,24 @@ public static class AgentFactory
 
         var createdAgent = new ChatClientAgent(client, chatOptions);
         return (createdAgent, client, clientInfo.displayName);
+    }
+
+    /// <summary>
+    /// Creates a fully wired <see cref="AgentChat"/> session from an agent definition.
+    /// The returned <see cref="AgentChat"/> already owns its <see cref="AgentInputQueueManager"/>
+    /// and has started its processing loop.
+    /// </summary>
+    /// <param name="agent">Agent definition to materialize.</param>
+    /// <param name="services">Optional service integrations for runtime behavior.</param>
+    /// <returns>Tuple of the running <see cref="AgentChat"/>, the underlying client, and a display name.</returns>
+    public static (AgentChat Chat, IChatClient Client, string DisplayName) CreateAgentChat(
+        AgentDefinition agent,
+        AgentServices? services = null)
+    {
+        var (chatClientAgent, client, displayName) = CreateAgent(agent, services);
+        var queueManager = new AgentInputQueueManager(chatClientAgent);
+        var chat = new AgentChat(queueManager);
+        return (chat, client, displayName);
     }
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)

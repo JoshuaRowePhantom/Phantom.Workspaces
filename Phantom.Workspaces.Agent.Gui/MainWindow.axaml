@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+        xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
+        x:Class="Phantom.Workspaces.Agent.Gui.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Agent.DisplayName}"
+        Width="1200" Height="800"
+        MinWidth="600" MinHeight="400">
+
+    <DockPanel>
+        <!-- Title bar -->
+        <Border DockPanel.Dock="Top" Background="#1A1A1A" Padding="12,6">
+            <TextBlock Text="{Binding Agent.DisplayName}"
+                       FontWeight="SemiBold"
+                       Foreground="#D0D0D0"
+                       FontSize="13"/>
+        </Border>
+
+        <!-- Main content area -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" MinWidth="80"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="*" MinWidth="200"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: Runtime browser (placeholder) -->
+            <Border Grid.Column="0" Background="#161616">
+                <TextBlock Text="Runtime Browser"
+                           Foreground="#444"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontStyle="Italic"
+                           FontSize="12"/>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Background="#2A2A2A" ResizeBehavior="PreviousAndNext"/>
+
+            <!-- Right: Agent chat -->
+            <DockPanel Grid.Column="2">
+                <controls:AgentInputQueueControl DockPanel.Dock="Bottom"
+                                                  DataContext="{Binding Agent.InputQueue}"/>
+                <controls:ChatAgentOutputControl DataContext="{Binding Agent}"/>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>

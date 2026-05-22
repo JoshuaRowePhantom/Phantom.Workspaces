@@ -1,0 +1,44 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+             x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentInputQueueControl"
+             x:DataType="vm:InputQueueViewModel"
+             Background="#1A1A1A">
+
+    <Border BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="8,6">
+        <DockPanel>
+            <!-- Mode indicator -->
+            <Border DockPanel.Dock="Top"
+                    Padding="0,0,0,4"
+                    IsVisible="{Binding IsFormattedMode}">
+                <TextBlock Text="Formatted mode  •  Ctrl+Enter to submit  •  Esc to cancel"
+                           FontSize="11"
+                           Foreground="#808080"/>
+            </Border>
+
+            <!-- Input box + submit button -->
+            <Grid ColumnDefinitions="*,Auto"
+                  ColumnSpacing="8">
+                <TextBox x:Name="InputBox"
+                         Grid.Column="0"
+                         Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}"
+                         PlaceholderText="Type a message…  (Enter to send, Shift+Enter for multi-line)"
+                         AcceptsReturn="True"
+                         MaxHeight="200"
+                         MinHeight="36"
+                         FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                         FontSize="13"
+                         Background="#242424"
+                         Foreground="#E0E0E0"
+                         CaretBrush="#E0E0E0"
+                         BorderBrush="#3A3A3A"/>
+                <Button Grid.Column="1"
+                        Command="{Binding SubmitToDefaultQueueCommand}"
+                        Content="Send"
+                        MinHeight="36"
+                        Padding="12,0"
+                        VerticalAlignment="Bottom"/>
+            </Grid>
+        </DockPanel>
+    </Border>
+</UserControl>
