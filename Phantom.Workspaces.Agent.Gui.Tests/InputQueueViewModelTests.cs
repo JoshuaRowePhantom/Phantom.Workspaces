@@ -123,10 +123,9 @@ public sealed class InputQueueViewModelTests
         Assert.False(viewModel.DefaultComposer.HasAttachments);
         Assert.Equal(string.Empty, viewModel.InputText);
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("[image 640x480 shot.png][image/png]", chat.History[0].Text);
-        Assert.Equal(2, chat.History[0].Contents.Count);
-        Assert.IsType<TextContent>(chat.History[0].Contents[0]);
-        Assert.IsType<DataContent>(chat.History[0].Contents[1]);
+        Assert.Equal("[image/png]", chat.History[0].Text);
+        Assert.Single(chat.History[0].Contents);
+        Assert.IsType<DataContent>(chat.History[0].Contents[0]);
     }
 
     [Fact]

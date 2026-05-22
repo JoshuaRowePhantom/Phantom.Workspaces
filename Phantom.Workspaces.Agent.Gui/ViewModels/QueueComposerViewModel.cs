@@ -10,6 +10,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue targetQueue;
     private readonly List<AIContent> attachments = [];
+    private readonly List<string> attachmentPlaceholders = [];
     private string inputText = string.Empty;
     private bool isFormattedMode;
 
@@ -62,6 +63,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.attachments.Add(new DataContent(imageData, mediaType));
 
         var placeholder = this.FormatImagePlaceholder(width, height, fileName);
+        this.attachmentPlaceholders.Add(placeholder);
         if (!string.IsNullOrWhiteSpace(this.InputText))
         {
             this.InputText += this.InputText.EndsWith(' ') ? string.Empty : " ";
@@ -73,7 +75,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public void Submit()
     {
-        var text = this.InputText;
+        var text = this.SanitizeText(this.InputText);
         if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
         {
             return;
@@ -89,6 +91,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.parent.AppendToQueue(this.targetQueue, contents);
         this.InputText = string.Empty;
         this.attachments.Clear();
+        this.attachmentPlaceholders.Clear();
         this.RaisePropertyChanged(nameof(this.HasAttachments));
         this.IsFormattedMode = false;
         if (!this.IsDefaultComposer)
@@ -128,5 +131,16 @@ public sealed class QueueComposerViewModel : ViewModelBase
         }
 
         return $"[image {size} {fileName}]";
+    }
+
+    private string SanitizeText(string text)
+    {
+        var sanitized = text;
+        foreach (var placeholder in this.attachmentPlaceholders)
+        {
+            sanitized = sanitized.Replace(placeholder, string.Empty, StringComparison.Ordinal);
+        }
+
+        return sanitized.TrimEnd();
     }
 }
