@@ -35,10 +35,6 @@
                                                 Padding="0"
                                                 VerticalAlignment="Center"
                                                 IsVisible="{Binding CanToggleComposer}"/>
-                                        <TextBlock Text="{Binding ItemCountText}"
-                                                   Foreground="#8A8A8A"
-                                                   FontSize="11"
-                                                   VerticalAlignment="Center"/>
                                         <Border Background="{Binding SelectedImmediacyOption.Background}"
                                                 BorderBrush="{Binding SelectedImmediacyOption.BorderBrush}"
                                                 BorderThickness="1"
