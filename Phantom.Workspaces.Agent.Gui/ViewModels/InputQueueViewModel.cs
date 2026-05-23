@@ -19,6 +19,9 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels = [];
     private AgentChatQueue? mostRecentlyCreatedQueue;
     private bool hasMultipleQueues;
+    private readonly ICommand holdAllQueuesCommand;
+    private readonly ICommand unholdAllQueuesCommand;
+    private readonly ICommand toggleHoldAllQueuesCommand;
     private readonly ICommand submitToMostRecentQueueCommand;
     private readonly ICommand submitToNewQueueCommand;
 
@@ -32,6 +35,9 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.inputQueueManager = inputQueueManager;
         this.DefaultComposer = new QueueComposerViewModel(this, defaultInputQueue, isDefaultComposer: true);
         this.SubmitToDefaultQueueCommand = this.DefaultComposer.SubmitCommand;
+        this.holdAllQueuesCommand = new RelayCommand(this.HoldAllQueues);
+        this.unholdAllQueuesCommand = new RelayCommand(this.UnholdAllQueues);
+        this.toggleHoldAllQueuesCommand = new RelayCommand(this.ToggleHoldAllQueues);
         this.submitToMostRecentQueueCommand = new RelayCommand(this.SubmitToMostRecentQueue);
         this.submitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
         this.agentChat.InputQueues.CollectionChanged += this.OnInputQueuesChanged;
@@ -71,6 +77,12 @@ public sealed class InputQueueViewModel : ViewModelBase
     }
 
     public ICommand SubmitToDefaultQueueCommand { get; }
+
+    public ICommand HoldAllQueuesCommand => this.holdAllQueuesCommand;
+
+    public ICommand UnholdAllQueuesCommand => this.unholdAllQueuesCommand;
+
+    public ICommand ToggleHoldAllQueuesCommand => this.toggleHoldAllQueuesCommand;
 
     public ICommand SubmitToMostRecentQueueCommand => this.submitToMostRecentQueueCommand;
 
@@ -308,7 +320,10 @@ public sealed class InputQueueViewModel : ViewModelBase
             this.agentChat.SetQueueHeld(queue, held);
         }
 
-        this.RebuildQueues();
+        foreach (var queue in this.InputQueues)
+        {
+            this.RefreshQueue(queue);
+        }
     }
 
     private void SubmitToQueue(AgentChatQueue queue)

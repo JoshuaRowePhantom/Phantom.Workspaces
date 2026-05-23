@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
@@ -63,10 +64,16 @@ public partial class QueueComposerControl : UserControl
             return;
         }
 
-        var handled = await this.TryAppendImagesAsync(vm, this.GetDataTransfer(e));
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            return;
+        }
+
+        var handled = await this.TryAppendImagesAsync(vm, clipboard);
         if (handled)
         {
-            this.TrySetHandled(e);
+            e.Handled = true;
             this.SyncTextBoxText(vm);
         }
     }
@@ -131,30 +138,6 @@ public partial class QueueComposerControl : UserControl
         return false;
     }
 
-    private IDataTransfer? GetDataTransfer(object eventArgs)
-    {
-        var eventArgsType = eventArgs.GetType();
-        foreach (var propertyName in new[] { "DataObject", "DataTransfer", "Data" })
-        {
-            var property = eventArgsType.GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
-            if (property?.GetValue(eventArgs) is IDataTransfer dataTransfer)
-            {
-                return dataTransfer;
-            }
-        }
-
-        return null;
-    }
-
-    private void TrySetHandled(object eventArgs)
-    {
-        var property = eventArgs.GetType().GetProperty("Handled", BindingFlags.Instance | BindingFlags.Public);
-        if (property?.CanWrite == true && property.PropertyType == typeof(bool))
-        {
-            property.SetValue(eventArgs, true);
-        }
-    }
-
     private async Task<bool> TryAppendImagesAsync(QueueComposerViewModel vm, IDataTransfer? dataTransfer)
     {
         if (dataTransfer is null)
@@ -179,6 +162,43 @@ public partial class QueueComposerControl : UserControl
         }
 
         var files = dataTransfer.TryGetFiles();
+        if (files is not null)
+        {
+            foreach (var fileItem in files)
+            {
+                using (fileItem)
+                {
+                    if (fileItem is IStorageFile file
+                        && await this.TryAppendImageFileAsync(vm, file))
+                    {
+                        handled = true;
+                    }
+                }
+            }
+        }
+
+        return handled;
+    }
+
+    private async Task<bool> TryAppendImagesAsync(QueueComposerViewModel vm, IClipboard clipboard)
+    {
+        var handled = false;
+
+        var bitmap = await clipboard.TryGetBitmapAsync();
+        if (bitmap is not null)
+        {
+            using (bitmap)
+            {
+                handled = true;
+                vm.AppendImageAttachment(
+                    this.BitmapToBytes(bitmap),
+                    "image/png",
+                    bitmap.PixelSize.Width,
+                    bitmap.PixelSize.Height);
+            }
+        }
+
+        var files = await clipboard.TryGetFilesAsync();
         if (files is not null)
         {
             foreach (var fileItem in files)

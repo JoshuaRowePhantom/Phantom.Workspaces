@@ -7,6 +7,14 @@
         Title="{Binding Agent.DisplayName}"
         Width="1200" Height="800"
         MinWidth="600" MinHeight="400">
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Shift+Pause"
+                    Command="{Binding Agent.InputQueue.HoldAllQueuesCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Pause"
+                    Command="{Binding Agent.InputQueue.UnholdAllQueuesCommand}"/>
+        <KeyBinding Gesture="Pause"
+                    Command="{Binding Agent.InputQueue.ToggleHoldAllQueuesCommand}"/>
+    </Window.KeyBindings>
 
     <DockPanel>
         <!-- Title bar -->

@@ -120,6 +120,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        foreach (var item in this.History)
+        {
+            item.Dispose();
+        }
+
         this.InputQueue.Dispose();
         this.agentChat.History.CollectionChanged -= this.OnHistoryChanged;
         this.agentChat.RunningItems.CollectionChanged -= this.OnRunningItemsChanged;

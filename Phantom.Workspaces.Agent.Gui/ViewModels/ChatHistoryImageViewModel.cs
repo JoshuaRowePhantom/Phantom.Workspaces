@@ -1,15 +1,13 @@
-using System.Windows.Input;
 using Avalonia.Media.Imaging;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class InputQueueEntryAttachmentViewModel : ViewModelBase, IDisposable
+public sealed class ChatHistoryImageViewModel : ViewModelBase, IDisposable
 {
-    public InputQueueEntryAttachmentViewModel(Bitmap? preview, string label, ICommand removeCommand)
+    public ChatHistoryImageViewModel(Bitmap? preview, string label)
     {
         this.Preview = preview;
         this.Label = label;
-        this.RemoveCommand = removeCommand;
     }
 
     public Bitmap? Preview { get; }
@@ -17,8 +15,6 @@ public sealed class InputQueueEntryAttachmentViewModel : ViewModelBase, IDisposa
     public bool HasPreview => this.Preview is not null;
 
     public string Label { get; }
-
-    public ICommand RemoveCommand { get; }
 
     public void Dispose()
     {

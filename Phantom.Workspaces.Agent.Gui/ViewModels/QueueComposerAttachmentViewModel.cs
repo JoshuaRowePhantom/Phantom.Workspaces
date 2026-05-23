@@ -3,9 +3,9 @@ using Avalonia.Media.Imaging;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class InputQueueEntryAttachmentViewModel : ViewModelBase, IDisposable
+public sealed class QueueComposerAttachmentViewModel : ViewModelBase, IDisposable
 {
-    public InputQueueEntryAttachmentViewModel(Bitmap? preview, string label, ICommand removeCommand)
+    public QueueComposerAttachmentViewModel(Bitmap? preview, string label, ICommand removeCommand)
     {
         this.Preview = preview;
         this.Label = label;
@@ -13,8 +13,6 @@ public sealed class InputQueueEntryAttachmentViewModel : ViewModelBase, IDisposa
     }
 
     public Bitmap? Preview { get; }
-
-    public bool HasPreview => this.Preview is not null;
 
     public string Label { get; }
 

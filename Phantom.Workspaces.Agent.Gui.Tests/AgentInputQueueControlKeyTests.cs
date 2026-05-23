@@ -24,7 +24,7 @@ public sealed class AgentInputQueueControlKeyTests
             """);
 
     [Fact]
-    public async Task HandleInputKey_CtrlShiftH_HoldsAllQueues()
+    public async Task HoldAllQueuesCommand_HoldsAllQueues()
     {
         var created = AgentFactory.CreateAgentChat(CreateAgentDefinition());
         await using var chat = created.Chat;
@@ -33,14 +33,12 @@ public sealed class AgentInputQueueControlKeyTests
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
-        var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.H, KeyModifiers.Control | KeyModifiers.Shift);
-
-        Assert.True(handled);
+        viewModel.HoldAllQueuesCommand.Execute(null);
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 
     [Fact]
-    public async Task HandleInputKey_CtrlShiftU_UnholdsAllQueues()
+    public async Task UnholdAllQueuesCommand_UnholdsAllQueues()
     {
         var created = AgentFactory.CreateAgentChat(CreateAgentDefinition());
         await using var chat = created.Chat;
@@ -50,14 +48,12 @@ public sealed class AgentInputQueueControlKeyTests
         viewModel.SubmitToNewQueue();
         viewModel.HoldAllQueues();
 
-        var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.U, KeyModifiers.Control | KeyModifiers.Shift);
-
-        Assert.True(handled);
+        viewModel.UnholdAllQueuesCommand.Execute(null);
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
 
     [Fact]
-    public async Task HandleInputKey_Pause_TogglesHoldState()
+    public async Task ToggleHoldAllQueuesCommand_TogglesHoldState()
     {
         var created = AgentFactory.CreateAgentChat(CreateAgentDefinition());
         await using var chat = created.Chat;
@@ -66,9 +62,7 @@ public sealed class AgentInputQueueControlKeyTests
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
-        var handled = AgentInputQueueControl.HandleInputKey(viewModel, Key.Pause, KeyModifiers.None);
-
-        Assert.True(handled);
+        viewModel.ToggleHoldAllQueuesCommand.Execute(null);
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 

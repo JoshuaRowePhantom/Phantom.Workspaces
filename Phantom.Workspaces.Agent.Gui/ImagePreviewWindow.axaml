@@ -1,0 +1,37 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Phantom.Workspaces.Agent.Gui.ImagePreviewWindow"
+        Width="1000"
+        Height="800"
+        MinWidth="320"
+        MinHeight="240"
+        WindowStartupLocation="CenterOwner"
+        Title="Image preview"
+        Background="#1A1A1A">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,12,0,0">
+            <Button Content="Copy"
+                    Click="OnCopyClicked"
+                    Classes="queue-action-button"/>
+            <Button Content="Close"
+                    Click="OnCloseClicked"
+                    Classes="queue-action-button"/>
+        </StackPanel>
+
+        <Border Background="#111111"
+                BorderBrush="#303030"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto">
+                <Image x:Name="PreviewImage"
+                       Stretch="None"/>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</Window>

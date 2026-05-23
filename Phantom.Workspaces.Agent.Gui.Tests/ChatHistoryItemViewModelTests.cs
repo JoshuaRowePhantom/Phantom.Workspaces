@@ -1,3 +1,6 @@
+using System.Linq;
+using System.Collections.Generic;
+using System.ComponentModel;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -66,6 +69,34 @@ public sealed class ChatHistoryItemViewModelTests
     }
 
     [Fact]
+    public void UpdateFrom_CompletingResponse_RefreshesReasoningVisibility()
+    {
+        var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Text = "streaming",
+            IsInProgress = true,
+        });
+
+        var changed = new List<string>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName!);
+
+        viewModel.UpdateFrom(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Text = "complete",
+            ReasoningText = "because",
+            IsInProgress = false,
+        });
+
+        Assert.Contains(nameof(ChatHistoryItemViewModel.IsInProgress), changed);
+        Assert.Contains(nameof(ChatHistoryItemViewModel.HasReasoningLine), changed);
+        Assert.Contains(nameof(ChatHistoryItemViewModel.ReasoningDisplayText), changed);
+        Assert.False(viewModel.HasReasoningLine);
+        Assert.Empty(viewModel.ReasoningDisplayText);
+    }
+
+    [Fact]
     public void SetReasoningVisible_ShowsReasoningText()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -96,5 +127,21 @@ public sealed class ChatHistoryItemViewModelTests
 
         Assert.Equal("step 1", viewModel.ReasoningDisplayText);
         Assert.True(viewModel.HasReasoningLine);
+    }
+
+    [Fact]
+    public void Constructor_WithImageContent_ExposesAttachmentPreview()
+    {
+        var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
+        {
+            Role = ChatRole.User,
+            Text = "[image/png]",
+            Contents = [new DataContent(Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII="), "image/png")],
+        });
+
+        var attachment = Assert.Single(viewModel.Attachments);
+
+        Assert.True(viewModel.HasAttachments);
+        Assert.Equal("image/png", attachment.Label);
     }
 }

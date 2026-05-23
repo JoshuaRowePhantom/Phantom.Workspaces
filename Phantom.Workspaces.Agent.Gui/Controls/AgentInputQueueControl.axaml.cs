@@ -1,57 +1,119 @@
+using System.Collections.Specialized;
+using System.Linq;
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
 public partial class AgentInputQueueControl : UserControl
 {
+    private InputQueueViewModel? viewModel;
+
     public AgentInputQueueControl()
     {
         this.InitializeComponent();
-        this.AddHandler(
-            InputElement.KeyDownEvent,
-            this.OnKeyDown,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
-            handledEventsToo: true);
+        this.DataContextChanged += this.OnDataContextChanged;
     }
 
-    internal static bool HandleInputKey(InputQueueViewModel vm, Key key, KeyModifiers keyModifiers)
+    private void OnDataContextChanged(object? sender, EventArgs e)
     {
-        if (key == Key.H
-            && keyModifiers.HasFlag(KeyModifiers.Control)
-            && keyModifiers.HasFlag(KeyModifiers.Shift))
+        if (this.viewModel is not null)
         {
-            vm.HoldAllQueues();
-            return true;
+            this.viewModel.Queues.CollectionChanged -= this.OnQueuesCollectionChanged;
+            this.UnwireEditHandlers(this.viewModel);
         }
 
-        if (key == Key.U
-            && keyModifiers.HasFlag(KeyModifiers.Control)
-            && keyModifiers.HasFlag(KeyModifiers.Shift))
-        {
-            vm.UnholdAllQueues();
-            return true;
-        }
-
-        if (key == Key.Pause)
-        {
-            vm.ToggleHoldAllQueues();
-            return true;
-        }
-
-        return false;
-    }
-
-    private void OnKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (this.DataContext is not InputQueueViewModel vm)
+        this.viewModel = this.DataContext as InputQueueViewModel;
+        if (this.viewModel is null)
         {
             return;
         }
 
-        e.Handled = HandleInputKey(vm, e.Key, e.KeyModifiers);
+        this.viewModel.Queues.CollectionChanged += this.OnQueuesCollectionChanged;
+        this.WireEditHandlers(this.viewModel);
     }
 
+    private void OnQueuesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (this.viewModel is null)
+        {
+            return;
+        }
+
+        this.UnwireEditHandlers(this.viewModel);
+        this.WireEditHandlers(this.viewModel);
+    }
+
+    private void OnQueueItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (this.viewModel is null)
+        {
+            return;
+        }
+
+        this.UnwireEditHandlers(this.viewModel);
+        this.WireEditHandlers(this.viewModel);
+    }
+
+    private void OnItemEditStarted(object? sender, EventArgs e)
+    {
+        if (sender is not InputQueueEntryViewModel item)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() => this.FocusEditBox(item));
+    }
+
+    private void WireEditHandlers(InputQueueViewModel vm)
+    {
+        foreach (var queue in vm.Queues)
+        {
+            queue.Items.CollectionChanged += this.OnQueueItemsCollectionChanged;
+            foreach (var item in queue.Items)
+            {
+                item.EditStarted += this.OnItemEditStarted;
+            }
+        }
+    }
+
+    private void UnwireEditHandlers(InputQueueViewModel vm)
+    {
+        foreach (var queue in vm.Queues)
+        {
+            queue.Items.CollectionChanged -= this.OnQueueItemsCollectionChanged;
+            foreach (var item in queue.Items)
+            {
+                item.EditStarted -= this.OnItemEditStarted;
+            }
+        }
+    }
+
+    private void FocusEditBox(InputQueueEntryViewModel item)
+    {
+        var editBox = this.GetVisualDescendants()
+            .OfType<TextBox>()
+            .FirstOrDefault(box => ReferenceEquals(box.DataContext, item));
+
+        if (editBox is null)
+        {
+            return;
+        }
+
+        editBox.Focus();
+        editBox.SelectAll();
+    }
+
+    private async void OnQueueAttachmentImageClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control control || control.DataContext is not InputQueueEntryAttachmentViewModel attachment || attachment.Preview is null)
+        {
+            return;
+        }
+
+        await ImagePreviewPresenter.ShowAsync(this, attachment.Preview, attachment.Label);
+    }
 }

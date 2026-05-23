@@ -5,7 +5,6 @@
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentInputQueueControl"
              x:DataType="vm:InputQueueViewModel"
              Background="#1A1A1A">
-
     <Border BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="8,6">
         <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
@@ -31,101 +30,17 @@
                                                 HorizontalAlignment="Right">
                                         <Button Command="{Binding ToggleComposerCommand}"
                                                 Content="+"
-                                                MinWidth="24"
-                                                MinHeight="24"
-                                                Padding="0"
+                                                Classes="queue-glyph-button"
                                                 VerticalAlignment="Center"
                                                 IsVisible="{Binding CanToggleComposer}"/>
                                         <Button Command="{Binding RemoveQueueCommand}"
                                                 IsVisible="{Binding CanRemoveQueue}"
-                                                Background="Transparent"
-                                                BorderBrush="#8A3A3A"
-                                                Foreground="#FF6666"
+                                                Classes="queue-glyph-button queue-danger-button"
                                                 BorderThickness="1"
                                                 CornerRadius="999"
-                                                Content="X"
-                                                MinWidth="24"
-                                                MinHeight="24"
-                                                Padding="0"/>
-                                        <Border Background="{Binding SelectedImmediacyOption.Background}"
-                                                BorderBrush="{Binding SelectedImmediacyOption.BorderBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="999">
-                                            <Button Background="Transparent"
-                                                    BorderThickness="0"
-                                                    Padding="10,2"
-                                                    MinHeight="24"
-                                                    HorizontalAlignment="Right">
-                                                <Button.Flyout>
-                                                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
-                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
-                                                                  CommandParameter="{Binding ImmediateImmediacyOption}"
-                                                                  Tag="{Binding ImmediateImmediacyOption}"
-                                                                  Padding="0">
-                                                            <MenuItem.Header>
-                                                                <Border Background="{Binding ImmediateImmediacyOption.Background}"
-                                                                        BorderBrush="{Binding ImmediateImmediacyOption.BorderBrush}"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="999"
-                                                                        Padding="10,4">
-                                                                    <TextBlock Text="{Binding ImmediateImmediacyOption.Label}"
-                                                                               Foreground="{Binding ImmediateImmediacyOption.Foreground}"
-                                                                               FontSize="11"/>
-                                                                </Border>
-                                                            </MenuItem.Header>
-                                                        </MenuItem>
-                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
-                                                                  CommandParameter="{Binding QueuedImmediacyOption}"
-                                                                  Tag="{Binding QueuedImmediacyOption}"
-                                                                  Padding="0">
-                                                            <MenuItem.Header>
-                                                                <Border Background="{Binding QueuedImmediacyOption.Background}"
-                                                                        BorderBrush="{Binding QueuedImmediacyOption.BorderBrush}"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="999"
-                                                                        Padding="10,4">
-                                                                    <TextBlock Text="{Binding QueuedImmediacyOption.Label}"
-                                                                               Foreground="{Binding QueuedImmediacyOption.Foreground}"
-                                                                               FontSize="11"/>
-                                                                </Border>
-                                                            </MenuItem.Header>
-                                                        </MenuItem>
-                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
-                                                                  CommandParameter="{Binding HeldImmediacyOption}"
-                                                                  Tag="{Binding HeldImmediacyOption}"
-                                                                  Padding="0">
-                                                            <MenuItem.Header>
-                                                                <Border Background="{Binding HeldImmediacyOption.Background}"
-                                                                        BorderBrush="{Binding HeldImmediacyOption.BorderBrush}"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="999"
-                                                                        Padding="10,4">
-                                                                    <TextBlock Text="{Binding HeldImmediacyOption.Label}"
-                                                                               Foreground="{Binding HeldImmediacyOption.Foreground}"
-                                                                               FontSize="11"/>
-                                                                </Border>
-                                                            </MenuItem.Header>
-                                                        </MenuItem>
-                                                    </MenuFlyout>
-                                                </Button.Flyout>
-                                                <StackPanel Orientation="Horizontal"
-                                                            Spacing="6"
-                                                            VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding SelectedImmediacyOption.Label}"
-                                                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
-                                                               FontSize="11"/>
-                                                    <TextBlock Text="▾"
-                                                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
-                                                               FontSize="10"/>
-                                                </StackPanel>
-                                            </Button>
-                                        </Border>
+                                                Content="✕"/>
                                     </StackPanel>
                                 </DockPanel>
-
-                                <Border IsVisible="{Binding HasComposer}">
-                                    <controls:QueueComposerControl DataContext="{Binding Composer}"/>
-                                </Border>
 
                                 <ItemsControl ItemsSource="{Binding Items}"
                                               IsVisible="{Binding HasItems}">
@@ -137,42 +52,52 @@
                                                     CornerRadius="3">
                                                 <Grid ColumnDefinitions="*,Auto"
                                                       RowDefinitions="Auto,Auto"
-                                                      ColumnSpacing="8">
+                                                      ColumnSpacing="8"
+                                                      RowSpacing="6">
                                                     <StackPanel IsVisible="{Binding IsEditing}"
                                                                 Spacing="6">
                                                         <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
-                                                                 AcceptsReturn="False"
-                                                                 MinHeight="32"
-                                                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                                                 FontSize="12"
-                                                                 Background="#2A2A2A"
-                                                                 Foreground="#E0E0E0"
-                                                                 CaretBrush="#E0E0E0"
-                                                                 BorderBrush="#3A3A3A"/>
-                                                        <StackPanel Orientation="Horizontal"
-                                                                    HorizontalAlignment="Right"
-                                                                    Spacing="6">
-                                                            <Button Command="{Binding SaveEditCommand}"
-                                                                    Content="Save"
-                                                                    MinHeight="28"
-                                                                    Padding="10,0"/>
+                                                             x:Name="EditBox"
+                                                             AcceptsReturn="False"
+                                                             MinHeight="32"
+                                                             FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                                             FontSize="12"
+                                                             Background="#2A2A2A"
+                                                             Foreground="#E0E0E0"
+                                                             CaretBrush="#E0E0E0"
+                                                             BorderBrush="#3A3A3A"/>
+                                                    <StackPanel Orientation="Horizontal"
+                                                                HorizontalAlignment="Right"
+                                                                Spacing="6">
+                                                        <Button Command="{Binding SaveEditCommand}"
+                                                                Content="Save"
+                                                                Classes="queue-action-button"/>
                                                             <Button Command="{Binding CancelEditCommand}"
                                                                     Content="Cancel"
-                                                                    MinHeight="28"
-                                                                    Padding="10,0"/>
-                                                        </StackPanel>
+                                                                Classes="queue-action-button"/>
                                                     </StackPanel>
+                                                </StackPanel>
 
+                                                <Button Command="{Binding EditCommand}"
+                                                        Classes="queue-item-trigger"
+                                                        IsVisible="{Binding IsNotEditing}"
+                                                        Grid.Column="0"
+                                                        Grid.Row="0">
+                                                    <Button.KeyBindings>
+                                                        <KeyBinding Gesture="F2"
+                                                                    Command="{Binding EditCommand}"/>
+                                                    </Button.KeyBindings>
                                                     <SelectableTextBlock Text="{Binding Text}"
-                                                                         IsVisible="{Binding IsNotEditing}"
                                                                          TextWrapping="Wrap"
                                                                          Foreground="#D0D0D0"
                                                                          FontFamily="Cascadia Code,Consolas,Courier New,monospace"
                                                                          FontSize="12"/>
+                                                </Button>
 
-                                                    <ItemsControl Grid.Row="1"
-                                                                  Grid.ColumnSpan="2"
-                                                                  Margin="0,6,0,0"
+                                                <ItemsControl Grid.Row="1"
+                                                              Grid.Column="0"
+                                                              Grid.ColumnSpan="2"
+                                                              Margin="0,6,0,0"
                                                                   ItemsSource="{Binding Attachments}"
                                                                   IsVisible="{Binding HasAttachments}">
                                                         <ItemsControl.ItemsPanel>
@@ -187,21 +112,39 @@
                                                                 <Border Background="#5A3A1A"
                                                                         BorderBrush="#8A5A20"
                                                                         BorderThickness="1"
-                                                                        CornerRadius="999"
-                                                                        Padding="8,3">
+                                                                        CornerRadius="10"
+                                                                        Padding="4">
                                                                     <StackPanel Orientation="Horizontal"
-                                                                               Spacing="6">
+                                                                               Spacing="6"
+                                                                               VerticalAlignment="Center">
+                                                                        <Border Background="#2A2A2A"
+                                                                                BorderBrush="#8A5A20"
+                                                                                BorderThickness="1"
+                                                                                CornerRadius="6"
+                                                                                Width="28"
+                                                                                Height="20"
+                                                                                ClipToBounds="True">
+                                                                            <Button Background="Transparent"
+                                                                                    BorderThickness="0"
+                                                                                    Padding="0"
+                                                                                    Click="OnQueueAttachmentImageClicked"
+                                                                                    IsVisible="{Binding HasPreview}">
+                                                                                <Image Source="{Binding Preview}"
+                                                                                       Width="28"
+                                                                                       Height="20"
+                                                                                       Stretch="UniformToFill"/>
+                                                                            </Button>
+                                                                        </Border>
                                                                         <TextBlock Text="{Binding Label}"
                                                                                   Foreground="#F6D7A7"
-                                                                                  FontSize="11"/>
+                                                                                  FontSize="11"
+                                                                                  VerticalAlignment="Center"/>
                                                                         <Button Command="{Binding RemoveCommand}"
-                                                                               Content="X"
-                                                                               Background="Transparent"
-                                                                               BorderThickness="0"
-                                                                               Foreground="#FFB7B7"
-                                                                               MinWidth="18"
-                                                                               MinHeight="18"
-                                                                               Padding="0"/>
+                                                                               Content="✕"
+                                                                               Classes="queue-glyph-button queue-danger-button"
+                                                                               BorderThickness="1"
+                                                                               MinWidth="20"
+                                                                               MinHeight="20"/>
                                                                     </StackPanel>
                                                                 </Border>
                                                             </DataTemplate>
@@ -211,23 +154,23 @@
                                                     <StackPanel Grid.Column="1"
                                                                 Orientation="Horizontal"
                                                                 Spacing="6"
-                                                                VerticalAlignment="Top">
-                                                        <Button Command="{Binding EditCommand}"
-                                                                Content="Edit"
-                                                                MinWidth="36"
-                                                                MinHeight="24"
-                                                                Padding="8,0"/>
+                                                                VerticalAlignment="Center">
                                                         <Button Command="{Binding RemoveCommand}"
-                                                                Content="X"
-                                                                MinWidth="24"
-                                                                MinHeight="24"
-                                                                Padding="0"/>
+                                                                Content="✕"
+                                                                Classes="queue-glyph-button queue-danger-button"
+                                                                BorderThickness="1"
+                                                                CornerRadius="999"
+                                                                VerticalAlignment="Center"/>
                                                     </StackPanel>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+
+                                <Border IsVisible="{Binding HasComposer}">
+                                    <controls:QueueComposerControl DataContext="{Binding Composer}"/>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </DataTemplate>

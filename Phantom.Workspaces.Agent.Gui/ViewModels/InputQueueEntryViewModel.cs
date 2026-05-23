@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows.Input;
+using Avalonia.Media.Imaging;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 
@@ -12,6 +14,8 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
     private readonly int index;
     private bool isEditing;
     private string editText;
+
+    public event EventHandler? EditStarted;
 
     public InputQueueEntryViewModel(
         InputQueueViewModel parent,
@@ -83,6 +87,7 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
     {
         this.EditText = this.Text;
         this.IsEditing = true;
+        this.EditStarted?.Invoke(this, EventArgs.Empty);
     }
 
     private void SaveEdit()
@@ -108,7 +113,9 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
             }
 
             var attachmentIndex = contentIndex;
+            var preview = this.TryCreatePreview(dataContent);
             attachments.Add(new InputQueueEntryAttachmentViewModel(
+                preview,
                 this.FormatDataContentLabel(dataContent),
                 new RelayCommand(() => this.RemoveAttachment(attachmentIndex))));
         }
@@ -120,4 +127,28 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
     {
         return string.IsNullOrWhiteSpace(dataContent.MediaType) ? "image" : dataContent.MediaType;
     }
+
+    private Bitmap? TryCreatePreview(DataContent dataContent)
+    {
+        if (!IsImageMediaType(dataContent.MediaType))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new Bitmap(new MemoryStream(dataContent.Data.ToArray()));
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsImageMediaType(string? mediaType)
+        => !string.IsNullOrWhiteSpace(mediaType) && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 }

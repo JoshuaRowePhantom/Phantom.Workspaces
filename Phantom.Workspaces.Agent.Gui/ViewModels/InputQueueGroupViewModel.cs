@@ -5,7 +5,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class InputQueueGroupViewModel : ViewModelBase
+public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable
 {
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue queue;
@@ -145,5 +145,13 @@ public sealed class InputQueueGroupViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.HasComposer));
         this.RaisePropertyChanged(nameof(this.CanToggleComposer));
         this.RaisePropertyChanged(nameof(this.CanRemoveQueue));
+    }
+
+    public void Dispose()
+    {
+        if (!this.IsDefault)
+        {
+            this.Composer.Dispose();
+        }
     }
 }
