@@ -29,24 +29,28 @@
         </DataTemplate>
         <DataTemplate DataType="ai:FunctionCallContent">
             <Border Classes="agent-card">
-                <StackPanel>
-                    <TextBlock Text="{Binding Name, StringFormat=tool call: {0}}"
-                               Classes="agent-meta-label"/>
+                <Expander>
+                    <Expander.Header>
+                        <TextBlock Text="{Binding Name, StringFormat=tool call: {0}}"
+                                   Classes="agent-meta-label"/>
+                    </Expander.Header>
                     <SelectableTextBlock Text="{Binding Arguments, Converter={x:Static converters:ObjectToPrettyJsonConverter.Instance}}"
                                          Classes="terminal-mono terminal-detail"
                                          Margin="0,4,0,0"/>
-                </StackPanel>
+                </Expander>
             </Border>
         </DataTemplate>
         <DataTemplate DataType="ai:FunctionResultContent">
             <Border Classes="agent-card">
-                <StackPanel>
-                    <TextBlock Text="{Binding CallId, StringFormat=tool result: {0}}"
-                               Classes="agent-meta-label"/>
+                <Expander>
+                    <Expander.Header>
+                        <TextBlock Text="{Binding CallId, StringFormat=tool result: {0}}"
+                                   Classes="agent-meta-label"/>
+                    </Expander.Header>
                     <SelectableTextBlock Text="{Binding Result, Converter={x:Static converters:ObjectToPrettyJsonConverter.Instance}}"
                                          Classes="terminal-mono terminal-detail"
                                          Margin="0,4,0,0"/>
-                </StackPanel>
+                </Expander>
             </Border>
         </DataTemplate>
         <DataTemplate DataType="llm:AgentChatHistoryItem">
@@ -79,7 +83,7 @@
                                 Margin="0,0,0,6"
                                 Background="Transparent"
                                 Foreground="#4080FF"/>
-                    <ItemsControl ItemsSource="{Binding Contents, Converter={x:Static converters:RenderableContentFilterConverter.Instance}}"
+                    <ItemsControl ItemsSource="{Binding RenderableContents}"
                                  Margin="0,8,0,0"/>
                     <ItemsControl ItemsSource="{Binding Attachments}"
                                  IsVisible="{Binding HasAttachments}"

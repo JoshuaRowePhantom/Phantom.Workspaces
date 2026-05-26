@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
+using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -9,6 +10,21 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class ChatHistoryItemViewModelTests
 {
+    private static AgentDefinition CreateTestProviderAgentDefinition()
+        => AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
     [Fact]
     public void Constructor_UserRole_MapsToUserLabel()
     {
@@ -137,5 +153,88 @@ public sealed class ChatHistoryItemViewModelTests
 
         Assert.True(viewModel.HasAttachments);
         Assert.Equal("image/png", attachment.Label);
+    }
+
+    [Fact]
+    public void UpdateFrom_WithEquivalentContents_DoesNotResetContentsBinding()
+    {
+        var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("same content")],
+            IsInProgress = true,
+        });
+
+        var changed = new List<string>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName!);
+
+        viewModel.UpdateFrom(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("same content")],
+            IsInProgress = false,
+        });
+
+        Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
+    }
+
+    [Fact]
+    public void Constructor_RenderableContents_FiltersReasoningAndImageData()
+    {
+        var imageBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
+        var call = new FunctionCallContent("web_request", "{\"url\":\"https://example.com\"}");
+        var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new TextContent("response"),
+                new TextReasoningContent("hidden"),
+                new DataContent(imageBytes, "image/png"),
+                call,
+            ],
+        });
+
+        Assert.Collection(
+            viewModel.RenderableContents,
+            content => Assert.IsType<TextContent>(content),
+            content => Assert.Same(call, content));
+    }
+
+    [Fact]
+    public async Task UpdateFrom_TestProviderEquivalentAssistantTurn_DoesNotResetContentsBinding()
+    {
+        var chat = AgentFactory.CreateAgentChat(CreateTestProviderAgentDefinition());
+        await using var _ = chat;
+
+        chat.EnqueueUserMessage("hello");
+
+        AgentChatHistoryItem? assistantHistory = null;
+        for (var i = 0; i < 20; i++)
+        {
+            assistantHistory = chat.History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
+            if (assistantHistory is not null)
+            {
+                break;
+            }
+
+            await Task.Delay(25);
+        }
+
+        Assert.NotNull(assistantHistory);
+        var viewModel = new ChatHistoryItemViewModel(assistantHistory!);
+
+        var changed = new List<string>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName!);
+
+        viewModel.UpdateFrom(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent(assistantHistory!.Text)],
+            IsInProgress = false,
+        });
+
+        Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
+        Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.RenderableContents), changed);
     }
 }

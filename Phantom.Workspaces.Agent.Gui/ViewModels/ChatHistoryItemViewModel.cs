@@ -10,6 +10,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
 {
     private IReadOnlyList<AIContent> contents;
+    private IReadOnlyList<AIContent> renderableContents;
     private string text;
     private string reasoningText;
     private bool isInProgress;
@@ -21,6 +22,7 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
         this.IsUser = item.Role == ChatRole.User;
         this.RoleLabel = item.Role.Value.ToLowerInvariant();
         this.contents = item.Contents;
+        this.renderableContents = CreateRenderableContents(item.Contents);
         this.text = item.Text;
         this.reasoningText = item.ReasoningText;
         this.isInProgress = item.IsInProgress;
@@ -86,6 +88,12 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
         private set => this.SetProperty(ref this.contents, value);
     }
 
+    public IReadOnlyList<AIContent> RenderableContents
+    {
+        get => this.renderableContents;
+        private set => this.SetProperty(ref this.renderableContents, value);
+    }
+
     public string ReasoningDisplayText
         => this.IsUser
             ? string.Empty
@@ -100,8 +108,12 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
         this.Text = item.Text;
         this.ReasoningText = item.ReasoningText;
         this.IsInProgress = item.IsInProgress;
-        this.Contents = item.Contents;
-        this.UpdateAttachments(item.Contents);
+        if (!AreContentsEquivalent(this.contents, item.Contents))
+        {
+            this.Contents = item.Contents;
+            this.RenderableContents = CreateRenderableContents(item.Contents);
+            this.UpdateAttachments(item.Contents);
+        }
     }
 
     public void SetReasoningVisible(bool visible)
@@ -151,6 +163,32 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
     private static bool IsImageMediaType(string? mediaType)
         => !string.IsNullOrWhiteSpace(mediaType) && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 
+    private static IReadOnlyList<AIContent> CreateRenderableContents(IReadOnlyList<AIContent> contents)
+    {
+        if (contents.Count == 0)
+        {
+            return Array.Empty<AIContent>();
+        }
+
+        var filtered = new List<AIContent>(contents.Count);
+        foreach (var content in contents)
+        {
+            if (content is TextReasoningContent)
+            {
+                continue;
+            }
+
+            if (content is DataContent data && IsImageMediaType(data.MediaType))
+            {
+                continue;
+            }
+
+            filtered.Add(content);
+        }
+
+        return filtered.Count == 0 ? Array.Empty<AIContent>() : filtered;
+    }
+
     private string FormatImageLabel(byte[] data, string? mediaType)
     {
         try
@@ -186,4 +224,86 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
         }
     }
 
+    private static bool AreContentsEquivalent(IReadOnlyList<AIContent> left, IReadOnlyList<AIContent> right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!AreContentItemsEquivalent(left[i], right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool AreContentItemsEquivalent(AIContent left, AIContent right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left.GetType() != right.GetType())
+        {
+            return false;
+        }
+
+        return (left, right) switch
+        {
+            (TextContent l, TextContent r) => string.Equals(l.Text, r.Text, StringComparison.Ordinal),
+            (TextReasoningContent l, TextReasoningContent r) => string.Equals(l.Text, r.Text, StringComparison.Ordinal),
+            (FunctionCallContent l, FunctionCallContent r) =>
+                string.Equals(l.Name, r.Name, StringComparison.Ordinal) &&
+                string.Equals(l.CallId, r.CallId, StringComparison.Ordinal) &&
+                string.Equals(NormalizeObject(l.Arguments), NormalizeObject(r.Arguments), StringComparison.Ordinal),
+            (FunctionResultContent l, FunctionResultContent r) =>
+                string.Equals(l.CallId, r.CallId, StringComparison.Ordinal) &&
+                string.Equals(NormalizeObject(l.Result), NormalizeObject(r.Result), StringComparison.Ordinal),
+            (UriContent l, UriContent r) =>
+                Equals(l.Uri, r.Uri) &&
+                string.Equals(l.MediaType, r.MediaType, StringComparison.Ordinal),
+            (DataContent l, DataContent r) =>
+                string.Equals(l.MediaType, r.MediaType, StringComparison.Ordinal) &&
+                l.Data.Span.SequenceEqual(r.Data.Span),
+            _ => string.Equals(left.ToString(), right.ToString(), StringComparison.Ordinal),
+        };
+    }
+
+    private static string NormalizeObject(object? value)
+    {
+        if (value is null)
+        {
+            return string.Empty;
+        }
+
+        if (value is JsonElement element)
+        {
+            return element.GetRawText();
+        }
+
+        if (value is string s)
+        {
+            return s;
+        }
+
+        try
+        {
+            return JsonSerializer.Serialize(value);
+        }
+        catch (NotSupportedException)
+        {
+            return value.ToString() ?? string.Empty;
+        }
+    }
 }
