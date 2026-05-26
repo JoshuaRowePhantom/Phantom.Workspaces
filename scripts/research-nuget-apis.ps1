@@ -21,6 +21,7 @@ $targetPackages = @(
     "Microsoft.Extensions.AI",
     "Microsoft.Extensions.AI.Abstractions",
     "ModelContextProtocol",
+    "ModelContextProtocol.Core",
     "OllamaSharp",
     "System.CommandLine",
     "YamlDotNet"
@@ -125,11 +126,11 @@ foreach ($packageId in $targetPackages) {
         "- none (package does not ship XML docs in the selected TFM)"
     }
     else {
-        ($xmlFiles | ForEach-Object { "- ``$($_.Name)``" }) -join "`n"
+        ($xmlFiles | ForEach-Object { "- ``$($_.Name)``" }) -join "`r`n"
     }
     $mdPath = Join-Path $outDir "$packageId.md"
 
-    $apiBody = $apiLines -join "`n"
+    $apiBody = $apiLines -join "`r`n"
     $markdown = @"
 # $packageId — Public API Reference
 

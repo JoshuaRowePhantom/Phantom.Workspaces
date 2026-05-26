@@ -8,10 +8,12 @@ public sealed class EntityRepositoryTests
     [Fact]
     public async Task TryGetEntityByName_FindsSeededMainView()
     {
+        var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            ct);
         var repository = broker.EntityRepository;
-        var snapshots = await repository.ExportEntitySnapshotsAsync();
+        var snapshots = await repository.ExportEntitySnapshotsAsync(ct);
 
         var mainView = repository.TryGetEntityByName(
             snapshots,
@@ -23,8 +25,10 @@ public sealed class EntityRepositoryTests
     [Fact]
     public async Task ExportEntitySnapshotsAsync_ReturnsLatestEntityVersion()
     {
+        var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            ct);
         var repository = broker.EntityRepository;
         var entityId = new EntityId("55555555-5555-5555-5555-555555555555");
 
@@ -53,7 +57,7 @@ public sealed class EntityRepositoryTests
             """,
             firstConcurrencyTag);
 
-        var snapshots = await repository.ExportEntitySnapshotsAsync();
+        var snapshots = await repository.ExportEntitySnapshotsAsync(ct);
 
         var snapshot = Assert.Contains(entityId, snapshots);
         Assert.Contains("Version 2", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
@@ -65,6 +69,7 @@ public sealed class EntityRepositoryTests
         string json,
         ConcurrencyTag? concurrencyTag)
     {
+        var ct = TestContext.Current.CancellationToken;
         using var document = JsonDocument.Parse(json);
         var updateResult = await repository.DataAccessLayer.UpdateAsync(
             new UpdateRequest
@@ -86,7 +91,8 @@ public sealed class EntityRepositoryTests
                         Data = document.RootElement.Clone(),
                     },
                 ],
-            });
+            },
+            ct);
 
         var entityResult = Assert.Single(updateResult.EntityResults, entityResult => entityResult.RequestedEntityId == entityId);
         Assert.Empty(entityResult.Errors);

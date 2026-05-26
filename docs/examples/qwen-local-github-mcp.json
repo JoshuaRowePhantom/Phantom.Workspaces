@@ -1,0 +1,58 @@
+{
+  "kind": "prompt",
+  "name": "qwen-local-github-mcp",
+  "displayName": "Qwen 3.6 Local + GitHub MCP",
+  "description": "A chat agent using Qwen 3.6 running locally on Ollama with the GitHub MCP server for repository, issue, PR, and workflow management",
+  "model": {
+    "id": "qwen3.6",
+    "provider": "ollama",
+    "apiType": "Ollama",
+    "connection": {
+      "kind": "Anonymous",
+      "endpoint": "http://localhost:11434"
+    },
+    "options": {
+      "temperature": 0.7,
+      "topP": 0.9,
+      "frequencyPenalty": 0.0,
+      "presencePenalty": 0.0,
+      "maxOutputTokens": 4096,
+      "topK": 40,
+      "additionalProperties": {
+        "thinking": false
+      }
+    }
+  },
+  "instructions": "You are a GitHub-integrated AI assistant powered by Qwen 3.6.\nYou have access to GitHub through the GitHub MCP server, which lets you read and manage repositories, issues, pull requests, discussions, Actions workflow runs, and more.\n\nWhen helping with GitHub tasks:\n- Always confirm before making mutations (creating/updating/closing issues, PRs, etc.)\n- Prefer searching before creating to avoid duplicates\n- When browsing code or files, start with a repository overview before diving into specifics\n- Summarize long lists of results rather than dumping everything verbatim",
+  "tools": [
+    {
+      "name": "github",
+      "kind": "mcp",
+      "description": "GitHub MCP server providing tools for repository management, issues, pull requests, code search, Actions workflow runs, Dependabot alerts, and more",
+      "connection": {
+        "kind": "key",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "serverName": "github",
+      "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",
+      "approvalMode": {
+        "kind": "never"
+      }
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": ["local", "ollama", "github", "mcp"],
+    "prerequisites": [
+      "Ollama installed and running locally",
+      "qwen3.6 model downloaded: ollama pull qwen3.6",
+      "GITHUB_TOKEN environment variable set to your GitHub CLI token: gh auth token"
+    ],
+    "references": {
+      "mcpServer": "https://github.com/github/github-mcp-server",
+      "remoteServerDocs": "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md"
+    }
+  }
+}

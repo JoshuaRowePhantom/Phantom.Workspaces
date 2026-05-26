@@ -25,15 +25,14 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task SubmitToDefaultQueue_QueuesTextAndClearsInput()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue);
         viewModel.InputText = "hello";
         viewModel.IsFormattedMode = true;
 
         viewModel.SubmitToDefaultQueue();
+        await Task.Delay(100);
 
         Assert.Empty(viewModel.InputText);
         Assert.False(viewModel.IsFormattedMode);
@@ -47,19 +46,17 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task SubmitToNewQueue_CreatesQueueWhenManagerIsBound()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "queued";
 
         viewModel.SubmitToNewQueue();
+        await Task.Delay(100);
 
         Assert.Equal(2, chat.InputQueues.Count);
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued", chat.History[0].Text);
-        Assert.Empty(viewModel.Queues[1].Items);
         Assert.Equal(2, viewModel.Queues.Count);
         Assert.Equal("queued", viewModel.Queues[1].SelectedImmediacyOption.Label);
     }
@@ -67,12 +64,10 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task SubmitToNewQueue_ProvidesRemoveCommandForQueuedItems()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
-        var queue = chat.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
         viewModel.AppendToQueue(queue, "remove me");
 
         var item = Assert.Single(viewModel.Queues[1].Items);
@@ -84,12 +79,10 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueComposer_AppendsTextToExistingQueue()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
-        var queue = chat.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
         viewModel.AppendToQueue(queue, "original");
 
         var queueVm = viewModel.Queues[1];
@@ -108,9 +101,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueComposer_SubmitStatusOptionTracksQueueState()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "one";
@@ -127,9 +118,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueComposer_CanAttachImageAndSubmitStructuredContent()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.DefaultComposer.AppendImageAttachment([0x01, 0x02, 0x03], "image/png", 640, 480, "shot.png");
@@ -139,6 +128,7 @@ public sealed class InputQueueViewModelTests
         Assert.Single(viewModel.DefaultComposer.AttachmentPreviews);
 
         viewModel.SubmitToDefaultQueue();
+        await Task.Delay(100);
 
         Assert.False(viewModel.DefaultComposer.HasAttachments);
         Assert.Equal(string.Empty, viewModel.InputText);
@@ -151,9 +141,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueComposer_BackspaceRemovesImageAttachment()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "hello";
@@ -175,9 +163,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task SubmitToNewQueue_WhenQueuesAreHeld_CreatesHeldQueue()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "held queue";
@@ -195,9 +181,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueImmediacy_CanBeChangedInPlace()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "one";
@@ -213,9 +197,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task SingleQueue_HidesNameUntilSecondQueueExists()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
 
@@ -230,13 +212,11 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueItem_CanBeEditedInPlace()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
-        var queue = chat.CreateInputQueue();
-        chat.SetQueueHeld(queue, held: true);
+        var queue = chat.QueueManager.CreateInputQueue();
+        chat.QueueManager.SetQueueHeld(queue, held: true);
         viewModel.AppendToQueue(queue, "original");
 
         var queueItem = Assert.Single(viewModel.Queues[1].Items);
@@ -255,13 +235,11 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task QueueItem_CanRemoveImageAttachment()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
-        var queue = chat.CreateInputQueue();
-        chat.SetQueueHeld(queue, held: true);
+        var queue = chat.QueueManager.CreateInputQueue();
+        chat.QueueManager.SetQueueHeld(queue, held: true);
         var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
         viewModel.AppendToQueue(queue, [new TextContent("hello"), new DataContent(png, "image/png")]);
 
@@ -278,9 +256,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task ToggleHoldAllQueues_WhenAnyNotHeld_HoldsAllQueues()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.SubmitToNewQueue();
@@ -293,9 +269,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task ToggleHoldAllQueues_WhenAllHeld_UnholdsAllQueues()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.SubmitToNewQueue();
@@ -309,9 +283,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task HoldAllQueues_AlwaysHoldsAllQueues()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "one";
@@ -328,9 +300,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task UnholdAllQueues_AlwaysUnholdsAllQueues()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.SubmitToNewQueue();
@@ -344,9 +314,7 @@ public sealed class InputQueueViewModelTests
     [Fact]
     public async Task HoldAndUnholdAllQueues_PreserveQueueViewModels()
     {
-        var created = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
-        await using var chat = created.Chat;
-        using var _ = created.Client;
+        await using var chat = AgentFactory.CreateAgentChat(CreateTestAgentDefinition());
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "one";

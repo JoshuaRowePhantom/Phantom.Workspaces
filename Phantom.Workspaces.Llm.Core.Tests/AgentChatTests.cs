@@ -7,20 +7,34 @@ public sealed class AgentChatTests
 {
     private static AgentChat CreateChat(params ChatResponseUpdate[] updates)
     {
-        var manager = new AgentInputQueueManager(
-            new ChatClientAgent(
-                new TestChatClient(updates),
-                new ChatClientAgentOptions { UseProvidedChatClientAsIs = true }));
-        return new AgentChat(manager);
+        var agent = new ChatClientAgent(
+            new TestChatClient(updates),
+            new ChatClientAgentOptions
+            {
+                UseProvidedChatClientAsIs = true,
+                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+            });
+        var session = new AgentChatSession(
+            agent,
+            agent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
+        var manager = new AgentInputQueueManager();
+        return new AgentChat(session, manager);
     }
 
     private static AgentChat CreateBusyChat(IChatClient client)
     {
-        var manager = new AgentInputQueueManager(
-            new ChatClientAgent(
-                client,
-                new ChatClientAgentOptions { UseProvidedChatClientAsIs = true }));
-        return new AgentChat(manager);
+        var agent = new ChatClientAgent(
+            client,
+            new ChatClientAgentOptions
+            {
+                UseProvidedChatClientAsIs = true,
+                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+            });
+        var session = new AgentChatSession(
+            agent,
+            agent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
+        var manager = new AgentInputQueueManager();
+        return new AgentChat(session, manager);
     }
 
     [Fact]
@@ -30,6 +44,7 @@ public sealed class AgentChatTests
 
         var image = new DataContent(new byte[] { 0x01, 0x02 }, "image/png");
         chat.EnqueueUserContents([new TextContent("hello"), image]);
+        await Task.Delay(100);
 
         Assert.Equal(2, chat.History.Count);
         var userHistory = chat.History[0];
@@ -50,6 +65,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat();
 
         chat.EnqueueUserMessage("hello");
+        await Task.Delay(100);
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
@@ -86,7 +102,7 @@ public sealed class AgentChatTests
     {
         await using var chat = CreateChat();
 
-        var created = chat.CreateInputQueue();
+        var created = chat.QueueManager.CreateInputQueue();
 
         Assert.Contains(created, chat.InputQueues);
         Assert.False(created.IsDefault);
@@ -94,11 +110,21 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task Constructor_DefaultQueueStartsQueued_AndImmediateQueueStartsImmediate()
+    {
+        await using var chat = CreateChat();
+
+        Assert.Equal(AgentInputQueueImmediacy.Queue, chat.DefaultInputQueue.Immediacy);
+        Assert.True(chat.ImmediateInputQueue.IsImmediate);
+        Assert.Equal(AgentInputQueueImmediacy.Immediate, chat.ImmediateInputQueue.Immediacy);
+    }
+
+    [Fact]
     public async Task RemoveInputQueue_DefaultQueueCannotBeRemoved()
     {
         await using var chat = CreateChat();
 
-        var removed = chat.RemoveInputQueue(chat.DefaultInputQueue);
+        var removed = chat.QueueManager.RemoveInputQueue(chat.DefaultInputQueue);
 
         Assert.False(removed);
         Assert.Single(chat.InputQueues);
@@ -108,9 +134,10 @@ public sealed class AgentChatTests
     public async Task EnqueueUserMessage_ToQueuedQueue_PublishesImmediatelyWhenIdle()
     {
         await using var chat = CreateChat();
-        var queue = chat.CreateInputQueue();
+        var queue = chat.QueueManager.CreateInputQueue();
 
         chat.EnqueueUserMessage("queued later", queue);
+        await Task.Delay(100);
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued later", chat.History[0].Text);
@@ -131,7 +158,7 @@ public sealed class AgentChatTests
                 FinishReason = ChatFinishReason.Stop,
             }));
 
-        var queue = chat.CreateInputQueue();
+        var queue = chat.QueueManager.CreateInputQueue();
         chat.EnqueueUserMessage("start");
 
         await started.Task;
@@ -153,11 +180,11 @@ public sealed class AgentChatTests
     public async Task UpdateQueueItem_PreservesImageAttachments()
     {
         await using var chat = CreateChat();
-        var queue = chat.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
         var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
         chat.EnqueueUserContents([new TextContent("hello"), new DataContent(png, "image/png")], chat.InputQueues[1]);
 
-        var updated = chat.UpdateQueueItem(queue, 0, "edited");
+        var updated = chat.QueueManager.UpdateQueueItem(queue, 0, "edited");
 
         Assert.True(updated);
         Assert.Equal(2, queue.Items[0].Contents.Count);
@@ -172,7 +199,12 @@ public sealed class AgentChatTests
         var changedCount = 0;
         queue.Changed += (_, _) => changedCount++;
 
-        queue.Enqueue([new ChatMessage(ChatRole.User, "hello")]);
+        queue.Enqueue([
+            new AgentInputItem
+            {
+                Messages = [new ChatMessage(ChatRole.User, "hello")],
+            },
+        ]);
         var items = queue.Items;
         queue.TryRemoveAt(ref items, 0);
 

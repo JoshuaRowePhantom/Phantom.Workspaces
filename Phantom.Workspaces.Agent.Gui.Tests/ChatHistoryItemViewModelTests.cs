@@ -15,7 +15,7 @@ public sealed class ChatHistoryItemViewModelTests
         var source = new AgentChatHistoryItem
         {
             Role = ChatRole.User,
-            Text = "hello",
+            Contents = [new TextContent("hello")],
         };
 
         var viewModel = new ChatHistoryItemViewModel(source);
@@ -31,8 +31,7 @@ public sealed class ChatHistoryItemViewModelTests
         var source = new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "response",
-            ReasoningText = "hidden reasoning",
+            Contents = [new TextContent("response"), new TextReasoningContent("hidden reasoning")],
             IsInProgress = true,
         };
 
@@ -51,15 +50,14 @@ public sealed class ChatHistoryItemViewModelTests
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "streaming",
+            Contents = [new TextContent("streaming")],
             IsInProgress = true,
         });
 
         viewModel.UpdateFrom(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "complete",
-            ReasoningText = "because",
+            Contents = [new TextContent("complete"), new TextReasoningContent("because")],
             IsInProgress = false,
         });
 
@@ -74,7 +72,7 @@ public sealed class ChatHistoryItemViewModelTests
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "streaming",
+            Contents = [new TextContent("streaming")],
             IsInProgress = true,
         });
 
@@ -84,8 +82,7 @@ public sealed class ChatHistoryItemViewModelTests
         viewModel.UpdateFrom(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "complete",
-            ReasoningText = "because",
+            Contents = [new TextContent("complete"), new TextReasoningContent("because")],
             IsInProgress = false,
         });
 
@@ -102,8 +99,7 @@ public sealed class ChatHistoryItemViewModelTests
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "answer",
-            ReasoningText = "step 1",
+            Contents = [new TextContent("answer"), new TextReasoningContent("step 1")],
             IsInProgress = true,
         });
 
@@ -118,8 +114,7 @@ public sealed class ChatHistoryItemViewModelTests
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Text = "answer",
-            ReasoningText = "step 1",
+            Contents = [new TextContent("answer"), new TextReasoningContent("step 1")],
             IsInProgress = false,
         });
 
@@ -135,7 +130,6 @@ public sealed class ChatHistoryItemViewModelTests
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
         {
             Role = ChatRole.User,
-            Text = "[image/png]",
             Contents = [new DataContent(Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII="), "image/png")],
         });
 

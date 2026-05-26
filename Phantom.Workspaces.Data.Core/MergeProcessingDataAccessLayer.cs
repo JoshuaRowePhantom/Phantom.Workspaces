@@ -426,7 +426,9 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
             return false;
         }
 
-        patchedData = this.ToJsonElement(patchResult.Result);
+        patchedData = patchResult.Result is null
+            ? default
+            : this.ToJsonElement(patchResult.Result);
         error = null;
         return true;
     }

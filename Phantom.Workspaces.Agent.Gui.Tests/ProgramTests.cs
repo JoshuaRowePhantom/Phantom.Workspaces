@@ -26,4 +26,18 @@ public sealed class ProgramTests
         Assert.False(success);
         Assert.Null(parseResult);
     }
+
+    [Fact]
+    public void TryParseArguments_WithMissingSchemaFile_ReturnsFalseAndSetsParseError()
+    {
+        var success = Program.TryParseArguments(
+            ["--agent-schema", "nonexistent-file.json"],
+            out var parseResult);
+
+        Assert.False(success);
+        Assert.Null(parseResult);
+        Assert.NotNull(Program.ParseError);
+        Assert.NotEmpty(Program.ParseError!);
+    }
 }
+

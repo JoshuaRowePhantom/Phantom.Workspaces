@@ -57,7 +57,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            TestContext.Current.CancellationToken);
         var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
         {
             Id = "entity-browser-tab",
@@ -70,15 +71,15 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 && item.HasChildren));
 
         var rootItem = Assert.Single(
-            viewModel.EntityList.Items.Where(item =>
-                string.Equals(item.ItemKey, "[]", StringComparison.Ordinal)));
+            viewModel.EntityList.Items,
+            item => string.Equals(item.ItemKey, "[]", StringComparison.Ordinal));
         Assert.True(rootItem.IsExpanded);
         Assert.Equal(0, rootItem.Level);
         Assert.Null(rootItem.ParentItemKey);
 
         var parentItem = Assert.Single(
-            viewModel.EntityList.Items.Where(item =>
-                string.Equals(item.ItemKey, "[\"entity-types\"]", StringComparison.Ordinal)));
+            viewModel.EntityList.Items,
+            item => string.Equals(item.ItemKey, "[\"entity-types\"]", StringComparison.Ordinal));
         Assert.Equal("[\"entity-types\"]", parentItem.ItemKey);
         Assert.Equal("[]", parentItem.ParentItemKey);
         Assert.Equal(1, parentItem.Level);
@@ -90,8 +91,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal)));
 
         var childItem = Assert.Single(
-            viewModel.EntityList.Items.Where(item =>
-                string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal)));
+            viewModel.EntityList.Items,
+            item => string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal));
         Assert.Equal(2, childItem.Level);
         Assert.Equal(parentItem.ItemKey, childItem.ParentItemKey);
 
@@ -103,7 +104,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     private static Task<EntityBroker> CreateBrokerAsync()
     {
         return EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            TestContext.Current.CancellationToken);
     }
 
     private static async Task SeedSnapshotAsync(
@@ -131,7 +133,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                         Data = snapshot.Data?.Clone(),
                     },
                 ],
-            });
+            },
+            TestContext.Current.CancellationToken);
     }
 
     private static EntitySnapshot CreateSnapshot(
@@ -153,6 +156,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     private static async Task WaitForConditionAsync(
         Func<bool> condition)
     {
+        var ct = TestContext.Current.CancellationToken;
         var timeout = TimeSpan.FromSeconds(5);
         var pollInterval = TimeSpan.FromMilliseconds(25);
         var start = DateTime.UtcNow;
@@ -163,7 +167,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 throw new TimeoutException("Timed out waiting for expected browser state.");
             }
 
-            await Task.Delay(pollInterval);
+            await Task.Delay(pollInterval, ct);
         }
     }
 }

@@ -1,5 +1,6 @@
 using Phantom.Workspaces.Data;
 
+#pragma warning disable CS0618
 namespace Phantom.Workspaces.Data.Tests;
 
 public sealed class BaseUpdateProcessingDataAccessLayerTests
@@ -25,6 +26,7 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
 
         Assert.Same(request, underlyingDataAccessLayer.GetRequest);
     }
+    #pragma warning restore CS0618
 
     [Fact]
     public async Task ExportAsync_PassesRequestThroughUnchanged()
@@ -36,7 +38,9 @@ public sealed class BaseUpdateProcessingDataAccessLayerTests
         var underlyingDataAccessLayer = new RecordingDataAccessLayer();
         var dataAccessLayer = new TestBaseUpdateProcessingDataAccessLayer(underlyingDataAccessLayer);
 
+#pragma warning disable CS0618
         var result = await dataAccessLayer.ExportAsync(request);
+#pragma warning restore CS0618
 
         Assert.Same(request, underlyingDataAccessLayer.ExportRequest);
         Assert.Same(underlyingDataAccessLayer.ExportResultToReturn, result);

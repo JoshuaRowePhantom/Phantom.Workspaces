@@ -8,17 +8,20 @@ namespace Phantom.Workspaces.Agent.Gui;
 class Program
 {
     public static AgentDefinitionParseResult? ParseResult { get; private set; }
+    public static string? ParseError { get; private set; }
 
     [STAThread]
     public static void Main(string[] args)
     {
         if (!TryParseArguments(args, out var parsed))
         {
-            Environment.ExitCode = 1;
-            return;
+            // ParseError is set — start Avalonia to show the error window.
+        }
+        else
+        {
+            ParseResult = parsed;
         }
 
-        ParseResult = parsed;
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
@@ -30,12 +33,22 @@ class Program
         var parsedCommand = rootCommand.Parse(args);
         if (parsedCommand.Errors.Count > 0)
         {
+            ParseError = string.Join(Environment.NewLine, parsedCommand.Errors.Select(e => e.Message));
             parseResult = null;
             return false;
         }
 
-        parseResult = definitionParser.Parse(parsedCommand);
-        return true;
+        try
+        {
+            parseResult = definitionParser.Parse(parsedCommand);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ParseError = ex.Message;
+            parseResult = null;
+            return false;
+        }
     }
 
     public static AppBuilder BuildAvaloniaApp()

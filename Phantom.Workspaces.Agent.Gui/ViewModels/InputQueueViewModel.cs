@@ -137,7 +137,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        var queue = this.agentChat.CreateInputQueue(
+        var queue = this.agentChat.QueueManager.CreateInputQueue(
             immediacy: this.InputQueues.All(queue => queue.IsHeld)
                 ? AgentInputQueueImmediacy.Held
                 : AgentInputQueueImmediacy.Queue);
@@ -169,7 +169,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void SetQueueImmediacy(AgentChatQueue queue, AgentInputQueueImmediacy immediacy)
     {
-        this.agentChat.SetQueueImmediacy(queue, immediacy);
+        this.agentChat.QueueManager.SetQueueImmediacy(queue, immediacy);
         this.RefreshQueue(queue);
     }
 
@@ -184,7 +184,17 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void RemoveQueueItem(AgentChatQueue queue, int index)
     {
-        if (!this.agentChat.RemoveQueueItem(queue, index))
+        if (!this.agentChat.QueueManager.RemoveQueueItem(queue, index))
+        {
+            return;
+        }
+
+        this.RefreshQueue(queue);
+    }
+
+    public void RemoveQueueItem(AgentChatQueue queue, AgentInputItem item)
+    {
+        if (!this.agentChat.QueueManager.RemoveQueueItem(queue, item))
         {
             return;
         }
@@ -194,7 +204,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public bool RemoveInputQueue(AgentChatQueue queue)
     {
-        if (!this.agentChat.RemoveInputQueue(queue))
+        if (!this.agentChat.QueueManager.RemoveInputQueue(queue))
         {
             return false;
         }
@@ -209,8 +219,11 @@ public sealed class InputQueueViewModel : ViewModelBase
     }
 
     public void UpdateQueueItem(AgentChatQueue queue, int index, string text)
+        => this.UpdateQueueItem(queue, queue.Items[index], text);
+
+    public void UpdateQueueItem(AgentChatQueue queue, AgentInputItem item, string text)
     {
-        if (!this.agentChat.UpdateQueueItem(queue, index, text))
+        if (!this.agentChat.QueueManager.UpdateQueueItem(queue, item, text))
         {
             return;
         }
@@ -219,8 +232,11 @@ public sealed class InputQueueViewModel : ViewModelBase
     }
 
     public void RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
+        => this.RemoveQueueItemContent(queue, queue.Items[index], contentIndex);
+
+    public void RemoveQueueItemContent(AgentChatQueue queue, AgentInputItem item, int contentIndex)
     {
-        if (!this.agentChat.RemoveQueueItemContent(queue, index, contentIndex))
+        if (!this.agentChat.QueueManager.RemoveQueueItemContent(queue, item, contentIndex))
         {
             return;
         }
@@ -317,7 +333,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         foreach (var queue in this.InputQueues)
         {
-            this.agentChat.SetQueueHeld(queue, held);
+            this.agentChat.QueueManager.SetQueueHeld(queue, held);
         }
 
         foreach (var queue in this.InputQueues)

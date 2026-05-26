@@ -5,6 +5,12 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentInputQueueTests
 {
+    private static AgentInputItem Item(string text)
+        => new()
+        {
+            Messages = [new ChatMessage(ChatRole.User, text)],
+        };
+
     [Fact]
     public void Constructor_WithDefaultParameters_InitializesQueue()
     {
@@ -37,13 +43,16 @@ public sealed class AgentInputQueueTests
     public void Enqueue_WithMessages_AppendsToQueue()
     {
         var queue = new AgentInputQueue();
-        var messages = new[]
+        var items = new[]
         {
-            new ChatMessage(ChatRole.User, "hello"),
-            new ChatMessage(ChatRole.Assistant, "hi"),
+            Item("hello"),
+            new AgentInputItem
+            {
+                Messages = [new ChatMessage(ChatRole.Assistant, "hi")],
+            },
         };
 
-        var result = queue.Enqueue(messages);
+        var result = queue.Enqueue(items);
 
         Assert.Equal(2, queue.Items.Count);
         Assert.Equal(2, result.Count);
@@ -55,13 +64,13 @@ public sealed class AgentInputQueueTests
     public void Enqueue_WithEmptyList_ReturnsCurrentItems()
     {
         var queue = new AgentInputQueue();
-        var messages = new[]
+        var items = new[]
         {
-            new ChatMessage(ChatRole.User, "hello"),
+            Item("hello"),
         };
-        queue.Enqueue(messages);
+        queue.Enqueue(items);
 
-        var result = queue.Enqueue(Array.Empty<ChatMessage>());
+        var result = queue.Enqueue(Array.Empty<AgentInputItem>());
 
         Assert.Single(queue.Items);
         Assert.Single(result);
@@ -72,9 +81,9 @@ public sealed class AgentInputQueueTests
     {
         var queue = new AgentInputQueue();
 
-        queue.Enqueue([new ChatMessage(ChatRole.User, "first")]);
-        queue.Enqueue([new ChatMessage(ChatRole.User, "second")]);
-        queue.Enqueue([new ChatMessage(ChatRole.User, "third")]);
+        queue.Enqueue([Item("first")]);
+        queue.Enqueue([Item("second")]);
+        queue.Enqueue([Item("third")]);
 
         Assert.Equal(3, queue.Items.Count);
         Assert.Equal("first", queue.Items[0].Text);
@@ -87,7 +96,7 @@ public sealed class AgentInputQueueTests
     {
         var queue = new AgentInputQueue();
         var oldItems = queue.Items;
-        var newItems = oldItems.Add(new ChatMessage(ChatRole.User, "test"));
+        var newItems = oldItems.Add(Item("test"));
 
         var expectedItems = oldItems;
         var result = queue.Update(ref expectedItems, newItems);
@@ -100,10 +109,10 @@ public sealed class AgentInputQueueTests
     public void Update_WithoutMatchingExpectedItems_DoesNotUpdate()
     {
         var queue = new AgentInputQueue();
-        queue.Enqueue([new ChatMessage(ChatRole.User, "existing")]);
+        queue.Enqueue([Item("existing")]);
 
-        var wrongExpectedItems = ImmutableList<ChatMessage>.Empty;
-        var newItems = wrongExpectedItems.Add(new ChatMessage(ChatRole.User, "test"));
+        var wrongExpectedItems = ImmutableList<AgentInputItem>.Empty;
+        var newItems = wrongExpectedItems.Add(Item("test"));
 
         var expectedItems = wrongExpectedItems;
         var result = queue.Update(ref expectedItems, newItems);
@@ -138,8 +147,8 @@ public sealed class AgentInputQueueTests
     {
         var queue = new AgentInputQueue();
         queue.Enqueue([
-            new ChatMessage(ChatRole.User, "first"),
-            new ChatMessage(ChatRole.User, "second"),
+            Item("first"),
+            Item("second"),
         ]);
 
         var expectedItems = queue.Items;
@@ -154,8 +163,8 @@ public sealed class AgentInputQueueTests
     {
         var queue = new AgentInputQueue();
         queue.Enqueue([
-            new ChatMessage(ChatRole.User, "first"),
-            new ChatMessage(ChatRole.User, "second"),
+            Item("first"),
+            Item("second"),
         ]);
 
         var expectedItems = queue.Items;
@@ -179,9 +188,9 @@ public sealed class AgentInputQueueTests
     public void Update_WithNullExistingItems_ThrowsArgumentNullException()
     {
         var queue = new AgentInputQueue();
-        var newItems = ImmutableList<ChatMessage>.Empty;
+        var newItems = ImmutableList<AgentInputItem>.Empty;
 
-        var nullItems = (ImmutableList<ChatMessage>)null!;
+        var nullItems = (ImmutableList<AgentInputItem>)null!;
         var ex = Assert.Throws<ArgumentNullException>(() => queue.Update(ref nullItems, newItems));
         Assert.Equal("existingItems", ex.ParamName);
     }
@@ -217,7 +226,7 @@ public sealed class AgentInputQueueTests
             var index = i;
             tasks[i] = Task.Run(() =>
             {
-                queue.Enqueue([new ChatMessage(ChatRole.User, $"message-{index}")]);
+                queue.Enqueue([Item($"message-{index}")]);
             });
         }
 

@@ -7,7 +7,12 @@ namespace Phantom.Workspaces.Agent.Gui;
 
 public partial class ImagePreviewWindow : Window
 {
-    private readonly Bitmap bitmap;
+    private readonly Bitmap? bitmap;
+
+    public ImagePreviewWindow()
+    {
+        this.InitializeComponent();
+    }
 
     public ImagePreviewWindow(Bitmap bitmap, string title)
     {
@@ -20,7 +25,7 @@ public partial class ImagePreviewWindow : Window
     private async void OnCopyClicked(object? sender, RoutedEventArgs e)
     {
         var clipboard = this.Clipboard;
-        if (clipboard is null)
+        if (clipboard is null || this.bitmap is null)
         {
             return;
         }

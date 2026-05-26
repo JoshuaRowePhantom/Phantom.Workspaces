@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Linq;
+using System.Text.Json;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
@@ -9,6 +9,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
 {
+    private IReadOnlyList<AIContent> contents;
     private string text;
     private string reasoningText;
     private bool isInProgress;
@@ -18,6 +19,7 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
     {
         this.IsUser = item.Role == ChatRole.User;
         this.RoleLabel = this.IsUser ? "user" : "assistant";
+        this.contents = item.Contents;
         this.text = item.Text;
         this.reasoningText = item.ReasoningText;
         this.isInProgress = item.IsInProgress;
@@ -31,8 +33,16 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
     public string Text
     {
         get => this.text;
-        private set => this.SetProperty(ref this.text, value);
+        private set
+        {
+            if (this.SetProperty(ref this.text, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasText));
+            }
+        }
     }
+
+    public bool HasText => !string.IsNullOrWhiteSpace(this.text);
 
     public bool IsInProgress
     {
@@ -68,6 +78,12 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
 
     public bool HasAttachments => this.Attachments.Count > 0;
 
+    public IReadOnlyList<AIContent> Contents
+    {
+        get => this.contents;
+        private set => this.SetProperty(ref this.contents, value);
+    }
+
     public string ReasoningDisplayText
         => this.IsUser
             ? string.Empty
@@ -82,6 +98,7 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
         this.Text = item.Text;
         this.ReasoningText = item.ReasoningText;
         this.IsInProgress = item.IsInProgress;
+        this.Contents = item.Contents;
         this.UpdateAttachments(item.Contents);
     }
 
@@ -166,4 +183,5 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
             return null;
         }
     }
+
 }

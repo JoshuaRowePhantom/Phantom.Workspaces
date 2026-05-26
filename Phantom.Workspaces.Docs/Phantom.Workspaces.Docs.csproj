@@ -10,5 +10,6 @@
     <None Include="..\README.md" Link="README.md" />
     <None Include="..\docs\**\*" Link="docs\%(RecursiveDir)%(Filename)%(Extension)" />
     <None Include="..\.github\**\*.md" Link=".github\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="..\scripts\**\*" Link="scripts\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

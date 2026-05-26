@@ -6,6 +6,7 @@ using Phantom.Workspaces.Data.Offline;
 
 namespace Phantom.Workspaces.Data.Tests;
 
+#pragma warning disable CS0618
 public sealed class SchemaPopulatorTests
 {
     [Fact]
@@ -462,4 +463,5 @@ public sealed class SchemaPopulatorTests
             return base.UpdateAsync(request, cancellationToken);
         }
     }
+    #pragma warning restore CS0618
 }

@@ -191,7 +191,7 @@ public class AgentFactoryTests
     }
 
     [Fact]
-    public void CreateAgent_EchoProvider_ReturnsChatClientAgentAndEchoClient()
+    public async Task CreateAgentChat_EchoProvider_ReturnsRunningChat()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -207,16 +207,13 @@ public class AgentFactoryTests
             }
             """);
 
-        var created = AgentFactory.CreateAgent(agent);
-
-        Assert.NotNull(created.Agent);
-        Assert.IsType<ChatClientAgent>(created.Agent);
-        Assert.IsType<EchoChatClient>(created.Client);
-        Assert.Equal("Echo Chat Client", created.DisplayName);
+        await using var chat = AgentFactory.CreateAgentChat(agent);
+        Assert.NotNull(chat);
+        Assert.Equal("Echo Chat Client", chat.DisplayName);
     }
 
     [Fact]
-    public void CreateAgent_LogChatWithoutLoggerFactory_Throws()
+    public void CreateAgentChat_LogChatWithoutLoggerFactory_Throws()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -232,12 +229,12 @@ public class AgentFactoryTests
             }
             """);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateAgent(agent, new AgentServices { LogChat = true }));
+        var ex = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateAgentChat(agent, new AgentServices { LogChat = true }));
         Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CreateAgent_LogHttpRequestsWithoutLoggerFactory_Throws()
+    public void CreateAgentChat_LogHttpRequestsWithoutLoggerFactory_Throws()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -257,12 +254,12 @@ public class AgentFactoryTests
             }
             """);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateAgent(agent, new AgentServices { LogHttpRequests = true }));
+        var ex = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateAgentChat(agent, new AgentServices { LogHttpRequests = true }));
         Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CreateAgent_LogChatWithLoggerFactory_ReturnsAgent()
+    public async Task CreateAgentChat_LogChatWithLoggerFactory_ReturnsChat()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -284,9 +281,9 @@ public class AgentFactoryTests
             LoggerFactory = NullLoggerFactory.Instance,
         };
 
-        var created = AgentFactory.CreateAgent(agent, services);
-        Assert.NotNull(created.Agent);
-        Assert.NotNull(created.Client);
+        await using var chat = AgentFactory.CreateAgentChat(agent, services);
+        Assert.NotNull(chat);
+        Assert.Equal("Echo Chat Client", chat.DisplayName);
     }
 
     [Fact]
@@ -319,5 +316,51 @@ public class AgentFactoryTests
         var (client, displayName) = AgentFactory.CreateChatClient(agent, services);
         Assert.NotNull(client);
         Assert.Equal("Ollama (qwen3.6 at http://localhost:11434)", displayName);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_EchoProvider_ReturnsRunningChat()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(agent);
+
+        Assert.NotNull(chat);
+        Assert.Equal("Echo Chat Client", chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_LogChatWithoutLoggerFactory_Throws()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => AgentFactory.CreateAgentChatAsync(agent, new AgentServices { LogChat = true }));
+
+        Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
 }

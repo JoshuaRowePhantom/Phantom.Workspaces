@@ -2,6 +2,7 @@ using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Client;
 using OllamaSharp;
 using Phantom.Workspaces.Llm.Echo;
 
@@ -47,6 +48,7 @@ public static class AgentFactory
 
         if (!string.IsNullOrEmpty(promptAgent.AdditionalInstructions))
         {
+            chatOptions.AdditionalProperties ??= [];
             chatOptions.AdditionalProperties["additionalInstructions"] = promptAgent.AdditionalInstructions;
         }
     }
@@ -146,23 +148,24 @@ public static class AgentFactory
     }
 
     /// <summary>
-    /// Creates a <see cref="ChatClientAgent"/> and underlying client from an agent definition.
+    /// Creates a synchronously-initialized <see cref="AgentChat"/> session from an agent definition.
+    /// This returns immediately without waiting for MCP tool setup. Use <see cref="CreateAgentChatAsync"/>
+    /// to include MCP tool initialization.
     /// </summary>
     /// <param name="agent">Agent definition to materialize.</param>
-    /// <returns>Tuple of created agent, underlying chat client, and display name.</returns>
-    public static (ChatClientAgent Agent, IChatClient Client, string DisplayName) CreateAgent(
+    /// <param name="services">Optional service integrations for runtime behavior.</param>
+    /// <returns>The running <see cref="AgentChat"/>.</returns>
+    public static AgentChat CreateAgentChat(
         AgentDefinition agent,
         AgentServices? services = null)
     {
-        if ((services?.LogChat == true || services?.LogHttpRequests == true) && services.LoggerFactory is null)
-        {
-            throw new InvalidOperationException(
-                "AgentServices.LoggerFactory is required when AgentServices.LogChat or AgentServices.LogHttpRequests is enabled.");
-        }
+        ValidateServices(services);
 
         var chatOptions = new ChatClientAgentOptions
         {
             ChatOptions = new ChatOptions(),
+            ChatHistoryProvider = new AgentFrameworkChatHistoryProvider(),
+            //RequirePerServiceCallChatHistoryPersistence = true,
         };
         ConfigureChatOptions(agent, chatOptions.ChatOptions);
 
@@ -173,26 +176,105 @@ public static class AgentFactory
             client = client.AsBuilder().UseLogging(services.LoggerFactory).Build();
         }
 
-        var createdAgent = new ChatClientAgent(client, chatOptions);
-        return (createdAgent, client, clientInfo.displayName);
+        var chatClientAgent = new ChatClientAgent(client, chatOptions);
+        var session = new AgentChatSession(
+            chatClientAgent,
+            chatClientAgent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
+        var queueManager = new AgentInputQueueManager();
+        var chat = new AgentChat(session, queueManager, clientInfo.displayName);
+        InitializeMcpToolsAsync(agent, client, chat, chatOptions, services, CancellationToken.None);
+
+        return chat;
     }
 
     /// <summary>
     /// Creates a fully wired <see cref="AgentChat"/> session from an agent definition.
-    /// The returned <see cref="AgentChat"/> already owns its <see cref="AgentInputQueueManager"/>
-    /// and has started its processing loop.
+    /// This async overload resolves MCP tool transports and registers discovered tools.
     /// </summary>
     /// <param name="agent">Agent definition to materialize.</param>
     /// <param name="services">Optional service integrations for runtime behavior.</param>
-    /// <returns>Tuple of the running <see cref="AgentChat"/>, the underlying client, and a display name.</returns>
-    public static (AgentChat Chat, IChatClient Client, string DisplayName) CreateAgentChat(
+    /// <param name="cancellationToken">Cancellation token for async MCP initialization.</param>
+    /// <returns>The running <see cref="AgentChat"/>.</returns>
+    public static Task<AgentChat> CreateAgentChatAsync(
         AgentDefinition agent,
-        AgentServices? services = null)
+        AgentServices? services = null,
+        CancellationToken cancellationToken = default)
     {
-        var (chatClientAgent, client, displayName) = CreateAgent(agent, services);
-        var queueManager = new AgentInputQueueManager(chatClientAgent);
-        var chat = new AgentChat(queueManager);
-        return (chat, client, displayName);
+        // Chat creation is synchronous; MCP tool setup continues in the background.
+        var chat = CreateAgentChat(agent, services);
+        return Task.FromResult(chat);
+    }
+
+    /// <summary>
+    /// Initializes MCP tools asynchronously on an existing <see cref="AgentChat"/> instance.
+    /// This is called after the chat has been created synchronously to avoid blocking the UI.
+    /// </summary>
+    private static void InitializeMcpToolsAsync(
+        AgentDefinition agent,
+        IChatClient client,
+        AgentChat chat,
+        ChatClientAgentOptions chatOptions,
+        AgentServices? services = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(chatOptions);
+        ArgumentNullException.ThrowIfNull(chatOptions.ChatOptions);
+        
+        var agentTools = ExtractTools(agent);
+        var hasMcpTools = agentTools?.OfType<McpTool>().Any() == true;
+        if (!hasMcpTools)
+        {
+            return;
+        }
+
+        chat.QueueManager.SetQueueHeld(chat.DefaultInputQueue, held: true);
+        var startupRunningItem = chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = new AIContent[] { new TextContent("Initializing tools...") },
+        });
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    var runtimeTools = await CreateRuntimeToolsAsync(
+                        agentTools,
+                        services,
+                        text => chat.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
+                        {
+                            Role = AgentChatHistoryItem.DiagnosticChatRole,
+                            Contents = new AIContent[] { new TextContent(text) },
+                        }]),
+                        resource => chat.RegisterOwnedResource(resource),
+                        cancellationToken);
+
+                    chatOptions.ChatOptions.Tools = runtimeTools;
+                    var rebuiltAgent = new ChatClientAgent(client, chatOptions);
+                    var session = await rebuiltAgent.CreateSessionAsync(cancellationToken);
+                    chat.ResetSession(new AgentChatSession(rebuiltAgent, session), interruptCurrentResponse: false);
+                    chat.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
+                    {
+                        Role = AgentChatHistoryItem.DiagnosticChatRole,
+                        Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(runtimeTools)) },
+                    }]);
+                    chat.CompleteRunningItem(startupRunningItem, true);
+                }
+                catch (Exception ex)
+                {
+                    chat.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
+                    {
+                        Role = AgentChatHistoryItem.DiagnosticChatRole,
+                        Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
+                    }]);
+                    chat.CompleteRunningItem(startupRunningItem, true);
+                }
+                finally
+                {
+                    chat.QueueManager.SetQueueHeld(chat.DefaultInputQueue, held: false);
+                }
+            },
+            cancellationToken);
     }
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
@@ -273,5 +355,162 @@ public static class AgentFactory
             throw new InvalidOperationException(
                 $"Failed to create Ollama client for model '{modelId}' at '{endpoint}': {ex.Message}", ex);
         }
+    }
+
+    private static void ValidateServices(AgentServices? services)
+    {
+        if ((services?.LogChat == true || services?.LogHttpRequests == true) && services.LoggerFactory is null)
+        {
+            throw new InvalidOperationException(
+                "AgentServices.LoggerFactory is required when AgentServices.LogChat or AgentServices.LogHttpRequests is enabled.");
+        }
+    }
+
+    private static async Task<List<AITool>> CreateRuntimeToolsAsync(
+        IList<Tool>? agentTools,
+        AgentServices? services,
+        Action<string>? progressCallback,
+        Action<IAsyncDisposable>? resourceCallback,
+        CancellationToken cancellationToken)
+    {
+        var resolvedTools = new List<AITool>();
+        if (agentTools is null || agentTools.Count == 0)
+        {
+            return resolvedTools;
+        }
+
+        foreach (var tool in agentTools.OfType<McpTool>())
+        {
+            var toolServerName = string.IsNullOrWhiteSpace(tool.ServerName) ? tool.Name : tool.ServerName;
+            progressCallback?.Invoke($"Opening MCP server '{toolServerName}'...");
+
+            var transport = CreateMcpTransport(tool, services);
+            var client = await McpClient.CreateAsync(
+                transport,
+                null,
+                services?.LoggerFactory,
+                cancellationToken);
+            resourceCallback?.Invoke(client);
+
+            var tools = await client.ListToolsAsync(options: null, cancellationToken);
+            var allowed = tool.AllowedTools;
+            if (allowed is { Count: > 0 })
+            {
+                var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase);
+                tools = [.. tools.Where(mcpTool => allowedSet.Contains(mcpTool.Name))];
+            }
+
+            resolvedTools.AddRange(tools);
+            progressCallback?.Invoke($"Opened MCP server '{toolServerName}' ({tools.Count} tools).");
+        }
+
+        return resolvedTools;
+    }
+
+    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
+    {
+        if (runtimeTools.Count == 0)
+        {
+            return "Agent ready. Loaded tools: (none).";
+        }
+
+        var toolNames = runtimeTools
+            .Select(tool => tool.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (toolNames.Length == 0)
+        {
+            return "Agent ready. Loaded tools: (unnamed tools).";
+        }
+
+        return $"Agent ready. Loaded tools:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", toolNames)}";
+    }
+
+    private static IClientTransport CreateMcpTransport(
+        McpTool tool,
+        AgentServices? services)
+    {
+        return tool.Connection switch
+        {
+            AnonymousConnection anonymous => CreateHttpTransport(
+                anonymous.Endpoint,
+                apiKey: null,
+                tool.ServerName,
+                services?.LoggerFactory),
+            ApiKeyConnection apiKey => CreateHttpTransport(
+                apiKey.Endpoint,
+                ResolveApiKey(apiKey.ApiKey, tool.ServerName),
+                tool.ServerName,
+                services?.LoggerFactory),
+            null => throw new InvalidOperationException($"MCP tool '{tool.Name}' must define a connection."),
+            _ => throw new InvalidOperationException(
+                $"MCP tool '{tool.Name}' has unsupported connection type '{tool.Connection.GetType().Name}'."),
+        };
+    }
+
+    private static IClientTransport CreateHttpTransport(
+        string? endpoint,
+        string? apiKey,
+        string? serverName,
+        ILoggerFactory? loggerFactory)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            throw new InvalidOperationException("MCP tool endpoint is required.");
+        }
+
+        var transportOptions = new HttpClientTransportOptions
+        {
+            Endpoint = new Uri(endpoint, UriKind.Absolute),
+        };
+
+        if (!string.IsNullOrWhiteSpace(serverName))
+        {
+            transportOptions.Name = serverName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            transportOptions.AdditionalHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Authorization"] = $"Bearer {apiKey}",
+            };
+        }
+
+        return new HttpClientTransport(transportOptions, loggerFactory);
+    }
+
+    private static string ResolveApiKey(
+        string? apiKeyValue,
+        string? serverName)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyValue))
+        {
+            throw new InvalidOperationException($"MCP tool '{serverName ?? "unknown"}' API key is required.");
+        }
+
+        var trimmed = apiKeyValue.Trim();
+        if (trimmed.StartsWith("${", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal))
+        {
+            var envVarName = trimmed[2..^1];
+            if (string.IsNullOrWhiteSpace(envVarName))
+            {
+                throw new InvalidOperationException("MCP API key environment variable name cannot be empty.");
+            }
+
+            var envValue = Environment.GetEnvironmentVariable(envVarName);
+            if (string.IsNullOrWhiteSpace(envValue))
+            {
+                throw new InvalidOperationException(
+                    $"Environment variable '{envVarName}' for MCP tool '{serverName ?? "unknown"}' was not found or is empty.");
+            }
+
+            return envValue;
+        }
+
+        return trimmed;
     }
 }

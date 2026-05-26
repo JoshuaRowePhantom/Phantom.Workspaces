@@ -5,82 +5,64 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentInputQueueManagerTests
 {
-    private static AgentInputQueueManager CreateManager(params ChatResponseUpdate[] updates)
-        => new AgentInputQueueManager(
-            new ChatClientAgent(
-                new TestChatClient(updates),
-                new ChatClientAgentOptions { UseProvidedChatClientAsIs = true }));
+    private static AgentInputQueueManager CreateManager()
+        => new();
+
+    private static AgentInputItem Item(string text)
+        => new()
+        {
+            Messages = [new ChatMessage(ChatRole.User, text)],
+        };
 
     [Fact]
-    public async Task Enqueue_ImmediateQueue_IsProcessedByAgent()
+    public void Enqueue_ImmediateQueue_CanBeDequeuedAsImmediate()
     {
-        var manager = CreateManager(new ChatResponseUpdate(ChatRole.Assistant, "response"));
+        var manager = CreateManager();
 
-        await using var updates = manager.Process().GetAsyncEnumerator();
         manager.Enqueue(
             manager.ImmediateQueue,
-            [new ChatMessage(ChatRole.User, "immediate")]);
+            [Item("immediate")]);
 
-        Assert.True(await updates.MoveNextAsync());
-        Assert.Equal("response", updates.Current.Text);
-
-        manager.Complete();
+        Assert.True(manager.TryDequeueNextImmediate(out var input));
+        Assert.Single(input.Messages);
+        Assert.Equal("immediate", input.Messages[0].Text);
     }
 
     [Fact]
-    public async Task ServiceQueues_HonorsImmediacyRules()
+    public void TryDequeueNextImmediateOrQueued_IncludesQueued_ButImmediateOnlyDoesNot()
     {
-        var manager = CreateManager(new ChatResponseUpdate(ChatRole.Assistant, "response"));
+        var manager = CreateManager();
         var queuedQueue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
                 Priority = 100,
                 Immediacy = AgentInputQueueImmediacy.Queue,
             });
-        var heldQueue = new AgentInputQueue(
-            new AgentInputQueue.Parameters
-            {
-                Priority = 1000,
-                Immediacy = AgentInputQueueImmediacy.Held,
-            });
         manager.RegisterInputQueue(queuedQueue);
-        manager.RegisterInputQueue(heldQueue);
+        manager.Enqueue(queuedQueue, [Item("queued")]);
 
-        manager.Enqueue(queuedQueue, [new ChatMessage(ChatRole.User, "queued")]);
-        manager.Enqueue(heldQueue, [new ChatMessage(ChatRole.System, "held")]);
-        Assert.Empty(queuedQueue.Items);
-        Assert.Single(heldQueue.Items);
-        Assert.Equal(0, manager.ServiceQueues(modelTurnIncludedToolCalls: true));
-        Assert.Equal(0, manager.ServiceQueues(modelTurnIncludedToolCalls: false));
-
-        await using var updates = manager.Process().GetAsyncEnumerator();
-        Assert.True(await updates.MoveNextAsync());
-
-        manager.Complete();
+        Assert.False(manager.TryDequeueNextImmediate(out _));
+        Assert.True(manager.TryDequeueNextImmediateOrQueued(out var input));
+        Assert.Single(input.Messages);
+        Assert.Equal("queued", input.Messages[0].Text);
     }
 
     [Fact]
-    public async Task Interrupt_PublishesInterruptInputAndDrainsQueue()
+    public void TryDequeueNextImmediateOrQueued_PrefersImmediateByPriorityAndLeavesQueuedItem()
     {
-        var manager = CreateManager(new ChatResponseUpdate(ChatRole.Assistant, "response"));
+        var manager = CreateManager();
         var queue = new AgentInputQueue(
             new AgentInputQueue.Parameters
             {
                 Priority = 1,
-                Immediacy = AgentInputQueueImmediacy.Held,
+                Immediacy = AgentInputQueueImmediacy.Queue,
             });
         manager.RegisterInputQueue(queue);
-        queue.Enqueue([new ChatMessage(ChatRole.User, "interrupt me")]);
+        manager.Enqueue(queue, [Item("queued")]);
+        manager.Enqueue(manager.ImmediateQueue, [Item("immediate")]);
 
-        await using var updates = manager.Process().GetAsyncEnumerator();
-
-        var interruptedItems = manager.Interrupt(queue);
-
-        Assert.Equal(1, interruptedItems);
-        Assert.Empty(queue.Items);
-        Assert.True(await updates.MoveNextAsync());
-        Assert.Equal("response", updates.Current.Text);
-
-        manager.Complete();
+        Assert.True(manager.TryDequeueNextImmediateOrQueued(out var input));
+        Assert.Equal("immediate", input.Messages[0].Text);
+        Assert.Single(queue.Items);
     }
 }

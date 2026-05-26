@@ -5,12 +5,13 @@ public sealed class ProfileStoreTests
     [Fact]
     public async Task GetOrInitializeProfileAsync_DefaultsThemeAndDebugging()
     {
+        var ct = TestContext.Current.CancellationToken;
         var path = CreateTempFilePath();
         try
         {
             var store = new ProfileStore(path);
 
-            var profile = await store.GetOrInitializeProfileAsync();
+            var profile = await store.GetOrInitializeProfileAsync(ct);
 
             Assert.Equal("dark", profile.Theme.Name);
             Assert.Equal("#1E1E1E", profile.Theme.Surfaces.EntityPane.Background);
@@ -34,6 +35,7 @@ public sealed class ProfileStoreTests
     [Fact]
     public async Task SetThemeAndDebuggingAsync_PreserveEachOther()
     {
+        var ct = TestContext.Current.CancellationToken;
         var path = CreateTempFilePath();
         try
         {
@@ -43,7 +45,8 @@ public sealed class ProfileStoreTests
                 profile => profile with
                 {
                     Debugging = true,
-                });
+                },
+                ct);
             await store.ChangeProfileAsync(
                 profile => profile with
                 {
@@ -78,9 +81,10 @@ public sealed class ProfileStoreTests
                             },
                         },
                     },
-                });
+                },
+                ct);
 
-            var persistedProfile = await store.GetOrInitializeProfileAsync();
+            var persistedProfile = await store.GetOrInitializeProfileAsync(ct);
 
             Assert.True(persistedProfile.Debugging);
             Assert.Equal("light", persistedProfile.Theme.Name);

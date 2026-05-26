@@ -85,6 +85,36 @@ public class ExampleAgentDefinitionsTests
     }
 
     [Fact]
+    public void LoadQwenLocalGithubMcp_ValidatesSuccessfully()
+    {
+        var json = GetEmbeddedResourceContent("qwen-local-github-mcp.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        Assert.NotNull(agent);
+        Assert.Equal("prompt", agent.Kind);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        Assert.Equal("qwen-local-github-mcp", promptAgent.Name);
+        Assert.Equal("qwen3.6", promptAgent.Model?.Id);
+        Assert.Equal("ollama", promptAgent.Model?.Provider);
+    }
+
+    [Fact]
+    public void LoadQwenLocalGithubMcp_HasMcpTool()
+    {
+        var json = GetEmbeddedResourceContent("qwen-local-github-mcp.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        var tool = Assert.Single(promptAgent.Tools);
+        var mcpTool = Assert.IsType<McpTool>(tool);
+
+        Assert.Equal("github", mcpTool.Name);
+        Assert.Equal("github", mcpTool.ServerName);
+        Assert.NotNull(mcpTool.Connection);
+    }
+
+    [Fact]
     public void LoadAgentFromJson_InvalidAgainstSupportedSchema_Throws()
     {
         const string invalidJson = """

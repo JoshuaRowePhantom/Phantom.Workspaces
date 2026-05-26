@@ -1,5 +1,5 @@
 using System.Collections.ObjectModel;
-using System.Text;
+using System.Linq;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -8,43 +8,45 @@ namespace Phantom.Workspaces.Llm;
 /// <summary>
 /// A single chat history entry (user or completed assistant turn).
 /// </summary>
-public sealed class AgentChatHistoryItem
+public sealed record AgentChatHistoryItem
 {
-    public ChatRole Role { get; init; }
+    public static ChatRole DiagnosticChatRole { get; } = new("diagnostic");
 
-    /// <summary>Completed text content of this turn.</summary>
-    public string Text { get; init; } = string.Empty;
+    public ChatRole Role { get; init; }
 
     /// <summary>Structured content blocks for this turn.</summary>
     public IReadOnlyList<AIContent> Contents { get; init; } = [];
 
-    /// <summary>Reasoning/thinking text associated with this turn.</summary>
-    public string ReasoningText { get; init; } = string.Empty;
+    public string Text => string.Concat(this.Contents.Select(FormatContentAsText));
+
+    public string ReasoningText => string.Concat(
+        this.Contents.OfType<TextReasoningContent>().Select(static content => content.Text));
 
     /// <summary>True while this assistant item is still pending or streaming.</summary>
     public bool IsInProgress { get; init; }
+
+    public bool HasText => !string.IsNullOrWhiteSpace(this.Text);
+
+    private static string FormatContentAsText(AIContent content) => content switch
+    {
+        TextContent textContent => textContent.Text,
+        TextReasoningContent => string.Empty,
+        ToolCallContent => string.Empty,
+        ToolResultContent => string.Empty,
+        DataContent dataContent when !string.IsNullOrWhiteSpace(dataContent.MediaType) => $"[{dataContent.MediaType}]",
+        DataContent => "[data]",
+        UriContent uriContent when !string.IsNullOrWhiteSpace(uriContent.MediaType) => $"[{uriContent.MediaType}] {uriContent.Uri}",
+        UriContent uriContent => uriContent.Uri.ToString(),
+        _ => $"[{content.GetType().Name}]",
+    };
 }
 
 /// <summary>
-/// A currently-running (streaming) agent response item.
+/// A currently-running item with model payload for GUI data templates.
 /// </summary>
 public sealed class AgentChatRunningItem
 {
-    private readonly StringBuilder buffer = new();
-
-    /// <summary>Accumulated text so far from the streaming response.</summary>
-    public string CurrentText => this.buffer.ToString();
-
-    internal void Append(string text) => this.buffer.Append(text);
-
-    internal AgentChatHistoryItem ToHistoryItem() =>
-        new()
-        {
-            Role = ChatRole.Assistant,
-            Text = this.buffer.ToString(),
-            Contents = [new TextContent(this.buffer.ToString())],
-            ReasoningText = string.Empty,
-        };
+    public AgentChatHistoryItem[]? Items { get; set; }
 }
 
 /// <summary>
@@ -60,11 +62,12 @@ public sealed class AgentChatPendingApprovalItem
 /// </summary>
 public sealed class AgentChatQueue
 {
-    internal AgentChatQueue(AgentInputQueue queue, string name, bool isDefault)
+    internal AgentChatQueue(AgentInputQueue queue, string name, bool isDefault, bool isImmediate = false)
     {
         this.Queue = queue;
         this.Name = name;
         this.IsDefault = isDefault;
+        this.IsImmediate = isImmediate;
         this.Queue.Changed += this.OnQueueChanged;
     }
 
@@ -74,11 +77,13 @@ public sealed class AgentChatQueue
 
     public bool IsDefault { get; }
 
+    public bool IsImmediate { get; }
+
     public bool IsHeld => this.Queue.Immediacy == AgentInputQueueImmediacy.Held;
 
     public AgentInputQueueImmediacy Immediacy => this.Queue.Immediacy;
 
-    public IReadOnlyList<ChatMessage> Items => this.Queue.Items;
+    public IReadOnlyList<AgentInputItem> Items => this.Queue.Items;
 
     public event EventHandler? Changed;
 
@@ -94,32 +99,43 @@ public sealed class AgentChatQueue
 /// </summary>
 public sealed class AgentChat : IAsyncDisposable
 {
+    private const string RunningPartAssistantReasoning = "assistant-reasoning";
+    private const string RunningPartAssistantText = "assistant-text";
+
+    private readonly object sessionLock = new();
+    private AgentChatSession session;
     private readonly AgentInputQueueManager queueManager;
+    private readonly AgentChatQueueManager chatQueueManager;
+    private readonly AgentChatHistoryService historyService;
+    private readonly AgentRunningItems runningItems;
+    private readonly List<IAsyncDisposable> ownedResources;
+    private readonly object ownedResourcesLock = new();
     private readonly CancellationTokenSource cts = new();
     private readonly Task processTask;
-    private int nextUserQueuePriority = 10;
-    private int userQueueSequence = 1;
 
-    private AgentChatRunningItem? activeItem;
-    private readonly Queue<int> pendingAssistantHistoryIndexes = new();
-    private int? activeAssistantHistoryIndex;
+    private bool isBusy;
+    private readonly object processingStateLock = new();
+    private CancellationTokenSource? activeRunCancellation;
 
-    public AgentChat(AgentInputQueueManager queueManager)
+    public AgentChat(
+        AgentChatSession session,
+        AgentInputQueueManager queueManager,
+        string displayName = "",
+        IReadOnlyList<IAsyncDisposable>? ownedResources = null)
     {
+        ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(queueManager);
+        this.session = session;
         this.queueManager = queueManager;
-        this.DefaultInputQueue = new AgentChatQueue(queueManager.ImmediateQueue, "Default Queue", isDefault: true);
-        this.InputQueues.Add(this.DefaultInputQueue);
-        this.queueManager.QueuePublished += this.OnQueuePublished;
+        this.DisplayName = displayName;
+        this.chatQueueManager = new AgentChatQueueManager(queueManager);
+        this.historyService = new AgentChatHistoryService(this.History);
+        this.historyService.BindSession(session);
+        this.runningItems = new AgentRunningItems(this.RunningItems);
+        this.runningItems.Idle += this.OnRunningItemsIdle;
+        this.ownedResources = ownedResources?.ToList() ?? [];
         this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
     }
-
-    /// <summary>
-    /// Fired when a text chunk arrives from a streaming response.
-    /// The argument is the new chunk (not the accumulated total).
-    /// Fires on the background processing thread.
-    /// </summary>
-    public event EventHandler<string>? TextChunkReceived;
 
     /// <summary>
     /// Fired when the active streaming turn finishes.
@@ -128,6 +144,8 @@ public sealed class AgentChat : IAsyncDisposable
     /// </summary>
     public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
 
+    public event EventHandler? Idle;
+
     /// <summary>Completed conversation turns, in order.</summary>
     public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
 
@@ -135,16 +153,25 @@ public sealed class AgentChat : IAsyncDisposable
     public ObservableCollection<AgentChatRunningItem> RunningItems { get; } = [];
 
     /// <summary>All known input queues, including the default queue.</summary>
-    public ObservableCollection<AgentChatQueue> InputQueues { get; } = [];
+    public ObservableCollection<AgentChatQueue> InputQueues => this.chatQueueManager.InputQueues;
 
     /// <summary>The default input queue.</summary>
-    public AgentChatQueue DefaultInputQueue { get; }
+    public AgentChatQueue DefaultInputQueue => this.chatQueueManager.DefaultInputQueue;
+
+    /// <summary>System queue that bypasses queued scheduling.</summary>
+    public AgentChatQueue ImmediateInputQueue => this.chatQueueManager.ImmediateInputQueue;
 
     /// <summary>Items awaiting user approval.</summary>
     public ObservableCollection<AgentChatPendingApprovalItem> PendingApprovalItems { get; } = [];
 
     /// <summary>Underlying queue manager, for advanced queue behaviors.</summary>
     public AgentInputQueueManager InputQueueManager => this.queueManager;
+
+    public AgentChatQueueManager QueueManager => this.chatQueueManager;
+
+    public bool IsBusy => this.isBusy;
+
+    public string DisplayName { get; }
 
     /// <summary>
     /// Adds a user message to the target queue and waits for submission before history is created.
@@ -180,201 +207,89 @@ public sealed class AgentChat : IAsyncDisposable
 
         targetQueue ??= this.DefaultInputQueue;
 
-        var message = new ChatMessage(ChatRole.User, contents.ToList());
-        this.queueManager.Enqueue(targetQueue.Queue, [message]);
-    }
-
-    public AgentChatQueue CreateInputQueue(
-        string? name = null,
-        AgentInputQueueImmediacy immediacy = AgentInputQueueImmediacy.Queue)
-    {
-        var queue = new AgentInputQueue(
-            new AgentInputQueue.Parameters
-            {
-                Priority = this.nextUserQueuePriority++,
-                Immediacy = immediacy,
-            });
-        var queueName = string.IsNullOrWhiteSpace(name)
-            ? $"Queue {this.userQueueSequence++}"
-            : name;
-        var wrapped = new AgentChatQueue(queue, queueName, isDefault: false);
-        this.queueManager.RegisterInputQueue(queue);
-        this.InputQueues.Add(wrapped);
-        return wrapped;
-    }
-
-    public bool RemoveInputQueue(AgentChatQueue queue)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-        if (queue.IsDefault)
-        {
-            return false;
-        }
-
-        var removedFromManager = this.queueManager.UnregisterInputQueue(queue.Queue);
-        if (removedFromManager)
-        {
-            this.InputQueues.Remove(queue);
-        }
-
-        return removedFromManager;
-    }
-
-    public void SetQueueHeld(AgentChatQueue queue, bool held)
-    {
-        this.SetQueueImmediacy(queue, held
-            ? AgentInputQueueImmediacy.Held
-            : queue.IsDefault ? AgentInputQueueImmediacy.Immediate : AgentInputQueueImmediacy.Queue);
-    }
-
-    public void SetQueueImmediacy(AgentChatQueue queue, AgentInputQueueImmediacy immediacy)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-        queue.Queue.Configure(new AgentInputQueue.Parameters
-        {
-            Priority = queue.Queue.Priority,
-            Immediacy = immediacy,
-            CoalescingKey = queue.Queue.CoalescingKey,
-        });
-        if (immediacy != AgentInputQueueImmediacy.Held)
-        {
-            this.queueManager.ServiceQueues(false);
-        }
-    }
-
-    public void ClearQueue(AgentChatQueue queue)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-        while (true)
-        {
-            var expected = queue.Queue.Items;
-            if (expected.Count == 0)
-            {
-                return;
-            }
-
-            if (queue.Queue.Clear(ref expected))
-            {
-                return;
-            }
-        }
-    }
-
-    public bool RemoveQueueItem(AgentChatQueue queue, int index)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-        while (true)
-        {
-            var expected = queue.Queue.Items;
-            if (index < 0 || index >= expected.Count)
-            {
-                return false;
-            }
-
-            if (queue.Queue.TryRemoveAt(ref expected, index))
-            {
-                return true;
-            }
-        }
-    }
-
-    public bool UpdateQueueItem(AgentChatQueue queue, int index, string text)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return false;
-        }
-
-        while (true)
-        {
-            var expected = queue.Queue.Items;
-            if (index < 0 || index >= expected.Count)
-            {
-                return false;
-            }
-
-            var existingMessage = expected[index];
-            var contents = existingMessage.Contents.ToList();
-            var textContentIndex = contents.FindIndex(static content => content is TextContent);
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                if (textContentIndex >= 0)
+        this.queueManager.Enqueue(
+            targetQueue.Queue,
+            [
+                new AgentInputItem
                 {
-                    contents.RemoveAt(textContentIndex);
-                }
-            }
-            else if (textContentIndex >= 0)
-            {
-                contents[textContentIndex] = new TextContent(text);
-            }
-            else
-            {
-                contents.Insert(0, new TextContent(text));
-            }
-
-            if (contents.Count == 0)
-            {
-                if (queue.Queue.TryRemoveAt(ref expected, index))
-                {
-                    return true;
-                }
-
-                continue;
-            }
-
-            if (queue.Queue.TryUpdateAt(ref expected, index, new ChatMessage(ChatRole.User, contents)))
-            {
-                return true;
-            }
-        }
-    }
-
-    public bool RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
-    {
-        ArgumentNullException.ThrowIfNull(queue);
-
-        while (true)
-        {
-            var expected = queue.Queue.Items;
-            if (index < 0 || index >= expected.Count)
-            {
-                return false;
-            }
-
-            var existingMessage = expected[index];
-            var contents = existingMessage.Contents.ToList();
-            if (contentIndex < 0 || contentIndex >= contents.Count)
-            {
-                return false;
-            }
-
-            contents.RemoveAt(contentIndex);
-            if (contents.Count == 0)
-            {
-                if (queue.Queue.TryRemoveAt(ref expected, index))
-                {
-                    return true;
-                }
-
-                continue;
-            }
-
-            if (queue.Queue.TryUpdateAt(ref expected, index, new ChatMessage(ChatRole.User, contents)))
-            {
-                return true;
-            }
-        }
+                    Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
+                },
+            ]);
     }
 
     /// <summary>
     /// Requests an interrupt of the current streaming response.
     /// </summary>
-    public void RequestInterrupt() => this.queueManager.RequestInterrupt();
+    public void Interrupt()
+    {
+        CancellationTokenSource? cancellationToUse;
+        lock (this.processingStateLock)
+        {
+            cancellationToUse = this.activeRunCancellation;
+        }
+
+        cancellationToUse?.Cancel();
+    }
+
+    public void ResetSession(AgentChatSession nextSession, bool interruptCurrentResponse = true)
+    {
+        ArgumentNullException.ThrowIfNull(nextSession);
+
+        if (interruptCurrentResponse)
+        {
+            this.Interrupt();
+        }
+
+        this.queueManager.Enqueue(
+            this.queueManager.ImmediateQueue,
+            [
+                new AgentInputItem
+                {
+                    Messages = [],
+                    ResetSession = nextSession,
+                },
+            ]);
+    }
+
+    public AgentChatRunningItem CreateRunningItem(params AgentChatHistoryItem[] items)
+        => this.runningItems.Create(items);
+
+    public void UpdateRunningItem(AgentChatRunningItem item, AgentChatHistoryItem[] model)
+        => this.runningItems.Update(item, model);
+
+    public void CompleteRunningItem(
+        AgentChatRunningItem item,
+        bool writeToHistory = true)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        if (writeToHistory)
+        {
+            if (item.Items != null)
+            {
+                foreach (var historyItem in item.Items)
+                {
+                    this.History.Add(historyItem);
+                    this.TurnCompleted?.Invoke(this, historyItem);
+                }
+            }
+        }
+
+        this.runningItems.Remove(item);
+    }
+
+    public void RegisterOwnedResource(IAsyncDisposable resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        lock (this.ownedResourcesLock)
+        {
+            this.ownedResources.Add(resource);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
-        this.queueManager.QueuePublished -= this.OnQueuePublished;
+        this.runningItems.Idle -= this.OnRunningItemsIdle;
         await this.cts.CancelAsync();
         try
         {
@@ -385,189 +300,197 @@ public sealed class AgentChat : IAsyncDisposable
         }
 
         this.cts.Dispose();
-        this.queueManager.Complete();
-    }
-
-    private async Task RunProcessLoopAsync(CancellationToken cancellationToken)
-    {
-        await foreach (var update in this.queueManager.Process(cancellationToken).WithCancellation(cancellationToken))
+        List<IAsyncDisposable> resourcesToDispose;
+        lock (this.ownedResourcesLock)
         {
-            this.HandleUpdate(update);
+            resourcesToDispose = [.. this.ownedResources];
+            this.ownedResources.Clear();
+        }
+
+        foreach (var resource in resourcesToDispose)
+        {
+            await resource.DisposeAsync();
         }
     }
 
-    private void HandleUpdate(AgentResponseUpdate update)
+    private async Task UpdateCurrentPartialResponse(
+        AgentChatRunningItem currentRunningItem,
+        AgentResponseUpdate agentResponseUpdate,
+        List<AgentResponseUpdate> agentResponseUpdates)
     {
-        EnsureActiveAssistantHistoryIndex();
+        agentResponseUpdates.Add(agentResponseUpdate);
 
-        if (!string.IsNullOrEmpty(update.Text))
+        var chatResponseUpdates = agentResponseUpdates.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
+        var chatResponse = await chatResponseUpdates.ToChatResponseAsync();
+
+        bool lastIsToolResult = Enumerable.OfType<ToolResultContent>(agentResponseUpdate.Contents).Any();
+
+        IEnumerable<AgentChatHistoryItem> finalItem = Array.Empty<AgentChatHistoryItem>();
+        if (lastIsToolResult)
         {
-            if (this.activeItem is null)
+            finalItem = new AgentChatHistoryItem[]
             {
-                this.activeItem = new AgentChatRunningItem();
-                this.RunningItems.Add(this.activeItem);
-            }
-
-            this.activeItem.Append(update.Text);
-
-            var idx = this.RunningItems.IndexOf(this.activeItem);
-            if (idx >= 0)
-            {
-                this.RunningItems[idx] = this.activeItem;
-            }
-
-            this.TextChunkReceived?.Invoke(this, update.Text);
-
-            if (this.activeAssistantHistoryIndex is int assistantIndex)
-            {
-                var assistantItem = this.History[assistantIndex];
-                var updatedText = assistantItem.Text + update.Text;
-                this.History[assistantIndex] = new AgentChatHistoryItem
+                new AgentChatHistoryItem
                 {
-                    Role = assistantItem.Role,
-                    Text = updatedText,
-                    Contents = [new TextContent(updatedText)],
-                    ReasoningText = assistantItem.ReasoningText,
                     IsInProgress = true,
-                };
-            }
-        }
-
-        var reasoningChunk = string.Concat(
-            update.Contents
-                .OfType<TextReasoningContent>()
-                .Select(static content => content.Text));
-        if (!string.IsNullOrEmpty(reasoningChunk) && this.activeAssistantHistoryIndex is int reasoningIndex)
-        {
-            var assistantItem = this.History[reasoningIndex];
-            var updatedReasoning = assistantItem.ReasoningText + reasoningChunk;
-            this.History[reasoningIndex] = new AgentChatHistoryItem
-            {
-                Role = assistantItem.Role,
-                Text = assistantItem.Text,
-                Contents = assistantItem.Contents,
-                ReasoningText = updatedReasoning,
-                IsInProgress = true,
+                }
             };
         }
 
-        if (update.FinishReason is not null)
+        var chatHistoryItems = chatResponse.Messages.Reverse().Select((message, index) => new AgentChatHistoryItem
         {
-            var completed = this.activeItem;
-            this.activeItem = null;
+            Role = message.Role,
+            Contents = message.Contents.ToArray(),
+            IsInProgress = index == 0 && !lastIsToolResult
+        }).Reverse().Concat(finalItem).ToArray();
 
-            if (completed is not null)
-            {
-                this.RunningItems.Remove(completed);
-            }
+        this.UpdateRunningItem(currentRunningItem, chatHistoryItems);
+    }
 
-            if (this.activeAssistantHistoryIndex is int assistantIndex)
+    private async Task RunProcessLoopAsync(
+        CancellationToken cancellationToken)
+    {
+        lock (processingStateLock)
+        {
+            activeRunCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        }
+        var currentSession = this.GetSession();
+        using var queueStateSignal = new SemaphoreSlim(0);
+        void OnQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            => queueStateSignal.Release();
+        this.queueManager.QueueStateChanged += OnQueueStateChanged;
+
+        List<ChatMessage> chatMessagesToSubmit = new List<ChatMessage>();
+
+        try
+        {
+            this.isBusy = true;
+            while (!cancellationToken.IsCancellationRequested)
             {
-                var assistantItem = this.History[assistantIndex];
-                var completedHistoryItem = new AgentChatHistoryItem
+                chatMessagesToSubmit.Clear();
+                while (chatMessagesToSubmit.Count == 0)
                 {
-                    Role = assistantItem.Role,
-                    Text = assistantItem.Text,
-                    Contents = assistantItem.Contents,
-                    ReasoningText = assistantItem.ReasoningText,
-                    IsInProgress = false,
-                };
-                this.History[assistantIndex] = completedHistoryItem;
-                this.TurnCompleted?.Invoke(this, completedHistoryItem);
-                this.activeAssistantHistoryIndex = null;
+                    while(this.queueManager.TryDequeueNextImmediateOrQueued(
+                        out var agentInputItem))
+                    {
+                        if (agentInputItem.ResetSession != null)
+                        {
+                            this.SetSession(agentInputItem.ResetSession);
+                            currentSession = this.GetSession();
+                        }
+                        chatMessagesToSubmit.AddRange(agentInputItem.Messages ?? Array.Empty<ChatMessage>());
+                    }
+
+                    if (chatMessagesToSubmit.Count == 0)
+                    {
+                        queueStateSignal.Wait(cancellationToken);
+                    }
+                }
+
+                AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
+                    new AgentChatHistoryItem
+                    {
+                        Role = ChatRole.Assistant,
+                        IsInProgress = true,
+                    }]);
+
+                try
+                {
+                    List<AgentResponseUpdate> agentResponseUpdates = new List<AgentResponseUpdate>();
+
+                    await foreach (var update in this.StartRun(
+                        chatMessagesToSubmit.ToArray(),
+                        currentSession,
+                        cancellationToken))
+                    {
+                        await this.UpdateCurrentPartialResponse(
+                            currentPartialTextResponseItem,
+                            update,
+                            agentResponseUpdates);
+                    }
+                }
+                finally
+                {
+                    this.CompleteRunningItem(currentPartialTextResponseItem, false);
+                }
             }
         }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            this.queueManager.QueueStateChanged -= OnQueueStateChanged;
+            this.isBusy = false;
+        }
     }
 
-    private void OnQueuePublished(object? sender, AgentInputQueueManager.QueuePublishedEventArgs e)
+    private static async Task DisposeProviderEnumeratorAsync(
+        IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
     {
-        if (e.Messages.Count == 0)
+        try
         {
-            return;
+            await providerEnumerator.DisposeAsync();
         }
-
-        foreach (var message in e.Messages)
+        catch (NotSupportedException)
         {
-            if (message.Role != ChatRole.User)
-            {
-                continue;
-            }
-
-            var contents = message.Contents.ToArray();
-            this.History.Add(new AgentChatHistoryItem
-            {
-                Role = ChatRole.User,
-                Text = FormatContentAsText(contents),
-                Contents = contents,
-            });
         }
-
-        var assistantIndex = this.History.Count;
-        this.History.Add(new AgentChatHistoryItem
-        {
-            Role = ChatRole.Assistant,
-            Text = string.Empty,
-            Contents = [new TextContent(string.Empty)],
-            ReasoningText = string.Empty,
-            IsInProgress = true,
-        });
-        this.pendingAssistantHistoryIndexes.Enqueue(assistantIndex);
     }
 
-    private void EnsureActiveAssistantHistoryIndex()
+    private IAsyncEnumerable<AgentResponseUpdate> StartRun(
+        ChatMessage[] messages,
+        AgentChatSession session,
+        CancellationToken cancellationToken)
     {
-        if (this.activeAssistantHistoryIndex is not null)
-        {
-            return;
-        }
-
-        if (this.pendingAssistantHistoryIndexes.Count > 0)
-        {
-            this.activeAssistantHistoryIndex = this.pendingAssistantHistoryIndexes.Dequeue();
-            return;
-        }
-
-        // Fallback: keep model resilient when updates arrive without a pre-created placeholder.
-        var assistantIndex = this.History.Count;
-        this.History.Add(new AgentChatHistoryItem
-        {
-            Role = ChatRole.Assistant,
-            Text = string.Empty,
-            Contents = [new TextContent(string.Empty)],
-            ReasoningText = string.Empty,
-            IsInProgress = true,
-        });
-        this.activeAssistantHistoryIndex = assistantIndex;
+        return session
+            .RunStreamAsync(messages, cancellationToken);
     }
 
-    private static string FormatContentAsText(IReadOnlyList<AIContent> contents)
+    private static string ResolveAssistantTextChunk(AgentResponseUpdate update)
     {
-        var builder = new StringBuilder();
-        foreach (var content in contents)
+        if (!string.IsNullOrEmpty(update.Text))
         {
-            switch (content)
-            {
-                case TextContent textContent:
-                    builder.Append(textContent.Text);
-                    break;
-                case DataContent dataContent when !string.IsNullOrWhiteSpace(dataContent.MediaType):
-                    builder.Append($"[{dataContent.MediaType}]");
-                    break;
-                case DataContent:
-                    builder.Append("[data]");
-                    break;
-                case UriContent uriContent when !string.IsNullOrWhiteSpace(uriContent.MediaType):
-                    builder.Append($"[{uriContent.MediaType}] {uriContent.Uri}");
-                    break;
-                case UriContent uriContent:
-                    builder.Append(uriContent.Uri.ToString());
-                    break;
-                default:
-                    builder.Append($"[{content.GetType().Name}]");
-                    break;
-            }
+            return update.Text;
         }
 
-        return builder.ToString();
+        return string.Concat(
+            update.Contents
+                .OfType<TextContent>()
+                .Select(static content => content.Text));
     }
+
+    private static bool IsToolContinuationFinishReason(ChatFinishReason? finishReason)
+    {
+        if (finishReason is null)
+        {
+            return false;
+        }
+
+        var finishReasonText = finishReason?.ToString() ?? string.Empty;
+        return finishReasonText.Contains("tool", StringComparison.OrdinalIgnoreCase)
+            || finishReasonText.Contains("function", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private AgentChatSession GetSession()
+    {
+        lock (this.sessionLock)
+        {
+            return this.session;
+        }
+    }
+
+    private void SetSession(AgentChatSession nextSession)
+    {
+        ArgumentNullException.ThrowIfNull(nextSession);
+        lock (this.sessionLock)
+        {
+            this.session = nextSession;
+        }
+
+        this.historyService.BindSession(nextSession);
+    }
+
+    private void OnRunningItemsIdle(object? sender, EventArgs e)
+        => this.Idle?.Invoke(this, EventArgs.Empty);
+
 }

@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Threading;
-using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -24,7 +23,7 @@ public sealed class AgentInputQueue
         public string? CoalescingKey { get; init; }
     }
 
-    private ImmutableList<ChatMessage> items;
+    private ImmutableList<AgentInputItem> items;
 
     public AgentInputQueue(
         Parameters? parameters = null)
@@ -34,7 +33,7 @@ public sealed class AgentInputQueue
         this.Priority = parameters.Priority;
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;
-        this.items = ImmutableList<ChatMessage>.Empty;
+        this.items = ImmutableList<AgentInputItem>.Empty;
     }
 
     public int Priority { get; private set; }
@@ -43,7 +42,7 @@ public sealed class AgentInputQueue
 
     public string? CoalescingKey { get; private set; }
 
-    public ImmutableList<ChatMessage> Items => Volatile.Read(ref this.items);
+    public ImmutableList<AgentInputItem> Items => Volatile.Read(ref this.items);
 
     public void Configure(
         Parameters parameters)
@@ -55,8 +54,8 @@ public sealed class AgentInputQueue
         this.OnChanged();
     }
 
-    public ImmutableList<ChatMessage> Enqueue(
-        IEnumerable<ChatMessage> newItems)
+    public ImmutableList<AgentInputItem> Enqueue(
+        IEnumerable<AgentInputItem> newItems)
     {
         ArgumentNullException.ThrowIfNull(newItems);
 
@@ -79,8 +78,8 @@ public sealed class AgentInputQueue
     }
 
     public bool Update(
-        ref ImmutableList<ChatMessage> existingItems,
-        ImmutableList<ChatMessage> newItems)
+        ref ImmutableList<AgentInputItem> existingItems,
+        ImmutableList<AgentInputItem> newItems)
     {
         ArgumentNullException.ThrowIfNull(existingItems);
         ArgumentNullException.ThrowIfNull(newItems);
@@ -100,14 +99,14 @@ public sealed class AgentInputQueue
     }
 
     public bool Clear(
-        ref ImmutableList<ChatMessage> existingItems)
+        ref ImmutableList<AgentInputItem> existingItems)
     {
         ArgumentNullException.ThrowIfNull(existingItems);
-        return this.Update(ref existingItems, ImmutableList<ChatMessage>.Empty);
+        return this.Update(ref existingItems, ImmutableList<AgentInputItem>.Empty);
     }
 
     public bool TryRemoveAt(
-        ref ImmutableList<ChatMessage> existingItems,
+        ref ImmutableList<AgentInputItem> existingItems,
         int index)
     {
         ArgumentNullException.ThrowIfNull(existingItems);
@@ -120,10 +119,26 @@ public sealed class AgentInputQueue
         return this.Update(ref existingItems, newItems);
     }
 
+    public bool TryRemove(
+        ref ImmutableList<AgentInputItem> existingItems,
+        AgentInputItem item)
+    {
+        ArgumentNullException.ThrowIfNull(existingItems);
+        ArgumentNullException.ThrowIfNull(item);
+
+        var index = FindIndexByReference(existingItems, item);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        return this.TryRemoveAt(ref existingItems, index);
+    }
+
     public bool TryUpdateAt(
-        ref ImmutableList<ChatMessage> existingItems,
+        ref ImmutableList<AgentInputItem> existingItems,
         int index,
-        ChatMessage newItem)
+        AgentInputItem newItem)
     {
         ArgumentNullException.ThrowIfNull(existingItems);
         ArgumentNullException.ThrowIfNull(newItem);
@@ -134,6 +149,39 @@ public sealed class AgentInputQueue
 
         var newItems = existingItems.SetItem(index, newItem);
         return this.Update(ref existingItems, newItems);
+    }
+
+    public bool TryUpdate(
+        ref ImmutableList<AgentInputItem> existingItems,
+        AgentInputItem item,
+        AgentInputItem newItem)
+    {
+        ArgumentNullException.ThrowIfNull(existingItems);
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(newItem);
+
+        var index = FindIndexByReference(existingItems, item);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        return this.TryUpdateAt(ref existingItems, index, newItem);
+    }
+
+    private static int FindIndexByReference(
+        ImmutableList<AgentInputItem> items,
+        AgentInputItem item)
+    {
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (ReferenceEquals(items[index], item))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private void OnChanged()

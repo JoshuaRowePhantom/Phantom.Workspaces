@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:Phantom.Workspaces.Agent.Gui"
+        x:Class="Phantom.Workspaces.Agent.Gui.LogWindow"
+        x:Name="Root"
+        x:DataType="local:LogWindow"
+        Width="1000"
+        Height="600"
+        MinWidth="400"
+        MinHeight="200"
+        WindowStartupLocation="CenterOwner"
+        Title="Agent Log"
+        Background="#1A1A1A">
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,12,0,0"
+                    Spacing="8">
+            <Button Content="Clear"
+                    Click="OnClearClicked"
+                    Classes="queue-action-button"/>
+            <Button Content="Close"
+                    Click="OnCloseClicked"
+                    Classes="queue-action-button"/>
+        </StackPanel>
+
+        <TextBlock DockPanel.Dock="Top"
+                   Text="Log"
+                   FontSize="16"
+                   FontWeight="SemiBold"
+                   Foreground="#AAAAAA"
+                   Margin="0,0,0,12"/>
+        <CheckBox DockPanel.Dock="Top"
+                  Content="Word wrap"
+                  IsChecked="{Binding IsWordWrapEnabled, Mode=TwoWay}"
+                  Foreground="#CCCCCC"
+                  Margin="0,0,0,8"/>
+
+        <Border Background="#111111"
+                BorderBrush="#303030"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="12">
+            <ScrollViewer x:Name="LogScrollViewer"
+                          AllowAutoHide="False"
+                          HorizontalScrollBarVisibility="{Binding LogHorizontalScrollBarVisibility}"
+                          VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="LogItems">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <SelectableTextBlock Text="{Binding}"
+                                                 TextWrapping="{Binding LogTextWrapping, ElementName=Root}"
+                                                 FontFamily="Consolas,monospace"
+                                                 FontSize="12"
+                                                 Foreground="#CCCCCC"
+                                                 Margin="0,1"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</Window>

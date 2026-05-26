@@ -184,7 +184,9 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             this.TryAddSchemaEntityById(schemaEntitiesById, schemaEntity);
         }
 
+#pragma warning disable CS0618
         var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+#pragma warning restore CS0618
         foreach (var entityData in exportResult.ChangeBatches
                      .SelectMany(static batch => batch.Entities)
                      .Select(static entity => entity.Data)
@@ -500,7 +502,9 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             }
         }
 
+#pragma warning disable CS0618
         var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+#pragma warning restore CS0618
         foreach (var entity in exportResult.ChangeBatches.SelectMany(static batch => batch.Entities))
         {
             if (entity.Data is not { ValueKind: JsonValueKind.Object } data)

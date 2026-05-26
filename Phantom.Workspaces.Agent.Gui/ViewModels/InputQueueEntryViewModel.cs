@@ -11,7 +11,7 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
 {
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue queue;
-    private readonly int index;
+    private readonly AgentInputItem item;
     private bool isEditing;
     private string editText;
 
@@ -20,15 +20,14 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
     public InputQueueEntryViewModel(
         InputQueueViewModel parent,
         AgentChatQueue queue,
-        int index,
-        ChatMessage message)
+        AgentInputItem item)
     {
         this.parent = parent;
         this.queue = queue;
-        this.index = index;
-        this.Text = message.Text;
+        this.item = item;
+        this.Text = item.Text;
         this.editText = this.Text;
-        this.Attachments = this.CreateAttachments(message);
+        this.Attachments = this.CreateAttachments(item);
         this.RemoveCommand = new RelayCommand(this.Remove);
         this.EditCommand = new RelayCommand(this.BeginEdit);
         this.SaveEditCommand = new RelayCommand(this.SaveEdit);
@@ -79,9 +78,9 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.Text));
     }
 
-    private void Remove() => this.parent.RemoveQueueItem(this.queue, this.index);
+    private void Remove() => this.parent.RemoveQueueItem(this.queue, this.item);
 
-    private void RemoveAttachment(int contentIndex) => this.parent.RemoveQueueItemContent(this.queue, this.index, contentIndex);
+    private void RemoveAttachment(int contentIndex) => this.parent.RemoveQueueItemContent(this.queue, this.item, contentIndex);
 
     private void BeginEdit()
     {
@@ -92,7 +91,7 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
 
     private void SaveEdit()
     {
-        this.parent.UpdateQueueItem(this.queue, this.index, this.EditText);
+        this.parent.UpdateQueueItem(this.queue, this.item, this.EditText);
         this.IsEditing = false;
     }
 
@@ -102,12 +101,12 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         this.IsEditing = false;
     }
 
-    private ObservableCollection<InputQueueEntryAttachmentViewModel> CreateAttachments(ChatMessage message)
+    private ObservableCollection<InputQueueEntryAttachmentViewModel> CreateAttachments(AgentInputItem item)
     {
         var attachments = new ObservableCollection<InputQueueEntryAttachmentViewModel>();
-        for (var contentIndex = 0; contentIndex < message.Contents.Count; contentIndex++)
+        for (var contentIndex = 0; contentIndex < item.Contents.Count; contentIndex++)
         {
-            if (message.Contents[contentIndex] is not DataContent dataContent)
+            if (item.Contents[contentIndex] is not DataContent dataContent)
             {
                 continue;
             }

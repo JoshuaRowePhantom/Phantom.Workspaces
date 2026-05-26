@@ -8,12 +8,10 @@
         Width="1200" Height="800"
         MinWidth="600" MinHeight="400">
     <Window.KeyBindings>
-        <KeyBinding Gesture="Shift+Pause"
-                    Command="{Binding Agent.InputQueue.HoldAllQueuesCommand}"/>
-        <KeyBinding Gesture="Ctrl+Shift+Pause"
-                    Command="{Binding Agent.InputQueue.UnholdAllQueuesCommand}"/>
-        <KeyBinding Gesture="Pause"
-                    Command="{Binding Agent.InputQueue.ToggleHoldAllQueuesCommand}"/>
+        <KeyBinding Gesture="Cancel"         Command="{Binding Agent.InterruptCommand}"/>
+        <KeyBinding Gesture="Pause"          Command="{Binding Agent.InputQueue.ToggleHoldAllQueuesCommand}"/>
+        <KeyBinding Gesture="Shift+Pause"    Command="{Binding Agent.InputQueue.HoldAllQueuesCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding Agent.InputQueue.UnholdAllQueuesCommand}"/>
     </Window.KeyBindings>
 
     <DockPanel>

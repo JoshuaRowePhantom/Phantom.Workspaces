@@ -10,10 +10,12 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task CreateInitializedAsync_PopulatesRepositoryForInMemorySource()
     {
+        var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            ct);
 
-        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
 
         Assert.NotEmpty(snapshots);
     }
@@ -21,6 +23,7 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task CreateSubscriptionAsync_LoadsBindableEntities()
     {
+        var ct = TestContext.Current.CancellationToken;
         var entityId = new EntityId("11111111-1111-1111-1111-111111111111");
         var timestamp = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1");
         var snapshot = CreateSnapshot(
@@ -35,10 +38,10 @@ public sealed class EntityBrokerTests
             }
             """);
 
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
         await SeedSnapshotAsync(broker, snapshot);
 
-        var entities = await broker.GetEntitiesAsync([entityId]);
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
 
         var entity = Assert.Single(entities);
         Assert.Equal(entityId, entity.EntityId);
@@ -49,6 +52,7 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task RefreshAsync_UpdatesBindableEntityObject()
     {
+        var ct = TestContext.Current.CancellationToken;
         var entityId = new EntityId("22222222-2222-2222-2222-222222222222");
         var initialTimestamp = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1");
         var initialSnapshot = CreateSnapshot(
@@ -75,14 +79,14 @@ public sealed class EntityBrokerTests
             }
             """);
 
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
         await SeedSnapshotAsync(broker, initialSnapshot);
-        var entities = await broker.GetEntitiesAsync([entityId]);
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
         var entity = Assert.Single(entities);
         var previousModifiedTime = entity.ModifiedTime;
 
         await SeedSnapshotAsync(broker, refreshedSnapshot, entity.ConcurrencyTag);
-        await broker.RefreshAsync();
+        await broker.RefreshAsync(ct);
 
         Assert.Equal("Updated", entity.DisplayName);
         Assert.NotEqual(previousModifiedTime, entity.ModifiedTime);
@@ -92,6 +96,7 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task RefreshAsync_SkipsCollectedSubscriptions()
     {
+        var ct = TestContext.Current.CancellationToken;
         var entityId = new EntityId("33333333-3333-3333-3333-333333333333");
         var initialTimestamp = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1");
         var initialSnapshot = CreateSnapshot(
@@ -118,22 +123,23 @@ public sealed class EntityBrokerTests
             }
             """);
 
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
         await SeedSnapshotAsync(broker, initialSnapshot);
         var weakEntity = await CreateCollectedEntityAsync(broker, entityId);
 
         ForceGarbageCollection();
         Assert.False(weakEntity.TryGetTarget(out _));
 
-        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
         var concurrencyTag = Assert.Contains(entityId, snapshots).ConcurrencyTag;
         await SeedSnapshotAsync(broker, refreshedSnapshot, concurrencyTag);
-        await broker.RefreshAsync();
+        await broker.RefreshAsync(ct);
     }
 
     [Fact]
     public async Task UpdateAsync_UpdatesSubscribedEntityWithoutRefreshAsync()
     {
+        var ct = TestContext.Current.CancellationToken;
         var entityId = new EntityId("44444444-4444-4444-4444-444444444444");
         var initialTimestamp = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1");
         var initialSnapshot = CreateSnapshot(
@@ -147,9 +153,9 @@ public sealed class EntityBrokerTests
               "display-name": { "default": "Before Update" }
             }
             """);
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
         await SeedSnapshotAsync(broker, initialSnapshot);
-        var entities = await broker.GetEntitiesAsync([entityId]);
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
         var entity = Assert.Single(entities);
 
         var changedEntityIds = new List<EntityId>();
@@ -175,7 +181,8 @@ public sealed class EntityBrokerTests
                         Data = null,
                     },
                 ],
-            });
+            },
+            ct);
 
         var entityResult = Assert.Single(updateResult.EntityResults);
         Assert.Equal(UpdateState.Removed, entityResult.UpdateState);
@@ -186,9 +193,10 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task SubscribeGetAsync_LoadsInitialResults()
     {
+        var ct = TestContext.Current.CancellationToken;
         var firstId = new EntityId("55555555-5555-5555-5555-555555555555");
         var secondId = new EntityId("66666666-6666-6666-6666-666666666666");
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
         await SeedSnapshotAsync(
             broker,
             CreateSnapshot(
@@ -228,7 +236,8 @@ public sealed class EntityBrokerTests
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            ct);
 
         var resultIds = subscribedGet.Results.Select(static entity => entity.EntityId).ToArray();
         Assert.Contains(firstId, resultIds);
@@ -238,9 +247,10 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task RefreshAsync_SubscribedGetRerunsGetAndReplacesResultCollection()
     {
+        var ct = TestContext.Current.CancellationToken;
         var firstId = new EntityId("77777777-7777-7777-7777-777777777777");
         var secondId = new EntityId("88888888-8888-8888-8888-888888888888");
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
 
         await SeedSnapshotAsync(
             broker,
@@ -268,10 +278,11 @@ public sealed class EntityBrokerTests
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            ct);
         Assert.Equal(firstId, Assert.Single(subscribedGet.Results).EntityId);
 
-        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
         var firstConcurrencyTag = Assert.Contains(firstId, snapshots).ConcurrencyTag;
         await SeedSnapshotAsync(
             broker,
@@ -301,7 +312,7 @@ public sealed class EntityBrokerTests
                 }
                 """));
 
-        await broker.RefreshAsync();
+        await broker.RefreshAsync(ct);
 
         var resultIds = subscribedGet.Results.Select(static entity => entity.EntityId).ToArray();
         Assert.DoesNotContain(firstId, resultIds);
@@ -311,9 +322,10 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task RefreshAsync_SubscribedGet_UsesIncrementalCollectionNotifications()
     {
+        var ct = TestContext.Current.CancellationToken;
         var firstId = new EntityId("99999999-9999-9999-9999-999999999999");
         var secondId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
 
         await SeedSnapshotAsync(
             broker,
@@ -341,7 +353,8 @@ public sealed class EntityBrokerTests
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            ct);
 
         var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
         subscribedGet.Results.CollectionChanged += (_, args) =>
@@ -349,7 +362,7 @@ public sealed class EntityBrokerTests
             actions.Add(args.Action);
         };
 
-        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
         var firstConcurrencyTag = Assert.Contains(firstId, snapshots).ConcurrencyTag;
         await SeedSnapshotAsync(
             broker,
@@ -379,7 +392,7 @@ public sealed class EntityBrokerTests
                 }
                 """));
 
-        await broker.RefreshAsync();
+        await broker.RefreshAsync(ct);
 
         Assert.Contains(System.Collections.Specialized.NotifyCollectionChangedAction.Remove, actions);
         Assert.Contains(System.Collections.Specialized.NotifyCollectionChangedAction.Add, actions);
@@ -389,8 +402,9 @@ public sealed class EntityBrokerTests
     [Fact]
     public async Task RefreshAsync_SubscribedGet_DoesNotClearAndRecreateCollection_WhenMembershipUnchanged()
     {
+        var ct = TestContext.Current.CancellationToken;
         var entityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
-        var broker = await CreateBrokerAsync();
+        var broker = await CreateBrokerAsync(ct);
 
         await SeedSnapshotAsync(
             broker,
@@ -418,13 +432,14 @@ public sealed class EntityBrokerTests
                     },
                 ],
                 Timestamps = [null],
-            });
+            },
+            ct);
 
         var originalItem = Assert.Single(subscribedGet.Results);
         var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
         subscribedGet.Results.CollectionChanged += (_, args) => actions.Add(args.Action);
 
-        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
         var concurrencyTag = Assert.Contains(entityId, snapshots).ConcurrencyTag;
         await SeedSnapshotAsync(
             broker,
@@ -441,17 +456,18 @@ public sealed class EntityBrokerTests
                 """),
             concurrencyTag);
 
-        await broker.RefreshAsync();
+        await broker.RefreshAsync(ct);
 
         Assert.Empty(actions);
         Assert.Same(originalItem, Assert.Single(subscribedGet.Results));
         Assert.Equal("Stable (updated)", subscribedGet.Results[0].DisplayName);
     }
 
-    private static Task<EntityBroker> CreateBrokerAsync()
+    private static Task<EntityBroker> CreateBrokerAsync(CancellationToken cancellationToken)
     {
         return EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            cancellationToken);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -459,7 +475,7 @@ public sealed class EntityBrokerTests
         EntityBroker broker,
         EntityId entityId)
     {
-        var entities = await broker.GetEntitiesAsync([entityId]);
+        var entities = await broker.GetEntitiesAsync([entityId], TestContext.Current.CancellationToken);
         var entity = Assert.Single(entities);
         return new WeakReference<SubscribedEntityViewModel>(entity);
     }
@@ -496,7 +512,8 @@ public sealed class EntityBrokerTests
                         Data = snapshot.Data?.Clone(),
                     },
                 ],
-            });
+            },
+            TestContext.Current.CancellationToken);
     }
 
     private static EntitySnapshot CreateSnapshot(

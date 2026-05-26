@@ -105,13 +105,147 @@
     "tools": {
       "type": "array",
       "items": {
-        "type": "object",
-        "additionalProperties": true
+        "anyOf": [
+          {
+            "$ref": "#/$defs/mcpTool"
+          },
+          {
+            "$ref": "#/$defs/tool"
+          }
+        ]
       }
     },
     "metadata": {
       "type": "object",
       "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "mcpTool": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "kind",
+        "connection",
+        "serverName"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "mcp"
+        },
+        "description": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string"
+            }
+          }
+        },
+        "serverName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "serverDescription": {
+          "type": "string"
+        },
+        "approvalMode": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "always"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "never"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "specify"
+                },
+                "alwaysRequireApprovalTools": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "neverRequireApprovalTools": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "allowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

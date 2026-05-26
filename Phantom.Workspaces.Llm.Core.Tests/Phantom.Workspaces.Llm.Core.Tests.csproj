@@ -27,6 +27,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat.yaml" Link="qwen-local-chat.yaml" />
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat.json" Link="qwen-local-chat.json" />
+    <EmbeddedResource Include="..\docs\examples\qwen-local-github-mcp.json" Link="qwen-local-github-mcp.json" />
   </ItemGroup>
 
 </Project>

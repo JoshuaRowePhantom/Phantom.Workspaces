@@ -1,46 +1,50 @@
-using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
-    private readonly IChatClient chatClient;
-    private readonly ILoggerFactory? loggerFactory;
-
     public MainWindowViewModel(AgentDefinitionParseResult parseResult)
     {
-        this.loggerFactory = (parseResult.LogChat || parseResult.LogHttpRequests)
-            ? NullLoggerFactory.Instance
-            : null;
+        var loggerFactory = new ObservableLoggerFactory();
+        this.LoggerFactory = loggerFactory;
 
-        var services = new AgentServices
+        var chat = AgentFactory.CreateAgentChat(parseResult.AgentDefinition, CreateServices(parseResult, loggerFactory));
+        this.Agent = CreateAgentViewModel(parseResult, chat);
+    }
+
+    public AgentViewModel Agent { get; }
+
+    public ObservableLoggerFactory LoggerFactory { get; }
+
+    public async ValueTask DisposeAsync()
+    {
+        await this.Agent.DisposeAsync();
+        this.LoggerFactory.Dispose();
+    }
+
+    private static AgentServices CreateServices(
+        AgentDefinitionParseResult parseResult,
+        ObservableLoggerFactory loggerFactory)
+    {
+        return new AgentServices
         {
             LogChat = parseResult.LogChat,
             LogHttpRequests = parseResult.LogHttpRequests,
-            LoggerFactory = this.loggerFactory,
+            LoggerFactory = parseResult.LogChat || parseResult.LogHttpRequests ? loggerFactory : null,
         };
+    }
 
-        var created = AgentFactory.CreateAgentChat(parseResult.AgentDefinition, services);
-        this.chatClient = created.Client;
-
-        var displayName = created.DisplayName;
+    private static AgentViewModel CreateAgentViewModel(
+        AgentDefinitionParseResult parseResult,
+        AgentChat chat)
+    {
+        var displayName = chat.DisplayName;
         if (!string.IsNullOrEmpty(parseResult.AgentSchemaPath))
         {
             displayName = $"{displayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        this.Agent = new AgentViewModel(created.Chat, displayName);
-    }
-
-    public AgentViewModel Agent { get; }
-
-    public async ValueTask DisposeAsync()
-    {
-        await this.Agent.DisposeAsync();
-        this.chatClient.Dispose();
-        this.loggerFactory?.Dispose();
+        return new AgentViewModel(chat, displayName);
     }
 }

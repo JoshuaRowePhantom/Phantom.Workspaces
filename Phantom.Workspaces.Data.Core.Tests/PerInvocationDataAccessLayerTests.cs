@@ -1,5 +1,6 @@
 namespace Phantom.Workspaces.Data.Tests;
 
+#pragma warning disable CS0618
 public sealed class PerInvocationDataAccessLayerTests
 {
     [Fact]
@@ -205,6 +206,7 @@ public sealed class PerInvocationDataAccessLayerTests
                 return ValueTask.CompletedTask;
             }
         }
+        #pragma warning restore CS0618
     }
 
     private sealed class SyncDisposableTracker

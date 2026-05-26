@@ -697,7 +697,9 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         CancellationToken cancellationToken)
     {
         var latestById = new Dictionary<EntityId, QueryEntitySnapshot>();
+#pragma warning disable CS0618
         var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+#pragma warning restore CS0618
         foreach (var batch in exportResult.ChangeBatches)
         {
             foreach (var entity in batch.Entities)
@@ -1321,7 +1323,9 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         }
 
         var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
+#pragma warning disable CS0618
         var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+#pragma warning restore CS0618
         foreach (var batch in exportResult.ChangeBatches)
         {
             foreach (var entity in batch.Entities)

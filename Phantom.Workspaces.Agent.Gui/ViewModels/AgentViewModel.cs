@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Windows.Input;
 using Avalonia.Threading;
 using Phantom.Workspaces.Llm;
 
@@ -14,6 +15,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         this.agentChat = agentChat;
         this.DisplayName = displayName;
+        this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.InputQueue = new InputQueueViewModel(
             this.agentChat,
             this.agentChat.DefaultInputQueue,
@@ -26,6 +28,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public string DisplayName { get; }
 
     public AgentChat AgentChat => this.agentChat;
+
+    public ICommand InterruptCommand { get; }
 
     public InputQueueViewModel InputQueue { get; }
 
@@ -49,6 +53,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
 
         foreach (var item in this.History)
+        {
+            item.SetReasoningVisible(visible);
+        }
+
+        foreach (var item in this.RunningItems)
         {
             item.SetReasoningVisible(visible);
         }
@@ -92,7 +101,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                 case NotifyCollectionChangedAction.Add when e.NewItems is not null:
                     foreach (AgentChatRunningItem item in e.NewItems)
                     {
-                        this.RunningItems.Add(new RunningItemViewModel(item));
+                        var vm = new RunningItemViewModel(item);
+                        vm.SetReasoningVisible(this.IsReasoningVisible);
+                        this.RunningItems.Add(vm);
                     }
                     break;
 
@@ -103,6 +114,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                         if (vm is not null)
                         {
                             this.RunningItems.Remove(vm);
+                            vm.Dispose();
                         }
                     }
                     break;
@@ -111,7 +123,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                     foreach (AgentChatRunningItem item in e.NewItems)
                     {
                         var vm = this.RunningItems.FirstOrDefault(x => x.Source == item);
-                        vm?.UpdateText();
+                        vm?.UpdateModel();
                     }
                     break;
             }
@@ -121,6 +133,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         foreach (var item in this.History)
+        {
+            item.Dispose();
+        }
+
+        foreach (var item in this.RunningItems)
         {
             item.Dispose();
         }

@@ -81,6 +81,71 @@ public sealed class AgentCliEchoProviderTests
         Assert.DoesNotContain("Unhandled exception", standardError, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Run_WithEchoProvider_StdinCloseWaitsForAssistantTurn()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var cliExePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Agent.Cli",
+            "bin",
+            "Debug",
+            "net10.0",
+            "Phantom.Workspaces.Agent.Cli.exe");
+        Assert.True(File.Exists(cliExePath), $"Expected CLI executable at '{cliExePath}'.");
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = cliExePath,
+                WorkingDirectory = repositoryRoot.FullName,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+        };
+
+        process.Start();
+
+        var standardOutputBuilder = new StringBuilder();
+        await ReadUntilContainsAsync(
+            process.StandardOutput,
+            standardOutputBuilder,
+            "Type /exit to quit.",
+            TimeSpan.FromSeconds(10));
+
+        await process.StandardInput.WriteLineAsync("hello");
+        await process.StandardInput.FlushAsync();
+        process.StandardInput.Close();
+
+        var waitTask = process.WaitForExitAsync();
+        var completed = await Task.WhenAny(waitTask, Task.Delay(TimeSpan.FromSeconds(30)));
+        if (!ReferenceEquals(completed, waitTask))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            Assert.Fail("CLI process did not exit within timeout.");
+        }
+
+        var standardOutput = standardOutputBuilder.ToString() + await process.StandardOutput.ReadToEndAsync();
+        var standardError = await process.StandardError.ReadToEndAsync();
+
+        Assert.True(
+            process.ExitCode == 0,
+            $"Expected zero exit code. ExitCode={process.ExitCode}, stderr={standardError}");
+        Assert.Contains("assistant > hello", standardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unhandled exception", standardError, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task ReadUntilContainsAsync(
         StreamReader reader,
         StringBuilder buffer,

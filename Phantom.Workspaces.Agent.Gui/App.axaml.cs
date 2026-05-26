@@ -16,10 +16,23 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var parseResult = Program.ParseResult
-                ?? throw new InvalidOperationException("ParseResult not set before Avalonia initialized.");
-            var viewModel = new MainWindowViewModel(parseResult);
-            desktop.MainWindow = new MainWindow(viewModel);
+            if (Program.ParseError is { } error)
+            {
+                desktop.MainWindow = new ErrorWindow(error);
+            }
+            else
+            {
+                try
+                {
+                    var parseResult = Program.ParseResult
+                        ?? throw new InvalidOperationException("ParseResult not set before Avalonia initialized.");
+                    desktop.MainWindow = new MainWindow(new MainWindowViewModel(parseResult));
+                }
+                catch (Exception ex)
+                {
+                    desktop.MainWindow = new ErrorWindow(ex.Message);
+                }
+            }
         }
 
         base.OnFrameworkInitializationCompleted();

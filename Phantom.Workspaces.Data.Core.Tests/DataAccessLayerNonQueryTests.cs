@@ -2,6 +2,7 @@ using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Data.Tests;
 
+#pragma warning disable CS0618
 public abstract class DataAccessLayerNonQueryTests : DataAccessLayerNonQueryWithoutHistoryTests
 {
     [Fact]
@@ -328,3 +329,4 @@ public abstract class DataAccessLayerNonQueryTests : DataAccessLayerNonQueryWith
         Assert.Empty(changedAfterUpdate.Entities);
     }
 }
+#pragma warning restore CS0618
