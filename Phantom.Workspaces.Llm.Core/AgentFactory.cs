@@ -4,7 +4,9 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using OllamaSharp;
+using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
+using System.ClientModel;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -16,6 +18,8 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public static class AgentFactory
 {
+    private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
+
     /// <summary>
     /// Applies agent-definition-specific settings to chat options.
     /// </summary>
@@ -27,10 +31,10 @@ public static class AgentFactory
         ArgumentNullException.ThrowIfNull(chatOptions);
         chatOptions.AdditionalProperties ??= [];
 
-        chatOptions.Reasoning = new ReasoningOptions
+        chatOptions.Reasoning = HasExplicitReasoningSetting(agent) ? new ReasoningOptions
         {
             Effort = ResolveReasoningEffort(agent),
-        };
+        } : null;
 
         StoreAgentDefinition(agent, chatOptions);
 
@@ -40,6 +44,16 @@ public static class AgentFactory
         }
 
         ConfigureChatOptions_Internal(promptAgent, chatOptions);
+    }
+
+    private static bool HasExplicitReasoningSetting(AgentDefinition agent)
+    {
+        if (agent is not PromptAgent promptAgent)
+        {
+            return false;
+        }
+
+        return promptAgent.Model?.Options?.AdditionalProperties?.ContainsKey("thinking") == true;
     }
 
     private static void ConfigureChatOptions_Internal(PromptAgent promptAgent, ChatOptions chatOptions)
@@ -139,11 +153,12 @@ public static class AgentFactory
         return provider switch
         {
             "echo" => (new EchoChatClient(), "Echo Chat Client"),
+            "github" => CreateGitHubModelsClient(model),
             "ollama" => CreateOllamaClient(model, services),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, ollama, openai, azure")
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github, ollama, openai, azure")
         };
     }
 
@@ -342,6 +357,7 @@ public static class AgentFactory
                 };
                 client = new OllamaApiClient(httpClient, modelId, jsonSerializerContext: null);
             }
+
             else
             {
                 client = new OllamaApiClient(new Uri(endpoint), modelId);
@@ -354,6 +370,40 @@ public static class AgentFactory
         {
             throw new InvalidOperationException(
                 $"Failed to create Ollama client for model '{modelId}' at '{endpoint}': {ex.Message}", ex);
+        }
+    }
+
+    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model)
+    {
+        var connection = model.Connection as ApiKeyConnection
+            ?? throw new InvalidOperationException("GitHub provider requires an ApiKeyConnection.");
+
+        var endpoint = string.IsNullOrWhiteSpace(connection.Endpoint)
+            ? GitHubModelsInferenceEndpoint
+            : connection.Endpoint;
+
+        var apiKey = ResolveApiKey(connection.ApiKey, "github-models");
+        var modelId = model.Id
+            ?? throw new InvalidOperationException("GitHub provider requires a model id.");
+
+        try
+        {
+            var openAiClient = new OpenAIClient(
+                new ApiKeyCredential(apiKey),
+                new OpenAIClientOptions
+                {
+                    Endpoint = new Uri(endpoint, UriKind.Absolute),
+                });
+
+            IChatClient client = openAiClient.GetChatClient(modelId).AsIChatClient();
+            var displayName = $"GitHub Models ({modelId} at {endpoint})";
+            return (client, displayName);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
+                ex);
         }
     }
 

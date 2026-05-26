@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using System.Linq;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -211,6 +212,22 @@ public sealed class AgentChatTests
         Assert.Equal(2, changedCount);
     }
 
+    [Fact]
+    public async Task ProviderException_AppendsAssistantErrorContentTurn()
+    {
+        await using var chat = CreateBusyChat(new ThrowingTestChatClient("budget limit"));
+
+        chat.EnqueueUserMessage("hello");
+        await Task.Delay(150);
+
+        var assistantErrorTurn = Assert.Single(
+            chat.History.Where(item =>
+                item.Role == ChatRole.Assistant &&
+                item.Contents.OfType<ErrorContent>().Any()));
+        var error = Assert.Single(assistantErrorTurn.Contents.OfType<ErrorContent>());
+        Assert.Contains("budget limit", error.Message);
+    }
+
     private sealed class BusyTestChatClient : IChatClient
     {
         private readonly TaskCompletionSource started;
@@ -262,6 +279,37 @@ public sealed class AgentChatTests
                 yield return update;
                 await Task.Yield();
             }
+
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ThrowingTestChatClient(string message) : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException(message);
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                yield break;
+            }
+
+            throw new InvalidOperationException(message);
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null)

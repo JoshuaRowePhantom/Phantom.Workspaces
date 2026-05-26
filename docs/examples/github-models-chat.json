@@ -1,0 +1,52 @@
+{
+  "kind": "prompt",
+  "name": "github-models-chat",
+  "displayName": "GitHub Models Chat",
+  "description": "A chat agent using GitHub Models via the OpenAI-compatible inference API",
+  "model": {
+    "id": "gpt-4.1-mini",
+    "provider": "github",
+    "apiType": "OpenAI",
+    "connection": {
+      "kind": "key",
+      "endpoint": "https://models.github.ai/inference",
+      "apiKey": "${GITHUB_TOKEN}"
+    },
+    "options": {
+      "temperature": 0.2,
+      "maxOutputTokens": 2048
+    }
+  },
+  "instructions": "You are a helpful assistant. Keep answers concise and practical.\nYou can also use GitHub MCP tools to read and manage repository data when needed.",
+  "tools": [
+    {
+      "name": "github",
+      "kind": "mcp",
+      "description": "GitHub MCP server providing tools for repositories, issues, pull requests, code search, and workflows.",
+      "connection": {
+        "kind": "key",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "serverName": "github",
+      "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",
+      "approvalMode": {
+        "kind": "never"
+      }
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": [
+      "github-models",
+      "openai-compatible",
+      "chat-only",
+      "mcp",
+      "github"
+    ],
+    "prerequisites": [
+      "Set GITHUB_TOKEN in your environment with access to GitHub Models and GitHub MCP."
+    ]
+  }
+}

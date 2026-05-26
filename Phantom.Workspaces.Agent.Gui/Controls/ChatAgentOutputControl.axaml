@@ -29,6 +29,19 @@
                                  FontFamily="Cascadia Code,Consolas,Courier New,monospace"
                                  FontSize="13"/>
         </DataTemplate>
+        <DataTemplate DataType="ai:ErrorContent">
+            <Border Background="#3A1F1F"
+                    BorderBrush="#6B2A2A"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="6">
+                <SelectableTextBlock Text="{Binding Message}"
+                                     TextWrapping="Wrap"
+                                     Foreground="#FFB3B3"
+                                     FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                     FontSize="13"/>
+            </Border>
+        </DataTemplate>
         <DataTemplate DataType="ai:FunctionCallContent">
             <Border Background="#252525"
                     BorderBrush="#3A3A3A"

@@ -393,6 +393,7 @@ public sealed class AgentChat : IAsyncDisposable
                         Role = ChatRole.Assistant,
                         IsInProgress = true,
                     }]);
+                var shouldWriteRunningItemToHistory = false;
 
                 try
                 {
@@ -409,9 +410,29 @@ public sealed class AgentChat : IAsyncDisposable
                             agentResponseUpdates);
                     }
                 }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    var runningItem = currentPartialTextResponseItem
+                        ?? throw new InvalidOperationException("Running item was unexpectedly null while handling a provider error.");
+                    var existingItems = runningItem.Items ?? [];
+                    var errorItems = existingItems
+                        .Select(item => item with { IsInProgress = false })
+                        .Concat([
+                            new AgentChatHistoryItem
+                            {
+                                Role = ChatRole.Assistant,
+                                Contents = [new ErrorContent($"Provider error: {ex.Message}")],
+                                IsInProgress = false,
+                            },
+                        ])
+                        .ToArray();
+
+                    this.UpdateRunningItem(runningItem, errorItems);
+                    shouldWriteRunningItemToHistory = true;
+                }
                 finally
                 {
-                    this.CompleteRunningItem(currentPartialTextResponseItem, false);
+                    this.CompleteRunningItem(currentPartialTextResponseItem, shouldWriteRunningItemToHistory);
                 }
             }
         }

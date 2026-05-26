@@ -67,6 +67,62 @@ public class AgentFactoryTests
     }
 
     [Fact]
+    public void ConfigureChatOptions_GitHubProvider_WithThinking_MapsReasoningEffort()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-agent",
+              "model": {
+                "id": "gpt-4.1-mini",
+                "provider": "github",
+                "apiType": "OpenAI",
+                "connection": {
+                  "kind": "key",
+                  "apiKey": "${GITHUB_TOKEN}"
+                },
+                "options": {
+                  "additionalProperties": {
+                    "thinking": "high"
+                  }
+                }
+              },
+              "tools": []
+            }
+            """);
+
+        var chatOptions = new ChatOptions();
+        AgentFactory.ConfigureChatOptions(agent, chatOptions);
+
+        Assert.NotNull(chatOptions.Reasoning);
+        Assert.Equal(ReasoningEffort.High, chatOptions.Reasoning!.Effort);
+    }
+
+    [Fact]
+    public void ConfigureChatOptions_WithoutThinking_DoesNotSetReasoningEffort()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var chatOptions = new ChatOptions();
+        AgentFactory.ConfigureChatOptions(agent, chatOptions);
+
+        Assert.Null(chatOptions.Reasoning);
+    }
+
+    [Fact]
     public void ConfigureChatOptions_NonPromptAgent_IgnoresInstructions()
     {
         var nonPromptAgent = AgentDefinition.FromJson(
@@ -91,8 +147,7 @@ public class AgentFactoryTests
         Assert.NotNull(chatOptions.AdditionalProperties);
         Assert.True(chatOptions.AdditionalProperties!.ContainsKey("agent_definition"));
         Assert.False(chatOptions.AdditionalProperties!.ContainsKey("additionalInstructions"));
-        Assert.NotNull(chatOptions.Reasoning);
-        Assert.Equal(ReasoningEffort.High, chatOptions.Reasoning!.Effort);
+        Assert.Null(chatOptions.Reasoning);
     }
 
     [Fact]
@@ -188,6 +243,79 @@ public class AgentFactoryTests
 
         Assert.IsType<TestProviderChatClient>(client);
         Assert.Equal("Test Chat Client", displayName);
+    }
+
+    [Fact]
+    public void CreateChatClient_GitHubProvider_ReturnsOpenAiChatClient()
+    {
+        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
+        try
+        {
+            var agent = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "github-models-agent",
+                  "model": {
+                    "id": "gpt-4.1-mini",
+                    "provider": "github",
+                    "apiType": "OpenAI",
+                    "connection": {
+                      "kind": "key",
+                      "endpoint": "https://models.github.ai/inference",
+                      "apiKey": "${GITHUB_TOKEN}"
+                    }
+                  },
+                  "tools": []
+                }
+                """);
+
+            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+
+            Assert.NotNull(client);
+            Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
+        }
+    }
+
+    [Fact]
+    public void CreateChatClient_GitHubProvider_WithNoEndpoint_UsesDefaultEndpoint()
+    {
+        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
+        try
+        {
+            var agent = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "github-models-agent",
+                  "model": {
+                    "id": "gpt-4.1-mini",
+                    "provider": "github",
+                    "apiType": "OpenAI",
+                    "connection": {
+                      "kind": "key",
+                      "apiKey": "${GITHUB_TOKEN}"
+                    }
+                  },
+                  "tools": []
+                }
+                """);
+
+            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+
+            Assert.NotNull(client);
+            Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
+        }
     }
 
     [Fact]

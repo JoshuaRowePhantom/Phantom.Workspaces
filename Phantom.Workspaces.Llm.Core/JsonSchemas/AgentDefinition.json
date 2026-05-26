@@ -43,6 +43,7 @@
           "type": "string",
           "enum": [
             "echo",
+            "github",
             "ollama",
             "openai",
             "azure"
@@ -68,6 +69,9 @@
               "minLength": 1
             },
             "key": {
+              "type": "string"
+            },
+            "apiKey": {
               "type": "string"
             }
           }
