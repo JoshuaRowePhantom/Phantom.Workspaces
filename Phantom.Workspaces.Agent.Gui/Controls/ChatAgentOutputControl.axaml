@@ -8,6 +8,27 @@
              x:DataType="vm:AgentViewModel"
              Background="#1E1E1E">
     <UserControl.DataTemplates>
+        <DataTemplate DataType="ai:TextContent">
+            <SelectableTextBlock Text="{Binding Text}"
+                                 TextWrapping="Wrap"
+                                 Foreground="#D0D0D0"
+                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                 FontSize="13"/>
+        </DataTemplate>
+        <DataTemplate DataType="ai:DataContent">
+            <SelectableTextBlock Text="{Binding MediaType, StringFormat=[{0}]}"
+                                 TextWrapping="Wrap"
+                                 Foreground="#D0D0D0"
+                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                 FontSize="13"/>
+        </DataTemplate>
+        <DataTemplate DataType="ai:UriContent">
+            <SelectableTextBlock Text="{Binding Uri}"
+                                 TextWrapping="Wrap"
+                                 Foreground="#D0D0D0"
+                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
+                                 FontSize="13"/>
+        </DataTemplate>
         <DataTemplate DataType="ai:FunctionCallContent">
             <Border Background="#252525"
                     BorderBrush="#3A3A3A"
@@ -50,12 +71,7 @@
         </DataTemplate>
         <DataTemplate DataType="llm:AgentChatHistoryItem">
             <StackPanel>
-                <TextBlock Text="{Binding Text}"
-                           IsVisible="{Binding HasText}"
-                           Foreground="#D0D0D0"
-                           TextWrapping="Wrap"
-                           FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                           FontSize="13"/>
+                <ItemsControl ItemsSource="{Binding Contents, Converter={x:Static converters:RenderableContentFilterConverter.Instance}}"/>
                 <ProgressBar IsVisible="{Binding IsInProgress}"
                              IsIndeterminate="True"
                              Height="2"
@@ -63,9 +79,6 @@
                              Background="Transparent"
                              Foreground="#4080FF"/>
 
-                <ItemsControl ItemsSource="{Binding Contents, Converter={x:Static converters:FunctionContentFilterConverter.Instance}}"
-                              Margin="0,6,0,0">
-                </ItemsControl>
             </StackPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:ChatHistoryItemViewModel">
@@ -93,13 +106,7 @@
                                 Margin="0,0,0,6"
                                 Background="Transparent"
                                 Foreground="#4080FF"/>
-                    <SelectableTextBlock Text="{Binding Text}"
-                                        IsVisible="{Binding HasText}"
-                                         TextWrapping="Wrap"
-                                         Foreground="#D0D0D0"
-                                         FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                         FontSize="13"/>
-                    <ItemsControl ItemsSource="{Binding Contents, Converter={x:Static converters:FunctionContentFilterConverter.Instance}}"
+                    <ItemsControl ItemsSource="{Binding Contents, Converter={x:Static converters:RenderableContentFilterConverter.Instance}}"
                                  Margin="0,8,0,0"/>
                     <ItemsControl ItemsSource="{Binding Attachments}"
                                  IsVisible="{Binding HasAttachments}"
@@ -141,28 +148,10 @@
         </DataTemplate>
     </UserControl.DataTemplates>
 
-    <DockPanel>
-        <Border DockPanel.Dock="Bottom"
-                Background="#232323"
-                BorderBrush="#2A2A2A"
-                BorderThickness="0,1,0,0"
-                Padding="8,6"
-                IsVisible="{Binding RunningItems.Count, Converter={x:Static converters:CountToBoolConverter.Instance}}">
-            <ItemsControl ItemsSource="{Binding RunningItems}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate DataType="vm:RunningItemViewModel">
-                        <Border Padding="6,4">
-                            <ItemsControl ItemsSource="{Binding HistoryItems}"/>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </Border>
-
-        <!-- History (virtualized) -->
-        <ScrollViewer x:Name="HistoryScroll"
-                      HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollBarVisibility="Auto">
+    <ScrollViewer x:Name="HistoryScroll"
+                  HorizontalScrollBarVisibility="Disabled"
+                  VerticalScrollBarVisibility="Auto">
+        <StackPanel>
             <ItemsControl x:Name="HistoryList"
                           ItemsSource="{Binding History}">
                 <ItemsControl.ItemsPanel>
@@ -171,6 +160,21 @@
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
             </ItemsControl>
-        </ScrollViewer>
-    </DockPanel>
+            <Border Background="#232323"
+                    BorderBrush="#2A2A2A"
+                    BorderThickness="0,1,0,0"
+                    Padding="8,6"
+                    IsVisible="{Binding RunningItems.Count, Converter={x:Static converters:CountToBoolConverter.Instance}}">
+                <ItemsControl ItemsSource="{Binding RunningItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:RunningItemViewModel">
+                            <Border Padding="6,4">
+                                <ItemsControl ItemsSource="{Binding HistoryItems}"/>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
 </UserControl>

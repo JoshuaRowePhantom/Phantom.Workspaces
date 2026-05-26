@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Avalonia.Data.Converters;
+using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Agent.Gui.Converters;
 
@@ -20,6 +21,8 @@ public sealed class ObjectToPrettyJsonConverter : IValueConverter
             null => string.Empty,
             string s when string.IsNullOrWhiteSpace(s) => string.Empty,
             string s => TryPrettyPrintJson(s, out var pretty) ? pretty : s,
+            TextContent textContent when string.IsNullOrWhiteSpace(textContent.Text) => string.Empty,
+            TextContent textContent => TryPrettyPrintJson(textContent.Text, out var pretty) ? pretty : textContent.Text,
             JsonElement element => JsonSerializer.Serialize(element, PrettyOptions),
             _ => TrySerializePrettyJson(value),
         };
