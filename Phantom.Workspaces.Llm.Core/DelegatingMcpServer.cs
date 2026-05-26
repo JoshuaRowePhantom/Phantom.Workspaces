@@ -23,11 +23,6 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
 
     public string Name => $"Delegating ({this.delegatedClientTransport.Name})";
 
-    public IToolRegistry GetToolRegistry()
-    {
-        return new McpToolRegistry(this, this.delegatedClientOptions);
-    }
-
     public Task<ITransport> ConnectAsync(CancellationToken cancellationToken = default)
     {
         return this.delegatedClientTransport.ConnectAsync(cancellationToken);
@@ -119,64 +114,4 @@ public sealed class DelegatingMcpServer : IClientTransport, IAsyncDisposable
         }
     }
 
-    private sealed class McpToolRegistry : IToolRegistry
-    {
-        private readonly DelegatingMcpServer server;
-        private readonly McpClientOptions? clientOptions;
-        private readonly Lazy<Task<McpClient>> clientTask;
-
-        public McpToolRegistry(
-            DelegatingMcpServer server,
-            McpClientOptions? clientOptions)
-        {
-            this.server = server;
-            this.clientOptions = clientOptions;
-            this.clientTask = new Lazy<Task<McpClient>>(
-                () => McpClient.CreateAsync(server, clientOptions, cancellationToken: CancellationToken.None),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-        }
-
-        public async Task<string> ExecuteToolAsync(
-            string toolName,
-            IReadOnlyDictionary<string, object?>? arguments = null,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(toolName);
-
-            try
-            {
-                var client = await this.clientTask.Value.WaitAsync(cancellationToken);
-                var result = await client.CallToolAsync(toolName, arguments, cancellationToken: cancellationToken);
-                return this.FormatResult(result);
-            }
-            catch (Exception exception)
-            {
-                return $"MCP tool execution failed. {exception.Message}";
-            }
-        }
-
-        private string FormatResult(
-            CallToolResult result)
-        {
-            var textContent = result.Content
-                .OfType<TextContentBlock>()
-                .Select(static content => content.Text)
-                .Where(static text => !string.IsNullOrWhiteSpace(text))
-                .ToArray();
-            var text = string.Join(Environment.NewLine, textContent);
-            if (string.IsNullOrWhiteSpace(text) && result.StructuredContent is not null)
-            {
-                text = result.StructuredContent.Value.GetRawText();
-            }
-
-            if (result.IsError == true)
-            {
-                text = string.IsNullOrWhiteSpace(text)
-                    ? "MCP tool execution failed."
-                    : $"MCP tool execution failed. {text}";
-            }
-
-            return text ?? string.Empty;
-        }
-    }
 }

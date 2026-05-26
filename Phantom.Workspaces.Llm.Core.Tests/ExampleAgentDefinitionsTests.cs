@@ -2,6 +2,7 @@ using Phantom.Workspaces.Llm;
 using AgentSchema;
 using Xunit;
 using System.Reflection;
+using System.Linq;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -106,12 +107,56 @@ public class ExampleAgentDefinitionsTests
         var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
 
         var promptAgent = Assert.IsType<PromptAgent>(agent);
-        var tool = Assert.Single(promptAgent.Tools);
-        var mcpTool = Assert.IsType<McpTool>(tool);
+        Assert.NotNull(promptAgent.Tools);
 
+        var mcpTool = Assert.Single(promptAgent.Tools!.OfType<McpTool>());
         Assert.Equal("github", mcpTool.Name);
         Assert.Equal("github", mcpTool.ServerName);
         Assert.NotNull(mcpTool.Connection);
+    }
+
+    [Fact]
+    public void LoadQwenLocalGithubMcp_HasWebRequestTool()
+    {
+        var json = GetEmbeddedResourceContent("qwen-local-github-mcp.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        Assert.NotNull(promptAgent.Tools);
+
+        var webRequestTool = Assert.Single(promptAgent.Tools!.OfType<CustomTool>().Where(t => t.Kind == "web_request"));
+        Assert.Equal("web_request", webRequestTool.Kind);
+    }
+
+    [Fact]
+    public void LoadGithubModelsChat_ValidatesSuccessfully()
+    {
+        var json = GetEmbeddedResourceContent("github-models-chat.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        Assert.NotNull(agent);
+        Assert.Equal("prompt", agent.Kind);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        Assert.Equal("github-models-chat", promptAgent.Name);
+        Assert.Equal("gpt-4.1-mini", promptAgent.Model?.Id);
+        Assert.Equal("github", promptAgent.Model?.Provider);
+    }
+
+    [Fact]
+    public void LoadGithubModelsChat_HasMcpAndWebRequestTools()
+    {
+        var json = GetEmbeddedResourceContent("github-models-chat.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        Assert.NotNull(promptAgent.Tools);
+
+        var mcpTool = Assert.Single(promptAgent.Tools!.OfType<McpTool>());
+        Assert.Equal("github", mcpTool.Name);
+
+        var webRequestTool = Assert.Single(promptAgent.Tools.OfType<CustomTool>().Where(t => t.Kind == "web_request"));
+        Assert.Equal("web_request", webRequestTool.Kind);
     }
 
     [Fact]

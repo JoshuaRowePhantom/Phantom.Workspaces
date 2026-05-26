@@ -20,6 +20,10 @@
   "instructions": "You are a helpful assistant. Keep answers concise and practical.\nYou can also use GitHub MCP tools to read and manage repository data when needed.",
   "tools": [
     {
+      "kind": "web_request",
+      "description": "Make HTTP requests to fetch web pages and resources"
+    },
+    {
       "name": "github",
       "kind": "mcp",
       "description": "GitHub MCP server providing tools for repositories, issues, pull requests, code search, and workflows.",

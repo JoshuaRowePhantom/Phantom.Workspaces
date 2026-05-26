@@ -23,8 +23,17 @@
       }
     }
   },
-  "instructions": "You are a helpful AI assistant powered by Qwen 3.6.\nRespond to user queries clearly and concisely.\nYou have no special tools available, so focus on providing thoughtful answers through conversation.",
-  "tools": [],
+  "instructions": "You are a helpful AI assistant powered by Qwen 3.6.\nRespond to user queries clearly and concisely.\nYou can search the web and fetch URLs when needed to provide accurate, up-to-date information.",
+  "tools": [
+    {
+      "kind": "web_search",
+      "description": "Search the web for information"
+    },
+    {
+      "kind": "web_request",
+      "description": "Make HTTP requests to fetch web pages and resources"
+    }
+  ],
   "metadata": {
     "version": "1.0",
     "author": "Phantom Workspaces",

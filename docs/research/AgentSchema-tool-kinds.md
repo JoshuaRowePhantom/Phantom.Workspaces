@@ -1,0 +1,13 @@
+# AgentSchema tool kinds
+
+Generated from `AgentSchema` package `1.0.0-beta.8` via reflection (`AgentSchema.dll`).
+
+| Tool type | kind |
+| --- | --- |
+| `AgentSchema.CodeInterpreterTool` | `code_interpreter` |
+| `AgentSchema.CustomTool` | *(empty string; caller-specified custom kind)* |
+| `AgentSchema.FileSearchTool` | `file_search` |
+| `AgentSchema.FunctionTool` | `function` |
+| `AgentSchema.McpTool` | `mcp` |
+| `AgentSchema.OpenApiTool` | `openapi` |
+| `AgentSchema.WebSearchTool` | `bing_search` |

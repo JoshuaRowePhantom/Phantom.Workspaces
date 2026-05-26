@@ -332,6 +332,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 new AgentChatHistoryItem
                 {
+                    Role = ChatRole.Assistant,
                     IsInProgress = true,
                 }
             };

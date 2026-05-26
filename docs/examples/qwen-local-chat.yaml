@@ -23,9 +23,13 @@ model:
 instructions: |
   You are a helpful AI assistant powered by Qwen 3.6. 
   Respond to user queries clearly and concisely.
-  You have no special tools available, so focus on providing thoughtful answers through conversation.
+  You can search the web and fetch URLs when needed to provide accurate, up-to-date information.
 
-tools: []
+tools:
+  - kind: web_search
+    description: Search the web for information
+  - kind: web_request
+    description: Make HTTP requests to fetch web pages and resources
 
 metadata:
   version: "1.0"

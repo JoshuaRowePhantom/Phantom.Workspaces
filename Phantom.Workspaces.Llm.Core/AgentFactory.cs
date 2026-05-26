@@ -6,7 +6,9 @@ using ModelContextProtocol.Client;
 using OllamaSharp;
 using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
+using System.ComponentModel;
 using System.ClientModel;
+using System.Diagnostics;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -429,29 +431,42 @@ public static class AgentFactory
             return resolvedTools;
         }
 
-        foreach (var tool in agentTools.OfType<McpTool>())
+        foreach (var tool in agentTools)
         {
-            var toolServerName = string.IsNullOrWhiteSpace(tool.ServerName) ? tool.Name : tool.ServerName;
-            progressCallback?.Invoke($"Opening MCP server '{toolServerName}'...");
-
-            var transport = CreateMcpTransport(tool, services);
-            var client = await McpClient.CreateAsync(
-                transport,
-                null,
-                services?.LoggerFactory,
-                cancellationToken);
-            resourceCallback?.Invoke(client);
-
-            var tools = await client.ListToolsAsync(options: null, cancellationToken);
-            var allowed = tool.AllowedTools;
-            if (allowed is { Count: > 0 })
+            switch (tool)
             {
-                var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase);
-                tools = [.. tools.Where(mcpTool => allowedSet.Contains(mcpTool.Name))];
-            }
+                case McpTool mcpTool:
+                {
+                    var toolServerName = string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName;
+                    progressCallback?.Invoke($"Opening MCP server '{toolServerName}'...");
 
-            resolvedTools.AddRange(tools);
-            progressCallback?.Invoke($"Opened MCP server '{toolServerName}' ({tools.Count} tools).");
+                    var transport = CreateMcpTransport(mcpTool, services);
+                    var client = await McpClient.CreateAsync(
+                        transport,
+                        null,
+                        services?.LoggerFactory,
+                        cancellationToken);
+                    resourceCallback?.Invoke(client);
+
+                    var mcpTools = await client.ListToolsAsync(options: null, cancellationToken);
+                    var allowed = mcpTool.AllowedTools;
+                    if (allowed is { Count: > 0 })
+                    {
+                        var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase);
+                        mcpTools = [.. mcpTools.Where(t => allowedSet.Contains(t.Name))];
+                    }
+
+                    resolvedTools.AddRange(mcpTools);
+                    progressCallback?.Invoke($"Opened MCP server '{toolServerName}' ({mcpTools.Count} tools).");
+                    break;
+                }
+                case CustomTool { Kind: "web_search" }:
+                    resolvedTools.Add(new WebSearchTool(logger: services?.LoggerFactory?.CreateLogger<WebSearchTool>()));
+                    break;
+                case CustomTool { Kind: "web_request" }:
+                    resolvedTools.Add(new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>()));
+                    break;
+            }
         }
 
         return resolvedTools;
@@ -554,6 +569,15 @@ public static class AgentFactory
             var envValue = Environment.GetEnvironmentVariable(envVarName);
             if (string.IsNullOrWhiteSpace(envValue))
             {
+                if (string.Equals(envVarName, "GITHUB_TOKEN", StringComparison.OrdinalIgnoreCase))
+                {
+                    var githubCliToken = ResolveGithubTokenFromCli();
+                    if (!string.IsNullOrWhiteSpace(githubCliToken))
+                    {
+                        return githubCliToken;
+                    }
+                }
+
                 throw new InvalidOperationException(
                     $"Environment variable '{envVarName}' for MCP tool '{serverName ?? "unknown"}' was not found or is empty.");
             }
@@ -562,5 +586,47 @@ public static class AgentFactory
         }
 
         return trimmed;
+    }
+
+    private static string? ResolveGithubTokenFromCli()
+    {
+        Process? process;
+        try
+        {
+            process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "gh",
+                Arguments = "auth token",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+        }
+        catch (Win32Exception)
+        {
+            return null;
+        }
+
+        if (process is null)
+        {
+            return null;
+        }
+
+        using (process)
+        {
+            if (!process.WaitForExit(10000))
+            {
+                process.Kill(entireProcessTree: true);
+                throw new InvalidOperationException("Timed out while resolving GITHUB_TOKEN via 'gh auth token'.");
+            }
+
+            if (process.ExitCode != 0)
+            {
+                return null;
+            }
+
+            return process.StandardOutput.ReadToEnd().Trim();
+        }
     }
 }

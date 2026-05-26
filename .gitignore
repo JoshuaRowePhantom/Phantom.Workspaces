@@ -485,3 +485,6 @@ $RECYCLE.BIN/
 
 # Generated NuGet API research artifacts
 docs/nuget/research/
+
+# Local launch profiles
+**/Properties/launchSettings.json

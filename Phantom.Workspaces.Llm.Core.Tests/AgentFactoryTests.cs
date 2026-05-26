@@ -3,6 +3,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Llm.Echo;
+using System.Runtime.InteropServices;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -315,6 +316,66 @@ public class AgentFactoryTests
         finally
         {
             Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
+        }
+    }
+
+    [Fact]
+    public void CreateChatClient_GitHubProvider_WithMissingEnv_UsesGhAuthToken()
+    {
+        var originalToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var tempDir = Path.Combine(Path.GetTempPath(), $"gh-stub-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        var ghToken = "token-from-gh-cli";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            File.WriteAllText(
+                Path.Combine(tempDir, "gh.cmd"),
+                $"@echo off{Environment.NewLine}echo {ghToken}{Environment.NewLine}exit /b 0{Environment.NewLine}");
+        }
+        else
+        {
+            var ghPath = Path.Combine(tempDir, "gh");
+            File.WriteAllText(
+                ghPath,
+                $"#!/usr/bin/env sh{Environment.NewLine}echo {ghToken}{Environment.NewLine}");
+            System.Diagnostics.Process.Start("chmod", $"+x \"{ghPath}\"")!.WaitForExit();
+        }
+
+        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        Environment.SetEnvironmentVariable("PATH", $"{tempDir}{Path.PathSeparator}{originalPath}");
+
+        try
+        {
+            var agent = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "github-models-agent",
+                  "model": {
+                    "id": "gpt-4.1-mini",
+                    "provider": "github",
+                    "apiType": "OpenAI",
+                    "connection": {
+                      "kind": "key",
+                      "apiKey": "${GITHUB_TOKEN}"
+                    }
+                  },
+                  "tools": []
+                }
+                """);
+
+            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+
+            Assert.NotNull(client);
+            Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", originalToken);
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Directory.Delete(tempDir, recursive: true);
         }
     }
 

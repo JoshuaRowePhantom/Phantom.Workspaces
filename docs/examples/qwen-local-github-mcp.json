@@ -26,6 +26,10 @@
   "instructions": "You are a GitHub-integrated AI assistant powered by Qwen 3.6.\nYou have access to GitHub through the GitHub MCP server, which lets you read and manage repositories, issues, pull requests, discussions, Actions workflow runs, and more.\n\nWhen helping with GitHub tasks:\n- Always confirm before making mutations (creating/updating/closing issues, PRs, etc.)\n- Prefer searching before creating to avoid duplicates\n- When browsing code or files, start with a repository overview before diving into specifics\n- Summarize long lists of results rather than dumping everything verbatim",
   "tools": [
     {
+      "kind": "web_request",
+      "description": "Make HTTP requests to fetch web pages and resources"
+    },
+    {
       "name": "github",
       "kind": "mcp",
       "description": "GitHub MCP server providing tools for repository management, issues, pull requests, code search, Actions workflow runs, Dependabot alerts, and more",

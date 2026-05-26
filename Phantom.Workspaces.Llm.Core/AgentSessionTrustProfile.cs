@@ -1,5 +1,3 @@
-using Json.Schema;
-
 namespace Phantom.Workspaces.Llm;
 
 public sealed class AgentSessionTrustProfile
@@ -9,11 +7,8 @@ public sealed class AgentSessionTrustProfile
 
     private readonly IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>> tools;
 
-    private readonly JsonSchema? allowedToolCallSchema;
-
     public AgentSessionTrustProfile(
-        IEnumerable<KeyValuePair<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>>> tools,
-        JsonSchema? allowedToolCallSchema = null)
+        IEnumerable<KeyValuePair<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>>> tools)
     {
         ArgumentNullException.ThrowIfNull(tools);
 
@@ -24,23 +19,7 @@ public sealed class AgentSessionTrustProfile
             static pair => pair.Value
                 ?? throw new ArgumentException("Tool implementation cannot be null.", nameof(tools)),
             StringComparer.Ordinal);
-        this.allowedToolCallSchema = allowedToolCallSchema;
     }
 
-    public IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>> Tools =>
-        this.tools;
-
-    public IToolRegistry CreateToolRegistry()
-    {
-        var toolRegistry = new ToolRegistry(this.tools);
-        if (this.allowedToolCallSchema is null)
-        {
-            return toolRegistry;
-        }
-
-        return new SchemaValidatingToolRegistry(
-            toolRegistry,
-            this.allowedToolCallSchema);
-    }
+    public IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, object?>?, CancellationToken, ValueTask<string>>> Tools => this.tools;
 }
-
