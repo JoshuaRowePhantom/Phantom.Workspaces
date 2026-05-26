@@ -55,20 +55,17 @@
                                                       ColumnSpacing="8"
                                                       RowSpacing="6">
                                                     <StackPanel IsVisible="{Binding IsEditing}"
-                                                                Spacing="6">
+                                                               Spacing="6">
                                                         <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
                                                              x:Name="EditBox"
                                                              AcceptsReturn="False"
                                                              MinHeight="32"
-                                                             FontFamily="Cascadia Code,Consolas,Courier New,monospace"
                                                              FontSize="12"
                                                              Background="#2A2A2A"
-                                                             Foreground="#E0E0E0"
-                                                             CaretBrush="#E0E0E0"
-                                                             BorderBrush="#3A3A3A"/>
+                                                             Classes="terminal-mono terminal-editor"/>
                                                     <StackPanel Orientation="Horizontal"
-                                                                HorizontalAlignment="Right"
-                                                                Spacing="6">
+                                                               HorizontalAlignment="Right"
+                                                               Spacing="6">
                                                         <Button Command="{Binding SaveEditCommand}"
                                                                 Content="Save"
                                                                 Classes="queue-action-button"/>
@@ -89,9 +86,8 @@
                                                     </Button.KeyBindings>
                                                     <SelectableTextBlock Text="{Binding Text}"
                                                                          TextWrapping="Wrap"
-                                                                         Foreground="#D0D0D0"
-                                                                         FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                                                         FontSize="12"/>
+                                                                         FontSize="12"
+                                                                         Classes="terminal-mono terminal-content"/>
                                                 </Button>
 
                                                 <ItemsControl Grid.Row="1"

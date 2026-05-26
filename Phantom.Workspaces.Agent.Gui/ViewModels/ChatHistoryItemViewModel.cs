@@ -17,8 +17,9 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
 
     public ChatHistoryItemViewModel(AgentChatHistoryItem item)
     {
+        this.Role = item.Role;
         this.IsUser = item.Role == ChatRole.User;
-        this.RoleLabel = this.IsUser ? "user" : "assistant";
+        this.RoleLabel = item.Role.Value.ToLowerInvariant();
         this.contents = item.Contents;
         this.text = item.Text;
         this.reasoningText = item.ReasoningText;
@@ -27,6 +28,7 @@ public sealed class ChatHistoryItemViewModel : ViewModelBase, IDisposable
         this.UpdateAttachments(item.Contents);
     }
 
+    public ChatRole Role { get; }
     public bool IsUser { get; }
     public string RoleLabel { get; }
 

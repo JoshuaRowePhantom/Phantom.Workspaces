@@ -7,12 +7,10 @@
         MinHeight="200"
         WindowStartupLocation="CenterScreen"
         Title="Agent Startup Error"
-        Background="#1A1A1A">
-    <DockPanel Margin="16">
+        Classes="agent-window">
+    <DockPanel Classes="agent-dialog-root">
         <StackPanel DockPanel.Dock="Bottom"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Margin="0,12,0,0">
+                    Classes="agent-dialog-actions">
             <Button Content="Close"
                     Click="OnCloseClicked"
                     Classes="queue-action-button"/>
@@ -20,23 +18,14 @@
 
         <TextBlock DockPanel.Dock="Top"
                    Text="Failed to load agent definition"
-                   FontSize="16"
-                   FontWeight="SemiBold"
-                   Foreground="#E57373"
-                   Margin="0,0,0,12"/>
+                   Classes="agent-dialog-title agent-error-title"/>
 
-        <Border Background="#111111"
-                BorderBrush="#303030"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="12">
+        <Border Classes="agent-surface">
             <ScrollViewer HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto">
                 <TextBlock x:Name="ErrorText"
                            TextWrapping="Wrap"
-                           FontFamily="Consolas,monospace"
-                           FontSize="13"
-                           Foreground="#CCCCCC"/>
+                           Classes="terminal-mono agent-body-text"/>
             </ScrollViewer>
         </Border>
     </DockPanel>

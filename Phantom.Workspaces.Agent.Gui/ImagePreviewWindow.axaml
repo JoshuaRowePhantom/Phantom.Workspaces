@@ -7,13 +7,10 @@
         MinHeight="240"
         WindowStartupLocation="CenterOwner"
         Title="Image preview"
-        Background="#1A1A1A">
-    <DockPanel Margin="12">
+        Classes="agent-window">
+    <DockPanel Classes="agent-dialog-root compact">
         <StackPanel DockPanel.Dock="Bottom"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Spacing="8"
-                    Margin="0,12,0,0">
+                    Classes="agent-dialog-actions">
             <Button Content="Copy"
                     Click="OnCopyClicked"
                     Classes="queue-action-button"/>
@@ -22,11 +19,7 @@
                     Classes="queue-action-button"/>
         </StackPanel>
 
-        <Border Background="#111111"
-                BorderBrush="#303030"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="8">
+        <Border Classes="agent-surface compact">
             <ScrollViewer HorizontalScrollBarVisibility="Auto"
                           VerticalScrollBarVisibility="Auto">
                 <Image x:Name="PreviewImage"

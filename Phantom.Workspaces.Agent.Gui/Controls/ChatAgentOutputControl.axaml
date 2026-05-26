@@ -3,6 +3,7 @@
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              xmlns:ai="using:Microsoft.Extensions.AI"
              xmlns:llm="using:Phantom.Workspaces.Llm"
+             xmlns:behaviors="using:Phantom.Workspaces.Agent.Gui.Behaviors"
              xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.ChatAgentOutputControl"
              x:DataType="vm:AgentViewModel"
@@ -10,74 +11,40 @@
     <UserControl.DataTemplates>
         <DataTemplate DataType="ai:TextContent">
             <SelectableTextBlock Text="{Binding Text}"
-                                 TextWrapping="Wrap"
-                                 Foreground="#D0D0D0"
-                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                 FontSize="13"/>
+                                 Classes="terminal-mono terminal-content"/>
         </DataTemplate>
         <DataTemplate DataType="ai:DataContent">
             <SelectableTextBlock Text="{Binding MediaType, StringFormat=[{0}]}"
-                                 TextWrapping="Wrap"
-                                 Foreground="#D0D0D0"
-                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                 FontSize="13"/>
+                                 Classes="terminal-mono terminal-content"/>
         </DataTemplate>
         <DataTemplate DataType="ai:UriContent">
             <SelectableTextBlock Text="{Binding Uri}"
-                                 TextWrapping="Wrap"
-                                 Foreground="#D0D0D0"
-                                 FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                 FontSize="13"/>
+                                 Classes="terminal-mono terminal-content"/>
         </DataTemplate>
         <DataTemplate DataType="ai:ErrorContent">
-            <Border Background="#3A1F1F"
-                    BorderBrush="#6B2A2A"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="6">
+            <Border Classes="agent-card error">
                 <SelectableTextBlock Text="{Binding Message}"
-                                     TextWrapping="Wrap"
-                                     Foreground="#FFB3B3"
-                                     FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                     FontSize="13"/>
+                                     Classes="terminal-mono terminal-error"/>
             </Border>
         </DataTemplate>
         <DataTemplate DataType="ai:FunctionCallContent">
-            <Border Background="#252525"
-                    BorderBrush="#3A3A3A"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="6">
+            <Border Classes="agent-card">
                 <StackPanel>
                     <TextBlock Text="{Binding Name, StringFormat=tool call: {0}}"
-                               Foreground="#B8B8B8"
-                               FontWeight="SemiBold"
-                               FontSize="11"/>
+                               Classes="agent-meta-label"/>
                     <SelectableTextBlock Text="{Binding Arguments, Converter={x:Static converters:ObjectToPrettyJsonConverter.Instance}}"
-                                         TextWrapping="Wrap"
-                                         Foreground="#C8C8C8"
-                                         FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                         FontSize="12"
+                                         Classes="terminal-mono terminal-detail"
                                          Margin="0,4,0,0"/>
                 </StackPanel>
             </Border>
         </DataTemplate>
         <DataTemplate DataType="ai:FunctionResultContent">
-            <Border Background="#252525"
-                    BorderBrush="#3A3A3A"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="6">
+            <Border Classes="agent-card">
                 <StackPanel>
                     <TextBlock Text="{Binding CallId, StringFormat=tool result: {0}}"
-                               Foreground="#B8B8B8"
-                               FontWeight="SemiBold"
-                               FontSize="11"/>
+                               Classes="agent-meta-label"/>
                     <SelectableTextBlock Text="{Binding Result, Converter={x:Static converters:ObjectToPrettyJsonConverter.Instance}}"
-                                         TextWrapping="Wrap"
-                                         Foreground="#C8C8C8"
-                                         FontFamily="Cascadia Code,Consolas,Courier New,monospace"
-                                         FontSize="12"
+                                         Classes="terminal-mono terminal-detail"
                                          Margin="0,4,0,0"/>
                 </StackPanel>
             </Border>
@@ -95,23 +62,16 @@
             </StackPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:ChatHistoryItemViewModel">
-            <Border Padding="12,8"
-                    BorderBrush="#2A2A2A"
-                    BorderThickness="0,0,0,1">
+            <Border Classes="agent-row">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding RoleLabel}"
-                               FontWeight="SemiBold"
-                               FontSize="11"
-                               Margin="0,0,0,4"
-                               Foreground="{Binding IsUser, Converter={x:Static converters:RoleToColorConverter.Instance}}"/>
+                               Classes="agent-role-label"
+                               behaviors:RoleClassBehavior.Role="{Binding Role}"/>
                     <TextBlock DockPanel.Dock="Top"
                                Text="{Binding ReasoningDisplayText}"
                                IsVisible="{Binding HasReasoningLine}"
-                               FontSize="11"
-                               FontStyle="Italic"
-                               Margin="0,0,0,4"
-                               Foreground="#8F8F8F"/>
+                               Classes="agent-reasoning-line"/>
                     <ProgressBar DockPanel.Dock="Top"
                                 IsVisible="{Binding IsInProgress}"
                                 IsIndeterminate="True"
@@ -132,11 +92,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="vm:ChatHistoryImageViewModel">
-                                <Border Background="#303030"
-                                        BorderBrush="#505050"
-                                        BorderThickness="1"
-                                        CornerRadius="4"
-                                        Padding="6">
+                                <Border Classes="agent-chip">
                                     <StackPanel Spacing="4">
                                         <Button Background="Transparent"
                                                 BorderThickness="0"
@@ -149,8 +105,7 @@
                                                    Stretch="UniformToFill"/>
                                         </Button>
                                         <TextBlock Text="{Binding Label}"
-                                                   FontSize="11"
-                                                   Foreground="#D0D0D0"/>
+                                                   Classes="agent-chip-label"/>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
@@ -173,10 +128,7 @@
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
             </ItemsControl>
-            <Border Background="#232323"
-                    BorderBrush="#2A2A2A"
-                    BorderThickness="0,1,0,0"
-                    Padding="8,6"
+            <Border Classes="agent-running"
                     IsVisible="{Binding RunningItems.Count, Converter={x:Static converters:CountToBoolConverter.Instance}}">
                 <ItemsControl ItemsSource="{Binding RunningItems}">
                     <ItemsControl.ItemTemplate>

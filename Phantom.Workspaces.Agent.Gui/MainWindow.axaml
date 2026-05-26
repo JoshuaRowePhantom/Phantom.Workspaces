@@ -6,7 +6,8 @@
         x:DataType="vm:MainWindowViewModel"
         Title="{Binding Agent.DisplayName}"
         Width="1200" Height="800"
-        MinWidth="600" MinHeight="400">
+        MinWidth="600" MinHeight="400"
+        Classes="agent-window">
     <Window.KeyBindings>
         <KeyBinding Gesture="Cancel"         Command="{Binding Agent.InterruptCommand}"/>
         <KeyBinding Gesture="Pause"          Command="{Binding Agent.InputQueue.ToggleHoldAllQueuesCommand}"/>
@@ -16,11 +17,9 @@
 
     <DockPanel>
         <!-- Title bar -->
-        <Border DockPanel.Dock="Top" Background="#1A1A1A" Padding="12,6">
+        <Border DockPanel.Dock="Top" Classes="agent-titlebar">
             <TextBlock Text="{Binding Agent.DisplayName}"
-                       FontWeight="SemiBold"
-                       Foreground="#D0D0D0"
-                       FontSize="13"/>
+                       Classes="agent-main-title"/>
         </Border>
 
         <!-- Main content area -->
@@ -32,16 +31,16 @@
             </Grid.ColumnDefinitions>
 
             <!-- Left: Runtime browser (placeholder) -->
-            <Border Grid.Column="0" Background="#161616">
+            <Border Grid.Column="0" Classes="agent-pane">
                 <TextBlock Text="Runtime Browser"
-                           Foreground="#444"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
-                           FontStyle="Italic"
-                           FontSize="12"/>
+                           Classes="agent-runtime-placeholder"/>
             </Border>
 
-            <GridSplitter Grid.Column="1" Background="#2A2A2A" ResizeBehavior="PreviousAndNext"/>
+            <GridSplitter Grid.Column="1"
+                          Classes="main-splitter"
+                          ResizeBehavior="PreviousAndNext"/>
 
             <!-- Right: Agent chat -->
             <DockPanel Grid.Column="2">

@@ -10,13 +10,10 @@
         MinHeight="200"
         WindowStartupLocation="CenterOwner"
         Title="Agent Log"
-        Background="#1A1A1A">
-    <DockPanel Margin="16">
+        Classes="agent-window">
+    <DockPanel Classes="agent-dialog-root">
         <StackPanel DockPanel.Dock="Bottom"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Margin="0,12,0,0"
-                    Spacing="8">
+                    Classes="agent-dialog-actions">
             <Button Content="Clear"
                     Click="OnClearClicked"
                     Classes="queue-action-button"/>
@@ -27,21 +24,13 @@
 
         <TextBlock DockPanel.Dock="Top"
                    Text="Log"
-                   FontSize="16"
-                   FontWeight="SemiBold"
-                   Foreground="#AAAAAA"
-                   Margin="0,0,0,12"/>
+                   Classes="agent-dialog-title"/>
         <CheckBox DockPanel.Dock="Top"
                   Content="Word wrap"
                   IsChecked="{Binding IsWordWrapEnabled, Mode=TwoWay}"
-                  Foreground="#CCCCCC"
-                  Margin="0,0,0,8"/>
+                  Classes="agent-option-toggle"/>
 
-        <Border Background="#111111"
-                BorderBrush="#303030"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="12">
+        <Border Classes="agent-surface">
             <ScrollViewer x:Name="LogScrollViewer"
                           AllowAutoHide="False"
                           HorizontalScrollBarVisibility="{Binding LogHorizontalScrollBarVisibility}"
@@ -51,10 +40,7 @@
                         <DataTemplate>
                             <SelectableTextBlock Text="{Binding}"
                                                  TextWrapping="{Binding LogTextWrapping, ElementName=Root}"
-                                                 FontFamily="Consolas,monospace"
-                                                 FontSize="12"
-                                                 Foreground="#CCCCCC"
-                                                 Margin="0,1"/>
+                                                 Classes="terminal-mono terminal-detail agent-log-line"/>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
