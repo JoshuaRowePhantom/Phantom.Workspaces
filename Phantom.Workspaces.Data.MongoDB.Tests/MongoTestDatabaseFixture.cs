@@ -63,9 +63,16 @@ public sealed class MongoTestDatabaseFixture : IAsyncLifetime
             return;
         }
 
+        await TryDropCollectionAsync(CollectionName);
+        await TryDropCollectionAsync($"{CollectionName}_entities");
+        await TryDropCollectionAsync($"{CollectionName}_state");
+    }
+
+    private async Task TryDropCollectionAsync(string name)
+    {
         try
         {
-            await Database.DropCollectionAsync(CollectionName);
+            await Database.DropCollectionAsync(name);
         }
         catch (MongoCommandException ex) when (ex.CodeName == "NamespaceNotFound")
         {
