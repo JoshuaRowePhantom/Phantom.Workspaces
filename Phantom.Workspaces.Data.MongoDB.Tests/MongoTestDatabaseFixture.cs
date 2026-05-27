@@ -14,6 +14,7 @@ public sealed class MongoTestDatabaseFixture : IAsyncLifetime
     public const string ContainerName = "pw-mongodb-test";
     public const string DatabaseName = "pw_mongodb_test_db";
     public const string CollectionName = "pw_mongodb_test_collection";
+    public const string ChatHistoryCollectionName = "pw_mongodb_test_chat_history";
     public const int HostPort = 37017;
 
     private static readonly string DataDirectory = Path.Combine(Path.GetTempPath(), "pw-mongodb-test-data");
@@ -64,6 +65,7 @@ public sealed class MongoTestDatabaseFixture : IAsyncLifetime
         }
 
         await TryDropCollectionAsync(CollectionName);
+        await TryDropCollectionAsync(ChatHistoryCollectionName);
         await TryDropCollectionAsync($"{CollectionName}_entities");
         await TryDropCollectionAsync($"{CollectionName}_state");
     }
