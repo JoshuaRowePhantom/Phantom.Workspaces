@@ -250,7 +250,7 @@ public sealed class InputQueueViewModelTests
         Assert.Equal("hello", viewModel.Queues[1].Items[0].Text);
         Assert.Empty(viewModel.Queues[1].Items[0].Attachments);
         Assert.Equal("hello", chat.InputQueues[1].Items[0].Text);
-        Assert.Equal(1, chat.InputQueues[1].Items[0].Contents.Count);
+        Assert.Single(chat.InputQueues[1].Items[0].Contents);
     }
 
     [Fact]

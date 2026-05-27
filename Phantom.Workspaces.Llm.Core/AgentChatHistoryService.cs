@@ -8,12 +8,16 @@ namespace Phantom.Workspaces.Llm;
 internal sealed class AgentChatHistoryService
 {
     private readonly ObservableCollection<AgentChatHistoryItem> history;
+    private readonly AgentFrameworkChatHistoryProvider configuredProvider;
     private AgentSession? activeSession;
     private AgentFrameworkChatHistoryProvider? provider;
 
-    public AgentChatHistoryService(ObservableCollection<AgentChatHistoryItem> history)
+    public AgentChatHistoryService(
+        ObservableCollection<AgentChatHistoryItem> history,
+        AgentFrameworkChatHistoryProvider chatHistoryProvider)
     {
         this.history = history;
+        this.configuredProvider = chatHistoryProvider ?? throw new ArgumentNullException(nameof(chatHistoryProvider));
     }
 
     public bool IsProviderBound => this.provider is not null;
@@ -22,21 +26,10 @@ internal sealed class AgentChatHistoryService
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        var nextProvider = session.Agent.ChatHistoryProvider as AgentFrameworkChatHistoryProvider;
+        var nextProvider = this.configuredProvider;
         if (!ReferenceEquals(this.provider, nextProvider))
         {
-            if (this.provider is not null)
-            {
-                this.provider.InvocationStarting -= this.OnInvocationStarting;
-                this.provider.HistoryStored -= this.OnHistoryStored;
-            }
-
             this.provider = nextProvider;
-            if (this.provider is not null)
-            {
-                this.provider.InvocationStarting += this.OnInvocationStarting;
-                this.provider.HistoryStored += this.OnHistoryStored;
-            }
         }
 
         this.activeSession = session.Session;
@@ -57,11 +50,18 @@ internal sealed class AgentChatHistoryService
             }
 
             var contents = message.Contents.ToArray();
-            this.history.Add(new AgentChatHistoryItem
+            var nextItem = new AgentChatHistoryItem
             {
                 Role = ChatRole.User,
                 Contents = contents,
-            });
+            };
+
+            if (this.history.Count > 0 && AreEquivalent(this.history[^1], nextItem))
+            {
+                continue;
+            }
+
+            this.history.Add(nextItem);
         }
     }
 
@@ -70,37 +70,31 @@ internal sealed class AgentChatHistoryService
         foreach (var message in messages)
         {
             var contents = message.Contents.ToArray();
-            this.history.Add(new AgentChatHistoryItem
+            var nextItem = new AgentChatHistoryItem
             {
                 Role = message.Role,
                 Contents = contents,
                 IsInProgress = false,
-            });
+            };
+
+            if (this.history.Count > 0 && AreEquivalent(this.history[^1], nextItem))
+            {
+                continue;
+            }
+
+            this.history.Add(nextItem);
         }
 
         return this.history.LastOrDefault(static item => item.Role == ChatRole.Assistant);
     }
 
-    private void OnInvocationStarting(object? sender, AgentFrameworkChatHistoryProvider.InvocationStartingEventArgs e)
+    private static bool AreEquivalent(AgentChatHistoryItem left, AgentChatHistoryItem right)
     {
-        if (!ReferenceEquals(e.Session, this.activeSession))
-        {
-            return;
-        }
-
-        this.BeginInvocation(e.RequestMessages.ToArray());
+        return left.Role == right.Role
+            && left.Text == right.Text
+            && left.ReasoningText == right.ReasoningText
+            && left.IsInProgress == right.IsInProgress;
     }
 
-    private void OnHistoryStored(object? sender, AgentFrameworkChatHistoryProvider.HistoryStoredEventArgs e)
-    {
-        if (!ReferenceEquals(e.Session, this.activeSession))
-        {
-            return;
-        }
-
-        if (e.Messages.Count > 0)
-        {
-            this.CommitFromMessages(e.Messages);
-        }
-    }
+    // Invocation and response history are applied by AgentChat's run loop to keep UI ordering stable.
 }

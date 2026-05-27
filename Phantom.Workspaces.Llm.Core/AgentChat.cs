@@ -117,9 +117,10 @@ public sealed class AgentChat : IAsyncDisposable
     private readonly object processingStateLock = new();
     private CancellationTokenSource? activeRunCancellation;
 
-    public AgentChat(
+    internal AgentChat(
         AgentChatSession session,
         AgentInputQueueManager queueManager,
+        AgentFrameworkChatHistoryProvider chatHistoryProvider,
         string displayName = "",
         IReadOnlyList<IAsyncDisposable>? ownedResources = null)
     {
@@ -129,7 +130,7 @@ public sealed class AgentChat : IAsyncDisposable
         this.queueManager = queueManager;
         this.DisplayName = displayName;
         this.chatQueueManager = new AgentChatQueueManager(queueManager);
-        this.historyService = new AgentChatHistoryService(this.History);
+        this.historyService = new AgentChatHistoryService(this.History, chatHistoryProvider);
         this.historyService.BindSession(session);
         this.runningItems = new AgentRunningItems(this.RunningItems);
         this.runningItems.Idle += this.OnRunningItemsIdle;
@@ -342,7 +343,9 @@ public sealed class AgentChat : IAsyncDisposable
         {
             Role = message.Role,
             Contents = message.Contents.ToArray(),
-            IsInProgress = index == 0 && !lastIsToolResult
+            IsInProgress = index == 0
+                && !lastIsToolResult
+                && !IsTerminalAssistantUpdate(agentResponseUpdate)
         }).Reverse().Concat(finalItem).ToArray();
 
         this.UpdateRunningItem(currentRunningItem, chatHistoryItems);
@@ -388,6 +391,19 @@ public sealed class AgentChat : IAsyncDisposable
                     }
                 }
 
+                var useHistoryPlaceholder = true;
+                var historyPlaceholderIndex = -1;
+                if (useHistoryPlaceholder)
+                {
+                    this.historyService.BeginInvocation(chatMessagesToSubmit.ToArray());
+                    this.History.Add(new AgentChatHistoryItem
+                    {
+                        Role = ChatRole.Assistant,
+                        IsInProgress = true,
+                    });
+                    historyPlaceholderIndex = this.History.Count - 1;
+                }
+
                 AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
                     new AgentChatHistoryItem
                     {
@@ -410,6 +426,8 @@ public sealed class AgentChat : IAsyncDisposable
                             update,
                             agentResponseUpdates);
                     }
+
+                    shouldWriteRunningItemToHistory = false;
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -429,10 +447,15 @@ public sealed class AgentChat : IAsyncDisposable
                         .ToArray();
 
                     this.UpdateRunningItem(runningItem, errorItems);
-                    shouldWriteRunningItemToHistory = true;
+                    shouldWriteRunningItemToHistory = false;
                 }
                 finally
                 {
+                    if (useHistoryPlaceholder && historyPlaceholderIndex >= 0)
+                    {
+                        this.CommitRunningItemToHistoryPlaceholder(currentPartialTextResponseItem, historyPlaceholderIndex);
+                    }
+
                     this.CompleteRunningItem(currentPartialTextResponseItem, shouldWriteRunningItemToHistory);
                 }
             }
@@ -491,6 +514,50 @@ public sealed class AgentChat : IAsyncDisposable
         var finishReasonText = finishReason?.ToString() ?? string.Empty;
         return finishReasonText.Contains("tool", StringComparison.OrdinalIgnoreCase)
             || finishReasonText.Contains("function", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTerminalAssistantUpdate(AgentResponseUpdate update)
+    {
+        if (update.Role != ChatRole.Assistant)
+        {
+            return false;
+        }
+
+        if (update.FinishReason is null)
+        {
+            return false;
+        }
+
+        return !IsToolContinuationFinishReason(update.FinishReason);
+    }
+
+    private void CommitRunningItemToHistoryPlaceholder(AgentChatRunningItem? runningItem, int placeholderIndex)
+    {
+        if (runningItem?.Items is null || runningItem.Items.Length == 0)
+        {
+            return;
+        }
+
+        if (placeholderIndex < 0 || placeholderIndex >= this.History.Count)
+        {
+            return;
+        }
+
+        var finalItem = runningItem.Items
+            .LastOrDefault(static item =>
+                item.Role == ChatRole.Assistant
+                && (!string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.ReasoningText)))
+            ?? runningItem.Items
+            .LastOrDefault(static item => item.Role == ChatRole.Assistant)
+            ?? runningItem.Items[^1];
+        finalItem = finalItem with { IsInProgress = false };
+
+        this.History[placeholderIndex] = finalItem;
+
+        if (finalItem.Role == ChatRole.Assistant)
+        {
+            this.TurnCompleted?.Invoke(this, finalItem);
+        }
     }
 
     private AgentChatSession GetSession()

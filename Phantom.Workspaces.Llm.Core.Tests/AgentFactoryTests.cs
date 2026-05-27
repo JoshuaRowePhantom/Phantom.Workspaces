@@ -552,4 +552,86 @@ public class AgentFactoryTests
 
         Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task CreateAgentChat_DefaultHistoryProvider_PublishesConversationHistory()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        await using var chat = AgentFactory.CreateAgentChat(agent);
+        chat.EnqueueUserMessage("hello");
+        await Task.Delay(150);
+
+        Assert.True(chat.History.Count >= 2);
+        Assert.Contains(chat.History, static item => item.Role == ChatRole.User);
+        Assert.Contains(chat.History, static item => item.Role == ChatRole.Assistant);
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_UsesServicesChatHistoryProvider()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var provider = new CountingChatHistoryProvider();
+        var services = new AgentServices
+        {
+            ChatHistoryProvider = provider,
+        };
+
+        await using var chat = AgentFactory.CreateAgentChat(agent, services);
+        chat.EnqueueUserMessage("hello");
+
+        for (var i = 0; i < 20 && (provider.ProvideCalls == 0 || provider.StoreCalls == 0); i++)
+        {
+            await Task.Delay(25);
+        }
+
+        Assert.True(provider.ProvideCalls > 0);
+        Assert.True(provider.StoreCalls > 0);
+    }
+
+    private sealed class CountingChatHistoryProvider : ChatHistoryProvider
+    {
+        private int provideCalls;
+        private int storeCalls;
+
+        public int ProvideCalls => this.provideCalls;
+        public int StoreCalls => this.storeCalls;
+
+        protected override ValueTask<IEnumerable<ChatMessage>> ProvideChatHistoryAsync(InvokingContext context, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref this.provideCalls);
+            return ValueTask.FromResult<IEnumerable<ChatMessage>>([]);
+        }
+
+        protected override ValueTask StoreChatHistoryAsync(InvokedContext context, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref this.storeCalls);
+            return ValueTask.CompletedTask;
+        }
+    }
 }

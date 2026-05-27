@@ -178,10 +178,12 @@ public static class AgentFactory
     {
         ValidateServices(services);
 
+        var configuredChatHistoryProvider = services?.ChatHistoryProvider ?? new InMemoryChatHistoryProvider();
+        var chatHistoryProvider = new AgentFrameworkChatHistoryProvider(configuredChatHistoryProvider);
         var chatOptions = new ChatClientAgentOptions
         {
             ChatOptions = new ChatOptions(),
-            ChatHistoryProvider = new AgentFrameworkChatHistoryProvider(),
+            ChatHistoryProvider = chatHistoryProvider,
             //RequirePerServiceCallChatHistoryPersistence = true,
         };
         ConfigureChatOptions(agent, chatOptions.ChatOptions);
@@ -198,7 +200,11 @@ public static class AgentFactory
             chatClientAgent,
             chatClientAgent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
         var queueManager = new AgentInputQueueManager();
-        var chat = new AgentChat(session, queueManager, clientInfo.displayName);
+        var chat = new AgentChat(
+            session,
+            queueManager,
+            chatHistoryProvider,
+            clientInfo.displayName);
         InitializeMcpToolsAsync(agent, client, chat, chatOptions, services, CancellationToken.None);
 
         return chat;

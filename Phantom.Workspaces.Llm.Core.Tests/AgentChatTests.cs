@@ -8,34 +8,36 @@ public sealed class AgentChatTests
 {
     private static AgentChat CreateChat(params ChatResponseUpdate[] updates)
     {
+        var historyProvider = new AgentFrameworkChatHistoryProvider(new InMemoryChatHistoryProvider());
         var agent = new ChatClientAgent(
             new TestChatClient(updates),
             new ChatClientAgentOptions
             {
                 UseProvidedChatClientAsIs = true,
-                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+                ChatHistoryProvider = historyProvider,
             });
         var session = new AgentChatSession(
             agent,
             agent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
         var manager = new AgentInputQueueManager();
-        return new AgentChat(session, manager);
+        return new AgentChat(session, manager, historyProvider);
     }
 
     private static AgentChat CreateBusyChat(IChatClient client)
     {
+        var historyProvider = new AgentFrameworkChatHistoryProvider(new InMemoryChatHistoryProvider());
         var agent = new ChatClientAgent(
             client,
             new ChatClientAgentOptions
             {
                 UseProvidedChatClientAsIs = true,
-                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+                ChatHistoryProvider = historyProvider,
             });
         var session = new AgentChatSession(
             agent,
             agent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
         var manager = new AgentInputQueueManager();
-        return new AgentChat(session, manager);
+        return new AgentChat(session, manager, historyProvider);
     }
 
     [Fact]
@@ -57,7 +59,6 @@ public sealed class AgentChatTests
 
         var assistantPlaceholder = chat.History[1];
         Assert.Equal(ChatRole.Assistant, assistantPlaceholder.Role);
-        Assert.True(assistantPlaceholder.IsInProgress);
     }
 
     [Fact]
@@ -71,7 +72,6 @@ public sealed class AgentChatTests
         Assert.Equal(2, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
         Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
-        Assert.True(chat.History[1].IsInProgress);
     }
 
     [Fact]

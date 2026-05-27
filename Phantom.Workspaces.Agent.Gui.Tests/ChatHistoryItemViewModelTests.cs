@@ -230,8 +230,8 @@ public sealed class ChatHistoryItemViewModelTests
         viewModel.UpdateFrom(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
-            Contents = [new TextContent(assistantHistory!.Text)],
-            IsInProgress = false,
+            Contents = assistantHistory!.Contents,
+            IsInProgress = assistantHistory.IsInProgress,
         });
 
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
