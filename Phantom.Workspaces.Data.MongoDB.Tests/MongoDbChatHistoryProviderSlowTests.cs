@@ -62,7 +62,9 @@ public sealed class MongoDbChatHistoryProviderSlowTests
         var secondInvocation = client.Invocations.Last();
         Assert.Equal(["hello", "world"], GetUserTexts(secondInvocation));
 
-        var restoredUserMessage = Assert.Single(secondInvocation.Where(message => message.Role == ChatRole.User && message.Contents.OfType<DataContent>().Any()));
+        var restoredUserMessage = Assert.Single(
+            secondInvocation,
+            message => message.Role == ChatRole.User && message.Contents.OfType<DataContent>().Any());
         Assert.Equal("hello", Assert.Single(restoredUserMessage.Contents.OfType<TextContent>()).Text);
         Assert.Equal("image/png", Assert.Single(restoredUserMessage.Contents.OfType<DataContent>()).MediaType);
 

@@ -40,7 +40,7 @@ public sealed class MongoConnectionBrokerSlowTests
     {
         await _fixture.ResetCollectionAsync();
 
-        var collection = _fixture.Database.GetCollection<BsonDocument>(MongoTestDatabaseFixture.CollectionName);
+        var collection = _fixture.Database.GetCollection<BsonDocument>(MongoTestDatabaseFixture.EntityCollectionName);
         var documentId = "non-query-document";
 
         await collection.InsertOneAsync(new BsonDocument

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Data.MongoDB.Tests;
 [Collection(MongoTestDatabaseCollection.CollectionName)]
 public sealed class MongoEntityDataAccessLayerSlowTests : DataAccessLayerNonQueryWithoutHistoryTests
 {
-    private static readonly EntityId SampleEntityId = new("b17c2f1a-98fb-4e59-9902-f86af1f0f6a9");
+    private static new readonly EntityId SampleEntityId = new("b17c2f1a-98fb-4e59-9902-f86af1f0f6a9");
 
     private readonly MongoTestDatabaseFixture _fixture;
 
@@ -172,7 +172,7 @@ public sealed class MongoEntityDataAccessLayerSlowTests : DataAccessLayerNonQuer
 
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
-        return new MongoEntityDataAccessLayer(_fixture.Database, MongoTestDatabaseFixture.CollectionName);
+        return new MongoEntityDataAccessLayer(_fixture.Database, MongoTestDatabaseFixture.EntityCollectionName);
     }
 
     private static JsonElement ParseEntityData(
