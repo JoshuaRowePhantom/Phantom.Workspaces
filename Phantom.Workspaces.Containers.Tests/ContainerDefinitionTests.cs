@@ -39,6 +39,14 @@ public sealed class ContainerDefinitionTests
                     ReadOnly = true,
                 },
             },
+            PortMappings = new List<ContainerPortMappingDefinition>
+            {
+                new()
+                {
+                    SourcePort = 27017,
+                    TargetPort = 27017,
+                },
+            },
         };
 
         var json = definition.ToJson();
@@ -56,6 +64,9 @@ public sealed class ContainerDefinitionTests
         Assert.Equal("C:\\mongo-config", roundTrip.Mounts[1].Source);
         Assert.Equal("/config", roundTrip.Mounts[1].Target);
         Assert.Equal(definition.Mounts[1].ReadOnly, roundTrip.Mounts[1].ReadOnly);
+        Assert.Single(roundTrip.PortMappings);
+        Assert.Equal(27017, roundTrip.PortMappings[0].SourcePort);
+        Assert.Equal(27017, roundTrip.PortMappings[0].TargetPort);
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -72,6 +83,7 @@ public sealed class ContainerDefinitionTests
         Assert.Equal(expectedNetworkType, root.GetProperty("network-type").GetString());
         Assert.Equal("root", root.GetProperty("environment-variables").GetProperty("MONGO_INITDB_ROOT_USERNAME").GetString());
         Assert.Equal(2, root.GetProperty("mounts").GetArrayLength());
+        Assert.Equal(1, root.GetProperty("port-mappings").GetArrayLength());
         Assert.True(validation.IsValid);
     }
 }

@@ -23,6 +23,9 @@ public sealed class ContainerDefinition
     [JsonPropertyName("mounts")]
     public List<ContainerMountDefinition> Mounts { get; init; } = new();
 
+    [JsonPropertyName("port-mappings")]
+    public List<ContainerPortMappingDefinition> PortMappings { get; init; } = new();
+
     public string ToJson()
     {
         var json = JsonSerializer.Serialize(this, SerializerOptions);
@@ -94,4 +97,13 @@ public sealed class ContainerMountDefinition
 
     [JsonPropertyName("read-only")]
     public bool ReadOnly { get; init; }
+}
+
+public sealed class ContainerPortMappingDefinition
+{
+    [JsonPropertyName("source-port")]
+    public int SourcePort { get; init; }
+
+    [JsonPropertyName("target-port")]
+    public int TargetPort { get; init; }
 }

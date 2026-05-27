@@ -6,6 +6,7 @@ public sealed class MongoDBContainerDefinitionGenerator
 {
     private const string MongoImageName = "mongo:latest";
     private const string MongoDataDirectory = "/data/db";
+    private const int MongoContainerPort = 27017;
 
     public ContainerDefinition Generate(
         MongoDBContainerConnectionDefinition connectionDefinition)
@@ -25,6 +26,14 @@ public sealed class MongoDBContainerDefinitionGenerator
                     Source = connectionDefinition.DataDirectory,
                     Target = MongoDataDirectory,
                     ReadOnly = false,
+                },
+            },
+            PortMappings = new List<ContainerPortMappingDefinition>
+            {
+                new ContainerPortMappingDefinition
+                {
+                    SourcePort = connectionDefinition.HostPort ?? MongoContainerPort,
+                    TargetPort = MongoContainerPort,
                 },
             },
         };

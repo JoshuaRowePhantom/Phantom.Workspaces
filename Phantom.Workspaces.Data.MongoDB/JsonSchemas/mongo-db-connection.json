@@ -16,12 +16,27 @@
         "data-directory": {
           "type": "string",
           "minLength": 1
+        },
+        "host-port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "database-name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collection-name": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
         "provider",
         "container-name",
-        "data-directory"
+        "data-directory",
+        "database-name",
+        "collection-name"
       ],
       "additionalProperties": false
     },
@@ -35,11 +50,21 @@
         "connection-string": {
           "type": "string",
           "minLength": 1
+        },
+        "database-name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collection-name": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
         "provider",
-        "connection-string"
+        "connection-string",
+        "database-name",
+        "collection-name"
       ],
       "additionalProperties": false
     }

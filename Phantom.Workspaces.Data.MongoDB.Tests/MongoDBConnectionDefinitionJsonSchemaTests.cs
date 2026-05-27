@@ -13,7 +13,10 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             {
               "provider": "container",
               "container-name": "mongo-db",
-              "data-directory": "C:\\mongo-data"
+              "data-directory": "C:\\mongo-data",
+              "host-port": 37017,
+              "database-name": "workspace-db",
+              "collection-name": "workspace-collection"
             }
             """);
 
@@ -35,7 +38,9 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             """
             {
               "provider": "external",
-              "connection-string": "mongodb://localhost:27017"
+              "connection-string": "mongodb://localhost:27017",
+              "database-name": "workspace-db",
+              "collection-name": "workspace-collection"
             }
             """);
 
@@ -57,7 +62,35 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             """
             {
               "provider": "container",
-              "container-name": "mongo-db"
+              "container-name": "mongo-db",
+              "database-name": "workspace-db",
+              "collection-name": "workspace-collection"
+            }
+            """);
+
+        var result = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+            instance,
+            new EvaluationOptions
+            {
+                OutputFormat = OutputFormat.Hierarchical,
+                RequireFormatValidation = false,
+            });
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Value_WhenContainerHostPortOutOfRange_IsInvalid()
+    {
+        var instance = ParseElement(
+            """
+            {
+              "provider": "container",
+              "container-name": "mongo-db",
+              "data-directory": "C:\\mongo-data",
+              "host-port": 70000,
+              "database-name": "workspace-db",
+              "collection-name": "workspace-collection"
             }
             """);
 

@@ -49,6 +49,29 @@
         ],
         "additionalProperties": false
       }
+    },
+    "port-mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source-port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "target-port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "required": [
+          "source-port",
+          "target-port"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

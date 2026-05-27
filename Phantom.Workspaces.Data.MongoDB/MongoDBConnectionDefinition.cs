@@ -16,33 +16,45 @@ public abstract class MongoDBConnectionDefinition
 
     public static MongoDBConnectionDefinition CreateContainer(
         string containerName,
-        string dataDirectory)
+        string dataDirectory,
+        string databaseName,
+        string collectionName,
+        int? hostPort = null)
     {
         return new MongoDBContainerConnectionDefinition
         {
             ContainerName = containerName,
             DataDirectory = dataDirectory,
+            DatabaseName = databaseName,
+            CollectionName = collectionName,
+            HostPort = hostPort,
         };
     }
 
     public static MongoDBConnectionDefinition CreateExternal(
-        string connectionString)
+        string connectionString,
+        string databaseName,
+        string collectionName)
     {
         return new MongoDBExternalConnectionDefinition
         {
             ConnectionString = connectionString,
+            DatabaseName = databaseName,
+            CollectionName = collectionName,
         };
     }
 
     public string ToJson()
     {
         var json = JsonSerializer.Serialize(this, typeof(MongoDBConnectionDefinition), SerializerOptions);
+        ValidateJson(json);
         return json;
     }
 
     public static MongoDBConnectionDefinition FromJson(
         string json)
     {
+        ValidateJson(json);
         return JsonSerializer.Deserialize<MongoDBConnectionDefinition>(json, SerializerOptions)
                ?? throw new JsonException("MongoDB connection definition JSON could not be deserialized.");
     }
@@ -94,6 +106,15 @@ public sealed class MongoDBContainerConnectionDefinition : MongoDBConnectionDefi
 
     [JsonPropertyName("data-directory")]
     public string DataDirectory { get; init; } = string.Empty;
+
+    [JsonPropertyName("database-name")]
+    public string DatabaseName { get; init; } = string.Empty;
+
+    [JsonPropertyName("collection-name")]
+    public string CollectionName { get; init; } = string.Empty;
+
+    [JsonPropertyName("host-port")]
+    public int? HostPort { get; init; }
 }
 
 public sealed class MongoDBExternalConnectionDefinition : MongoDBConnectionDefinition
@@ -103,6 +124,12 @@ public sealed class MongoDBExternalConnectionDefinition : MongoDBConnectionDefin
 
     [JsonPropertyName("connection-string")]
     public string ConnectionString { get; init; } = string.Empty;
+
+    [JsonPropertyName("database-name")]
+    public string DatabaseName { get; init; } = string.Empty;
+
+    [JsonPropertyName("collection-name")]
+    public string CollectionName { get; init; } = string.Empty;
 }
 
 public enum MongoDBConnectionProvider

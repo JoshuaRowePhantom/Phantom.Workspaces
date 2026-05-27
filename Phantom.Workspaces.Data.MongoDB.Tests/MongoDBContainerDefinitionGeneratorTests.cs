@@ -15,6 +15,9 @@ public sealed class MongoDBContainerDefinitionGeneratorTests
         {
             ContainerName = "mongo-db",
             DataDirectory = "C:\\mongo-data",
+            DatabaseName = "workspace-db",
+            CollectionName = "workspace-collection",
+            HostPort = 37017,
         };
 
         var containerDefinition = generator.Generate(connectionDefinition);
@@ -27,6 +30,9 @@ public sealed class MongoDBContainerDefinitionGeneratorTests
         Assert.Equal("C:\\mongo-data", containerDefinition.Mounts[0].Source);
         Assert.Equal("/data/db", containerDefinition.Mounts[0].Target);
         Assert.False(containerDefinition.Mounts[0].ReadOnly);
+        Assert.Single(containerDefinition.PortMappings);
+        Assert.Equal(37017, containerDefinition.PortMappings[0].SourcePort);
+        Assert.Equal(27017, containerDefinition.PortMappings[0].TargetPort);
 
         var json = containerDefinition.ToJson();
         var roundTrip = ContainerDefinition.FromJson(json);

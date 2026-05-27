@@ -28,6 +28,12 @@ public sealed class ContainerDefinitionJsonSchemaTests
                   "target": "/data/db",
                   "read-only": false
                 }
+              ],
+              "port-mappings": [
+                {
+                  "source-port": 27017,
+                  "target-port": 27017
+                }
               ]
             }
             """);
@@ -53,6 +59,43 @@ public sealed class ContainerDefinitionJsonSchemaTests
               "image-name": "mongo:latest",
               "network-type": "bridge",
               "environment-variables": {}
+            }
+            """);
+
+        var result = ContainerDefinitionJsonSchema.Value.Evaluate(
+            instance,
+            new EvaluationOptions
+            {
+                OutputFormat = OutputFormat.Hierarchical,
+                RequireFormatValidation = false,
+            });
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void Value_WhenPortMappingIsOutOfRange_IsInvalid()
+    {
+        var instance = ParseElement(
+            """
+            {
+              "container-name": "mongo-db",
+              "image-name": "mongo:latest",
+              "network-type": "bridge",
+              "environment-variables": {},
+              "mounts": [
+                {
+                  "source": "C:\\mongo-data",
+                  "target": "/data/db",
+                  "read-only": false
+                }
+              ],
+              "port-mappings": [
+                {
+                  "source-port": 0,
+                  "target-port": 27017
+                }
+              ]
             }
             """);
 

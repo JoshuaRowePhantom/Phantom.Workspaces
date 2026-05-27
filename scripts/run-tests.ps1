@@ -52,6 +52,7 @@ if ($TestNames -and $TestNames.Count -gt 0)
 if ($Mode -eq 'fast')
 {
     $filterClauses += '(Category!=SlowGit)'
+    $filterClauses += '(Category!=SlowDocker)'
 }
 
 if ($filterClauses.Count -gt 0)
