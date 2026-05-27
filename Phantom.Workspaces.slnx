@@ -1,5 +1,7 @@
 <Solution>
   <Project Path="Phantom.Workspaces.Data.Core.Tests/Phantom.Workspaces.Data.Core.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Containers.Tests/Phantom.Workspaces.Containers.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Containers/Phantom.Workspaces.Containers.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui.Tests/Phantom.Workspaces.Agent.Gui.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui/Phantom.Workspaces.Agent.Gui.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Cli/Phantom.Workspaces.Agent.Cli.csproj" />
@@ -8,6 +10,8 @@
   <Project Path="Phantom.Workspaces.Tests/Phantom.Workspaces.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.CosmosDB.Tests/Phantom.Workspaces.Data.CosmosDB.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.CosmosDB/Phantom.Workspaces.Data.CosmosDB.csproj" />
+  <Project Path="Phantom.Workspaces.Data.MongoDB.Tests/Phantom.Workspaces.Data.MongoDB.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Data.MongoDB/Phantom.Workspaces.Data.MongoDB.csproj" />
   <Project Path="Phantom.Workspaces.Data.Offline.Tests/Phantom.Workspaces.Data.Offline.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Data.Offline/Phantom.Workspaces.Data.Offline.csproj" />
   <Project Path="Phantom.Workspaces.Data.Sql.Tests/Phantom.Workspaces.Data.Sql.Tests.csproj" />

@@ -1,0 +1,62 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/containers/container-definition.json",
+  "type": "object",
+  "properties": {
+    "container-name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image-name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "network-type": {
+      "type": "string",
+      "enum": [
+        "bridge",
+        "host",
+        "none",
+        "container"
+      ]
+    },
+    "environment-variables": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "mounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1
+          },
+          "read-only": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source",
+          "target",
+          "read-only"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "container-name",
+    "image-name",
+    "network-type",
+    "environment-variables",
+    "mounts"
+  ],
+  "additionalProperties": false
+}

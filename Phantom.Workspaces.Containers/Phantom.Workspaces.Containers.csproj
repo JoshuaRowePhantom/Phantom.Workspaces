@@ -9,4 +9,16 @@
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" Version="9.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="JsonSchemas\*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="JsonSchemas\*.json" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,47 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/mongo-db-connection.json",
+  "type": "object",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "const": "container"
+        },
+        "container-name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data-directory": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "provider",
+        "container-name",
+        "data-directory"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "const": "external"
+        },
+        "connection-string": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "provider",
+        "connection-string"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

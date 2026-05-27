@@ -8,6 +8,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="JsonSchema.Net" Version="9.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="JsonSchemas\mongo-db-connection.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="JsonSchemas\mongo-db-connection.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Containers\Phantom.Workspaces.Containers.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
   </ItemGroup>

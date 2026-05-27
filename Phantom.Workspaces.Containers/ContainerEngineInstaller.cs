@@ -2,7 +2,13 @@ namespace Phantom.Workspaces.Containers;
 
 public abstract class ContainerEngineInstaller
 {
-    public abstract bool Usable { get; }
+    public virtual ValueTask<bool> Usable()
+    {
+        return ValueTask.FromResult(true);
+    }
 
-    public abstract void Configure();
+    public virtual ValueTask Configure()
+    {
+        throw new NotImplementedException();
+    }
 }
