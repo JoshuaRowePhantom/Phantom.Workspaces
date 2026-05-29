@@ -23,26 +23,6 @@
         </Border>
 
         <!-- Main content area -->
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="220" MinWidth="80"/>
-                <ColumnDefinition Width="5"/>
-                <ColumnDefinition Width="*" MinWidth="200"/>
-            </Grid.ColumnDefinitions>
-
-            <controls:AgentChatEditorControl Grid.Column="0"
-                                             DataContext="{Binding Agent}"/>
-
-            <GridSplitter Grid.Column="1"
-                          Classes="main-splitter"
-                          ResizeBehavior="PreviousAndNext"/>
-
-            <!-- Right: Agent chat -->
-            <DockPanel Grid.Column="2">
-                <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
-                                                     DataContext="{Binding Agent.InputQueue}"/>
-                <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
-            </DockPanel>
-        </Grid>
+        <controls:AgentChatEditorControl DataContext="{Binding Agent}"/>
     </DockPanel>
 </Window>

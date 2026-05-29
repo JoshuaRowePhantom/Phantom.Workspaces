@@ -1,61 +1,218 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless.XUnit;
+using Avalonia.Markup.Xaml;
+using Avalonia.Styling;
+using Phantom.Workspaces.Agent.Gui.Controls;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class MainWindowAxamlTests
 {
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void MainWindow_UsesBinding_ForChildControlDataContexts()
     {
         var mainWindowContent = ReadMainWindowAxaml();
 
         Assert.Contains(
-            "<controls:AgentChatEditorControl Grid.Column=\"0\"\r\n                                             DataContext=\"{Binding Agent}\"/>",
-            mainWindowContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "<controls:AgentChatInputQueueControl DockPanel.Dock=\"Bottom\"\r\n                                                     DataContext=\"{Binding Agent.InputQueue}\"/>",
-            mainWindowContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "<controls:AgentChatOutputControl DataContext=\"{Binding Agent}\"/>",
+            "<controls:AgentChatEditorControl DataContext=\"{Binding Agent}\"/>",
             mainWindowContent,
             StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AgentSessionIdTextBox_IsReadOnly_AndOneWay()
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_UsesTreeNavigationAndSelectedDetailPane()
     {
         var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
 
         Assert.Contains(
-            "<TextBox Text=\"{Binding AgentSessionId, Mode=OneWay}\"",
+            "x:Name=\"NavigationTree\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "IsReadOnly=\"True\"",
+            "<Grid.ColumnDefinitions>",
             editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<ColumnDefinition Width=\"280\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "MinWidth=\"0\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "MaxWidth=\"480\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ScrollViewer.HorizontalScrollBarVisibility=\"Disabled\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ScrollViewer.AllowAutoHide=\"False\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Value=\"{Binding IsExpanded}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "x:Name=\"SplitterHost\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<ToggleButton x:Name=\"TreeCollapseToggle\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "VerticalAlignment=\"Center\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DataType=\"vm:AgentChatToolsDetailViewModel\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<controls:AgentChatToolsDetailControl/>",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AgentChatToolTemplates.axaml",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Select a tool to view its details.",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Content=\"{Binding SelectedEditorDetailContent}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "DataType=\"vm:AgentChatToolViewModel\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ContentTemplate=\"{StaticResource AgentNavigationHeaderTemplate}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"entity-card\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"entity-card-expand-section\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"entity-card-expand-button\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TreeViewItem /template/ ToggleButton",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ContentTemplate=\"{StaticResource AgentToolDetailTemplate}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        var toolTemplatesContent = ReadAxaml("AgentChatToolTemplates.axaml");
+        Assert.Contains(
+            "IsVisible=\"{Binding HasTool}\"",
+            toolTemplatesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DataType=\"vm:AgentEditorNavigationItemViewModel\"",
+            toolTemplatesContent,
+            StringComparison.Ordinal);
+        var toolsControlContent = ReadAxaml("AgentChatToolsDetailControl.axaml");
+        Assert.Contains(
+            "ItemsSource=\"{Binding DisplayedRootItems}\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AgentChatToolTemplates.axaml",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TreeViewItem",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Value=\"{Binding IsExpanded}\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ScrollViewer.AllowAutoHide=\"False\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ContentTemplate=\"{StaticResource AgentNavigationHeaderTemplate}\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ContentTemplate=\"{StaticResource AgentNavigationDetailTemplate}\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"entity-card\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"entity-card-expand-section\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"entity-card-expand-button\"",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<GridSplitter",
+            toolsControlContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "SelectedTool",
+            toolsControlContent,
             StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void AgentChatEditorControl_ShowsToolTreeWithEnableToggle()
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_CanCollapseAndUncollapseNavigationPane()
     {
-        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+        var control = new AgentChatEditorControl();
+        var setTreeCollapsed = control.GetType().GetMethod("SetTreeCollapsed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find SetTreeCollapsed method.");
 
-        Assert.Contains(
-            "<TreeView ItemsSource=\"{Binding Tools}\">",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Click=\"OnToolToggleClicked\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "<TextBlock Text=\"{Binding Status}\"",
-            editorControlContent,
-            StringComparison.Ordinal);
+        var navigationTree = GetField<TreeView>(control, "NavigationTree");
+        var splitterHost = GetField<Control>(control, "SplitterHost");
+        var treeSplitter = GetField<GridSplitter>(control, "SplitterHost");
+        var collapseToggle = GetField<ToggleButton>(control, "TreeCollapseToggle");
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        editorGrid.ColumnDefinitions[0].Width = new GridLength(318);
+
+        setTreeCollapsed.Invoke(control, [true]);
+
+        Assert.False(navigationTree.IsVisible);
+        Assert.False(splitterHost.IsVisible);
+        Assert.False(treeSplitter.IsVisible);
+        Assert.Equal("▶", collapseToggle.Content);
+        Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
+        Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
+
+        setTreeCollapsed.Invoke(control, [false]);
+
+        Assert.True(navigationTree.IsVisible);
+        Assert.True(splitterHost.IsVisible);
+        Assert.True(treeSplitter.IsVisible);
+        Assert.Equal("◀", collapseToggle.Content);
+        Assert.Equal(new GridLength(318), editorGrid.ColumnDefinitions[0].Width);
+        Assert.Equal(new GridLength(24), editorGrid.ColumnDefinitions[1].Width);
     }
 
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ChildControls_DisableCompiledBindings_ForRuntimeDataContextHandoff()
     {
         var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
@@ -112,4 +269,13 @@ public sealed class MainWindowAxamlTests
 
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
     }
+
+    private static T GetField<T>(object instance, string fieldName) where T : class
+    {
+        var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"Could not find field '{fieldName}'.");
+
+        return Assert.IsAssignableFrom<T>(field.GetValue(instance));
+    }
+
 }

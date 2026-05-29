@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless.XUnit;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -10,7 +11,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class SharedStylesTests
 {
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ThemeClassFontWeightResources_AreTypedFontWeightValues()
     {
         var sharedStyles = LoadSharedStyles();
@@ -29,7 +30,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TextBlockClassStyles_WithFontWeightSetters_DoNotUseStringValues()
     {
         var sharedStyles = LoadSharedStyles();
@@ -51,7 +52,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SimpleClassStyles_CanAttachToResolvedControlTypes()
     {
         var sharedStyles = LoadSharedStyles();
@@ -122,8 +123,8 @@ public sealed class SharedStylesTests
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
 
-    [Fact]
-    public void CopyableTextBox_InnerRightContent_UsesTemplateSetter()
+    [AvaloniaFact(Timeout = 15_000)]
+    public void CopyableTextBox_InnerLeftContent_UsesTemplateSetter()
     {
         var repositoryRoot = FindRepositoryRoot();
         var stylesPath = Path.Combine(
@@ -134,17 +135,17 @@ public sealed class SharedStylesTests
         var stylesContent = File.ReadAllText(stylesPath);
 
         var setterStartIndex = stylesContent.IndexOf(
-            "<Setter Property=\"InnerRightContent\">",
+            "<Setter Property=\"InnerLeftContent\">",
             StringComparison.Ordinal);
-        Assert.True(setterStartIndex >= 0, "SharedStyles.axaml must define InnerRightContent setter for copyable text.");
+        Assert.True(setterStartIndex >= 0, "SharedStyles.axaml must define InnerLeftContent setter for copyable text.");
 
         var setterEndIndex = stylesContent.IndexOf("</Setter>", setterStartIndex, StringComparison.Ordinal);
-        Assert.True(setterEndIndex > setterStartIndex, "InnerRightContent setter must be properly closed.");
+        Assert.True(setterEndIndex > setterStartIndex, "InnerLeftContent setter must be properly closed.");
 
         var templateStartIndex = stylesContent.IndexOf("<Template>", setterStartIndex, StringComparison.Ordinal);
         Assert.True(
             templateStartIndex > setterStartIndex && templateStartIndex < setterEndIndex,
-            "InnerRightContent setter must wrap control content in <Template>.");
+            "InnerLeftContent setter must wrap control content in <Template>.");
     }
 
     private static DirectoryInfo FindRepositoryRoot()
@@ -165,23 +166,10 @@ public sealed class SharedStylesTests
 
     private static Styles LoadSharedStyles()
     {
-        EnsureAvaloniaServices();
         var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml");
         var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
         var loaded = AvaloniaXamlLoader.Load(source, baseUri);
         return Assert.IsType<Styles>(loaded);
-    }
-
-    private static void EnsureAvaloniaServices()
-    {
-        if (Application.Current is not null)
-        {
-            return;
-        }
-
-        AppBuilder.Configure<Application>()
-            .UsePlatformDetect()
-            .SetupWithoutStarting();
     }
 
     private static (string ControlTypeName, string[] Classes)? TryParseSimpleSelector(string selectorText)

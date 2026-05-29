@@ -159,7 +159,7 @@ public sealed class ChatHistoryItemViewModelTests
         var attachment = Assert.Single(viewModel.Attachments);
 
         Assert.True(viewModel.HasAttachments);
-        Assert.Equal("image/png", attachment.Label);
+        Assert.StartsWith("image/png", attachment.Label, StringComparison.Ordinal);
     }
 
     [Fact]

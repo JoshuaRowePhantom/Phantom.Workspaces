@@ -1,0 +1,78 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels">
+    <DataTemplate x:Key="AgentToolHeaderTemplate"
+                  DataType="vm:AgentChatToolViewModel">
+        <Grid ColumnDefinitions="Auto,*"
+              ColumnSpacing="6">
+            <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                      Command="{Binding ToggleEnabledCommand}"
+                      CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}"
+                      VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1"
+                        Spacing="2">
+                <TextBlock Text="{Binding Name}"
+                           Classes="agent-tool-node-title"/>
+                <TextBlock Text="{Binding Summary}"
+                           Classes="muted"/>
+            </StackPanel>
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="AgentToolDetailTemplate"
+                  DataType="vm:AgentChatToolViewModel">
+        <StackPanel Spacing="6"
+                    Margin="26,0,0,0">
+            <StackPanel Spacing="2">
+                <TextBlock Text="Description"
+                           Classes="muted"/>
+                <TextBlock Text="{Binding Summary}"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+            <StackPanel Spacing="2">
+                <TextBlock Text="Instructions"
+                           Classes="muted"/>
+                <TextBlock Text="{Binding Instructions}"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+            <StackPanel Spacing="2">
+                <TextBlock Text="Status"
+                           Classes="muted"/>
+                <TextBlock Text="{Binding Status}"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+        </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="AgentNavigationHeaderTemplate"
+                  DataType="vm:AgentEditorNavigationItemViewModel">
+        <StackPanel>
+            <ContentControl IsVisible="{Binding HasTool}"
+                            Content="{Binding Tool}"
+                            ContentTemplate="{StaticResource AgentToolHeaderTemplate}"/>
+            <StackPanel IsVisible="{Binding NotHasTool}"
+                        Spacing="2">
+                <TextBlock Text="{Binding Name}"
+                           Classes="agent-tool-node-title"/>
+                <TextBlock Text="{Binding Summary}"
+                           Classes="muted"/>
+            </StackPanel>
+        </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="AgentNavigationDetailTemplate"
+                  DataType="vm:AgentEditorNavigationItemViewModel">
+        <StackPanel>
+            <ContentControl IsVisible="{Binding HasTool}"
+                            Content="{Binding Tool}"
+                            ContentTemplate="{StaticResource AgentToolDetailTemplate}"/>
+            <StackPanel IsVisible="{Binding NotHasTool}"
+                        Margin="26,0,0,0"
+                        Spacing="2">
+                <TextBlock Text="{Binding Summary}"
+                           Classes="muted"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+        </StackPanel>
+    </DataTemplate>
+</ResourceDictionary>

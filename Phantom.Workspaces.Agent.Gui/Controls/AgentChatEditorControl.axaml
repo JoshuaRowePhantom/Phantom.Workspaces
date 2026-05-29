@@ -1,39 +1,144 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+             xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatEditorControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="avares://Phantom.Workspaces.Agent.Gui/Controls/AgentChatToolTemplates.axaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <UserControl.DataTemplates>
+        <DataTemplate DataType="vm:AgentChatConversationDetailViewModel">
+            <DockPanel>
+                <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
+                                                     DataContext="{Binding InputQueue}"/>
+                <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
+            </DockPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:AgentChatDetailsViewModel">
+            <StackPanel Spacing="10">
+                <TextBlock Text="Chat details"
+                           Classes="agent-section-title"/>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Display name"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding DisplayName}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Session ID"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding AgentSessionId}"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:AgentChatToolsDetailViewModel">
+            <controls:AgentChatToolsDetailControl/>
+        </DataTemplate>
+        <DataTemplate DataType="vm:AgentChatToolViewModel">
+            <StackPanel Spacing="10">
+                <ContentControl Content="{Binding}"
+                                ContentTemplate="{StaticResource AgentToolHeaderTemplate}"/>
+                <ContentControl Content="{Binding}"
+                                ContentTemplate="{StaticResource AgentToolDetailTemplate}"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:AgentChatPlaceholderDetailViewModel">
+            <StackPanel Spacing="8">
+                <TextBlock Text="{Binding Title}"
+                           Classes="agent-section-title"/>
+                <TextBlock Text="{Binding Description}"
+                           Classes="muted"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.DataTemplates>
+
     <Border Classes="agent-pane">
-        <StackPanel Spacing="12" Classes="agent-editor-root" VerticalAlignment="Top">
-            <TextBlock Text="Agent Details"
-                       Classes="agent-section-title"/>
-            <TextBlock Text="Agent Session ID" Classes="muted"/>
-            <TextBox Text="{Binding AgentSessionId, Mode=OneWay}"
-                     IsReadOnly="True"
-                     TextWrapping="Wrap"
-                     Classes="agent-detail-value copyable-text"/>
-            <TextBlock Text="Tools" Classes="muted"/>
-            <TreeView ItemsSource="{Binding Tools}">
+        <Grid x:Name="EditorGrid">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280"
+                                  MinWidth="0"
+                                  MaxWidth="480"/>
+                <ColumnDefinition Width="24"
+                                  MinWidth="24"
+                                  MaxWidth="24"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TreeView x:Name="NavigationTree"
+                      ItemsSource="{Binding EditorItems}"
+                      MinWidth="240"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                      ScrollViewer.AllowAutoHide="False"
+                      SelectionChanged="OnEditorSelectionChanged"
+                      Grid.Column="0">
+                <TreeView.Styles>
+                    <Style Selector="TreeViewItem">
+                        <Setter Property="IsExpanded" Value="{Binding IsExpanded}"/>
+                    </Style>
+                    <Style Selector="TreeViewItem /template/ ToggleButton">
+                        <Setter Property="IsVisible" Value="False"/>
+                        <Setter Property="Width" Value="0"/>
+                        <Setter Property="MinWidth" Value="0"/>
+                    </Style>
+                </TreeView.Styles>
                 <TreeView.ItemTemplate>
                     <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <StackPanel Spacing="2" Classes="agent-tool-node">
-                            <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
-                                      Content="{Binding Name}"
-                                      Click="OnToolToggleClicked"/>
-                            <StackPanel Classes="agent-tool-node-details" Spacing="2">
-                                <TextBlock Text="{Binding Kind}" Classes="muted"/>
-                                <TextBlock Text="{Binding Description}"
-                                           Classes="muted"
-                                           TextWrapping="Wrap"/>
-                                <TextBlock Text="{Binding Status}"
-                                           Classes="muted"
-                                           TextWrapping="Wrap"/>
-                            </StackPanel>
+                        <StackPanel Spacing="4"
+                                    Margin="0,0,0,6">
+                            <Border IsVisible="{Binding HasChildren}"
+                                    Classes="entity-card"
+                                    CornerRadius="6,6,0,0">
+                                <ContentControl Content="{Binding}"
+                                                ContentTemplate="{StaticResource AgentNavigationHeaderTemplate}"/>
+                            </Border>
+                            <Border IsVisible="{Binding NotHasChildren}"
+                                    Classes="entity-card"
+                                    CornerRadius="6">
+                                <ContentControl Content="{Binding}"
+                                                ContentTemplate="{StaticResource AgentNavigationHeaderTemplate}"/>
+                            </Border>
+                            <Border IsVisible="{Binding HasChildren}"
+                                    Classes="entity-card-expand-section"
+                                    CornerRadius="0,0,6,6">
+                                <Button Classes="entity-card-expand-button"
+                                        Content="{Binding ExpandArrow}"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Command="{Binding ToggleExpandCommand}" />
+                            </Border>
                         </StackPanel>
                     </TreeDataTemplate>
                 </TreeView.ItemTemplate>
             </TreeView>
-        </StackPanel>
+
+            <GridSplitter x:Name="SplitterHost"
+                          Grid.Column="1"
+                          VerticalAlignment="Stretch"
+                          HorizontalAlignment="Stretch"
+                          Classes="main-splitter"
+                          ResizeBehavior="PreviousAndNext"/>
+            <ToggleButton x:Name="TreeCollapseToggle"
+                          Width="16"
+                          Height="16"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Center"
+                          Grid.Column="1"
+                          Click="OnTreeCollapseToggleClicked"
+                          Content="◀"/>
+            <ContentControl Grid.Column="2"
+                            Content="{Binding SelectedEditorDetailContent}"/>
+        </Grid>
     </Border>
 </UserControl>

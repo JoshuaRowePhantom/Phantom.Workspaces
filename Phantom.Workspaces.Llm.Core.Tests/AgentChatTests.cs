@@ -208,8 +208,8 @@ public sealed class AgentChatTests
                 "apiType": "Echo"
               },
               "tools": [
-                { "kind": "web_search", "name": "search", "description": "Search docs" },
-                { "kind": "web_request", "name": "request", "description": "Fetch pages" }
+                { "kind": "web_search", "description": "Search docs" },
+                { "kind": "web_request", "description": "Fetch pages" }
               ]
             }
             """);
@@ -220,12 +220,14 @@ public sealed class AgentChatTests
             item =>
             {
                 Assert.Equal("web_request", item.Kind);
+                Assert.Equal("web_request", item.Name);
                 Assert.True(item.IsEnabled);
                 Assert.Empty(item.Children);
             },
             item =>
             {
                 Assert.Equal("web_search", item.Kind);
+                Assert.Equal("web_search", item.Name);
                 Assert.True(item.IsEnabled);
                 Assert.Empty(item.Children);
             });

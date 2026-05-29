@@ -110,6 +110,7 @@ public sealed record AgentChatToolItem(
     string Id,
     string Name,
     string Description,
+    string Instructions,
     string Kind,
     bool IsEnabled,
     IReadOnlyList<AgentChatToolItem> Children,
@@ -1340,7 +1341,8 @@ public sealed class AgentChat : IAsyncDisposable
         string kind,
         AITool runtimeTool)
     {
-        var displayName = tool.Name ?? kind;
+        var displayName = runtimeTool.Name ?? throw new InvalidOperationException($"Custom tool '{kind}' must define an invocation name.");
+        var summary = tool.Description ?? string.Empty;
         var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -1352,7 +1354,8 @@ public sealed class AgentChat : IAsyncDisposable
             var root = new ToolStateNode(
                 id: BuildCustomToolId(tool),
                 name: displayName,
-                description: tool.Description ?? string.Empty,
+                description: summary,
+                instructions: summary,
                 kind: kind,
                 runtimeTool: runtimeTool,
                 parent: null,
@@ -1390,6 +1393,7 @@ public sealed class AgentChat : IAsyncDisposable
                 id: BuildMcpServerToolId(toolServerName),
                 name: displayName,
                 description: mcpTool.ServerDescription ?? mcpTool.Description ?? string.Empty,
+                instructions: mcpTool.ServerDescription ?? mcpTool.Description ?? string.Empty,
                 kind: "mcp",
                 runtimeTool: null,
                 parent: null,
@@ -1417,7 +1421,8 @@ public sealed class AgentChat : IAsyncDisposable
                 serverNode.Children.Add(new ToolStateNode(
                     id: BuildMcpChildToolId(toolServerName, mcpRuntimeTool.Name),
                     name: mcpRuntimeTool.Name,
-                    description: string.Empty,
+                    description: mcpRuntimeTool.Description ?? string.Empty,
+                    instructions: mcpRuntimeTool.Description ?? string.Empty,
                     kind: "mcp-tool",
                     runtimeTool: mcpRuntimeTool,
                     parent: serverNode,
@@ -1454,6 +1459,7 @@ public sealed class AgentChat : IAsyncDisposable
                 id: BuildMcpServerToolId(toolServerName),
                 name: displayName,
                 description: mcpTool.ServerDescription ?? mcpTool.Description ?? string.Empty,
+                instructions: mcpTool.ServerDescription ?? mcpTool.Description ?? string.Empty,
                 kind: "mcp",
                 runtimeTool: null,
                 parent: null,
@@ -1789,6 +1795,7 @@ public sealed class AgentChat : IAsyncDisposable
             node.Id,
             node.Name,
             node.Description,
+            node.Instructions,
             node.Kind,
             node.IsEnabled,
             node.Children.Select(CreateToolSnapshot).ToArray(),
@@ -1807,6 +1814,7 @@ public sealed class AgentChat : IAsyncDisposable
         string id,
         string name,
         string description,
+        string instructions,
         string kind,
         AITool? runtimeTool,
         ToolStateNode? parent,
@@ -1818,6 +1826,8 @@ public sealed class AgentChat : IAsyncDisposable
         public string Name { get; } = name;
 
         public string Description { get; } = description;
+
+        public string Instructions { get; } = instructions;
 
         public string Kind { get; } = kind;
 

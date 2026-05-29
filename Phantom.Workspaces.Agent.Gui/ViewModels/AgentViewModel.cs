@@ -9,21 +9,37 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 {
     private readonly AgentChat agentChat;
+    private readonly AgentChatConversationDetailViewModel conversationDetail;
+    private readonly AgentChatDetailsViewModel chatDetailsDetail;
+    private readonly AgentChatToolsDetailViewModel toolsDetail;
+    private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
+    private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
     private readonly object stateLock = new();
     private long appliedStateVersion;
     private bool isReasoningVisible;
     private string agentSessionId;
+    private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
     public AgentViewModel(AgentChat agentChat, string displayName)
     {
         this.agentChat = agentChat;
         this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
+        this.conversationDetail = new AgentChatConversationDetailViewModel(this);
+        this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
+        this.toolsDetail = new AgentChatToolsDetailViewModel();
+        this.backgroundTasksDetail = new AgentChatPlaceholderDetailViewModel(
+            "Background tasks",
+            "Background task model coming later.");
+        this.subAgentsDetail = new AgentChatPlaceholderDetailViewModel(
+            "Sub-agents",
+            "Sub-agent model coming later.");
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.InputQueue = new InputQueueViewModel(
             this.agentChat,
             this.agentChat.DefaultInputQueue,
             this.agentChat.InputQueueManager);
+        this.EditorItems = [];
 
         agentChat.StateChanged += this.OnStateChanged;
         agentChat.ToolsChanged += this.OnToolsChanged;
@@ -36,7 +52,13 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public string AgentSessionId
     {
         get => this.agentSessionId;
-        private set => this.SetProperty(ref this.agentSessionId, value);
+        private set
+        {
+            if (this.SetProperty(ref this.agentSessionId, value))
+            {
+                this.chatDetailsDetail.UpdateSessionId(value);
+            }
+        }
     }
 
     public AgentChat AgentChat => this.agentChat;
@@ -50,6 +72,29 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<RunningItemViewModel> RunningItems { get; } = [];
 
     public ObservableCollection<AgentChatToolViewModel> Tools { get; } = [];
+
+    public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
+
+    public AgentEditorNavigationItemViewModel? SelectedEditorItem
+    {
+        get => this.selectedEditorItem;
+        set
+        {
+            if (!this.SetProperty(ref this.selectedEditorItem, value))
+            {
+                return;
+            }
+
+            if (ReferenceEquals(value?.DetailContent, this.toolsDetail))
+            {
+                this.toolsDetail.SetRootItem(value);
+            }
+
+            this.RaisePropertyChanged(nameof(this.SelectedEditorDetailContent));
+        }
+    }
+
+    public object? SelectedEditorDetailContent => this.SelectedEditorItem?.DetailContent;
 
     public bool IsReasoningVisible
     {
@@ -88,6 +133,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                     this.ApplySnapshot(this.agentChat.GetStateSnapshot());
                     return;
                 }
+
                 this.ApplyIncrementalChange(e);
                 this.appliedStateVersion = e.ToVersion;
             }
@@ -240,6 +286,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         {
             this.Tools.Add(this.CreateToolViewModel(tool));
         }
+
+        this.BuildEditorTree();
     }
 
     private AgentChatToolViewModel CreateToolViewModel(AgentChatToolItem tool)
@@ -247,11 +295,76 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             tool.Id,
             tool.Name,
             tool.Description,
+            tool.Instructions,
             tool.Kind,
             tool.IsEnabled,
             tool.Status,
             tool.Children.Select(this.CreateToolViewModel).ToArray(),
             enabled => this.agentChat.SetToolEnabledAsync(tool.Id, enabled));
+
+    private void BuildEditorTree()
+    {
+        var selectedId = this.SelectedEditorItem?.Id;
+        this.EditorItems.Clear();
+
+        var toolNavigationItems = BuildToolNavigationItems(this.Tools);
+
+        var root = new AgentEditorNavigationItemViewModel(
+            "chat",
+            this.DisplayName,
+            null,
+            null,
+            null,
+            this.conversationDetail,
+            [
+                new AgentEditorNavigationItemViewModel("chat-details", "Chat details", null, "Session information", null, this.chatDetailsDetail, []),
+                new AgentEditorNavigationItemViewModel("chat-tools", "Tools", null, "Loaded tools", null, this.toolsDetail, toolNavigationItems, isExpanded: true),
+                new AgentEditorNavigationItemViewModel("chat-background-tasks", "Background tasks", null, "Planned background work", null, this.backgroundTasksDetail, []),
+                new AgentEditorNavigationItemViewModel("chat-sub-agents", "Sub-agents", null, "Planned sub-agent work", null, this.subAgentsDetail, []),
+            ],
+            isExpanded: true);
+
+        this.toolsDetail.SetToolNavigationItems(toolNavigationItems);
+        this.EditorItems.Add(root);
+        this.SelectedEditorItem = FindNavigationItem(root, selectedId) ?? root;
+    }
+
+    private IReadOnlyList<AgentEditorNavigationItemViewModel> BuildToolNavigationItems(IEnumerable<AgentChatToolViewModel> tools)
+        => tools.Select(this.BuildToolNavigationItem).ToArray();
+
+    private AgentEditorNavigationItemViewModel BuildToolNavigationItem(AgentChatToolViewModel tool)
+        => new(
+            tool.Id,
+            tool.Name,
+            tool.Id,
+            tool.Summary,
+            tool,
+            this.toolsDetail,
+            tool.Children.Select(this.BuildToolNavigationItem).ToArray());
+
+    private static AgentEditorNavigationItemViewModel? FindNavigationItem(AgentEditorNavigationItemViewModel root, string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        if (string.Equals(root.Id, id, StringComparison.OrdinalIgnoreCase))
+        {
+            return root;
+        }
+
+        foreach (var child in root.Children)
+        {
+            var match = FindNavigationItem(child, id);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
 
     public async ValueTask DisposeAsync()
     {
