@@ -1,0 +1,75 @@
+{
+  "kind": "prompt",
+  "name": "github-models-chat-with-mongodb",
+  "displayName": "GitHub Models Chat with MongoDB History",
+  "description": "A chat agent using GitHub Models via the OpenAI-compatible inference API with persistent chat history stored in MongoDB",
+  "model": {
+    "id": "gpt-4.1-mini",
+    "provider": "github",
+    "apiType": "OpenAI",
+    "connection": {
+      "kind": "key",
+      "endpoint": "https://models.github.ai/inference",
+      "apiKey": "${GITHUB_TOKEN}"
+    },
+    "options": {
+      "temperature": 0.2,
+      "maxOutputTokens": 2048
+    }
+  },
+  "instructions": "You are a helpful assistant. Keep answers concise and practical.\nYou can also use GitHub MCP tools to read and manage repository data when needed.",
+  "tools": [
+    {
+      "kind": "web_request",
+      "description": "Make HTTP requests to fetch web pages and resources"
+    },
+    {
+      "name": "github",
+      "kind": "mcp",
+      "description": "GitHub MCP server providing tools for repositories, issues, pull requests, code search, and workflows.",
+      "connection": {
+        "kind": "key",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "serverName": "github",
+      "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",
+      "approvalMode": {
+        "kind": "never"
+      }
+    },
+    {
+      "name": "chat-history",
+      "kind": "chat-history",
+      "description": "Persistent chat history stored in MongoDB container",
+      "options": {
+        "connection": {
+          "provider": "mongodb",
+          "mongoProvider": "container",
+          "database-name": "phantom_chat_history",
+          "collection-name": "messages",
+          "container-name": "phantom-mongodb",
+          "data-directory": "./mongo-data",
+          "host-port": 27017
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": [
+      "github-models",
+      "openai-compatible",
+      "chat-with-history",
+      "mcp",
+      "github",
+      "mongodb",
+      "persistent-history"
+    ],
+    "prerequisites": [
+      "Set GITHUB_TOKEN in your environment with access to GitHub Models and GitHub MCP.",
+      "Docker and docker-compose installed for MongoDB container."
+    ]
+  }
+}

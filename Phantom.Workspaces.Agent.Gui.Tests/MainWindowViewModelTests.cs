@@ -1,13 +1,59 @@
 using AgentSchema;
 using Avalonia.Input;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using MongoDB.Bson;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Echo;
+using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class MainWindowViewModelTests
 {
+    private sealed class TestAgentPersistenceStore : IAgentPersistenceStore
+    {
+        private readonly List<ChatMessage> messages = [];
+        private PersistedAgent? persistedAgent;
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            this.persistedAgent = request.Agent;
+            if (request.NewMessages is { Length: > 0 })
+            {
+                this.messages.AddRange(request.NewMessages);
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(
+            RestoreRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (this.persistedAgent is { } persisted && persisted.AgentSessionId == request.AgentSessionId)
+            {
+                return ValueTask.FromResult<PersistedAgent?>(persisted);
+            }
+
+            return ValueTask.FromResult<PersistedAgent?>(null);
+        }
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(
+            ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (this.persistedAgent is { } persisted && persisted.AgentSessionId == request.AgentSessionId)
+            {
+                return ValueTask.FromResult(this.messages.ToArray());
+            }
+
+            return ValueTask.FromResult(Array.Empty<ChatMessage>());
+        }
+    }
+
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -29,11 +75,12 @@ public sealed class MainWindowViewModelTests
         var parseResult = new AgentDefinitionParseResult(
             CreateAgentDefinition(),
             AgentSchemaPath: null,
+            AgentSessionId: null,
             LogChat: true,
             LogHttpRequests: true,
             UnmatchedArguments: []);
 
-        var viewModel = new MainWindowViewModel(parseResult);
+        var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
         await viewModel.DisposeAsync();
     }
 
@@ -43,12 +90,14 @@ public sealed class MainWindowViewModelTests
         var parseResult = new AgentDefinitionParseResult(
             CreateAgentDefinition(),
             AgentSchemaPath: @"C:\repo\docs\examples\qwen-local-chat.json",
+            AgentSessionId: null,
             LogChat: false,
             LogHttpRequests: false,
             UnmatchedArguments: []);
 
-        var viewModel = new MainWindowViewModel(parseResult);
+        var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
         Assert.Contains("[from qwen-local-chat.json]", viewModel.Agent.DisplayName, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(viewModel.Agent.AgentSessionId));
         await viewModel.DisposeAsync();
     }
 
@@ -58,11 +107,12 @@ public sealed class MainWindowViewModelTests
         var parseResult = new AgentDefinitionParseResult(
             CreateAgentDefinition(),
             AgentSchemaPath: null,
+            AgentSessionId: null,
             LogChat: false,
             LogHttpRequests: false,
             UnmatchedArguments: []);
 
-        var viewModel = new MainWindowViewModel(parseResult);
+        var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
         Assert.False(viewModel.Agent.IsReasoningVisible);
         viewModel.Agent.ToggleReasoningVisibility();
         Assert.True(viewModel.Agent.IsReasoningVisible);
@@ -75,15 +125,80 @@ public sealed class MainWindowViewModelTests
         var parseResult = new AgentDefinitionParseResult(
             CreateAgentDefinition(),
             AgentSchemaPath: null,
+            AgentSessionId: null,
             LogChat: false,
             LogHttpRequests: false,
             UnmatchedArguments: []);
 
-        var viewModel = new MainWindowViewModel(parseResult);
+        var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
         var handled = MainWindow.HandleKey(viewModel, Key.T, KeyModifiers.Control);
 
         Assert.True(handled);
         Assert.True(viewModel.Agent.IsReasoningVisible);
         await viewModel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithAgentSessionId_UsesRequestedSessionId()
+    {
+        var parseResult = new AgentDefinitionParseResult(
+            CreateAgentDefinition(),
+            AgentSchemaPath: null,
+            AgentSessionId: "gui-session-id",
+            LogChat: false,
+            LogHttpRequests: false,
+            UnmatchedArguments: []);
+
+        var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
+
+        Assert.Equal("gui-session-id", viewModel.Agent.AgentSessionId);
+        await viewModel.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithRestoredSession_LoadsPersistedMessagesIntoAgentHistory()
+    {
+        var sessionId = "gui-restored-history";
+        var store = new TestAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+        };
+        var serializerAgent = new ChatClientAgent(
+            new EchoChatClient(),
+            new ChatClientAgentOptions { UseProvidedChatClientAsIs = true });
+        var serializerSession = await serializerAgent.CreateSessionAsync(CancellationToken.None);
+        var serializedSession = await serializerAgent.SerializeSessionAsync(serializerSession, cancellationToken: CancellationToken.None);
+        var agentDefinition = CreateAgentDefinition();
+
+        await store.StoreAsync(
+            new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = sessionId,
+                    AgentSessionJson = BsonDocument.Parse(serializedSession.GetRawText()),
+                    AgentDefinitionJson = BsonDocument.Parse(agentDefinition.ToJson()),
+                },
+                NewMessages =
+                [
+                    new ChatMessage(ChatRole.User, "restore me"),
+                    new ChatMessage(ChatRole.Assistant, "restored"),
+                ],
+            },
+            CancellationToken.None);
+
+        var parseResult = new AgentDefinitionParseResult(
+            agentDefinition,
+            AgentSchemaPath: null,
+            AgentSessionId: sessionId,
+            LogChat: false,
+            LogHttpRequests: false,
+            UnmatchedArguments: []);
+
+        await using var viewModel = await MainWindowViewModel.CreateAsync(parseResult, services);
+
+        Assert.Contains(viewModel.Agent.History, item => item.Role == ChatRole.User && item.Text.Contains("restore me", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Agent.History, item => item.Role == ChatRole.Assistant && item.Text.Contains("restored", StringComparison.Ordinal));
     }
 }

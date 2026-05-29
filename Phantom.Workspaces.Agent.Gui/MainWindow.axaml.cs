@@ -9,8 +9,6 @@ public partial class MainWindow : Window
 {
     private LogWindow? logWindow;
 
-    public MainWindow() : this(new MainWindowViewModel(Program.ParseResult!)) { }
-
     public MainWindow(MainWindowViewModel viewModel)
     {
         this.DataContext = viewModel;
@@ -66,4 +64,5 @@ public partial class MainWindow : Window
         this.logWindow.Closed += (_, _) => this.logWindow = null;
         this.logWindow.Show(this);
     }
+
 }

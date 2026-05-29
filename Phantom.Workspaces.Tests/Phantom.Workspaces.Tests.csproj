@@ -24,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />
   </ItemGroup>
 

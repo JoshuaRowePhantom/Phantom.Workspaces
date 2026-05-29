@@ -71,7 +71,13 @@ internal sealed class AgentCliApp : IDisposable
             LoggerFactory = this.loggerFactory,
         };
 
-        this.agentChat = AgentFactory.CreateAgentChatAsync(parseResult.AgentDefinition, services).GetAwaiter().GetResult();
+        this.agentChat = AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = parseResult.AgentSessionId,
+                AgentDefinition = parseResult.AgentDefinition,
+                AgentServices = services,
+            }).GetAwaiter().GetResult();
         this.clientDisplayName = this.agentChat.DisplayName;
 
         if (!string.IsNullOrEmpty(parseResult.AgentSchemaPath))

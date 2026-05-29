@@ -1,5 +1,5 @@
 namespace Phantom.Workspaces.Containers;
 
-public sealed class WindowsContainerEngineInstaller : ContainerDEngineInstaller
+public sealed class WindowsContainerDEngineInstaller : ContainerDEngineInstaller
 {
 }

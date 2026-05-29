@@ -25,6 +25,7 @@
   <Project Path="Phantom.Workspaces.Gui.Styles/Phantom.Workspaces.Gui.Styles.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core.Tests/Phantom.Workspaces.Llm.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core/Phantom.Workspaces.Llm.Core.csproj" />
+  <Project Path="Phantom.Workspaces.Llm.Interfaces/Phantom.Workspaces.Llm.Interfaces.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Echo/Phantom.Workspaces.Llm.Echo.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Tools.Tests/Phantom.Workspaces.Llm.Tools.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Tools/Phantom.Workspaces.Llm.Tools.csproj" />

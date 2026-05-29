@@ -6,6 +6,7 @@
              xmlns:behaviors="using:Phantom.Workspaces.Agent.Gui.Behaviors"
              xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.ChatAgentOutputControl"
+             x:CompileBindings="False"
              x:DataType="vm:AgentViewModel"
              Background="#1E1E1E">
     <UserControl.DataTemplates>

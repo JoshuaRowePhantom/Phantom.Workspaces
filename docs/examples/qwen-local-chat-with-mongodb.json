@@ -1,0 +1,58 @@
+{
+  "kind": "prompt",
+  "name": "qwen-local-chat-with-mongodb",
+  "displayName": "Qwen 3.6 Local Chat with MongoDB History",
+  "description": "A chat agent using Qwen 3.6 running locally on Ollama with persistent chat history stored in MongoDB",
+  "model": {
+    "id": "qwen3.6",
+    "provider": "ollama",
+    "apiType": "Ollama",
+    "connection": {
+      "kind": "Anonymous",
+      "endpoint": "http://localhost:11434"
+    },
+    "options": {
+      "temperature": 0.7,
+      "topP": 0.9,
+      "frequencyPenalty": 0.0,
+      "presencePenalty": 0.0,
+      "maxOutputTokens": 2048,
+      "topK": 40,
+      "additionalProperties": {
+        "thinking": false
+      }
+    }
+  },
+  "instructions": "You are a helpful AI assistant powered by Qwen 3.6.\nRespond to user queries clearly and concisely.\nYou can search the web and fetch URLs when needed to provide accurate, up-to-date information.",
+  "tools": [
+    {
+      "kind": "web_search",
+      "description": "Search the web for information"
+    },
+    {
+      "kind": "web_request",
+      "description": "Make HTTP requests to fetch web pages and resources"
+    },
+    {
+      "name": "chat-history",
+      "kind": "chat-history",
+      "description": "Persistent chat history stored in MongoDB container",
+      "options": {
+        "connection": {
+          "provider": "mongodb",
+          "mongoProvider": "container",
+          "database-name": "phantom_chat_history",
+          "collection-name": "messages",
+          "container-name": "phantom-mongodb",
+          "data-directory": "./mongo-data",
+          "host-port": 27017
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": ["local", "ollama", "chat", "mongodb", "persistent-history"]
+  }
+}

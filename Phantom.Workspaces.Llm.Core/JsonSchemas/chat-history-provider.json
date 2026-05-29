@@ -1,0 +1,53 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/chat-history-provider.json",
+  "type": "object",
+  "properties": {
+    "provider": {
+      "type": "string",
+      "const": "mongodb"
+    },
+    "mongoProvider": {
+      "type": "string",
+      "enum": ["container", "external"]
+    },
+    "database-name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "collection-name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "container-name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "data-directory": {
+      "type": "string",
+      "minLength": 1
+    },
+    "host-port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "connection-string": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": ["provider", "mongoProvider", "database-name", "collection-name"],
+  "if": {
+    "properties": {
+      "mongoProvider": {
+        "const": "container"
+      }
+    }
+  },
+  "then": {
+    "required": ["container-name", "data-directory"]
+  },
+  "else": {
+    "required": ["connection-string"]
+  }
+}

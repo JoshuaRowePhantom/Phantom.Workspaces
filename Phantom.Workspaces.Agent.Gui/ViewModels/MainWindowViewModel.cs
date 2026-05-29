@@ -4,13 +4,29 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
-    public MainWindowViewModel(AgentDefinitionParseResult parseResult)
+    private MainWindowViewModel(AgentChat chat, AgentDefinitionParseResult parseResult, ObservableLoggerFactory loggerFactory)
+    {
+        this.LoggerFactory = loggerFactory;
+        this.Agent = CreateAgentViewModel(parseResult, chat);
+    }
+
+    public static Task<MainWindowViewModel> CreateAsync(AgentDefinitionParseResult parseResult)
+        => CreateAsync(parseResult, agentServicesOverride: null);
+
+    public static async Task<MainWindowViewModel> CreateAsync(
+        AgentDefinitionParseResult parseResult,
+        AgentServices? agentServicesOverride)
     {
         var loggerFactory = new ObservableLoggerFactory();
-        this.LoggerFactory = loggerFactory;
-
-        var chat = AgentFactory.CreateAgentChat(parseResult.AgentDefinition, CreateServices(parseResult, loggerFactory));
-        this.Agent = CreateAgentViewModel(parseResult, chat);
+        var services = agentServicesOverride ?? CreateServices(parseResult, loggerFactory);
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = parseResult.AgentSessionId,
+                AgentDefinition = parseResult.AgentDefinition,
+                AgentServices = services,
+            });
+        return new MainWindowViewModel(chat, parseResult, loggerFactory);
     }
 
     public AgentViewModel Agent { get; }

@@ -488,3 +488,7 @@ docs/nuget/research/
 
 # Local launch profiles
 **/Properties/launchSettings.json
+
+# mongo data started from the examples
+mongo-data
+/build-output.txt

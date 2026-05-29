@@ -25,6 +25,13 @@ public sealed class ChatHistoryItemViewModelTests
             }
             """);
 
+    private static Task<AgentChat> CreateChatAsync()
+        => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = CreateTestProviderAgentDefinition(),
+            });
+
     [Fact]
     public void Constructor_UserRole_MapsToUserLabel()
     {
@@ -204,7 +211,7 @@ public sealed class ChatHistoryItemViewModelTests
     [Fact]
     public async Task UpdateFrom_TestProviderEquivalentAssistantTurn_DoesNotResetContentsBinding()
     {
-        var chat = AgentFactory.CreateAgentChat(CreateTestProviderAgentDefinition());
+        var chat = await CreateChatAsync();
         await using var _ = chat;
 
         chat.EnqueueUserMessage("hello");

@@ -1,4 +1,15 @@
-<Styles xmlns="https://github.com/avaloniaui">
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources />
+    <Style Selector="TextBox.copyable-text">
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="InnerRightContent">
+            <Template>
+                <Button Classes="copyable-text-button"
+                        Focusable="False" />
+            </Template>
+        </Setter>
+    </Style>
     <Style Selector="TextBlock.heading">
         <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.heading.FontWeight}" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.heading.Foreground}" />
@@ -371,5 +382,50 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="6" />
+    </Style>
+    <Style Selector="TextBlock.agent-section-title">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="#B8B8B8" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="TextBlock.agent-detail-label">
+        <Setter Property="Foreground" Value="#888888" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.agent-detail-value">
+        <Setter Property="Foreground" Value="#D0D0D0" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
+    </Style>
+    <Style Selector="Button.copyable-text-button">
+        <Setter Property="Content" Value="⧉" />
+        <Setter Property="ToolTip.Tip" Value="Copy value" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="#B8B8B8" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="StackPanel.copyable-text:pointerover Button.copyable-text-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Grid.copyable-text:pointerover Button.copyable-text-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="TextBox.copyable-text:pointerover Button.copyable-text-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.copyable-text-button:pointerover">
+        <Setter Property="Foreground" Value="#E0E0E0" />
+    </Style>
+    <Style Selector="Button.copyable-text-button:pressed">
+        <Setter Property="Foreground" Value="#6EC06E" />
     </Style>
 </Styles>

@@ -23,10 +23,18 @@ public sealed class AgentInputQueueControlKeyTests
             }
             """);
 
+    private static Task<AgentChat> CreateChatAsync(AgentServices? agentServices = null)
+        => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = CreateAgentDefinition(),
+                AgentServices = agentServices,
+            });
+
     [Fact]
     public async Task HoldAllQueuesCommand_HoldsAllQueues()
     {
-        await using var chat = AgentFactory.CreateAgentChat(CreateAgentDefinition());
+        await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
@@ -38,7 +46,7 @@ public sealed class AgentInputQueueControlKeyTests
     [Fact]
     public async Task UnholdAllQueuesCommand_UnholdsAllQueues()
     {
-        await using var chat = AgentFactory.CreateAgentChat(CreateAgentDefinition());
+        await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
@@ -51,7 +59,7 @@ public sealed class AgentInputQueueControlKeyTests
     [Fact]
     public async Task ToggleHoldAllQueuesCommand_TogglesHoldState()
     {
-        await using var chat = AgentFactory.CreateAgentChat(CreateAgentDefinition());
+        await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
@@ -63,7 +71,7 @@ public sealed class AgentInputQueueControlKeyTests
     [Fact]
     public async Task HandleInputKey_CtrlShiftQ_WhenQueuesAreHeld_CreatesHeldQueue()
     {
-        await using var chat = AgentFactory.CreateAgentChat(CreateAgentDefinition());
+        await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "create";
         viewModel.HoldAllQueues();
@@ -79,7 +87,7 @@ public sealed class AgentInputQueueControlKeyTests
     [Fact]
     public async Task HandleInputKey_Return_SubmitsToDefaultQueue()
     {
-        await using var chat = AgentFactory.CreateAgentChat(CreateAgentDefinition());
+        await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
         {
             InputText = "hello from return",
@@ -93,3 +101,4 @@ public sealed class AgentInputQueueControlKeyTests
         Assert.Equal("hello from return", chat.History[0].Text);
     }
 }
+

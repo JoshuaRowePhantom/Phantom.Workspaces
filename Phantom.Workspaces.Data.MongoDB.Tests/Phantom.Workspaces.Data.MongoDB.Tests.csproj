@@ -23,4 +23,8 @@
     <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\AgentPersistenceStoreContractTests.cs" Link="AgentPersistenceStoreContractTests.cs" />
+  </ItemGroup>
+
 </Project>

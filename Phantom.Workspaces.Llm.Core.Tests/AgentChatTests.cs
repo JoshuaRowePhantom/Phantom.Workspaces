@@ -1,5 +1,8 @@
+using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using MongoDB.Bson;
+using Phantom.Workspaces.Llm.Interfaces;
 using System.Linq;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -8,36 +11,105 @@ public sealed class AgentChatTests
 {
     private static AgentChat CreateChat(params ChatResponseUpdate[] updates)
     {
-        var historyProvider = new AgentFrameworkChatHistoryProvider(new InMemoryChatHistoryProvider());
-        var agent = new ChatClientAgent(
-            new TestChatClient(updates),
-            new ChatClientAgentOptions
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
             {
-                UseProvidedChatClientAsIs = true,
-                ChatHistoryProvider = historyProvider,
-            });
-        var session = new AgentChatSession(
-            agent,
-            agent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
-        var manager = new AgentInputQueueManager();
-        return new AgentChat(session, manager, historyProvider);
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new TestChatClient(updates);
+        return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "test-chat",
+        }).GetAwaiter().GetResult();
     }
 
     private static AgentChat CreateBusyChat(IChatClient client)
     {
-        var historyProvider = new AgentFrameworkChatHistoryProvider(new InMemoryChatHistoryProvider());
-        var agent = new ChatClientAgent(
-            client,
-            new ChatClientAgentOptions
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
             {
-                UseProvidedChatClientAsIs = true,
-                ChatHistoryProvider = historyProvider,
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = client,
+            DisplayNameOverride = "test-chat",
+        }).GetAwaiter().GetResult();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithRestoredSession_LoadsPersistedMessagesIntoHistory()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+        var store = new InMemoryAgentPersistenceStore();
+        var sessionId = "restored-history-session";
+        var serializerAgent = new ChatClientAgent(new TestChatClient(), new ChatClientAgentOptions { UseProvidedChatClientAsIs = true });
+        var serializerSession = await serializerAgent.CreateSessionAsync(CancellationToken.None);
+        var serializedSession = await serializerAgent.SerializeSessionAsync(serializerSession, cancellationToken: CancellationToken.None);
+
+        await store.StoreAsync(
+            new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = sessionId,
+                    AgentSessionJson = BsonDocument.Parse(serializedSession.GetRawText()),
+                    AgentDefinitionJson = BsonDocument.Parse(agentDefinition.ToJson()),
+                },
+                NewMessages =
+                [
+                    new ChatMessage(ChatRole.User, "hello"),
+                    new ChatMessage(ChatRole.Assistant, "world"),
+                ],
+            },
+            CancellationToken.None);
+
+        await using var chat = await AgentChat.CreateAsync(
+            new AgentChat.InternalCreateAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                AgentDefinition = null,
+                ConfiguredStore = store,
             });
-        var session = new AgentChatSession(
-            agent,
-            agent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
-        var manager = new AgentInputQueueManager();
-        return new AgentChat(session, manager, historyProvider);
+
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("hello", chat.History[0].Text);
+        Assert.Equal("world", chat.History[1].Text);
     }
 
     [Fact]

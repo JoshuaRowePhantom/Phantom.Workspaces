@@ -10,10 +10,12 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 {
     private readonly AgentChat agentChat;
     private bool isReasoningVisible;
+    private string agentSessionId;
 
     public AgentViewModel(AgentChat agentChat, string displayName)
     {
         this.agentChat = agentChat;
+        this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.InputQueue = new InputQueueViewModel(
@@ -21,11 +23,21 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.agentChat.DefaultInputQueue,
             this.agentChat.InputQueueManager);
 
+        this.LoadCurrentHistory();
+        this.LoadCurrentRunningItems();
+
         agentChat.History.CollectionChanged += this.OnHistoryChanged;
         agentChat.RunningItems.CollectionChanged += this.OnRunningItemsChanged;
+        agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
     }
 
     public string DisplayName { get; }
+
+    public string AgentSessionId
+    {
+        get => this.agentSessionId;
+        private set => this.SetProperty(ref this.agentSessionId, value);
+    }
 
     public AgentChat AgentChat => this.agentChat;
 
@@ -130,6 +142,31 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         });
     }
 
+    private void OnAgentSessionIdChanged(object? sender, string nextAgentSessionId)
+    {
+        Dispatcher.UIThread.Post(() => this.AgentSessionId = nextAgentSessionId);
+    }
+
+    private void LoadCurrentHistory()
+    {
+        foreach (var item in this.agentChat.History)
+        {
+            var vm = new ChatHistoryItemViewModel(item);
+            vm.SetReasoningVisible(this.IsReasoningVisible);
+            this.History.Add(vm);
+        }
+    }
+
+    private void LoadCurrentRunningItems()
+    {
+        foreach (var item in this.agentChat.RunningItems)
+        {
+            var vm = new RunningItemViewModel(item);
+            vm.SetReasoningVisible(this.IsReasoningVisible);
+            this.RunningItems.Add(vm);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var item in this.History)
@@ -145,6 +182,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.InputQueue.Dispose();
         this.agentChat.History.CollectionChanged -= this.OnHistoryChanged;
         this.agentChat.RunningItems.CollectionChanged -= this.OnRunningItemsChanged;
+        this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         await this.agentChat.DisposeAsync();
     }
 }

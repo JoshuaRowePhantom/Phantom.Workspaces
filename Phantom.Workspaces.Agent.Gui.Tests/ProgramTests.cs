@@ -17,6 +17,18 @@ public sealed class ProgramTests
     }
 
     [Fact]
+    public void TryParseArguments_WithSessionId_ReturnsParsedSessionId()
+    {
+        var success = Program.TryParseArguments(
+            ["--provider", "echo", "--session-id", "gui-session-123"],
+            out var parseResult);
+
+        Assert.True(success);
+        Assert.NotNull(parseResult);
+        Assert.Equal("gui-session-123", parseResult!.AgentSessionId);
+    }
+
+    [Fact]
     public void TryParseArguments_WithUnknownOption_ReturnsFalse()
     {
         var success = Program.TryParseArguments(
@@ -40,4 +52,3 @@ public sealed class ProgramTests
         Assert.NotEmpty(Program.ParseError!);
     }
 }
-

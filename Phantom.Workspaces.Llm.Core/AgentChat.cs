@@ -1,7 +1,20 @@
+using AgentSchema;
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.Linq;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Client;
+using MongoDB.Bson;
+using OllamaSharp;
+using OpenAI;
+using Phantom.Workspaces.Llm.Echo;
+using Phantom.Workspaces.Llm.Interfaces;
+using System.ClientModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -99,43 +112,347 @@ public sealed class AgentChatQueue
 /// </summary>
 public sealed class AgentChat : IAsyncDisposable
 {
+    private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
     private const string RunningPartAssistantText = "assistant-text";
 
     private readonly object sessionLock = new();
-    private AgentChatSession session;
+    private readonly InternalCreateAgentChatRequest request;
+    private AgentChatSession? session;
+    private AgentDefinition? agentDefinition;
+    private IChatClient? client;
+    private AgentFrameworkChatHistoryProvider? chatHistoryProvider;
+    private AgentPersistenceChatHistoryProvider? persistenceProvider;
+    private ChatClientAgent? chatClientAgent;
+    private ChatClientAgentOptions? chatOptions;
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;
-    private readonly AgentChatHistoryService historyService;
+    private AgentChatHistoryService? historyService;
     private readonly AgentRunningItems runningItems;
     private readonly List<IAsyncDisposable> ownedResources;
     private readonly object ownedResourcesLock = new();
     private readonly CancellationTokenSource cts = new();
-    private readonly Task processTask;
+    private Task processTask = Task.CompletedTask;
+    private string agentSessionId = Guid.NewGuid().ToString("n");
 
     private bool isBusy;
+    private bool processingStarted;
     private readonly object processingStateLock = new();
     private CancellationTokenSource? activeRunCancellation;
 
-    internal AgentChat(
-        AgentChatSession session,
-        AgentInputQueueManager queueManager,
-        AgentFrameworkChatHistoryProvider chatHistoryProvider,
-        string displayName = "",
-        IReadOnlyList<IAsyncDisposable>? ownedResources = null)
+    internal AgentChat(InternalCreateAgentChatRequest request)
     {
-        ArgumentNullException.ThrowIfNull(session);
-        ArgumentNullException.ThrowIfNull(queueManager);
-        this.session = session;
-        this.queueManager = queueManager;
-        this.DisplayName = displayName;
-        this.chatQueueManager = new AgentChatQueueManager(queueManager);
-        this.historyService = new AgentChatHistoryService(this.History, chatHistoryProvider);
-        this.historyService.BindSession(session);
-        this.runningItems = new AgentRunningItems(this.RunningItems);
-        this.runningItems.Idle += this.OnRunningItemsIdle;
-        this.ownedResources = ownedResources?.ToList() ?? [];
-        this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
+       this.request = request;
+       this.queueManager = new AgentInputQueueManager();
+       this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
+       this.runningItems = new AgentRunningItems(this.RunningItems);
+       this.runningItems.Idle += this.OnRunningItemsIdle;
+       this.ownedResources = request.OwnedResources?.ToList() ?? [];
+    }
+
+    internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
+    {
+       var chat = new AgentChat(request);
+       await chat.InitializeAsync().ConfigureAwait(false);
+       return chat;
+    }
+
+    internal sealed record InternalCreateAgentChatRequest
+    {
+       public required AgentDefinition? AgentDefinition { get; init; }
+
+       public string? AgentSessionId { get; init; }
+
+       public AgentServices? AgentServices { get; init; }
+
+       public required IAgentPersistenceStore ConfiguredStore { get; init; }
+
+       public IChatClient? ClientOverride { get; init; }
+
+       public string? DisplayNameOverride { get; init; }
+
+       public IReadOnlyList<IAsyncDisposable>? OwnedResources { get; init; }
+
+       public CancellationToken CancellationToken { get; init; } = default;
+    }
+
+    internal static (IChatClient client, string displayName) CreateChatClient(
+       AgentDefinition agent,
+       AgentServices? services = null)
+    {
+       var model = (agent as PromptAgent)?.Model;
+       if (model is null || string.IsNullOrEmpty(model.Id))
+       {
+           throw new InvalidOperationException("Agent definition does not specify a model ID.");
+       }
+
+       if (string.Equals(model.Id, "test", StringComparison.OrdinalIgnoreCase))
+       {
+           return (new TestProviderChatClient(), "Test Chat Client");
+       }
+
+       var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
+       return provider switch
+       {
+           "echo" => (new EchoChatClient(), "Echo Chat Client"),
+           "github" => CreateGitHubModelsClient(model),
+           "ollama" => CreateOllamaClient(model, services),
+           "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
+           "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
+           _ => throw new InvalidOperationException(
+               $"Unknown or unsupported provider: {provider}. Supported: echo, test, github, ollama, openai, azure"),
+       };
+    }
+
+    private static (IChatClient client, string displayName) CreateOllamaClient(Model model, AgentServices? services)
+    {
+       var connection = model.Connection as AgentSchema.AnonymousConnection
+           ?? throw new InvalidOperationException("Ollama model requires an AnonymousConnection.");
+
+       var endpoint = connection.Endpoint
+           ?? throw new InvalidOperationException("Ollama connection requires an endpoint URL.");
+
+       var modelId = model.Id ?? "mistral";
+
+       try
+       {
+           IChatClient client;
+           if (services?.LogHttpRequests == true)
+           {
+               var logger = services.LoggerFactory!.CreateLogger<HttpRequestLoggingHandler>();
+               var handler = new HttpRequestLoggingHandler(logger)
+               {
+                   InnerHandler = new HttpClientHandler(),
+               };
+               var httpClient = new HttpClient(handler)
+               {
+                   BaseAddress = new Uri(endpoint),
+               };
+               client = new OllamaApiClient(httpClient, modelId, jsonSerializerContext: null);
+           }
+           else
+           {
+               client = new OllamaApiClient(new Uri(endpoint), modelId);
+           }
+
+           var displayName = $"Ollama ({modelId} at {endpoint})";
+           return (client, displayName);
+       }
+       catch (Exception ex)
+       {
+           throw new InvalidOperationException(
+               $"Failed to create Ollama client for model '{modelId}' at '{endpoint}': {ex.Message}", ex);
+       }
+    }
+
+    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model)
+    {
+       var connection = model.Connection as ApiKeyConnection
+           ?? throw new InvalidOperationException("GitHub provider requires an ApiKeyConnection.");
+
+       var endpoint = string.IsNullOrWhiteSpace(connection.Endpoint)
+           ? GitHubModelsInferenceEndpoint
+           : connection.Endpoint;
+
+       var apiKey = ResolveApiKey(connection.ApiKey, "github-models");
+       var modelId = model.Id
+           ?? throw new InvalidOperationException("GitHub provider requires a model id.");
+
+       try
+       {
+           var openAiClient = new OpenAIClient(
+               new ApiKeyCredential(apiKey),
+               new OpenAIClientOptions
+               {
+                   Endpoint = new Uri(endpoint, UriKind.Absolute),
+               });
+
+           IChatClient client = openAiClient.GetChatClient(modelId).AsIChatClient();
+           var displayName = $"GitHub Models ({modelId} at {endpoint})";
+           return (client, displayName);
+       }
+       catch (Exception ex)
+       {
+           throw new InvalidOperationException(
+               $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
+               ex);
+       }
+    }
+
+    private static string ResolveApiKey(
+       string? apiKeyValue,
+       string? serverName)
+    {
+       if (string.IsNullOrWhiteSpace(apiKeyValue))
+       {
+           throw new InvalidOperationException($"MCP tool '{serverName ?? "unknown"}' API key is required.");
+       }
+
+       var trimmed = apiKeyValue.Trim();
+       if (trimmed.StartsWith("${", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal))
+       {
+           var envVarName = trimmed[2..^1];
+           if (string.IsNullOrWhiteSpace(envVarName))
+           {
+               throw new InvalidOperationException("MCP API key environment variable name cannot be empty.");
+           }
+
+           var envValue = Environment.GetEnvironmentVariable(envVarName);
+           if (string.IsNullOrWhiteSpace(envValue))
+           {
+               if (string.Equals(envVarName, "GITHUB_TOKEN", StringComparison.OrdinalIgnoreCase))
+               {
+                   var githubCliToken = ResolveGithubTokenFromCli();
+                   if (!string.IsNullOrWhiteSpace(githubCliToken))
+                   {
+                       return githubCliToken;
+                   }
+               }
+
+               throw new InvalidOperationException(
+                   $"Environment variable '{envVarName}' for MCP tool '{serverName ?? "unknown"}' was not found or is empty.");
+           }
+
+           return envValue;
+       }
+
+       return trimmed;
+    }
+
+    private static string? ResolveGithubTokenFromCli()
+    {
+       Process? process;
+       try
+       {
+           process = Process.Start(new ProcessStartInfo
+           {
+               FileName = "gh",
+               Arguments = "auth token",
+               RedirectStandardOutput = true,
+               RedirectStandardError = true,
+               UseShellExecute = false,
+               CreateNoWindow = true,
+           });
+       }
+       catch (Win32Exception)
+       {
+           return null;
+       }
+
+       if (process is null)
+       {
+           return null;
+       }
+
+       using (process)
+       {
+           if (!process.WaitForExit(10000))
+           {
+               process.Kill(entireProcessTree: true);
+               throw new InvalidOperationException("Timed out while resolving GITHUB_TOKEN via 'gh auth token'.");
+           }
+
+           if (process.ExitCode != 0)
+           {
+               return null;
+           }
+
+           return process.StandardOutput.ReadToEnd().Trim();
+       }
+    }
+
+    private async Task InitializeAsync()
+    {
+       PersistedAgent? restoredAgent = null;
+       if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+       {
+           restoredAgent = await this.request.ConfiguredStore.RestoreAsync(
+               new RestoreRequest
+               {
+                   AgentSessionId = this.request.AgentSessionId,
+               },
+               this.request.CancellationToken).ConfigureAwait(false);
+       }
+
+       var restoredAgentDefinitionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentDefinitionJson : null;
+       var restoredAgentSessionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentSessionJson : null;
+
+       var resolvedAgentDefinition = restoredAgentDefinitionJson is not null
+           ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
+           : this.request.AgentDefinition;
+       if (resolvedAgentDefinition is null)
+       {
+           throw new InvalidOperationException("Agent definition could not be resolved from request or persistence store.");
+       }
+
+       this.agentDefinition = resolvedAgentDefinition;
+       var clientInfo = this.request.ClientOverride is not null
+           ? (this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
+           : CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
+       var resolvedClient = clientInfo.Item1;
+       if (this.request.AgentServices?.LogChat == true)
+       {
+           resolvedClient = resolvedClient.AsBuilder().UseLogging(this.request.AgentServices.LoggerFactory).Build();
+       }
+
+       this.client = resolvedClient;
+       this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.Item2;
+
+       this.persistenceProvider = new AgentPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore);
+       this.chatHistoryProvider = new AgentFrameworkChatHistoryProvider(this.persistenceProvider);
+       this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider);
+       this.chatOptions = new ChatClientAgentOptions
+       {
+           ChatOptions = new ChatOptions(),
+           ChatHistoryProvider = this.chatHistoryProvider,
+           UseProvidedChatClientAsIs = this.request.ClientOverride is not null,
+       };
+       AgentFactory.ConfigureChatOptions(resolvedAgentDefinition, this.chatOptions.ChatOptions);
+
+       this.chatClientAgent = new ChatClientAgent(resolvedClient, this.chatOptions);
+       this.persistenceProvider.SetSessionSerializer(
+           async (session, token) =>
+           {
+               var serializedSession = await this.chatClientAgent.SerializeSessionAsync(
+                   session,
+                   cancellationToken: token).ConfigureAwait(false);
+               return serializedSession.ToBsonDocument();
+           });
+
+       var frameworkSession = restoredAgentSessionJson is not null
+           ? await this.chatClientAgent.DeserializeSessionAsync(
+               restoredAgentSessionJson.ToJsonElement()
+                   ?? throw new InvalidOperationException("Stored agent session JSON could not be read."),
+               cancellationToken: this.request.CancellationToken).ConfigureAwait(false)
+           : await this.chatClientAgent.CreateSessionAsync(this.request.CancellationToken).ConfigureAwait(false);
+
+       if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+       {
+           this.persistenceProvider.SetAgentSessionId(frameworkSession, this.request.AgentSessionId);
+       }
+
+       var resolvedAgentSessionId = this.persistenceProvider.ExtractAgentSessionId(frameworkSession);
+       var persistedMessages = await this.request.ConfiguredStore.ReadMessagesAsync(
+           new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
+           this.request.CancellationToken).ConfigureAwait(false);
+
+       this.LoadInitialHistory(persistedMessages);
+       this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
+       this.SetAgentSessionId(resolvedAgentSessionId);
+       this.StartProcessingLoop();
+
+       await this.InitializeMcpToolsAsync(this.request.CancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ReinitializeSessionAsync(
+       AgentChatSession nextSession,
+       string agentSessionId,
+       CancellationToken cancellationToken)
+    {
+       await Task.Yield();
+       this.SetSession(nextSession);
+       this.SetAgentSessionId(agentSessionId);
+       await Task.CompletedTask;
     }
 
     /// <summary>
@@ -146,6 +463,8 @@ public sealed class AgentChat : IAsyncDisposable
     public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
 
     public event EventHandler? Idle;
+
+    public event EventHandler<string>? AgentSessionIdChanged;
 
     /// <summary>Completed conversation turns, in order.</summary>
     public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
@@ -172,7 +491,9 @@ public sealed class AgentChat : IAsyncDisposable
 
     public bool IsBusy => this.isBusy;
 
-    public string DisplayName { get; }
+    public string DisplayName { get; private set; } = string.Empty;
+
+    public string AgentSessionId => this.agentSessionId;
 
     /// <summary>
     /// Adds a user message to the target queue and waits for submission before history is created.
@@ -285,6 +606,40 @@ public sealed class AgentChat : IAsyncDisposable
         lock (this.ownedResourcesLock)
         {
             this.ownedResources.Add(resource);
+        }
+    }
+
+    public void SetAgentSessionId(string agentSessionId)
+    {
+        if (string.IsNullOrWhiteSpace(agentSessionId))
+        {
+            throw new ArgumentException("Agent session id is required.", nameof(agentSessionId));
+        }
+
+        if (string.Equals(this.agentSessionId, agentSessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        this.agentSessionId = agentSessionId;
+        this.AgentSessionIdChanged?.Invoke(this, agentSessionId);
+    }
+
+    private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
+    {
+        if (initialMessages is null || initialMessages.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var message in initialMessages)
+        {
+            this.History.Add(new AgentChatHistoryItem
+            {
+                Role = message.Role,
+                Contents = message.Contents.ToArray(),
+                IsInProgress = false,
+            });
         }
     }
 
@@ -564,7 +919,7 @@ public sealed class AgentChat : IAsyncDisposable
     {
         lock (this.sessionLock)
         {
-            return this.session;
+            return this.session ?? throw new InvalidOperationException("Agent session has not been initialized.");
         }
     }
 
@@ -576,7 +931,229 @@ public sealed class AgentChat : IAsyncDisposable
             this.session = nextSession;
         }
 
-        this.historyService.BindSession(nextSession);
+        this.historyService!.BindSession(nextSession);
+    }
+
+    private void StartProcessingLoop()
+    {
+        if (this.processingStarted)
+        {
+            return;
+        }
+
+        this.processingStarted = true;
+        this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
+    }
+
+    private async Task InitializeMcpToolsAsync(CancellationToken cancellationToken = default)
+    {
+        var agent = this.agentDefinition;
+        var client = this.client;
+        var chatOptions = this.chatOptions;
+        var services = this.request.AgentServices;
+        var persistenceProvider = this.persistenceProvider;
+
+        if (agent is null || client is null || chatOptions?.ChatOptions is null || persistenceProvider is null)
+        {
+            return;
+        }
+
+        var agentTools = AgentFactory.ExtractTools(agent);
+        var hasMcpTools = agentTools?.OfType<McpTool>().Any() == true;
+        if (!hasMcpTools)
+        {
+            return;
+        }
+
+        this.QueueManager.SetQueueHeld(this.DefaultInputQueue, held: true);
+        var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = new AIContent[] { new TextContent("Initializing tools...") },
+        });
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    var runtimeTools = await CreateRuntimeToolsAsync(
+                        agentTools,
+                        services,
+                        text => this.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
+                        {
+                            Role = AgentChatHistoryItem.DiagnosticChatRole,
+                            Contents = new AIContent[] { new TextContent(text) },
+                        }]),
+                        resource => this.RegisterOwnedResource(resource),
+                        cancellationToken).ConfigureAwait(false);
+
+                    chatOptions.ChatOptions.Tools = runtimeTools;
+                    var rebuiltAgent = new ChatClientAgent(client, chatOptions);
+                    this.chatClientAgent = rebuiltAgent;
+                    var session = await rebuiltAgent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+                    {
+                        persistenceProvider.SetAgentSessionId(session, this.request.AgentSessionId);
+                    }
+                    var refreshedAgentSessionId = persistenceProvider.ExtractAgentSessionId(session);
+                    await this.ReinitializeSessionAsync(
+                        new AgentChatSession(rebuiltAgent, session),
+                        refreshedAgentSessionId,
+                        cancellationToken).ConfigureAwait(false);
+                    this.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
+                    {
+                        Role = AgentChatHistoryItem.DiagnosticChatRole,
+                        Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(runtimeTools)) },
+                    }]);
+                    this.CompleteRunningItem(startupRunningItem, true);
+                }
+                catch (Exception ex)
+                {
+                    this.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
+                    {
+                        Role = AgentChatHistoryItem.DiagnosticChatRole,
+                        Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
+                    }]);
+                    this.CompleteRunningItem(startupRunningItem, true);
+                }
+                finally
+                {
+                    this.QueueManager.SetQueueHeld(this.DefaultInputQueue, held: false);
+                }
+            },
+            cancellationToken);
+
+        await Task.CompletedTask;
+    }
+
+    private static async Task<List<AITool>> CreateRuntimeToolsAsync(
+        IList<Tool>? agentTools,
+        AgentServices? services,
+        Action<string>? progressCallback,
+        Action<IAsyncDisposable>? resourceCallback,
+        CancellationToken cancellationToken)
+    {
+        var resolvedTools = new List<AITool>();
+        if (agentTools is null || agentTools.Count == 0)
+        {
+            return resolvedTools;
+        }
+
+        foreach (var tool in agentTools)
+        {
+            switch (tool)
+            {
+                case McpTool mcpTool:
+                {
+                    var toolServerName = string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName;
+                    progressCallback?.Invoke($"Opening MCP server '{toolServerName}'...");
+
+                    var transport = CreateMcpTransport(mcpTool, services);
+                    var client = await McpClient.CreateAsync(
+                        transport,
+                        null,
+                        services?.LoggerFactory,
+                        cancellationToken).ConfigureAwait(false);
+                    resourceCallback?.Invoke(client);
+
+                    var mcpTools = await client.ListToolsAsync(options: null, cancellationToken).ConfigureAwait(false);
+                    var allowed = mcpTool.AllowedTools;
+                    if (allowed is { Count: > 0 })
+                    {
+                        var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase);
+                        mcpTools = [.. mcpTools.Where(t => allowedSet.Contains(t.Name))];
+                    }
+
+                    resolvedTools.AddRange(mcpTools);
+                    progressCallback?.Invoke($"Opened MCP server '{toolServerName}' ({mcpTools.Count} tools).");
+                    break;
+                }
+                case CustomTool { Kind: "web_search" }:
+                    resolvedTools.Add(new WebSearchTool(logger: services?.LoggerFactory?.CreateLogger<WebSearchTool>()));
+                    break;
+                case CustomTool { Kind: "web_request" }:
+                    resolvedTools.Add(new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>()));
+                    break;
+            }
+        }
+
+        return resolvedTools;
+    }
+
+    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
+    {
+        if (runtimeTools.Count == 0)
+        {
+            return "Agent ready. Loaded tools: (none).";
+        }
+
+        var toolNames = runtimeTools
+            .Select(tool => tool.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (toolNames.Length == 0)
+        {
+            return "Agent ready. Loaded tools: (unnamed tools).";
+        }
+
+        return $"Agent ready. Loaded tools:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", toolNames)}";
+    }
+
+    private static IClientTransport CreateMcpTransport(
+        McpTool tool,
+        AgentServices? services)
+    {
+        return tool.Connection switch
+        {
+            AnonymousConnection anonymous => CreateHttpTransport(
+                anonymous.Endpoint,
+                apiKey: null,
+                tool.ServerName,
+                services?.LoggerFactory),
+            ApiKeyConnection apiKey => CreateHttpTransport(
+                apiKey.Endpoint,
+                ResolveApiKey(apiKey.ApiKey, tool.ServerName),
+                tool.ServerName,
+                services?.LoggerFactory),
+            null => throw new InvalidOperationException($"MCP tool '{tool.Name}' must define a connection."),
+            _ => throw new InvalidOperationException(
+                $"MCP tool '{tool.Name}' has unsupported connection type '{tool.Connection.GetType().Name}'."),
+        };
+    }
+
+    private static IClientTransport CreateHttpTransport(
+        string? endpoint,
+        string? apiKey,
+        string? serverName,
+        ILoggerFactory? loggerFactory)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            throw new InvalidOperationException("MCP tool endpoint is required.");
+        }
+
+        var transportOptions = new HttpClientTransportOptions
+        {
+            Endpoint = new Uri(endpoint, UriKind.Absolute),
+        };
+
+        if (!string.IsNullOrWhiteSpace(serverName))
+        {
+            transportOptions.Name = serverName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            transportOptions.AdditionalHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Authorization"] = $"Bearer {apiKey}",
+            };
+        }
+
+        return new HttpClientTransport(transportOptions, loggerFactory);
     }
 
     private void OnRunningItemsIdle(object? sender, EventArgs e)

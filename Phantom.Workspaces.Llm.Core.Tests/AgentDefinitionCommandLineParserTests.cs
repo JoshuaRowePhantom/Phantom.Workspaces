@@ -17,6 +17,7 @@ public sealed class AgentDefinitionCommandLineParserTests
         var additionalProperties = prompt.Model?.Options?.AdditionalProperties;
 
         Assert.Null(result.AgentSchemaPath);
+        Assert.Null(result.AgentSessionId);
         Assert.False(result.LogChat);
         Assert.False(result.LogHttpRequests);
         Assert.Equal("echo", prompt.Model?.Provider);
@@ -65,6 +66,17 @@ public sealed class AgentDefinitionCommandLineParserTests
     }
 
     [Fact]
+    public void Parse_SessionIdArgs_ReturnsRequestedSessionId()
+    {
+        var parser = new AgentDefinitionCommandLineParser();
+        var parseResult = Parse(parser, ["--session-id", "session-123"]);
+
+        var result = parser.Parse(parseResult);
+
+        Assert.Equal("session-123", result.AgentSessionId);
+    }
+
+    [Fact]
     public void Parse_AgentSchemaPath_LoadsAgentDefinitionFromFile()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -78,6 +90,21 @@ public sealed class AgentDefinitionCommandLineParserTests
 
         Assert.Equal(schemaPath, result.AgentSchemaPath);
         Assert.Equal("qwen-local-chat", prompt.Name);
+    }
+
+    [Fact]
+    public void Parse_AgentSchemaAndSessionId_SetsBothValues()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var schemaPath = Path.Combine(repositoryRoot.FullName, "docs", "examples", "qwen-local-chat.json");
+
+        var parser = new AgentDefinitionCommandLineParser();
+        var parseResult = Parse(parser, ["--agent-schema", schemaPath, "--session-id", "session-from-schema"]);
+
+        var result = parser.Parse(parseResult);
+
+        Assert.Equal(schemaPath, result.AgentSchemaPath);
+        Assert.Equal("session-from-schema", result.AgentSessionId);
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Text.Json;
 using AgentSchema;
+using Microsoft.Agents.AI;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -44,6 +45,11 @@ public sealed class AgentDefinitionCommandLineParser
         DefaultValueFactory = _ => false,
     };
 
+    private readonly Option<string?> sessionIdOption = new("--session-id")
+    {
+        Description = "Agent session id to restore or continue.",
+    };
+
     public void AddOptions(Command command)
     {
         command.Add(this.providerOption);
@@ -53,6 +59,7 @@ public sealed class AgentDefinitionCommandLineParser
         command.Add(this.agentSchemaOption);
         command.Add(this.logChatOption);
         command.Add(this.logHttpRequestsOption);
+        command.Add(this.sessionIdOption);
     }
 
     public AgentDefinitionParseResult Parse(ParseResult parseResult)
@@ -61,6 +68,7 @@ public sealed class AgentDefinitionCommandLineParser
         var agentSchemaPath = parseResult.GetValue(this.agentSchemaOption);
         var logChat = parseResult.GetValue(this.logChatOption);
         var logHttpRequests = parseResult.GetValue(this.logHttpRequestsOption);
+        var agentSessionId = parseResult.GetValue(this.sessionIdOption);
         var provider = parseResult.GetValue(this.providerOption)!;
         var ollamaUrl = parseResult.GetValue(this.ollamaUrlOption);
         var ollamaModel = parseResult.GetValue(this.ollamaModelOption);
@@ -88,6 +96,7 @@ public sealed class AgentDefinitionCommandLineParser
         return new AgentDefinitionParseResult(
             definition,
             agentSchemaPath,
+            agentSessionId,
             logChat,
             logHttpRequests,
             parseResult.UnmatchedTokens.ToArray());
@@ -194,6 +203,7 @@ public sealed class AgentDefinitionCommandLineParser
 public sealed record AgentDefinitionParseResult(
     AgentDefinition AgentDefinition,
     string? AgentSchemaPath,
+    string? AgentSessionId,
     bool LogChat,
     bool LogHttpRequests,
     IReadOnlyList<string> UnmatchedArguments);

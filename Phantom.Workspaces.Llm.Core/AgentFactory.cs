@@ -3,14 +3,27 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
+using MongoDB.Bson;
 using OllamaSharp;
 using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
+using Phantom.Workspaces.Llm.Interfaces;
 using System.ComponentModel;
 using System.ClientModel;
 using System.Diagnostics;
+using System.Text.Json;
+using System.Collections;
 
 namespace Phantom.Workspaces.Llm;
+
+public struct CreateAgentChatRequest
+{
+    public string? AgentSessionId { get; init; }
+
+    public AgentDefinition? AgentDefinition { get; init; }
+
+    public AgentServices? AgentServices { get; init; }
+}
 
 /// <summary>
 /// Factory for creating Agent components from AgentSchema definitions.
@@ -127,7 +140,7 @@ public static class AgentFactory
     /// <returns>A tuple of (ChatClient, display name).</returns>
     /// <exception cref="InvalidOperationException">If the agent is invalid or provider is unsupported.</exception>
     public static (IChatClient client, string displayName) CreateChatClient(AgentDefinition agent)
-        => CreateChatClient(agent, services: null);
+        => AgentChat.CreateChatClient(agent, services: null);
 
     /// <summary>
     /// Creates a ChatClient from an AgentDefinition, resolving provider and optional service integrations.
@@ -138,166 +151,64 @@ public static class AgentFactory
     public static (IChatClient client, string displayName) CreateChatClient(
         AgentDefinition agent,
         AgentServices? services)
-    {
-        var model = GetModel(agent);
-        if (model is null || string.IsNullOrEmpty(model.Id))
-        {
-            throw new InvalidOperationException("Agent definition does not specify a model ID.");
-        }
-
-        if (string.Equals(model.Id, "test", StringComparison.OrdinalIgnoreCase))
-        {
-            return (new TestProviderChatClient(), "Test Chat Client");
-        }
-
-        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
-
-        return provider switch
-        {
-            "echo" => (new EchoChatClient(), "Echo Chat Client"),
-            "github" => CreateGitHubModelsClient(model),
-            "ollama" => CreateOllamaClient(model, services),
-            "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
-            "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
-            _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github, ollama, openai, azure")
-        };
-    }
+        => AgentChat.CreateChatClient(agent, services);
 
     /// <summary>
-    /// Creates a synchronously-initialized <see cref="AgentChat"/> session from an agent definition.
+    /// Creates a initialized <see cref="AgentChat"/> session from an agent definition.
     /// This returns immediately without waiting for MCP tool setup. Use <see cref="CreateAgentChatAsync"/>
     /// to include MCP tool initialization.
     /// </summary>
-    /// <param name="agent">Agent definition to materialize.</param>
-    /// <param name="services">Optional service integrations for runtime behavior.</param>
+    /// <param name="createAgentChatRequest">Request for creating or restoring a chat.</param>
     /// <returns>The running <see cref="AgentChat"/>.</returns>
-    public static AgentChat CreateAgentChat(
-        AgentDefinition agent,
-        AgentServices? services = null)
+    public static async Task<AgentChat> CreateAgentChatAsync(
+        CreateAgentChatRequest createAgentChatRequest)
     {
+        var services = createAgentChatRequest.AgentServices;
         ValidateServices(services);
 
-        var configuredChatHistoryProvider = services?.ChatHistoryProvider ?? new InMemoryChatHistoryProvider();
-        var chatHistoryProvider = new AgentFrameworkChatHistoryProvider(configuredChatHistoryProvider);
-        var chatOptions = new ChatClientAgentOptions
+        IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
+            ?? new InMemoryAgentPersistenceStore();
+
+        var requestedAgentDefinition = createAgentChatRequest.AgentDefinition;
+
+        // Try to extract chat-history tool from agent definition (skipped if override is provided)
+        if (services?.AgentPersistenceStoreOverride is null
+            && requestedAgentDefinition is PromptAgent promptAgent
+            && promptAgent.Tools != null)
         {
-            ChatOptions = new ChatOptions(),
-            ChatHistoryProvider = chatHistoryProvider,
-            //RequirePerServiceCallChatHistoryPersistence = true,
-        };
-        ConfigureChatOptions(agent, chatOptions.ChatOptions);
-
-        var clientInfo = CreateChatClient(agent, services);
-        var client = clientInfo.client;
-        if (services?.LogChat == true)
-        {
-            client = client.AsBuilder().UseLogging(services.LoggerFactory).Build();
-        }
-
-        var chatClientAgent = new ChatClientAgent(client, chatOptions);
-        var session = new AgentChatSession(
-            chatClientAgent,
-            chatClientAgent.CreateSessionAsync(CancellationToken.None).GetAwaiter().GetResult());
-        var queueManager = new AgentInputQueueManager();
-        var chat = new AgentChat(
-            session,
-            queueManager,
-            chatHistoryProvider,
-            clientInfo.displayName);
-        InitializeMcpToolsAsync(agent, client, chat, chatOptions, services, CancellationToken.None);
-
-        return chat;
-    }
-
-    /// <summary>
-    /// Creates a fully wired <see cref="AgentChat"/> session from an agent definition.
-    /// This async overload resolves MCP tool transports and registers discovered tools.
-    /// </summary>
-    /// <param name="agent">Agent definition to materialize.</param>
-    /// <param name="services">Optional service integrations for runtime behavior.</param>
-    /// <param name="cancellationToken">Cancellation token for async MCP initialization.</param>
-    /// <returns>The running <see cref="AgentChat"/>.</returns>
-    public static Task<AgentChat> CreateAgentChatAsync(
-        AgentDefinition agent,
-        AgentServices? services = null,
-        CancellationToken cancellationToken = default)
-    {
-        // Chat creation is synchronous; MCP tool setup continues in the background.
-        var chat = CreateAgentChat(agent, services);
-        return Task.FromResult(chat);
-    }
-
-    /// <summary>
-    /// Initializes MCP tools asynchronously on an existing <see cref="AgentChat"/> instance.
-    /// This is called after the chat has been created synchronously to avoid blocking the UI.
-    /// </summary>
-    private static void InitializeMcpToolsAsync(
-        AgentDefinition agent,
-        IChatClient client,
-        AgentChat chat,
-        ChatClientAgentOptions chatOptions,
-        AgentServices? services = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(chatOptions);
-        ArgumentNullException.ThrowIfNull(chatOptions.ChatOptions);
-        
-        var agentTools = ExtractTools(agent);
-        var hasMcpTools = agentTools?.OfType<McpTool>().Any() == true;
-        if (!hasMcpTools)
-        {
-            return;
-        }
-
-        chat.QueueManager.SetQueueHeld(chat.DefaultInputQueue, held: true);
-        var startupRunningItem = chat.CreateRunningItem(new AgentChatHistoryItem
-        {
-            Role = AgentChatHistoryItem.DiagnosticChatRole,
-            Contents = new AIContent[] { new TextContent("Initializing tools...") },
-        });
-        _ = Task.Run(
-            async () =>
+            var chatHistoryTool = promptAgent.Tools.OfType<CustomTool>()
+                .FirstOrDefault(t => t.Kind == "chat-history" || t.Name == "chat-history");
+            
+            if (chatHistoryTool?.Options != null && 
+                chatHistoryTool.Options.TryGetValue("connection", out var connectionObj) && 
+                connectionObj is IDictionary<string, object> connectionDict)
             {
                 try
                 {
-                    var runtimeTools = await CreateRuntimeToolsAsync(
-                        agentTools,
-                        services,
-                        text => chat.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
-                        {
-                            Role = AgentChatHistoryItem.DiagnosticChatRole,
-                            Contents = new AIContent[] { new TextContent(text) },
-                        }]),
-                        resource => chat.RegisterOwnedResource(resource),
-                        cancellationToken);
-
-                    chatOptions.ChatOptions.Tools = runtimeTools;
-                    var rebuiltAgent = new ChatClientAgent(client, chatOptions);
-                    var session = await rebuiltAgent.CreateSessionAsync(cancellationToken);
-                    chat.ResetSession(new AgentChatSession(rebuiltAgent, session), interruptCurrentResponse: false);
-                    chat.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
-                    {
-                        Role = AgentChatHistoryItem.DiagnosticChatRole,
-                        Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(runtimeTools)) },
-                    }]);
-                    chat.CompleteRunningItem(startupRunningItem, true);
+                    // Convert the connection options to JSON then deserialize as ChatHistoryProviderDefinition
+                    var connectionJson = System.Text.Json.JsonSerializer.Serialize(connectionDict);
+                    var definition = ChatHistoryProviderDefinition.FromJson(connectionJson);
+                    configuredStore = AgentPersistenceStoreFactory.CreateAsync(
+                        definition,
+                        CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
-                    chat.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
-                    {
-                        Role = AgentChatHistoryItem.DiagnosticChatRole,
-                        Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
-                    }]);
-                    chat.CompleteRunningItem(startupRunningItem, true);
+                    // Log warning but don't fail - fall back to in-memory
+                    System.Diagnostics.Debug.WriteLine($"Failed to create chat history provider from agent definition: {ex.Message}");
                 }
-                finally
-                {
-                    chat.QueueManager.SetQueueHeld(chat.DefaultInputQueue, held: false);
-                }
-            },
-            cancellationToken);
+            }
+        }
+
+        return await AgentChat.CreateAsync(
+            new AgentChat.InternalCreateAgentChatRequest
+            {
+                AgentDefinition = requestedAgentDefinition,
+                AgentSessionId = createAgentChatRequest.AgentSessionId,
+                AgentServices = services,
+                ConfiguredStore = configuredStore,
+                CancellationToken = CancellationToken.None,
+            });
     }
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
@@ -424,136 +335,6 @@ public static class AgentFactory
         }
     }
 
-    private static async Task<List<AITool>> CreateRuntimeToolsAsync(
-        IList<Tool>? agentTools,
-        AgentServices? services,
-        Action<string>? progressCallback,
-        Action<IAsyncDisposable>? resourceCallback,
-        CancellationToken cancellationToken)
-    {
-        var resolvedTools = new List<AITool>();
-        if (agentTools is null || agentTools.Count == 0)
-        {
-            return resolvedTools;
-        }
-
-        foreach (var tool in agentTools)
-        {
-            switch (tool)
-            {
-                case McpTool mcpTool:
-                {
-                    var toolServerName = string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName;
-                    progressCallback?.Invoke($"Opening MCP server '{toolServerName}'...");
-
-                    var transport = CreateMcpTransport(mcpTool, services);
-                    var client = await McpClient.CreateAsync(
-                        transport,
-                        null,
-                        services?.LoggerFactory,
-                        cancellationToken);
-                    resourceCallback?.Invoke(client);
-
-                    var mcpTools = await client.ListToolsAsync(options: null, cancellationToken);
-                    var allowed = mcpTool.AllowedTools;
-                    if (allowed is { Count: > 0 })
-                    {
-                        var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase);
-                        mcpTools = [.. mcpTools.Where(t => allowedSet.Contains(t.Name))];
-                    }
-
-                    resolvedTools.AddRange(mcpTools);
-                    progressCallback?.Invoke($"Opened MCP server '{toolServerName}' ({mcpTools.Count} tools).");
-                    break;
-                }
-                case CustomTool { Kind: "web_search" }:
-                    resolvedTools.Add(new WebSearchTool(logger: services?.LoggerFactory?.CreateLogger<WebSearchTool>()));
-                    break;
-                case CustomTool { Kind: "web_request" }:
-                    resolvedTools.Add(new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>()));
-                    break;
-            }
-        }
-
-        return resolvedTools;
-    }
-
-    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
-    {
-        if (runtimeTools.Count == 0)
-        {
-            return "Agent ready. Loaded tools: (none).";
-        }
-
-        var toolNames = runtimeTools
-            .Select(tool => tool.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (toolNames.Length == 0)
-        {
-            return "Agent ready. Loaded tools: (unnamed tools).";
-        }
-
-        return $"Agent ready. Loaded tools:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", toolNames)}";
-    }
-
-    private static IClientTransport CreateMcpTransport(
-        McpTool tool,
-        AgentServices? services)
-    {
-        return tool.Connection switch
-        {
-            AnonymousConnection anonymous => CreateHttpTransport(
-                anonymous.Endpoint,
-                apiKey: null,
-                tool.ServerName,
-                services?.LoggerFactory),
-            ApiKeyConnection apiKey => CreateHttpTransport(
-                apiKey.Endpoint,
-                ResolveApiKey(apiKey.ApiKey, tool.ServerName),
-                tool.ServerName,
-                services?.LoggerFactory),
-            null => throw new InvalidOperationException($"MCP tool '{tool.Name}' must define a connection."),
-            _ => throw new InvalidOperationException(
-                $"MCP tool '{tool.Name}' has unsupported connection type '{tool.Connection.GetType().Name}'."),
-        };
-    }
-
-    private static IClientTransport CreateHttpTransport(
-        string? endpoint,
-        string? apiKey,
-        string? serverName,
-        ILoggerFactory? loggerFactory)
-    {
-        if (string.IsNullOrWhiteSpace(endpoint))
-        {
-            throw new InvalidOperationException("MCP tool endpoint is required.");
-        }
-
-        var transportOptions = new HttpClientTransportOptions
-        {
-            Endpoint = new Uri(endpoint, UriKind.Absolute),
-        };
-
-        if (!string.IsNullOrWhiteSpace(serverName))
-        {
-            transportOptions.Name = serverName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            transportOptions.AdditionalHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Authorization"] = $"Bearer {apiKey}",
-            };
-        }
-
-        return new HttpClientTransport(transportOptions, loggerFactory);
-    }
-
     private static string ResolveApiKey(
         string? apiKeyValue,
         string? serverName)
@@ -635,4 +416,5 @@ public static class AgentFactory
             return process.StandardOutput.ReadToEnd().Trim();
         }
     }
+
 }

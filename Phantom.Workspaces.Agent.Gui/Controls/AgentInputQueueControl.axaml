@@ -3,6 +3,7 @@
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentInputQueueControl"
+             x:CompileBindings="False"
              x:DataType="vm:InputQueueViewModel"
              Background="#1A1A1A">
     <Border BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="8,6">

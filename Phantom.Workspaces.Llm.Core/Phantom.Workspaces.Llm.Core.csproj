@@ -20,7 +20,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Interfaces\Phantom.Workspaces.Llm.Interfaces.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
   </ItemGroup>
 
   <ItemGroup>

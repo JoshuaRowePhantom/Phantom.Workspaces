@@ -2,7 +2,9 @@ using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Echo;
+using Phantom.Workspaces.Llm.Interfaces;
 using System.Runtime.InteropServices;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -396,13 +398,14 @@ public class AgentFactoryTests
             }
             """);
 
-        await using var chat = AgentFactory.CreateAgentChat(agent);
+        await using var chat = await CreateChatAsync(agent);
         Assert.NotNull(chat);
         Assert.Equal("Echo Chat Client", chat.DisplayName);
+        Assert.False(string.IsNullOrWhiteSpace(chat.AgentSessionId));
     }
 
     [Fact]
-    public void CreateAgentChat_LogChatWithoutLoggerFactory_Throws()
+    public async Task CreateAgentChat_LogChatWithoutLoggerFactory_Throws()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -418,12 +421,12 @@ public class AgentFactoryTests
             }
             """);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateAgentChat(agent, new AgentServices { LogChat = true }));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await CreateChatAsync(agent, new AgentServices { LogChat = true }));
         Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CreateAgentChat_LogHttpRequestsWithoutLoggerFactory_Throws()
+    public async Task CreateAgentChat_LogHttpRequestsWithoutLoggerFactory_Throws()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -443,7 +446,7 @@ public class AgentFactoryTests
             }
             """);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateAgentChat(agent, new AgentServices { LogHttpRequests = true }));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await CreateChatAsync(agent, new AgentServices { LogHttpRequests = true }));
         Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
 
@@ -470,7 +473,7 @@ public class AgentFactoryTests
             LoggerFactory = NullLoggerFactory.Instance,
         };
 
-        await using var chat = AgentFactory.CreateAgentChat(agent, services);
+        await using var chat = await CreateChatAsync(agent, services);
         Assert.NotNull(chat);
         Assert.Equal("Echo Chat Client", chat.DisplayName);
     }
@@ -524,7 +527,7 @@ public class AgentFactoryTests
             }
             """);
 
-        await using var chat = await AgentFactory.CreateAgentChatAsync(agent);
+        await using var chat = await CreateChatAsync(agent);
 
         Assert.NotNull(chat);
         Assert.Equal("Echo Chat Client", chat.DisplayName);
@@ -548,7 +551,7 @@ public class AgentFactoryTests
             """);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => AgentFactory.CreateAgentChatAsync(agent, new AgentServices { LogChat = true }));
+            () => CreateChatAsync(agent, new AgentServices { LogChat = true }));
 
         Assert.Contains("LoggerFactory is required", ex.Message, StringComparison.Ordinal);
     }
@@ -570,7 +573,7 @@ public class AgentFactoryTests
             }
             """);
 
-        await using var chat = AgentFactory.CreateAgentChat(agent);
+        await using var chat = await CreateChatAsync(agent);
         chat.EnqueueUserMessage("hello");
         await Task.Delay(150);
 
@@ -580,7 +583,7 @@ public class AgentFactoryTests
     }
 
     [Fact]
-    public async Task CreateAgentChat_UsesServicesChatHistoryProvider()
+    public async Task CreateAgentChat_ChatHistoryProvider_IsInvokedOnTurn()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -596,42 +599,408 @@ public class AgentFactoryTests
             }
             """);
 
-        var provider = new CountingChatHistoryProvider();
-        var services = new AgentServices
-        {
-            ChatHistoryProvider = provider,
-        };
+        var store = new CountingAgentPersistenceStore();
+        var services = new AgentServices { AgentPersistenceStoreOverride = store };
 
-        await using var chat = AgentFactory.CreateAgentChat(agent, services);
+        await using var chat = await CreateChatAsync(agent, services);
         chat.EnqueueUserMessage("hello");
+        await Task.Delay(500);
 
-        for (var i = 0; i < 20 && (provider.ProvideCalls == 0 || provider.StoreCalls == 0); i++)
-        {
-            await Task.Delay(25);
-        }
-
-        Assert.True(provider.ProvideCalls > 0);
-        Assert.True(provider.StoreCalls > 0);
+        Assert.True(store.ReadCalls >= 1, "ReadMessagesAsync should have been called at least once");
+        Assert.True(store.StoreCalls >= 1, "StoreAsync should have been called at least once");
     }
 
-    private sealed class CountingChatHistoryProvider : ChatHistoryProvider
+    [Fact]
+    public async Task CreateAgentChat_UsesAgentDefinitionChatHistoryTool()
     {
-        private int provideCalls;
-        private int storeCalls;
-
-        public int ProvideCalls => this.provideCalls;
-        public int StoreCalls => this.storeCalls;
-
-        protected override ValueTask<IEnumerable<ChatMessage>> ProvideChatHistoryAsync(InvokingContext context, CancellationToken cancellationToken = default)
+        var mongoConfig = new MongoDbChatHistoryProviderDefinition
         {
-            Interlocked.Increment(ref this.provideCalls);
-            return ValueTask.FromResult<IEnumerable<ChatMessage>>([]);
+            MongoProvider = "container",
+            DatabaseName = "test-db",
+            CollectionName = "test-collection",
+            ContainerName = "test-mongo",
+            DataDirectory = "/tmp/mongo",
+        };
+        
+        var mongoConfigJson = System.Text.Json.JsonSerializer.Serialize(
+            System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(mongoConfig.ToJson())
+        );
+
+        var agentJson = $$"""
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                {
+                  "name": "chat-history",
+                  "kind": "chat-history",
+                  "options": {
+                    "connection": {{mongoConfigJson}}
+                  }
+                }
+              ]
+            }
+            """;
+
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(agentJson);
+
+        // This should extract and create a MongoDB provider from the agent's chat-history tool
+        await using var chat = await CreateChatAsync(agent);
+        
+        // Verify the chat was created successfully
+        Assert.NotNull(chat);
+        chat.EnqueueUserMessage("hello");
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_RequestWithoutResolvableAgentDefinition_Throws()
+    {
+        var store = new RestoringAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AgentFactory.CreateAgentChatAsync(
+                new CreateAgentChatRequest
+                {
+                    AgentSessionId = "unknown-session",
+                    AgentServices = services,
+                }));
+
+        Assert.Contains("Agent definition could not be resolved", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_WithSessionIdAndNoRestore_StoresUsingRequestedSessionId()
+    {
+        var store = new RestoringAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+        };
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "requested-session-id",
+                AgentDefinition = agent,
+                AgentServices = services,
+            });
+        chat.EnqueueUserMessage("hello");
+        await Task.Delay(500);
+
+        Assert.Equal("requested-session-id", chat.AgentSessionId);
+        Assert.Contains("requested-session-id", store.StoredAgentSessionIds);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_WithSessionIdAndRestoredDefinition_CreatesChat()
+    {
+        var restoredDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "restored-echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+        var store = new RestoringAgentPersistenceStore
+        {
+            RestoredAgent = new PersistedAgent
+            {
+                AgentSessionId = "restored-session-id",
+                AgentDefinitionJson = BsonDocument.Parse(restoredDefinition.ToJson()),
+            },
+        };
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+        };
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "restored-session-id",
+                AgentServices = services,
+            });
+
+        Assert.NotNull(chat);
+        Assert.Equal("Echo Chat Client", chat.DisplayName);
+        Assert.Equal("restored-session-id", chat.AgentSessionId);
+        Assert.Equal(1, store.RestoreCalls);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_WithPersistedMessages_LoadsHistoryIntoChat()
+    {
+        var agentDefinition = CreateEchoPromptAgentDefinition();
+        var agent = new ChatClientAgent(
+            new EchoChatClient(),
+            new ChatClientAgentOptions
+            {
+                UseProvidedChatClientAsIs = true,
+            });
+        var session = await agent.CreateSessionAsync(CancellationToken.None);
+        var serializedSession = await agent.SerializeSessionAsync(session, cancellationToken: CancellationToken.None);
+        var store = new InMemoryAgentPersistenceStore();
+        var sessionId = "loaded-history-session-id";
+
+        await store.StoreAsync(
+            new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = sessionId,
+                    AgentSessionJson = BsonDocument.Parse(serializedSession.GetRawText()),
+                    AgentDefinitionJson = BsonDocument.Parse(agentDefinition.ToJson()),
+                },
+                NewMessages =
+                [
+                    new ChatMessage(ChatRole.User, "hello"),
+                    new ChatMessage(ChatRole.Assistant, "world"),
+                ],
+            },
+            CancellationToken.None);
+
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+        };
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                AgentServices = services,
+            });
+
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("hello", chat.History[0].Text);
+        Assert.Equal("world", chat.History[1].Text);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_InMemoryStoreWithoutRequestedSessionId_GeneratesAgentSessionId()
+    {
+        var inMemoryAgentPersistenceStore = new InMemoryAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = inMemoryAgentPersistenceStore,
+        };
+        var agentDefinition = CreateEchoPromptAgentDefinition();
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                AgentServices = services,
+            });
+
+        Assert.False(string.IsNullOrWhiteSpace(chat.AgentSessionId));
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_InMemoryStoreWithRequestedSessionId_UsesRequestedSessionId()
+    {
+        var inMemoryAgentPersistenceStore = new InMemoryAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = inMemoryAgentPersistenceStore,
+        };
+        var agentDefinition = CreateEchoPromptAgentDefinition();
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "in-memory-requested-session-id",
+                AgentDefinition = agentDefinition,
+                AgentServices = services,
+            });
+        chat.EnqueueUserMessage("hello");
+        await Task.Delay(500);
+
+        Assert.Equal("in-memory-requested-session-id", chat.AgentSessionId);
+
+        var restoredAgent = await inMemoryAgentPersistenceStore.RestoreAsync(
+            new RestoreRequest { AgentSessionId = "in-memory-requested-session-id" },
+            CancellationToken.None);
+        Assert.NotNull(restoredAgent);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_InMemoryStoreWithUnknownSessionAndNoDefinition_Throws()
+    {
+        var inMemoryAgentPersistenceStore = new InMemoryAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = inMemoryAgentPersistenceStore,
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AgentFactory.CreateAgentChatAsync(
+                new CreateAgentChatRequest
+                {
+                    AgentSessionId = "in-memory-unknown-session-id",
+                    AgentServices = services,
+                }));
+
+        Assert.Contains("Agent definition could not be resolved", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_InMemoryStoreRestoresDefinitionFromStoredSessionId()
+    {
+        var inMemoryAgentPersistenceStore = new InMemoryAgentPersistenceStore();
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = inMemoryAgentPersistenceStore,
+        };
+        var agentDefinition = CreateEchoPromptAgentDefinition();
+
+        await using (var firstChat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "in-memory-restored-session-id",
+                AgentDefinition = agentDefinition,
+                AgentServices = services,
+            }))
+        {
+            firstChat.EnqueueUserMessage("persist this session");
+            await Task.Delay(500);
         }
 
-        protected override ValueTask StoreChatHistoryAsync(InvokedContext context, CancellationToken cancellationToken = default)
+        await using var restoredChat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "in-memory-restored-session-id",
+                AgentServices = services,
+            });
+
+        Assert.NotNull(restoredChat);
+        Assert.Equal("Echo Chat Client", restoredChat.DisplayName);
+        Assert.Equal("in-memory-restored-session-id", restoredChat.AgentSessionId);
+    }
+
+    private static AgentDefinition CreateEchoPromptAgentDefinition()
+    {
+        return AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+    }
+
+    private static Task<AgentChat> CreateChatAsync(AgentDefinition agentDefinition, AgentServices? agentServices = null)
+        => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                AgentServices = agentServices,
+            });
+
+    private sealed class CountingAgentPersistenceStore : IAgentPersistenceStore
+    {
+        private int readCalls;
+        private int storeCalls;
+
+        public int ReadCalls => this.readCalls;
+        public int StoreCalls => this.storeCalls;
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref this.storeCalls);
             return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(
+            RestoreRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return ValueTask.FromResult<PersistedAgent?>(null);
+        }
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(
+            ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref this.readCalls);
+            return ValueTask.FromResult(Array.Empty<ChatMessage>());
+        }
+    }
+
+    private sealed class RestoringAgentPersistenceStore : IAgentPersistenceStore
+    {
+        private int restoreCalls;
+        private readonly List<string> storedAgentSessionIds = [];
+
+        public PersistedAgent? RestoredAgent { get; init; }
+
+        public int RestoreCalls => this.restoreCalls;
+
+        public IReadOnlyList<string> StoredAgentSessionIds => this.storedAgentSessionIds;
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            this.storedAgentSessionIds.Add(request.Agent.AgentSessionId);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(
+            RestoreRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref this.restoreCalls);
+            if (this.RestoredAgent is null)
+            {
+                return ValueTask.FromResult<PersistedAgent?>(null);
+            }
+
+            if (!string.Equals(this.RestoredAgent.Value.AgentSessionId, request.AgentSessionId, StringComparison.Ordinal))
+            {
+                return ValueTask.FromResult<PersistedAgent?>(null);
+            }
+
+            return ValueTask.FromResult(this.RestoredAgent);
+        }
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(
+            ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return ValueTask.FromResult(Array.Empty<ChatMessage>());
         }
     }
 }
