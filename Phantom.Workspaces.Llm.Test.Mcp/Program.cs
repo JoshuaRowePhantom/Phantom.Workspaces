@@ -21,15 +21,16 @@ if (string.Equals(options.Mode, "http", StringComparison.OrdinalIgnoreCase))
 
 if (string.Equals(options.Mode, "stdio", StringComparison.OrdinalIgnoreCase))
 {
-    await RunStdioAsync(cts.Token);
+    await RunStdioAsync(options, cts.Token);
     return;
 }
 
 throw new InvalidOperationException($"Unsupported mode '{options.Mode}'. Expected 'stdio' or 'http'.");
 
-static async Task RunStdioAsync(CancellationToken cancellationToken)
+static async Task RunStdioAsync(ProgramOptions options, CancellationToken cancellationToken)
 {
     var builder = Host.CreateApplicationBuilder();
+    await ApplyStartupDelayAsync(options.StartupDelayMs, cancellationToken);
     builder.Logging.AddConsole(consoleLogOptions =>
     {
         consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
@@ -47,6 +48,7 @@ static async Task RunHttpAsync(ProgramOptions options, CancellationToken cancell
 {
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.UseUrls(options.Url);
+    await ApplyStartupDelayAsync(options.StartupDelayMs, cancellationToken);
     builder.Logging.AddConsole(consoleLogOptions =>
     {
         consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
@@ -69,12 +71,21 @@ static async Task RunHttpAsync(ProgramOptions options, CancellationToken cancell
     await app.WaitForShutdownAsync(cancellationToken);
 }
 
-internal sealed record ProgramOptions(string Mode, string Url)
+static async Task ApplyStartupDelayAsync(int startupDelayMs, CancellationToken cancellationToken)
+{
+    if (startupDelayMs > 0)
+    {
+        await Task.Delay(startupDelayMs, cancellationToken);
+    }
+}
+
+internal sealed record ProgramOptions(string Mode, string Url, int StartupDelayMs)
 {
     public static ProgramOptions Parse(string[] args)
     {
         var mode = "stdio";
         var url = "http://127.0.0.1:0";
+        var startupDelayMs = 0;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -88,10 +99,16 @@ internal sealed record ProgramOptions(string Mode, string Url)
             if (string.Equals(arg, "--url", StringComparison.OrdinalIgnoreCase))
             {
                 url = GetRequiredValue(args, ref index, "--url");
+                continue;
+            }
+
+            if (string.Equals(arg, "--startup-delay-ms", StringComparison.OrdinalIgnoreCase))
+            {
+                startupDelayMs = int.Parse(GetRequiredValue(args, ref index, "--startup-delay-ms"));
             }
         }
 
-        return new ProgramOptions(mode, url);
+        return new ProgramOptions(mode, url, startupDelayMs);
     }
 
     private static string GetRequiredValue(string[] args, ref int index, string optionName)

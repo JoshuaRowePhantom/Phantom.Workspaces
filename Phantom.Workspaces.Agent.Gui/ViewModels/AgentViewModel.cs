@@ -249,6 +249,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             tool.Description,
             tool.Kind,
             tool.IsEnabled,
+            tool.Status,
             tool.Children.Select(this.CreateToolViewModel).ToArray(),
             enabled => this.agentChat.SetToolEnabledAsync(tool.Id, enabled));
 

@@ -49,6 +49,10 @@ public sealed class MainWindowAxamlTests
             "Click=\"OnToolToggleClicked\"",
             editorControlContent,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "<TextBlock Text=\"{Binding Status}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
     }
 
     [Fact]

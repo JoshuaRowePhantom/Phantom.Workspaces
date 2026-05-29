@@ -22,6 +22,29 @@ public sealed class McpAgentIntegrationTests
     }
 
     [Fact]
+    public async Task CreateAgentChat_WithTwoHttpMcpServers_InitializesInParallel()
+    {
+        var barrier = new AsyncBarrier(2);
+        await using var firstServer = await InProcessMcpServer.StartAsync(barrier);
+        await using var secondServer = await InProcessMcpServer.StartAsync(barrier);
+        var agent = CreateMcpAgentDefinition(
+            ("slow-one", firstServer.BoundUrl),
+            ("slow-two", secondServer.BoundUrl));
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = agent,
+            });
+
+        await WaitForPingToolAsync(chat);
+        Assert.True(HasPingTool(chat));
+        var rootTools = chat.Tools.Where(tool => tool.Kind == "mcp").ToArray();
+        Assert.Contains(rootTools, tool => string.Equals(tool.Name, "slow-one", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(rootTools, tool => string.Equals(tool.Name, "slow-two", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task CreateAgentChat_WithHttpMcpServer_CanInvokePingTool()
     {
         await using var server = await TestMcpServerProcess.StartAsync();
@@ -38,8 +61,48 @@ public sealed class McpAgentIntegrationTests
         Assert.True(HasPingTool(chat));
     }
 
-    private static PromptAgent CreateMcpAgentDefinition(string endpoint)
+    [Fact]
+    public async Task CreateAgentChat_WithOneFailedMcpServer_StillLoadsOtherTools()
     {
+        await using var server = await TestMcpServerProcess.StartAsync();
+        var agent = CreateMcpAgentDefinition(
+            ("good-server", server.BoundUrl),
+            ("bad-server", "http://127.0.0.1:1"));
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = agent,
+            });
+
+        await WaitForPingToolAsync(chat);
+        Assert.True(HasPingTool(chat));
+
+        var failedServer = FindToolByName(chat.Tools, "bad-server");
+        Assert.NotNull(failedServer);
+        Assert.False(failedServer!.IsEnabled);
+        Assert.Contains("Failed", failedServer.Status ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static PromptAgent CreateMcpAgentDefinition(string endpoint)
+        => CreateMcpAgentDefinition(("test-mcp", endpoint));
+
+    private static PromptAgent CreateMcpAgentDefinition(params (string ServerName, string Endpoint)[] servers)
+    {
+        var tools = string.Join(
+            ",\n                ",
+            servers.Select(server => $$"""
+                 {
+                   "kind": "mcp",
+                   "name": "{{server.ServerName}}",
+                   "serverName": "{{server.ServerName}}",
+                   "connection": {
+                     "kind": "Anonymous",
+                     "endpoint": "{{server.Endpoint}}"
+                   }
+                 }
+                """));
+
         var agentJson = $$"""
             {
               "kind": "prompt",
@@ -50,15 +113,7 @@ public sealed class McpAgentIntegrationTests
                 "apiType": "Echo"
               },
               "tools": [
-                {
-                  "kind": "mcp",
-                  "name": "test-mcp",
-                  "serverName": "test-mcp",
-                  "connection": {
-                    "kind": "Anonymous",
-                    "endpoint": "{{endpoint}}"
-                  }
-                }
+                {{tools}}
               ]
             }
             """;
@@ -126,6 +181,9 @@ public sealed class McpAgentIntegrationTests
 
     private static bool HasPingTool(AgentChat chat)
         => FlattenTools(chat.Tools).Any(tool => string.Equals(tool.Name, "ping", StringComparison.OrdinalIgnoreCase));
+
+    private static AgentChatToolItem? FindToolByName(IEnumerable<AgentChatToolItem> roots, string name)
+        => FlattenTools(roots).FirstOrDefault(tool => string.Equals(tool.Name, name, StringComparison.OrdinalIgnoreCase));
 
     private static IEnumerable<AgentChatToolItem> FlattenTools(IEnumerable<AgentChatToolItem> roots)
     {

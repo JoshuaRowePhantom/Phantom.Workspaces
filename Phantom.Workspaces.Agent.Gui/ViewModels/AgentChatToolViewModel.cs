@@ -12,6 +12,7 @@ public sealed class AgentChatToolViewModel : ViewModelBase
         string description,
         string kind,
         bool isEnabled,
+        string? status,
         IReadOnlyList<AgentChatToolViewModel> children,
         Func<bool, Task> setEnabled)
     {
@@ -20,6 +21,7 @@ public sealed class AgentChatToolViewModel : ViewModelBase
         this.Description = description;
         this.Kind = kind;
         this.IsEnabled = isEnabled;
+        this.Status = status;
         this.setEnabled = setEnabled;
         this.Children = [.. children];
     }
@@ -33,6 +35,8 @@ public sealed class AgentChatToolViewModel : ViewModelBase
     public string Kind { get; }
 
     public bool IsEnabled { get; }
+
+    public string? Status { get; }
 
     public ObservableCollection<AgentChatToolViewModel> Children { get; }
 

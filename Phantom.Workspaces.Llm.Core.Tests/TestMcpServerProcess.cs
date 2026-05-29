@@ -15,19 +15,24 @@ internal sealed class TestMcpServerProcess : IAsyncDisposable
 
     public string BoundUrl { get; }
 
-    public static async Task<TestMcpServerProcess> StartAsync()
+    public static async Task<TestMcpServerProcess> StartAsync(params string[] extraArgs)
     {
         var executablePath = GetMcpExecutablePath();
         var startInfo = new ProcessStartInfo
         {
             FileName = executablePath,
-            Arguments = "--mode http",
             WorkingDirectory = Path.GetDirectoryName(executablePath),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        startInfo.ArgumentList.Add("--mode");
+        startInfo.ArgumentList.Add("http");
+        foreach (var extraArg in extraArgs)
+        {
+            startInfo.ArgumentList.Add(extraArg);
+        }
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start MCP test server process.");

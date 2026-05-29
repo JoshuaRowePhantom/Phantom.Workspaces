@@ -26,6 +26,9 @@
                                 <TextBlock Text="{Binding Description}"
                                            Classes="muted"
                                            TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding Status}"
+                                           Classes="muted"
+                                           TextWrapping="Wrap"/>
                             </StackPanel>
                         </StackPanel>
                     </TreeDataTemplate>
