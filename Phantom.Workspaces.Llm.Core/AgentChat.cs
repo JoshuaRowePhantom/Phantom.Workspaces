@@ -1433,12 +1433,12 @@ public sealed class AgentChat : IAsyncDisposable
     {
         return tool.Connection switch
         {
-            AnonymousConnection anonymous => CreateHttpTransport(
+            AnonymousConnection anonymous => CreateTransportFromEndpoint(
                 anonymous.Endpoint,
                 apiKey: null,
                 tool.ServerName,
                 services?.LoggerFactory),
-            ApiKeyConnection apiKey => CreateHttpTransport(
+            ApiKeyConnection apiKey => CreateTransportFromEndpoint(
                 apiKey.Endpoint,
                 ResolveApiKey(apiKey.ApiKey, tool.ServerName),
                 tool.ServerName,
@@ -1449,7 +1449,7 @@ public sealed class AgentChat : IAsyncDisposable
         };
     }
 
-    private static IClientTransport CreateHttpTransport(
+    private static IClientTransport CreateTransportFromEndpoint(
         string? endpoint,
         string? apiKey,
         string? serverName,
@@ -1460,9 +1460,69 @@ public sealed class AgentChat : IAsyncDisposable
             throw new InvalidOperationException("MCP tool endpoint is required.");
         }
 
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
+        {
+            throw new InvalidOperationException($"MCP tool endpoint '{endpoint}' is not a valid absolute URI.");
+        }
+
+        if (string.Equals(endpointUri.Scheme, "stdio", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                throw new InvalidOperationException("MCP stdio transport does not support API key headers.");
+            }
+
+            return CreateStdioTransport(endpointUri, serverName);
+        }
+
+        return CreateHttpTransport(endpointUri, apiKey, serverName, loggerFactory);
+    }
+
+    private static IClientTransport CreateStdioTransport(Uri endpointUri, string? serverName)
+    {
+        var query = ParseUriQuery(endpointUri.Query);
+        var command = GetFirstNonEmptyValue(query, "command")
+            ?? (!string.IsNullOrWhiteSpace(endpointUri.Host) ? endpointUri.Host : null);
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            throw new InvalidOperationException(
+                "MCP stdio endpoint requires a command. Use stdio://?command=<process>.");
+        }
+
+        var options = new StdioClientTransportOptions
+        {
+            Command = command,
+        };
+
+        if (!string.IsNullOrWhiteSpace(serverName))
+        {
+            options.Name = serverName;
+        }
+
+        var argValues = GetAllValues(query, "arg");
+        if (argValues.Count > 0)
+        {
+            options.Arguments = [.. argValues];
+        }
+
+        var workingDirectory = GetFirstNonEmptyValue(query, "cwd");
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            options.WorkingDirectory = workingDirectory;
+        }
+
+        return new StdioClientTransport(options);
+    }
+
+    private static IClientTransport CreateHttpTransport(
+        Uri endpointUri,
+        string? apiKey,
+        string? serverName,
+        ILoggerFactory? loggerFactory)
+    {
         var transportOptions = new HttpClientTransportOptions
         {
-            Endpoint = new Uri(endpoint, UriKind.Absolute),
+            Endpoint = endpointUri,
         };
 
         if (!string.IsNullOrWhiteSpace(serverName))
@@ -1479,6 +1539,65 @@ public sealed class AgentChat : IAsyncDisposable
         }
 
         return new HttpClientTransport(transportOptions, loggerFactory);
+    }
+
+    private static Dictionary<string, List<string>> ParseUriQuery(string query)
+    {
+        var values = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return values;
+        }
+
+        var segments = query.TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var segment in segments)
+        {
+            var separatorIndex = segment.IndexOf('=');
+            var encodedKey = separatorIndex >= 0 ? segment[..separatorIndex] : segment;
+            var encodedValue = separatorIndex >= 0 ? segment[(separatorIndex + 1)..] : string.Empty;
+
+            var key = Uri.UnescapeDataString(encodedKey);
+            var value = Uri.UnescapeDataString(encodedValue);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            if (!values.TryGetValue(key, out var list))
+            {
+                list = [];
+                values[key] = list;
+            }
+
+            list.Add(value);
+        }
+
+        return values;
+    }
+
+    private static string? GetFirstNonEmptyValue(
+        IReadOnlyDictionary<string, List<string>> values,
+        string key)
+    {
+        if (!values.TryGetValue(key, out var candidates))
+        {
+            return null;
+        }
+
+        return candidates.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static IReadOnlyList<string> GetAllValues(
+        IReadOnlyDictionary<string, List<string>> values,
+        string key)
+    {
+        if (!values.TryGetValue(key, out var candidates))
+        {
+            return [];
+        }
+
+        return candidates.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
     }
 
     private void OnRunningItemsIdle(object? sender, EventArgs e)
