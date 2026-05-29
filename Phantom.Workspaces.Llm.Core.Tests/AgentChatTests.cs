@@ -300,6 +300,68 @@ public sealed class AgentChatTests
         Assert.Contains("budget limit", error.Message);
     }
 
+    [Fact]
+    public async Task StateChanged_UsesMonotonicVersions_AndSnapshotMatchesLatestVersion()
+    {
+        await using var chat = CreateChat();
+        var changes = new List<AgentChatStateChangedEventArgs>();
+        chat.StateChanged += (_, change) => changes.Add(change);
+
+        var runningItem = chat.CreateRunningItem(
+            new AgentChatHistoryItem
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("working")],
+                IsInProgress = true,
+            });
+        chat.UpdateRunningItem(
+            runningItem,
+            [
+                new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Contents = [new TextContent("done")],
+                    IsInProgress = false,
+                },
+            ]);
+        chat.CompleteRunningItem(runningItem, writeToHistory: false);
+        chat.SetAgentSessionId("next-session-id");
+
+        Assert.Equal(4, changes.Count);
+        Assert.Equal(AgentChatStateChangeKind.RunningAdded, changes[0].ChangeKind);
+        Assert.Equal(AgentChatStateChangeKind.RunningUpdated, changes[1].ChangeKind);
+        Assert.Equal(AgentChatStateChangeKind.RunningRemoved, changes[2].ChangeKind);
+        Assert.Equal(AgentChatStateChangeKind.SessionChanged, changes[3].ChangeKind);
+
+        for (var i = 1; i < changes.Count; i++)
+        {
+            Assert.Equal(changes[i - 1].ToVersion, changes[i].FromVersion);
+        }
+
+        var snapshot = chat.GetStateSnapshot();
+        Assert.Equal(changes[^1].ToVersion, snapshot.Version);
+        Assert.Equal(chat.AgentSessionId, snapshot.AgentSessionId);
+    }
+
+    [Fact]
+    public async Task EnqueueUserMessage_RaisesHistoryAddAndReplaceStateChanges()
+    {
+        await using var chat = CreateChat(
+            new ChatResponseUpdate(ChatRole.Assistant, "hello")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            });
+        var changes = new List<AgentChatStateChangedEventArgs>();
+        chat.StateChanged += (_, change) => changes.Add(change);
+
+        chat.EnqueueUserMessage("hi");
+        await Task.Delay(150);
+
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.User);
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.Assistant && c.HistoryItem.IsInProgress);
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryReplaced && c.HistoryItem?.Role == ChatRole.Assistant && !c.HistoryItem.IsInProgress);
+    }
+
     private sealed class BusyTestChatClient : IChatClient
     {
         private readonly TaskCompletionSource started;

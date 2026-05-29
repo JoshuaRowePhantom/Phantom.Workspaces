@@ -62,6 +62,42 @@ public sealed class AgentChatRunningItem
     public AgentChatHistoryItem[]? Items { get; set; }
 }
 
+public enum AgentChatStateChangeKind
+{
+    Reset = 0,
+    HistoryAdded = 1,
+    HistoryReplaced = 2,
+    RunningAdded = 3,
+    RunningUpdated = 4,
+    RunningRemoved = 5,
+    SessionChanged = 6,
+}
+
+public sealed record AgentChatStateSnapshot(
+    long Version,
+    string AgentSessionId,
+    IReadOnlyList<AgentChatHistoryItem> History,
+    IReadOnlyList<AgentChatRunningItem> RunningItems);
+
+public sealed class AgentChatStateChangedEventArgs : EventArgs
+{
+    public required long FromVersion { get; init; }
+
+    public required long ToVersion { get; init; }
+
+    public required AgentChatStateChangeKind ChangeKind { get; init; }
+
+    public int Index { get; init; } = -1;
+
+    public int Count { get; init; }
+
+    public AgentChatHistoryItem? HistoryItem { get; init; }
+
+    public AgentChatRunningItem? RunningItem { get; init; }
+
+    public string? AgentSessionId { get; init; }
+}
+
 /// <summary>
 /// Placeholder for items awaiting approval.
 /// </summary>
@@ -117,6 +153,7 @@ public sealed class AgentChat : IAsyncDisposable
     private const string RunningPartAssistantText = "assistant-text";
 
     private readonly object sessionLock = new();
+    private readonly object stateLock = new();
     private readonly InternalCreateAgentChatRequest request;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
@@ -139,6 +176,7 @@ public sealed class AgentChat : IAsyncDisposable
     private bool processingStarted;
     private readonly object processingStateLock = new();
     private CancellationTokenSource? activeRunCancellation;
+    private long stateVersion;
 
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
@@ -466,6 +504,8 @@ public sealed class AgentChat : IAsyncDisposable
 
     public event EventHandler<string>? AgentSessionIdChanged;
 
+    public event EventHandler<AgentChatStateChangedEventArgs>? StateChanged;
+
     /// <summary>Completed conversation turns, in order.</summary>
     public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
 
@@ -494,6 +534,18 @@ public sealed class AgentChat : IAsyncDisposable
     public string DisplayName { get; private set; } = string.Empty;
 
     public string AgentSessionId => this.agentSessionId;
+
+    public AgentChatStateSnapshot GetStateSnapshot()
+    {
+        lock (this.stateLock)
+        {
+            return new AgentChatStateSnapshot(
+                this.stateVersion,
+                this.agentSessionId,
+                this.History.ToArray(),
+                this.RunningItems.ToArray());
+        }
+    }
 
     /// <summary>
     /// Adds a user message to the target queue and waits for submission before history is created.
@@ -574,10 +626,40 @@ public sealed class AgentChat : IAsyncDisposable
     }
 
     public AgentChatRunningItem CreateRunningItem(params AgentChatHistoryItem[] items)
-        => this.runningItems.Create(items);
+    {
+        AgentChatRunningItem runningItem;
+        AgentChatStateChangedEventArgs? stateChange = null;
+        lock (this.stateLock)
+        {
+            runningItem = this.runningItems.Create(items);
+            var index = this.RunningItems.IndexOf(runningItem);
+            stateChange = this.CreateStateChangedEvent(
+                AgentChatStateChangeKind.RunningAdded,
+                index: index,
+                count: 1,
+                runningItem: runningItem);
+        }
+
+        this.RaiseStateChanged(stateChange);
+        return runningItem;
+    }
 
     public void UpdateRunningItem(AgentChatRunningItem item, AgentChatHistoryItem[] model)
-        => this.runningItems.Update(item, model);
+    {
+        AgentChatStateChangedEventArgs? stateChange = null;
+        lock (this.stateLock)
+        {
+            this.runningItems.Update(item, model);
+            var index = this.RunningItems.IndexOf(item);
+            stateChange = this.CreateStateChangedEvent(
+                AgentChatStateChangeKind.RunningUpdated,
+                index: index,
+                count: 1,
+                runningItem: item);
+        }
+
+        this.RaiseStateChanged(stateChange);
+    }
 
     public void CompleteRunningItem(
         AgentChatRunningItem item,
@@ -585,19 +667,156 @@ public sealed class AgentChat : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(item);
 
+        List<AgentChatStateChangedEventArgs>? historyStateChanges = null;
+        AgentChatStateChangedEventArgs? runningStateChange = null;
+        var isIdle = false;
         if (writeToHistory)
         {
             if (item.Items != null)
             {
                 foreach (var historyItem in item.Items)
                 {
-                    this.History.Add(historyItem);
+                    historyStateChanges ??= [];
+                    historyStateChanges.Add(this.AddHistoryItem(historyItem));
                     this.TurnCompleted?.Invoke(this, historyItem);
                 }
             }
         }
 
-        this.runningItems.Remove(item);
+        lock (this.stateLock)
+        {
+            var index = this.RunningItems.IndexOf(item);
+            this.runningItems.Remove(item);
+            runningStateChange = this.CreateStateChangedEvent(
+                AgentChatStateChangeKind.RunningRemoved,
+                index: index,
+                count: 1,
+                runningItem: item);
+            isIdle = this.RunningItems.Count == 0;
+        }
+
+        if (historyStateChanges is not null)
+        {
+            foreach (var change in historyStateChanges)
+            {
+                this.RaiseStateChanged(change);
+            }
+        }
+
+        this.RaiseStateChanged(runningStateChange);
+
+        if (isIdle)
+        {
+            this.Idle?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private AgentChatStateChangedEventArgs AddHistoryItem(AgentChatHistoryItem item)
+    {
+        lock (this.stateLock)
+        {
+            this.History.Add(item);
+            var index = this.History.Count - 1;
+            return this.CreateStateChangedEvent(
+                AgentChatStateChangeKind.HistoryAdded,
+                index: index,
+                count: 1,
+                historyItem: item);
+        }
+    }
+
+    private AgentChatStateChangedEventArgs? ReplaceHistoryItem(int index, AgentChatHistoryItem item)
+    {
+        lock (this.stateLock)
+        {
+            if (index < 0 || index >= this.History.Count)
+            {
+                return null;
+            }
+
+            this.History[index] = item;
+            return this.CreateStateChangedEvent(
+                AgentChatStateChangeKind.HistoryReplaced,
+                index: index,
+                count: 1,
+                historyItem: item);
+        }
+    }
+
+    private void AppendUserMessagesToHistory(IReadOnlyList<ChatMessage> requestMessages)
+    {
+        foreach (var message in requestMessages)
+        {
+            if (message.Role != ChatRole.User)
+            {
+                continue;
+            }
+
+            var nextItem = new AgentChatHistoryItem
+            {
+                Role = ChatRole.User,
+                Contents = message.Contents.ToArray(),
+            };
+
+            AgentChatStateChangedEventArgs? stateChange = null;
+            lock (this.stateLock)
+            {
+                if (this.History.Count > 0 && AreEquivalent(this.History[^1], nextItem))
+                {
+                    continue;
+                }
+
+                this.History.Add(nextItem);
+                stateChange = this.CreateStateChangedEvent(
+                    AgentChatStateChangeKind.HistoryAdded,
+                    index: this.History.Count - 1,
+                    count: 1,
+                    historyItem: nextItem);
+            }
+
+            this.RaiseStateChanged(stateChange);
+        }
+    }
+
+    private static bool AreEquivalent(AgentChatHistoryItem left, AgentChatHistoryItem right)
+    {
+        return left.Role == right.Role
+            && left.Text == right.Text
+            && left.ReasoningText == right.ReasoningText
+            && left.IsInProgress == right.IsInProgress;
+    }
+
+    private AgentChatStateChangedEventArgs CreateStateChangedEvent(
+        AgentChatStateChangeKind changeKind,
+        int index = -1,
+        int count = 0,
+        AgentChatHistoryItem? historyItem = null,
+        AgentChatRunningItem? runningItem = null,
+        string? agentSessionId = null)
+    {
+        var fromVersion = this.stateVersion;
+        this.stateVersion++;
+        return new AgentChatStateChangedEventArgs
+        {
+            FromVersion = fromVersion,
+            ToVersion = this.stateVersion,
+            ChangeKind = changeKind,
+            Index = index,
+            Count = count,
+            HistoryItem = historyItem,
+            RunningItem = runningItem,
+            AgentSessionId = agentSessionId,
+        };
+    }
+
+    private void RaiseStateChanged(AgentChatStateChangedEventArgs? stateChange)
+    {
+        if (stateChange is null)
+        {
+            return;
+        }
+
+        this.StateChanged?.Invoke(this, stateChange);
     }
 
     public void RegisterOwnedResource(IAsyncDisposable resource)
@@ -621,8 +840,17 @@ public sealed class AgentChat : IAsyncDisposable
             return;
         }
 
-        this.agentSessionId = agentSessionId;
+        AgentChatStateChangedEventArgs? stateChange;
+        lock (this.stateLock)
+        {
+            this.agentSessionId = agentSessionId;
+            stateChange = this.CreateStateChangedEvent(
+                AgentChatStateChangeKind.SessionChanged,
+                agentSessionId: agentSessionId);
+        }
+
         this.AgentSessionIdChanged?.Invoke(this, agentSessionId);
+        this.RaiseStateChanged(stateChange);
     }
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
@@ -634,12 +862,13 @@ public sealed class AgentChat : IAsyncDisposable
 
         foreach (var message in initialMessages)
         {
-            this.History.Add(new AgentChatHistoryItem
+            var stateChange = this.AddHistoryItem(new AgentChatHistoryItem
             {
                 Role = message.Role,
                 Contents = message.Contents.ToArray(),
                 IsInProgress = false,
             });
+            this.RaiseStateChanged(stateChange);
         }
     }
 
@@ -750,13 +979,14 @@ public sealed class AgentChat : IAsyncDisposable
                 var historyPlaceholderIndex = -1;
                 if (useHistoryPlaceholder)
                 {
-                    this.historyService.BeginInvocation(chatMessagesToSubmit.ToArray());
-                    this.History.Add(new AgentChatHistoryItem
+                    this.AppendUserMessagesToHistory(chatMessagesToSubmit);
+                    var historyAdded = this.AddHistoryItem(new AgentChatHistoryItem
                     {
                         Role = ChatRole.Assistant,
                         IsInProgress = true,
                     });
-                    historyPlaceholderIndex = this.History.Count - 1;
+                    this.RaiseStateChanged(historyAdded);
+                    historyPlaceholderIndex = historyAdded.Index;
                 }
 
                 AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
@@ -893,11 +1123,6 @@ public sealed class AgentChat : IAsyncDisposable
             return;
         }
 
-        if (placeholderIndex < 0 || placeholderIndex >= this.History.Count)
-        {
-            return;
-        }
-
         var finalItem = runningItem.Items
             .LastOrDefault(static item =>
                 item.Role == ChatRole.Assistant
@@ -907,7 +1132,8 @@ public sealed class AgentChat : IAsyncDisposable
             ?? runningItem.Items[^1];
         finalItem = finalItem with { IsInProgress = false };
 
-        this.History[placeholderIndex] = finalItem;
+        var stateChange = this.ReplaceHistoryItem(placeholderIndex, finalItem);
+        this.RaiseStateChanged(stateChange);
 
         if (finalItem.Role == ChatRole.Assistant)
         {

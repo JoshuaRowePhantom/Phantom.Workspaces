@@ -201,4 +201,5 @@ public sealed class MainWindowViewModelTests
         Assert.Contains(viewModel.Agent.History, item => item.Role == ChatRole.User && item.Text.Contains("restore me", StringComparison.Ordinal));
         Assert.Contains(viewModel.Agent.History, item => item.Role == ChatRole.Assistant && item.Text.Contains("restored", StringComparison.Ordinal));
     }
+
 }

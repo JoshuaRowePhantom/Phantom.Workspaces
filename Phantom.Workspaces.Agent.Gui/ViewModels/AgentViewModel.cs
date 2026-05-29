@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Phantom.Workspaces.Llm;
@@ -9,6 +8,8 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 {
     private readonly AgentChat agentChat;
+    private readonly object stateLock = new();
+    private long appliedStateVersion;
     private bool isReasoningVisible;
     private string agentSessionId;
 
@@ -23,12 +24,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.agentChat.DefaultInputQueue,
             this.agentChat.InputQueueManager);
 
-        this.LoadCurrentHistory();
-        this.LoadCurrentRunningItems();
-
-        agentChat.History.CollectionChanged += this.OnHistoryChanged;
-        agentChat.RunningItems.CollectionChanged += this.OnRunningItemsChanged;
-        agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
+        agentChat.StateChanged += this.OnStateChanged;
+        this.ApplySnapshot(agentChat.GetStateSnapshot());
     }
 
     public string DisplayName { get; }
@@ -75,96 +72,105 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
-    private void OnHistoryChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
     {
         Dispatcher.UIThread.Post(() =>
         {
-            if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
+            lock (this.stateLock)
             {
-                foreach (AgentChatHistoryItem item in e.NewItems)
+                if (e.FromVersion != this.appliedStateVersion)
                 {
-                    var vm = new ChatHistoryItemViewModel(item);
-                    vm.SetReasoningVisible(this.IsReasoningVisible);
-                    this.History.Add(vm);
+                    this.ApplySnapshot(this.agentChat.GetStateSnapshot());
+                    return;
                 }
-            }
-            else if (e.Action == NotifyCollectionChangedAction.Replace && e.NewItems is not null && e.NewStartingIndex >= 0)
-            {
-                var index = e.NewStartingIndex;
-                foreach (AgentChatHistoryItem item in e.NewItems)
-                {
-                    if (index >= 0 && index < this.History.Count)
-                    {
-                        this.History[index].UpdateFrom(item);
-                    }
-
-                    index++;
-                }
+                this.ApplyIncrementalChange(e);
+                this.appliedStateVersion = e.ToVersion;
             }
         });
     }
 
-    private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void ApplySnapshot(AgentChatStateSnapshot snapshot)
     {
-        Dispatcher.UIThread.Post(() =>
+        lock (this.stateLock)
         {
-            switch (e.Action)
+            foreach (var historyItem in this.History)
             {
-                case NotifyCollectionChangedAction.Add when e.NewItems is not null:
-                    foreach (AgentChatRunningItem item in e.NewItems)
-                    {
-                        var vm = new RunningItemViewModel(item);
-                        vm.SetReasoningVisible(this.IsReasoningVisible);
-                        this.RunningItems.Add(vm);
-                    }
-                    break;
-
-                case NotifyCollectionChangedAction.Remove when e.OldItems is not null:
-                    foreach (AgentChatRunningItem item in e.OldItems)
-                    {
-                        var vm = this.RunningItems.FirstOrDefault(x => x.Source == item);
-                        if (vm is not null)
-                        {
-                            this.RunningItems.Remove(vm);
-                            vm.Dispose();
-                        }
-                    }
-                    break;
-
-                case NotifyCollectionChangedAction.Replace when e.NewItems is not null:
-                    foreach (AgentChatRunningItem item in e.NewItems)
-                    {
-                        var vm = this.RunningItems.FirstOrDefault(x => x.Source == item);
-                        vm?.UpdateModel();
-                    }
-                    break;
+                historyItem.Dispose();
             }
-        });
-    }
 
-    private void OnAgentSessionIdChanged(object? sender, string nextAgentSessionId)
-    {
-        Dispatcher.UIThread.Post(() => this.AgentSessionId = nextAgentSessionId);
-    }
+            foreach (var runningItem in this.RunningItems)
+            {
+                runningItem.Dispose();
+            }
 
-    private void LoadCurrentHistory()
-    {
-        foreach (var item in this.agentChat.History)
-        {
-            var vm = new ChatHistoryItemViewModel(item);
-            vm.SetReasoningVisible(this.IsReasoningVisible);
-            this.History.Add(vm);
+            this.History.Clear();
+            this.RunningItems.Clear();
+
+            foreach (var item in snapshot.History)
+            {
+                this.History.Add(this.CreateHistoryViewModel(item));
+            }
+
+            foreach (var item in snapshot.RunningItems)
+            {
+                this.RunningItems.Add(this.CreateRunningItemViewModel(item));
+            }
+
+            this.AgentSessionId = snapshot.AgentSessionId;
+            this.appliedStateVersion = snapshot.Version;
         }
     }
 
-    private void LoadCurrentRunningItems()
+    private void ApplyIncrementalChange(AgentChatStateChangedEventArgs change)
     {
-        foreach (var item in this.agentChat.RunningItems)
+        switch (change.ChangeKind)
         {
-            var vm = new RunningItemViewModel(item);
-            vm.SetReasoningVisible(this.IsReasoningVisible);
-            this.RunningItems.Add(vm);
+            case AgentChatStateChangeKind.HistoryAdded when change.HistoryItem is not null:
+                this.History.Add(this.CreateHistoryViewModel(change.HistoryItem));
+                break;
+            case AgentChatStateChangeKind.HistoryReplaced when change.HistoryItem is not null && change.Index >= 0 && change.Index < this.History.Count:
+                this.History[change.Index].UpdateFrom(change.HistoryItem);
+                break;
+            case AgentChatStateChangeKind.RunningAdded when change.RunningItem is not null:
+                this.RunningItems.Add(this.CreateRunningItemViewModel(change.RunningItem));
+                break;
+            case AgentChatStateChangeKind.RunningUpdated when change.RunningItem is not null:
+                this.RunningItems.FirstOrDefault(x => x.Source == change.RunningItem)?.UpdateModel();
+                break;
+            case AgentChatStateChangeKind.RunningRemoved when change.RunningItem is not null:
+                var vm = this.RunningItems.FirstOrDefault(x => x.Source == change.RunningItem);
+                if (vm is not null)
+                {
+                    this.RunningItems.Remove(vm);
+                    vm.Dispose();
+                }
+
+                break;
+            case AgentChatStateChangeKind.SessionChanged:
+                if (!string.IsNullOrWhiteSpace(change.AgentSessionId))
+                {
+                    this.AgentSessionId = change.AgentSessionId;
+                }
+
+                break;
+            case AgentChatStateChangeKind.Reset:
+                this.ApplySnapshot(this.agentChat.GetStateSnapshot());
+                break;
         }
+    }
+
+    private ChatHistoryItemViewModel CreateHistoryViewModel(AgentChatHistoryItem item)
+    {
+        var vm = new ChatHistoryItemViewModel(item);
+        vm.SetReasoningVisible(this.IsReasoningVisible);
+        return vm;
+    }
+
+    private RunningItemViewModel CreateRunningItemViewModel(AgentChatRunningItem item)
+    {
+        var vm = new RunningItemViewModel(item);
+        vm.SetReasoningVisible(this.IsReasoningVisible);
+        return vm;
     }
 
     public async ValueTask DisposeAsync()
@@ -180,9 +186,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
 
         this.InputQueue.Dispose();
-        this.agentChat.History.CollectionChanged -= this.OnHistoryChanged;
-        this.agentChat.RunningItems.CollectionChanged -= this.OnRunningItemsChanged;
-        this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
+        this.agentChat.StateChanged -= this.OnStateChanged;
         await this.agentChat.DisposeAsync();
     }
 }
