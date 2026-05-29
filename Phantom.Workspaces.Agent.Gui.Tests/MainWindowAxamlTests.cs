@@ -37,6 +37,21 @@ public sealed class MainWindowAxamlTests
     }
 
     [Fact]
+    public void AgentChatEditorControl_ShowsToolTreeWithEnableToggle()
+    {
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "<TreeView ItemsSource=\"{Binding Tools}\">",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Click=\"OnToolToggleClicked\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ChildControls_DisableCompiledBindings_ForRuntimeDataContextHandoff()
     {
         var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");

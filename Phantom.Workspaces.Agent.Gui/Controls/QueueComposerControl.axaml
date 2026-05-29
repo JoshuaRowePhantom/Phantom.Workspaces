@@ -3,7 +3,7 @@
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.QueueComposerControl"
              x:DataType="vm:QueueComposerViewModel"
-             Background="Transparent">
+             Classes="queue-composer-root">
     <StackPanel Spacing="6">
         <Grid ColumnDefinitions="*,Auto,Auto"
               ColumnSpacing="8">
@@ -17,69 +17,28 @@
             <Button Grid.Column="1"
                     Command="{Binding SubmitCommand}"
                     Content="{Binding SubmitButtonGlyph}"
-                    Classes="queue-glyph-button"
-                    HorizontalContentAlignment="Center"
-                    VerticalContentAlignment="Center"
+                    Classes="queue-glyph-button queue-submit-button"
                     MinHeight="36"
-                    Padding="12,0"
                     VerticalAlignment="Bottom"/>
             <Border Grid.Column="2"
-                    Classes="queue-status-pill"
-                    Background="{Binding SubmitStatusOption.Background}"
-                    BorderBrush="{Binding SubmitStatusOption.BorderBrush}"
-                    BorderThickness="1"
-                    Padding="0"
-                    VerticalAlignment="Bottom">
-                <Button Background="Transparent"
-                        BorderThickness="0"
-                        Classes="queue-action-button"
-                        HorizontalAlignment="Right">
+                    Classes="queue-status-pill dynamic">
+                <Button Classes="queue-action-button queue-status-picker-button">
                     <Button.Flyout>
                         <MenuFlyout Placement="BottomEdgeAlignedLeft">
                             <MenuItem Command="{Binding SetQueueImmediacyCommand}"
                                       CommandParameter="{Binding ImmediateImmediacyOption}"
-                                      Padding="0">
-                                <MenuItem.Header>
-                                    <Border Background="{Binding ImmediateImmediacyOption.Background}"
-                                            BorderBrush="{Binding ImmediateImmediacyOption.BorderBrush}"
-                                            BorderThickness="1"
-                                            CornerRadius="999"
-                                            Padding="10,4">
-                                        <TextBlock Text="{Binding ImmediateImmediacyOption.Label}"
-                                                   Foreground="{Binding ImmediateImmediacyOption.Foreground}"
-                                                   FontSize="11"/>
-                                    </Border>
-                                </MenuItem.Header>
+                                      Header="{Binding ImmediateImmediacyOption}"
+                                      Classes="queue-immediacy-menu-item">
                             </MenuItem>
                             <MenuItem Command="{Binding SetQueueImmediacyCommand}"
                                       CommandParameter="{Binding QueuedImmediacyOption}"
-                                      Padding="0">
-                                <MenuItem.Header>
-                                    <Border Background="{Binding QueuedImmediacyOption.Background}"
-                                            BorderBrush="{Binding QueuedImmediacyOption.BorderBrush}"
-                                            BorderThickness="1"
-                                            CornerRadius="999"
-                                            Padding="10,4">
-                                        <TextBlock Text="{Binding QueuedImmediacyOption.Label}"
-                                                   Foreground="{Binding QueuedImmediacyOption.Foreground}"
-                                                   FontSize="11"/>
-                                    </Border>
-                                </MenuItem.Header>
+                                      Header="{Binding QueuedImmediacyOption}"
+                                      Classes="queue-immediacy-menu-item">
                             </MenuItem>
                             <MenuItem Command="{Binding SetQueueImmediacyCommand}"
                                       CommandParameter="{Binding HeldImmediacyOption}"
-                                      Padding="0">
-                                <MenuItem.Header>
-                                    <Border Background="{Binding HeldImmediacyOption.Background}"
-                                            BorderBrush="{Binding HeldImmediacyOption.BorderBrush}"
-                                            BorderThickness="1"
-                                            CornerRadius="999"
-                                            Padding="10,4">
-                                        <TextBlock Text="{Binding HeldImmediacyOption.Label}"
-                                                   Foreground="{Binding HeldImmediacyOption.Foreground}"
-                                                   FontSize="11"/>
-                                    </Border>
-                                </MenuItem.Header>
+                                      Header="{Binding HeldImmediacyOption}"
+                                      Classes="queue-immediacy-menu-item">
                             </MenuItem>
                         </MenuFlyout>
                     </Button.Flyout>
@@ -87,11 +46,11 @@
                                 Spacing="6"
                                 VerticalAlignment="Center">
                         <TextBlock Text="{Binding SubmitStatusOption.Label}"
-                                   Foreground="{Binding SubmitStatusOption.Foreground}"
-                                   FontSize="11"/>
+                                   Classes="queue-immediacy-label queue-status-label"
+                                   />
                         <TextBlock Text="▾"
-                                   Foreground="{Binding SubmitStatusOption.Foreground}"
-                                   FontSize="10"/>
+                                   Classes="queue-immediacy-caret queue-status-caret"
+                                   />
                     </StackPanel>
                 </Button>
             </Border>
@@ -106,11 +65,7 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:QueueComposerAttachmentViewModel">
-                    <Border Background="#303030"
-                            BorderBrush="#505050"
-                            BorderThickness="1"
-                            CornerRadius="4"
-                            Padding="6">
+                    <Border Classes="agent-chip">
                         <StackPanel Spacing="4">
                             <Image Source="{Binding Preview}"
                                    Width="96"
@@ -119,8 +74,7 @@
                             <StackPanel Orientation="Horizontal"
                                         Spacing="6">
                                 <TextBlock Text="{Binding Label}"
-                                           FontSize="11"
-                                           Foreground="#D0D0D0"/>
+                                           Classes="agent-chip-label"/>
                                 <Button Command="{Binding RemoveCommand}"
                                         CommandParameter="{Binding}"
                                         Content="✕"

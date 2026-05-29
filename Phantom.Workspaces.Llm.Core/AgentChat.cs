@@ -106,6 +106,14 @@ public sealed class AgentChatPendingApprovalItem
     public string Description { get; init; } = string.Empty;
 }
 
+public sealed record AgentChatToolItem(
+    string Id,
+    string Name,
+    string Description,
+    string Kind,
+    bool IsEnabled,
+    IReadOnlyList<AgentChatToolItem> Children);
+
 /// <summary>
 /// The default queue abstraction for the chat UI.
 /// </summary>
@@ -168,6 +176,10 @@ public sealed class AgentChat : IAsyncDisposable
     private readonly AgentRunningItems runningItems;
     private readonly List<IAsyncDisposable> ownedResources;
     private readonly object ownedResourcesLock = new();
+    private readonly object toolsLock = new();
+    private readonly Dictionary<string, ToolStateNode> toolIndex = new(StringComparer.Ordinal);
+    private readonly List<ToolStateNode> toolRoots = [];
+    private readonly SemaphoreSlim toolMutationLock = new(1, 1);
     private readonly CancellationTokenSource cts = new();
     private Task processTask = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
@@ -506,6 +518,8 @@ public sealed class AgentChat : IAsyncDisposable
 
     public event EventHandler<AgentChatStateChangedEventArgs>? StateChanged;
 
+    public event EventHandler? ToolsChanged;
+
     /// <summary>Completed conversation turns, in order.</summary>
     public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
 
@@ -535,6 +549,8 @@ public sealed class AgentChat : IAsyncDisposable
 
     public string AgentSessionId => this.agentSessionId;
 
+    public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
+
     public AgentChatStateSnapshot GetStateSnapshot()
     {
         lock (this.stateLock)
@@ -544,6 +560,56 @@ public sealed class AgentChat : IAsyncDisposable
                 this.agentSessionId,
                 this.History.ToArray(),
                 this.RunningItems.ToArray());
+        }
+    }
+
+    public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()
+    {
+        lock (this.toolsLock)
+        {
+            return this.toolRoots.Select(CreateToolSnapshot).ToArray();
+        }
+    }
+
+    public async Task SetToolEnabledAsync(
+        string toolId,
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(toolId))
+        {
+            throw new ArgumentException("Tool id is required.", nameof(toolId));
+        }
+
+        await this.toolMutationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var changed = false;
+            lock (this.toolsLock)
+            {
+                if (!this.toolIndex.TryGetValue(toolId, out var node))
+                {
+                    return;
+                }
+
+                changed = SetNodeEnabled(node, enabled);
+                if (node.Parent is not null)
+                {
+                    RecomputeAncestorEnabled(node.Parent);
+                }
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            await this.RebuildSessionForCurrentToolsAsync(cancellationToken).ConfigureAwait(false);
+            this.ToolsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        finally
+        {
+            this.toolMutationLock.Release();
         }
     }
 
@@ -1185,13 +1251,12 @@ public sealed class AgentChat : IAsyncDisposable
         }
 
         var agentTools = AgentFactory.ExtractTools(agent);
-        var hasMcpTools = agentTools?.OfType<McpTool>().Any() == true;
-        if (!hasMcpTools)
+        if (agentTools is not { Count: > 0 })
         {
             return;
         }
 
-        this.QueueManager.SetQueueHeld(this.DefaultInputQueue, held: true);
+        await this.toolMutationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -1202,7 +1267,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 try
                 {
-                    var runtimeTools = await CreateRuntimeToolsAsync(
+                    var runtime = await CreateRuntimeToolsAsync(
                         agentTools,
                         services,
                         text => this.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
@@ -1213,25 +1278,15 @@ public sealed class AgentChat : IAsyncDisposable
                         resource => this.RegisterOwnedResource(resource),
                         cancellationToken).ConfigureAwait(false);
 
-                    chatOptions.ChatOptions.Tools = runtimeTools;
-                    var rebuiltAgent = new ChatClientAgent(client, chatOptions);
-                    this.chatClientAgent = rebuiltAgent;
-                    var session = await rebuiltAgent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
-                    {
-                        persistenceProvider.SetAgentSessionId(session, this.request.AgentSessionId);
-                    }
-                    var refreshedAgentSessionId = persistenceProvider.ExtractAgentSessionId(session);
-                    await this.ReinitializeSessionAsync(
-                        new AgentChatSession(rebuiltAgent, session),
-                        refreshedAgentSessionId,
-                        cancellationToken).ConfigureAwait(false);
+                    this.ReplaceToolNodes(runtime.Roots);
+                    await this.RebuildSessionForCurrentToolsAsync(cancellationToken).ConfigureAwait(false);
                     this.UpdateRunningItem(startupRunningItem, [new AgentChatHistoryItem
                     {
                         Role = AgentChatHistoryItem.DiagnosticChatRole,
-                        Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(runtimeTools)) },
+                        Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(this.GetEnabledRuntimeTools())) },
                     }]);
                     this.CompleteRunningItem(startupRunningItem, true);
+                    this.ToolsChanged?.Invoke(this, EventArgs.Empty);
                 }
                 catch (Exception ex)
                 {
@@ -1244,7 +1299,7 @@ public sealed class AgentChat : IAsyncDisposable
                 }
                 finally
                 {
-                    this.QueueManager.SetQueueHeld(this.DefaultInputQueue, held: false);
+                    this.toolMutationLock.Release();
                 }
             },
             cancellationToken);
@@ -1252,17 +1307,18 @@ public sealed class AgentChat : IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    private static async Task<List<AITool>> CreateRuntimeToolsAsync(
+    private static async Task<RuntimeToolsInitializationResult> CreateRuntimeToolsAsync(
         IList<Tool>? agentTools,
         AgentServices? services,
         Action<string>? progressCallback,
         Action<IAsyncDisposable>? resourceCallback,
         CancellationToken cancellationToken)
     {
+        var roots = new List<ToolStateNode>();
         var resolvedTools = new List<AITool>();
         if (agentTools is null || agentTools.Count == 0)
         {
-            return resolvedTools;
+            return new RuntimeToolsInitializationResult(roots, resolvedTools);
         }
 
         foreach (var tool in agentTools)
@@ -1272,6 +1328,14 @@ public sealed class AgentChat : IAsyncDisposable
                 case McpTool mcpTool:
                 {
                     var toolServerName = string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName;
+                    var serverNode = new ToolStateNode(
+                        id: BuildMcpServerToolId(toolServerName),
+                        name: toolServerName ?? "(mcp server)",
+                        description: mcpTool.ServerDescription ?? mcpTool.Description ?? string.Empty,
+                        kind: "mcp",
+                        runtimeTool: null,
+                        parent: null,
+                        isEnabled: true);
                     progressCallback?.Invoke($"Opening MCP server '{toolServerName}'...");
 
                     var transport = CreateMcpTransport(mcpTool, services);
@@ -1290,20 +1354,55 @@ public sealed class AgentChat : IAsyncDisposable
                         mcpTools = [.. mcpTools.Where(t => allowedSet.Contains(t.Name))];
                     }
 
+                    foreach (var mcpRuntimeTool in mcpTools)
+                    {
+                        serverNode.Children.Add(new ToolStateNode(
+                            id: BuildMcpChildToolId(toolServerName, mcpRuntimeTool.Name),
+                            name: mcpRuntimeTool.Name,
+                            description: string.Empty,
+                            kind: "mcp-tool",
+                            runtimeTool: mcpRuntimeTool,
+                            parent: serverNode,
+                            isEnabled: true));
+                    }
+
+                    roots.Add(serverNode);
                     resolvedTools.AddRange(mcpTools);
                     progressCallback?.Invoke($"Opened MCP server '{toolServerName}' ({mcpTools.Count} tools).");
                     break;
                 }
                 case CustomTool { Kind: "web_search" }:
-                    resolvedTools.Add(new WebSearchTool(logger: services?.LoggerFactory?.CreateLogger<WebSearchTool>()));
+                {
+                    var runtimeTool = new WebSearchTool(logger: services?.LoggerFactory?.CreateLogger<WebSearchTool>());
+                    roots.Add(new ToolStateNode(
+                        id: BuildCustomToolId(tool),
+                        name: tool.Name ?? "web_search",
+                        description: tool.Description ?? string.Empty,
+                        kind: "web_search",
+                        runtimeTool: runtimeTool,
+                        parent: null,
+                        isEnabled: true));
+                    resolvedTools.Add(runtimeTool);
                     break;
+                }
                 case CustomTool { Kind: "web_request" }:
-                    resolvedTools.Add(new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>()));
+                {
+                    var runtimeTool = new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>());
+                    roots.Add(new ToolStateNode(
+                        id: BuildCustomToolId(tool),
+                        name: tool.Name ?? "web_request",
+                        description: tool.Description ?? string.Empty,
+                        kind: "web_request",
+                        runtimeTool: runtimeTool,
+                        parent: null,
+                        isEnabled: true));
+                    resolvedTools.Add(runtimeTool);
                     break;
+                }
             }
         }
 
-        return resolvedTools;
+        return new RuntimeToolsInitializationResult(roots, resolvedTools);
     }
 
     private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
@@ -1384,5 +1483,168 @@ public sealed class AgentChat : IAsyncDisposable
 
     private void OnRunningItemsIdle(object? sender, EventArgs e)
         => this.Idle?.Invoke(this, EventArgs.Empty);
+
+    private static string BuildCustomToolId(Tool tool)
+        => $"custom:{tool.Kind}:{tool.Name}";
+
+    private static string BuildMcpServerToolId(string? serverName)
+        => $"mcp:{serverName ?? "(server)"}";
+
+    private static string BuildMcpChildToolId(string? serverName, string toolName)
+        => $"{BuildMcpServerToolId(serverName)}:{toolName}";
+
+    private void ReplaceToolNodes(IReadOnlyList<ToolStateNode> roots)
+    {
+        lock (this.toolsLock)
+        {
+            this.toolRoots.Clear();
+            this.toolIndex.Clear();
+
+            foreach (var root in roots)
+            {
+                this.toolRoots.Add(root);
+                IndexToolNode(root, this.toolIndex);
+            }
+        }
+    }
+
+    private static void IndexToolNode(ToolStateNode node, IDictionary<string, ToolStateNode> index)
+    {
+        index[node.Id] = node;
+        foreach (var child in node.Children)
+        {
+            IndexToolNode(child, index);
+        }
+    }
+
+    private async Task RebuildSessionForCurrentToolsAsync(CancellationToken cancellationToken)
+    {
+        var client = this.client;
+        var chatOptions = this.chatOptions;
+        var persistenceProvider = this.persistenceProvider;
+        if (client is null || chatOptions is null || persistenceProvider is null)
+        {
+            return;
+        }
+
+        var currentQueueStates = this.InputQueues.ToDictionary(queue => queue, queue => queue.IsHeld);
+        foreach (var queueState in currentQueueStates)
+        {
+            this.QueueManager.SetQueueHeld(queueState.Key, held: true);
+        }
+
+        this.Interrupt();
+        try
+        {
+            chatOptions.ChatOptions.Tools = this.GetEnabledRuntimeTools();
+            var rebuiltAgent = new ChatClientAgent(client, chatOptions);
+            this.chatClientAgent = rebuiltAgent;
+            var session = await rebuiltAgent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+            persistenceProvider.SetAgentSessionId(session, this.AgentSessionId);
+            await this.ReinitializeSessionAsync(
+                new AgentChatSession(rebuiltAgent, session),
+                this.AgentSessionId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (var queueState in currentQueueStates)
+            {
+                this.QueueManager.SetQueueHeld(queueState.Key, queueState.Value);
+            }
+        }
+    }
+
+    private List<AITool> GetEnabledRuntimeTools()
+    {
+        lock (this.toolsLock)
+        {
+            return this.toolIndex.Values
+                .Where(static node => node.IsEnabled && node.RuntimeTool is not null)
+                .Select(static node => node.RuntimeTool!)
+                .ToList();
+        }
+    }
+
+    private static bool SetNodeEnabled(ToolStateNode node, bool enabled)
+    {
+        var changed = false;
+        if (node.Children.Count == 0)
+        {
+            if (node.IsEnabled != enabled)
+            {
+                node.IsEnabled = enabled;
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        foreach (var child in node.Children)
+        {
+            changed |= SetNodeEnabled(child, enabled);
+        }
+
+        if (node.IsEnabled != enabled)
+        {
+            node.IsEnabled = enabled;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static void RecomputeAncestorEnabled(ToolStateNode node)
+    {
+        node.IsEnabled = node.Children.Count == 0 || node.Children.All(static child => child.IsEnabled);
+        if (node.Parent is not null)
+        {
+            RecomputeAncestorEnabled(node.Parent);
+        }
+    }
+
+    private static AgentChatToolItem CreateToolSnapshot(ToolStateNode node)
+        => new(
+            node.Id,
+            node.Name,
+            node.Description,
+            node.Kind,
+            node.IsEnabled,
+            node.Children.Select(CreateToolSnapshot).ToArray());
+
+    private sealed class RuntimeToolsInitializationResult(
+        IReadOnlyList<ToolStateNode> roots,
+        IReadOnlyList<AITool> runtimeTools)
+    {
+        public IReadOnlyList<ToolStateNode> Roots { get; } = roots;
+
+        public IReadOnlyList<AITool> RuntimeTools { get; } = runtimeTools;
+    }
+
+    private sealed class ToolStateNode(
+        string id,
+        string name,
+        string description,
+        string kind,
+        AITool? runtimeTool,
+        ToolStateNode? parent,
+        bool isEnabled)
+    {
+        public string Id { get; } = id;
+
+        public string Name { get; } = name;
+
+        public string Description { get; } = description;
+
+        public string Kind { get; } = kind;
+
+        public AITool? RuntimeTool { get; } = runtimeTool;
+
+        public ToolStateNode? Parent { get; } = parent;
+
+        public bool IsEnabled { get; set; } = isEnabled;
+
+        public List<ToolStateNode> Children { get; } = [];
+    }
 
 }

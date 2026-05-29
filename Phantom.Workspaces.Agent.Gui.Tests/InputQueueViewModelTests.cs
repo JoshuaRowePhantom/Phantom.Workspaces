@@ -7,6 +7,8 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class InputQueueViewModelTests
 {
+    private static readonly byte[] TinyPng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
+
     private static AgentDefinition CreateTestAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -129,7 +131,7 @@ public sealed class InputQueueViewModelTests
         await using var chat = await CreateChatAsync();
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
-        viewModel.DefaultComposer.AppendImageAttachment([0x01, 0x02, 0x03], "image/png", 640, 480, "shot.png");
+        viewModel.DefaultComposer.AppendImageAttachment(TinyPng, "image/png", 640, 480, "shot.png");
 
         Assert.Equal("[image 640x480 shot.png]", viewModel.InputText);
         Assert.True(viewModel.DefaultComposer.HasAttachments);
@@ -153,7 +155,7 @@ public sealed class InputQueueViewModelTests
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.InputText = "hello";
-        viewModel.DefaultComposer.AppendImageAttachment([0x01, 0x02, 0x03], "image/png", 640, 480, "shot.png");
+        viewModel.DefaultComposer.AppendImageAttachment(TinyPng, "image/png", 640, 480, "shot.png");
 
         var removed = viewModel.DefaultComposer.TryRemoveImageAttachmentBeforeCaret(
             viewModel.InputText,
@@ -248,8 +250,7 @@ public sealed class InputQueueViewModelTests
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         var queue = chat.QueueManager.CreateInputQueue();
         chat.QueueManager.SetQueueHeld(queue, held: true);
-        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
-        viewModel.AppendToQueue(queue, [new TextContent("hello"), new DataContent(png, "image/png")]);
+        viewModel.AppendToQueue(queue, [new TextContent("hello"), new DataContent(TinyPng, "image/png")]);
 
         var queueItem = Assert.Single(viewModel.Queues[1].Items);
         var attachment = Assert.Single(queueItem.Attachments);

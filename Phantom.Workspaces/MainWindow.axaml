@@ -6,13 +6,12 @@
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.MainWindow"
         x:DataType="vm:MainWindowViewModel"
+        Classes="main-window-root"
         Width="1400"
         Height="900"
         MinWidth="1100"
         MinHeight="700"
         FontFamily="{DynamicResource Theme.FontFamily}"
-        FontSize="{DynamicResource Theme.FontSize.Base}"
-        Foreground="{DynamicResource Theme.Class.normal.Foreground}"
         Title="Phantom.Workspaces">
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
@@ -64,9 +63,8 @@
                         <TextBlock Text="{Binding SelectedTopLevelView.Title}" Classes="heading" />
                         <TextBlock Text="{Binding SelectedTopLevelView.Description}" Classes="muted" />
                         <TextBlock Text="{Binding StickyParentContextText}"
-                                   Margin="0,6,0,0"
                                    FontStyle="Italic"
-                                   Classes="accent"
+                                   Classes="accent sticky-context-note"
                                    IsVisible="{Binding HasStickyParentContext}" />
                     </StackPanel>
                 </Border>

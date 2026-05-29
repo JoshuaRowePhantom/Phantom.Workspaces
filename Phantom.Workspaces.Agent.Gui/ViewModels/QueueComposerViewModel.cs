@@ -90,7 +90,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         {
             preview = new Bitmap(new MemoryStream(imageData));
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
             // Tests can run without an Avalonia render backend.
         }

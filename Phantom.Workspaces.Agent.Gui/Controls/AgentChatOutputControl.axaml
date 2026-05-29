@@ -8,7 +8,7 @@
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatOutputControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel"
-             Background="#1E1E1E">
+             Classes="agent-chat-output-root">
     <UserControl.DataTemplates>
         <DataTemplate DataType="ai:TextContent">
             <SelectableTextBlock Text="{Binding Text}"
@@ -36,8 +36,7 @@
                                    Classes="agent-meta-label"/>
                     </Expander.Header>
                     <SelectableTextBlock Text="{Binding Arguments, Converter={x:Static converters:ObjectToPrettyJsonConverter.Instance}}"
-                                         Classes="terminal-mono terminal-detail"
-                                         Margin="0,4,0,0"/>
+                                         Classes="terminal-mono terminal-detail agent-expand-content"/>
                 </Expander>
             </Border>
         </DataTemplate>
@@ -49,8 +48,7 @@
                                    Classes="agent-meta-label"/>
                     </Expander.Header>
                     <SelectableTextBlock Text="{Binding Result, Converter={x:Static converters:ObjectToPrettyJsonConverter.Instance}}"
-                                         Classes="terminal-mono terminal-detail"
-                                         Margin="0,4,0,0"/>
+                                         Classes="terminal-mono terminal-detail agent-expand-content"/>
                 </Expander>
             </Border>
         </DataTemplate>
@@ -59,10 +57,8 @@
                 <ItemsControl ItemsSource="{Binding Contents, Converter={x:Static converters:RenderableContentFilterConverter.Instance}}"/>
                 <ProgressBar IsVisible="{Binding IsInProgress}"
                              IsIndeterminate="True"
-                             Height="2"
-                             Margin="0,6,0,0"
-                             Background="Transparent"
-                             Foreground="#4080FF"/>
+                             Classes="agent-progress top-gap"
+                             />
 
             </StackPanel>
         </DataTemplate>
@@ -80,15 +76,13 @@
                     <ProgressBar DockPanel.Dock="Top"
                                 IsVisible="{Binding IsInProgress}"
                                 IsIndeterminate="True"
-                                Height="2"
-                                Margin="0,0,0,6"
-                                Background="Transparent"
-                                Foreground="#4080FF"/>
+                                Classes="agent-progress bottom-gap"
+                                />
                     <ItemsControl ItemsSource="{Binding RenderableContents}"
-                                 Margin="0,8,0,0"/>
+                                Classes="agent-content-block"/>
                     <ItemsControl ItemsSource="{Binding Attachments}"
-                                 IsVisible="{Binding HasAttachments}"
-                                 Margin="0,8,0,0">
+                                IsVisible="{Binding HasAttachments}"
+                                Classes="agent-attachments-block">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <StackPanel Orientation="Horizontal"
@@ -99,9 +93,7 @@
                             <DataTemplate DataType="vm:ChatHistoryImageViewModel">
                                 <Border Classes="agent-chip">
                                     <StackPanel Spacing="4">
-                                        <Button Background="Transparent"
-                                                BorderThickness="0"
-                                                Padding="0"
+                                        <Button Classes="agent-image-preview-button"
                                                 Click="OnHistoryImageClicked"
                                                 IsVisible="{Binding HasPreview}">
                                             <Image Source="{Binding Preview}"
@@ -138,7 +130,7 @@
                 <ItemsControl ItemsSource="{Binding RunningItems}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="vm:RunningItemViewModel">
-                            <Border Padding="6,4">
+                            <Border Classes="agent-running-item">
                                 <ItemsControl ItemsSource="{Binding HistoryItems}"/>
                             </Border>
                         </DataTemplate>

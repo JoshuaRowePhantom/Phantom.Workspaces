@@ -5,7 +5,7 @@
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel">
     <Border Classes="agent-pane">
-        <StackPanel Spacing="12" Margin="12" VerticalAlignment="Top">
+        <StackPanel Spacing="12" Classes="agent-editor-root" VerticalAlignment="Top">
             <TextBlock Text="Agent Details"
                        Classes="agent-section-title"/>
             <TextBlock Text="Agent Session ID" Classes="muted"/>
@@ -13,6 +13,24 @@
                      IsReadOnly="True"
                      TextWrapping="Wrap"
                      Classes="agent-detail-value copyable-text"/>
+            <TextBlock Text="Tools" Classes="muted"/>
+            <TreeView ItemsSource="{Binding Tools}">
+                <TreeView.ItemTemplate>
+                    <TreeDataTemplate ItemsSource="{Binding Children}">
+                        <StackPanel Spacing="2" Classes="agent-tool-node">
+                            <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                                      Content="{Binding Name}"
+                                      Click="OnToolToggleClicked"/>
+                            <StackPanel Classes="agent-tool-node-details" Spacing="2">
+                                <TextBlock Text="{Binding Kind}" Classes="muted"/>
+                                <TextBlock Text="{Binding Description}"
+                                           Classes="muted"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </TreeDataTemplate>
+                </TreeView.ItemTemplate>
+            </TreeView>
         </StackPanel>
     </Border>
 </UserControl>

@@ -31,7 +31,7 @@
                         HorizontalContentAlignment="Center"
                         Command="{Binding ToggleExpandCommand}" />
             </Border>
-            <ItemsControl ItemsSource="{Binding VisibleChildren}" Margin="22,0,0,0" />
+            <ItemsControl ItemsSource="{Binding VisibleChildren}" Classes="workspace-visible-children" />
         </StackPanel>
     </DataTemplate>
 

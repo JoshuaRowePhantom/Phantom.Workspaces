@@ -561,7 +561,7 @@ public sealed record ProfileThemeSettings(
             Heading: new ProfileThemeClass(Foreground: "#E6E6E6", Opacity: 1.0, FontScale: 16d / 13d, FontWeight: "Bold"),
             SectionTitle: new ProfileThemeClass(Foreground: "#E6E6E6", Opacity: 1.0, FontScale: 14d / 13d, FontWeight: "Bold"),
             Caption: new ProfileThemeClass(Foreground: "#E6E6E6", Opacity: 1.0, FontScale: 11d / 13d, FontWeight: "Normal"),
-            Muted: new ProfileThemeClass(Foreground: "#B3B3B3", Opacity: 0.75, FontScale: FontScale.One, FontWeight: "Normal"),
+            Muted: new ProfileThemeClass(Foreground: "#B3B3B3", Opacity: 1.0, FontScale: FontScale.One, FontWeight: "Normal"),
             Accent: new ProfileThemeClass(Foreground: "#5EA0FF", Opacity: 1.0, FontScale: FontScale.One, FontWeight: "Normal")));
 
     public static ProfileThemeSettings Light { get; } = new(

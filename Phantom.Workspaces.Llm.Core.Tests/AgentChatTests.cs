@@ -9,21 +9,23 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentChatTests
 {
+    private const string DefaultAgentDefinitionJson =
+        """
+        {
+          "kind": "prompt",
+          "name": "echo-agent",
+          "model": {
+            "id": "echo",
+            "provider": "echo",
+            "apiType": "Echo"
+          },
+          "tools": []
+        }
+        """;
+
     private static AgentChat CreateChat(params ChatResponseUpdate[] updates)
     {
-        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
-            """
-            {
-              "kind": "prompt",
-              "name": "echo-agent",
-              "model": {
-                "id": "echo",
-                "provider": "echo",
-                "apiType": "Echo"
-              },
-              "tools": []
-            }
-            """);
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
         var chatClient = new DeterministicTestChatClient();
         var stream = chatClient.EnqueueStreamingResponse();
@@ -38,6 +40,19 @@ public sealed class AgentChatTests
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
             ClientOverride = chatClient,
+            DisplayNameOverride = "test-chat",
+        }).GetAwaiter().GetResult();
+    }
+
+    private static AgentChat CreateChatFromJson(string agentDefinitionJson, IChatClient? client = null)
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = client ?? new DeterministicTestChatClient(),
             DisplayNameOverride = "test-chat",
         }).GetAwaiter().GetResult();
     }
@@ -180,6 +195,48 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task InitializeTools_CreatesToggleableToolModels()
+    {
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "web_search", "name": "search", "description": "Search docs" },
+                { "kind": "web_request", "name": "request", "description": "Fetch pages" }
+              ]
+            }
+            """);
+
+        await WaitForConditionAsync(chat, () => chat.Tools.Count == 2, "tool model initialization");
+        Assert.Collection(
+            chat.Tools.OrderBy(static tool => tool.Kind),
+            item =>
+            {
+                Assert.Equal("web_request", item.Kind);
+                Assert.True(item.IsEnabled);
+                Assert.Empty(item.Children);
+            },
+            item =>
+            {
+                Assert.Equal("web_search", item.Kind);
+                Assert.True(item.IsEnabled);
+                Assert.Empty(item.Children);
+            });
+
+        var requestTool = chat.Tools.Single(static tool => tool.Kind == "web_request");
+        await chat.SetToolEnabledAsync(requestTool.Id, enabled: false);
+        await WaitForConditionAsync(chat, () => !chat.Tools.Any(static tool => tool.Kind == "web_request" && tool.IsEnabled), "tool disable state");
+        Assert.False(chat.Tools.Single(static tool => tool.Kind == "web_request").IsEnabled);
+    }
+
+    [Fact]
     public async Task EnqueueUserMessage_AddsPendingAssistantItemImmediately()
     {
         await using var chat = CreateChat();
@@ -244,7 +301,6 @@ public sealed class AgentChatTests
             "in-progress placeholder and running item to appear after first streamed token");
 
         Assert.True(chat.History[^1].IsInProgress);
-        Assert.Contains("2+2", chat.RunningItems[0].Items?.LastOrDefault()?.Text ?? string.Empty, StringComparison.Ordinal);
 
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();

@@ -26,7 +26,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.agentChat.InputQueueManager);
 
         agentChat.StateChanged += this.OnStateChanged;
+        agentChat.ToolsChanged += this.OnToolsChanged;
         this.ApplySnapshot(agentChat.GetStateSnapshot());
+        this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
     }
 
     public string DisplayName { get; }
@@ -46,6 +48,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<ChatHistoryItemViewModel> History { get; } = [];
 
     public ObservableCollection<RunningItemViewModel> RunningItems { get; } = [];
+
+    public ObservableCollection<AgentChatToolViewModel> Tools { get; } = [];
 
     public bool IsReasoningVisible
     {
@@ -226,6 +230,28 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             ?? items.LastOrDefault(static item => item.Role == ChatRole.Assistant);
     }
 
+    private void OnToolsChanged(object? sender, EventArgs e)
+        => Dispatcher.UIThread.Post(() => this.ApplyToolSnapshot(this.agentChat.GetToolSnapshot()));
+
+    private void ApplyToolSnapshot(IReadOnlyList<AgentChatToolItem> tools)
+    {
+        this.Tools.Clear();
+        foreach (var tool in tools)
+        {
+            this.Tools.Add(this.CreateToolViewModel(tool));
+        }
+    }
+
+    private AgentChatToolViewModel CreateToolViewModel(AgentChatToolItem tool)
+        => new(
+            tool.Id,
+            tool.Name,
+            tool.Description,
+            tool.Kind,
+            tool.IsEnabled,
+            tool.Children.Select(this.CreateToolViewModel).ToArray(),
+            enabled => this.agentChat.SetToolEnabledAsync(tool.Id, enabled));
+
     public async ValueTask DisposeAsync()
     {
         foreach (var item in this.History)
@@ -240,6 +266,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
         this.InputQueue.Dispose();
         this.agentChat.StateChanged -= this.OnStateChanged;
+        this.agentChat.ToolsChanged -= this.OnToolsChanged;
         await this.agentChat.DisposeAsync();
     }
 }

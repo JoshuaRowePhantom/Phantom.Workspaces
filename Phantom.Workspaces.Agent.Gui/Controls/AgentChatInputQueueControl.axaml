@@ -5,26 +5,20 @@
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatInputQueueControl"
              x:CompileBindings="False"
              x:DataType="vm:InputQueueViewModel"
-             Background="#1A1A1A">
-    <Border BorderBrush="#2A2A2A" BorderThickness="0,1,0,0" Padding="8,6">
+             Classes="agent-chat-input-queue-root">
+    <Border Classes="agent-chat-input-queue-container">
         <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollBarVisibility="Auto">
             <ItemsControl ItemsSource="{Binding Queues}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="vm:InputQueueGroupViewModel">
-                        <Border Margin="0,0,0,8"
-                                Padding="10,8"
-                                Background="#202020"
-                                BorderBrush="#303030"
-                                BorderThickness="1"
-                                CornerRadius="4">
+                        <Border Classes="queue-group-card">
                             <StackPanel Spacing="6">
                                 <DockPanel>
                                     <TextBlock Text="{Binding Name}"
                                                IsVisible="{Binding ShowName}"
                                                FontWeight="SemiBold"
-                                               Foreground="#E0E0E0"
-                                               FontSize="12"/>
+                                               Classes="queue-group-title"/>
                                     <StackPanel DockPanel.Dock="Right"
                                                 Orientation="Horizontal"
                                                 Spacing="8"
@@ -32,7 +26,6 @@
                                         <Button Command="{Binding ToggleComposerCommand}"
                                                 Content="+"
                                                 Classes="queue-glyph-button"
-                                                VerticalAlignment="Center"
                                                 IsVisible="{Binding CanToggleComposer}"/>
                                         <Button Command="{Binding RemoveQueueCommand}"
                                                 IsVisible="{Binding CanRemoveQueue}"
@@ -47,10 +40,7 @@
                                               IsVisible="{Binding HasItems}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="vm:InputQueueEntryViewModel">
-                                            <Border Margin="0,0,0,4"
-                                                    Padding="8,6"
-                                                    Background="#262626"
-                                                    CornerRadius="3">
+                                            <Border Classes="queue-item-card">
                                                 <Grid ColumnDefinitions="*,Auto"
                                                       RowDefinitions="Auto,Auto"
                                                       ColumnSpacing="8"
@@ -61,9 +51,7 @@
                                                              x:Name="EditBox"
                                                              AcceptsReturn="False"
                                                              MinHeight="32"
-                                                             FontSize="12"
-                                                             Background="#2A2A2A"
-                                                             Classes="terminal-mono terminal-editor"/>
+                                                             Classes="terminal-mono terminal-editor queue-entry-editor"/>
                                                     <StackPanel Orientation="Horizontal"
                                                                HorizontalAlignment="Right"
                                                                Spacing="6">
@@ -87,14 +75,13 @@
                                                     </Button.KeyBindings>
                                                     <SelectableTextBlock Text="{Binding Text}"
                                                                          TextWrapping="Wrap"
-                                                                         FontSize="12"
-                                                                         Classes="terminal-mono terminal-content"/>
+                                                                         Classes="terminal-mono terminal-content queue-entry-content"/>
                                                 </Button>
 
                                                 <ItemsControl Grid.Row="1"
                                                               Grid.Column="0"
                                                               Grid.ColumnSpan="2"
-                                                              Margin="0,6,0,0"
+                                                              Classes="queue-entry-attachments"
                                                                   ItemsSource="{Binding Attachments}"
                                                                   IsVisible="{Binding HasAttachments}">
                                                         <ItemsControl.ItemsPanel>
@@ -106,24 +93,15 @@
                                                         </ItemsControl.ItemsPanel>
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate DataType="vm:InputQueueEntryAttachmentViewModel">
-                                                                <Border Background="#5A3A1A"
-                                                                        BorderBrush="#8A5A20"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="10"
-                                                                        Padding="4">
+                                                                <Border Classes="queue-attachment-pill">
                                                                     <StackPanel Orientation="Horizontal"
                                                                                Spacing="6"
                                                                                VerticalAlignment="Center">
-                                                                        <Border Background="#2A2A2A"
-                                                                                BorderBrush="#8A5A20"
-                                                                                BorderThickness="1"
-                                                                                CornerRadius="6"
+                                                                        <Border Classes="queue-attachment-preview"
                                                                                 Width="28"
                                                                                 Height="20"
                                                                                 ClipToBounds="True">
-                                                                            <Button Background="Transparent"
-                                                                                    BorderThickness="0"
-                                                                                    Padding="0"
+                                                                            <Button Classes="queue-preview-image-button"
                                                                                     Click="OnQueueAttachmentImageClicked"
                                                                                     IsVisible="{Binding HasPreview}">
                                                                                 <Image Source="{Binding Preview}"
@@ -133,13 +111,11 @@
                                                                             </Button>
                                                                         </Border>
                                                                         <TextBlock Text="{Binding Label}"
-                                                                                  Foreground="#F6D7A7"
-                                                                                  FontSize="11"
+                                                                                  Classes="queue-attachment-label"
                                                                                   VerticalAlignment="Center"/>
                                                                         <Button Command="{Binding RemoveCommand}"
                                                                                Content="✕"
-                                                                               Classes="queue-glyph-button queue-danger-button"
-                                                                               BorderThickness="1"
+                                                                               Classes="queue-glyph-button queue-danger-button queue-danger-pill"
                                                                                MinWidth="20"
                                                                                MinHeight="20"/>
                                                                     </StackPanel>
@@ -154,9 +130,7 @@
                                                                 VerticalAlignment="Center">
                                                         <Button Command="{Binding RemoveCommand}"
                                                                 Content="✕"
-                                                                Classes="queue-glyph-button queue-danger-button"
-                                                                BorderThickness="1"
-                                                                CornerRadius="999"
+                                                                Classes="queue-glyph-button queue-danger-button queue-danger-pill"
                                                                 VerticalAlignment="Center"/>
                                                     </StackPanel>
                                                 </Grid>

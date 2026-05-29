@@ -10,7 +10,7 @@
                   VerticalScrollBarVisibility="Auto"
                   controls:StickyScroll.IsEnabled="True">
         <ItemsControl x:Name="BrowserItemsControl"
-                      Margin="0,0,8,0"
+                      Classes="browser-entity-items"
                       ItemsSource="{Binding EntityList.Items}" />
     </ScrollViewer>
 </UserControl>

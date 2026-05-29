@@ -34,6 +34,21 @@
       "description": "Make HTTP requests to fetch web pages and resources"
     },
     {
+      "name": "github",
+      "kind": "mcp",
+      "description": "GitHub MCP server providing tools for repositories, issues, pull requests, code search, and workflows.",
+      "connection": {
+        "kind": "key",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "serverName": "github",
+      "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",
+      "approvalMode": {
+        "kind": "never"
+      }
+    },
+    {
       "name": "chat-history",
       "kind": "chat-history",
       "description": "Persistent chat history stored in MongoDB container",
