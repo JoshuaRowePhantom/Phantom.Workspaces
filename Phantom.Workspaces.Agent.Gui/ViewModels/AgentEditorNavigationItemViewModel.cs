@@ -45,8 +45,6 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
 
     public bool NotHasChildren => !this.HasChildren;
 
-    public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
-
     public RelayCommand ToggleExpandCommand { get; }
 
     public object DetailContent { get; }
@@ -63,7 +61,6 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
                 return;
             }
 
-            this.RaisePropertyChanged(nameof(this.ExpandArrow));
         }
     }
 }
