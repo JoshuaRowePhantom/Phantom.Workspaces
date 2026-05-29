@@ -8,11 +8,15 @@ public sealed class MainWindowAxamlTests
         var mainWindowContent = ReadMainWindowAxaml();
 
         Assert.Contains(
-            "DataContext=\"{Binding Agent.InputQueue}\"",
+            "<controls:AgentChatEditorControl Grid.Column=\"0\"\r\n                                             DataContext=\"{Binding Agent}\"/>",
             mainWindowContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "DataContext=\"{Binding Agent}\"",
+            "<controls:AgentChatInputQueueControl DockPanel.Dock=\"Bottom\"\r\n                                                     DataContext=\"{Binding Agent.InputQueue}\"/>",
+            mainWindowContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<controls:AgentChatOutputControl DataContext=\"{Binding Agent}\"/>",
             mainWindowContent,
             StringComparison.Ordinal);
     }
@@ -20,24 +24,29 @@ public sealed class MainWindowAxamlTests
     [Fact]
     public void AgentSessionIdTextBox_IsReadOnly_AndOneWay()
     {
-        var mainWindowContent = ReadMainWindowAxaml();
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
 
         Assert.Contains(
-            "<TextBox Text=\"{Binding Agent.AgentSessionId, Mode=OneWay}\"",
-            mainWindowContent,
+            "<TextBox Text=\"{Binding AgentSessionId, Mode=OneWay}\"",
+            editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "IsReadOnly=\"True\"",
-            mainWindowContent,
+            editorControlContent,
             StringComparison.Ordinal);
     }
 
     [Fact]
     public void ChildControls_DisableCompiledBindings_ForRuntimeDataContextHandoff()
     {
-        var inputQueueControlContent = ReadAxaml("AgentInputQueueControl.axaml");
-        var outputControlContent = ReadAxaml("ChatAgentOutputControl.axaml");
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+        var inputQueueControlContent = ReadAxaml("AgentChatInputQueueControl.axaml");
+        var outputControlContent = ReadAxaml("AgentChatOutputControl.axaml");
 
+        Assert.Contains(
+            "x:CompileBindings=\"False\"",
+            editorControlContent,
+            StringComparison.Ordinal);
         Assert.Contains(
             "x:CompileBindings=\"False\"",
             inputQueueControlContent,

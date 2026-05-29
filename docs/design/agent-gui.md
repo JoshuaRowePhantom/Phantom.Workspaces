@@ -89,7 +89,7 @@ Editable tool and AI context provider definitions should be represented as concr
 
 ### Chat agent output control
 
-Working name: `ChatAgentOutputControl`.
+Working name: `AgentChatOutputControl`.
 
 Responsibilities:
 
@@ -147,7 +147,7 @@ When an active item completes, it transitions from the active items zone into th
 
 ### Input queue control
 
-Working name: `AgentInputQueueControl`.
+Working name: `AgentChatInputQueueControl`.
 
 Responsibilities:
 

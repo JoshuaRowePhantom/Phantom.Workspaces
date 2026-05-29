@@ -1,0 +1,18 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+             x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatEditorControl"
+             x:CompileBindings="False"
+             x:DataType="vm:AgentViewModel">
+    <Border Classes="agent-pane">
+        <StackPanel Spacing="12" Margin="12" VerticalAlignment="Top">
+            <TextBlock Text="Agent Details"
+                       Classes="agent-section-title"/>
+            <TextBlock Text="Agent Session ID" Classes="muted"/>
+            <TextBox Text="{Binding AgentSessionId, Mode=OneWay}"
+                     IsReadOnly="True"
+                     TextWrapping="Wrap"
+                     Classes="agent-detail-value copyable-text"/>
+        </StackPanel>
+    </Border>
+</UserControl>

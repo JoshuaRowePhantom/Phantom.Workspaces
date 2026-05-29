@@ -8,11 +8,11 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
-public partial class AgentInputQueueControl : UserControl
+public partial class AgentChatInputQueueControl : UserControl
 {
     private InputQueueViewModel? viewModel;
 
-    public AgentInputQueueControl()
+    public AgentChatInputQueueControl()
     {
         this.InitializeComponent();
         this.DataContextChanged += this.OnDataContextChanged;

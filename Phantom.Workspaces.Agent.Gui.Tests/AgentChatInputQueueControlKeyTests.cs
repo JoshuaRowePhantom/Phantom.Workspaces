@@ -6,7 +6,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-public sealed class AgentInputQueueControlKeyTests
+public sealed class AgentChatInputQueueControlKeyTests
 {
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
@@ -101,4 +101,3 @@ public sealed class AgentInputQueueControlKeyTests
         Assert.Equal("hello from return", chat.History[0].Text);
     }
 }
-

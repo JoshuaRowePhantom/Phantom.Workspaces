@@ -39,8 +39,8 @@ public sealed class AgentGuiMainWindowIntegrationTests
         var window = new global::Phantom.Workspaces.Agent.Gui.MainWindow(viewModel);
         window.Show();
 
-        var inputQueueControl = window.GetVisualDescendants().OfType<AgentInputQueueControl>().Single();
-        var outputControl = window.GetVisualDescendants().OfType<ChatAgentOutputControl>().Single();
+        var inputQueueControl = window.GetVisualDescendants().OfType<AgentChatInputQueueControl>().Single();
+        var outputControl = window.GetVisualDescendants().OfType<AgentChatOutputControl>().Single();
 
         Assert.IsType<InputQueueViewModel>(inputQueueControl.DataContext);
         Assert.IsType<AgentViewModel>(outputControl.DataContext);

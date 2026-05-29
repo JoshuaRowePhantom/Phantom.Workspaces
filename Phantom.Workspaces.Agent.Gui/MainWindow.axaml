@@ -30,18 +30,8 @@
                 <ColumnDefinition Width="*" MinWidth="200"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left: Runtime browser (placeholder) -->
-            <Border Grid.Column="0" Classes="agent-pane">
-                <StackPanel Spacing="12" Margin="12" VerticalAlignment="Top">
-                    <TextBlock Text="Agent Details"
-                               Classes="agent-section-title"/>
-                    <TextBlock Text="Agent Session ID" Classes="muted"/>
-                    <TextBox Text="{Binding Agent.AgentSessionId, Mode=OneWay}"
-                             IsReadOnly="True"
-                             TextWrapping="Wrap"
-                             Classes="agent-detail-value copyable-text"/>
-                </StackPanel>
-            </Border>
+            <controls:AgentChatEditorControl Grid.Column="0"
+                                             DataContext="{Binding Agent}"/>
 
             <GridSplitter Grid.Column="1"
                           Classes="main-splitter"
@@ -49,9 +39,9 @@
 
             <!-- Right: Agent chat -->
             <DockPanel Grid.Column="2">
-                <controls:AgentInputQueueControl DockPanel.Dock="Bottom"
-                                                 DataContext="{Binding Agent.InputQueue}"/>
-                <controls:ChatAgentOutputControl DataContext="{Binding Agent}"/>
+                <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
+                                                     DataContext="{Binding Agent.InputQueue}"/>
+                <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </Grid>
     </DockPanel>

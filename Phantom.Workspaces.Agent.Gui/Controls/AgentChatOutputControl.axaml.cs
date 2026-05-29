@@ -5,9 +5,9 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
-public partial class ChatAgentOutputControl : UserControl
+public partial class AgentChatOutputControl : UserControl
 {
-    public ChatAgentOutputControl()
+    public AgentChatOutputControl()
     {
         this.InitializeComponent();
     }
