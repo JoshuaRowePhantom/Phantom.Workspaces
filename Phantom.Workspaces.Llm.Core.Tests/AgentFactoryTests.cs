@@ -756,6 +756,62 @@ public class AgentFactoryTests
     }
 
     [Fact]
+    public async Task CreateAgentChatAsync_WithSessionIdAndAgentSchema_UsesProvidedDefinition()
+    {
+        var restoredDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "restored-test-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+        var providedDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "provided-echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+        var store = new RecordingAgentPersistenceStore
+        {
+            RestoredAgent = new PersistedAgent
+            {
+                AgentSessionId = "provided-session-id",
+                AgentDefinitionJson = BsonDocument.Parse(restoredDefinition.ToJson()),
+            },
+        };
+        var services = new AgentServices
+        {
+            AgentPersistenceStoreOverride = store,
+        };
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentSessionId = "provided-session-id",
+                AgentDefinition = providedDefinition,
+                AgentServices = services,
+            });
+
+        Assert.NotNull(chat);
+        Assert.Equal("Echo Chat Client", chat.DisplayName);
+        Assert.Equal("provided-session-id", chat.AgentSessionId);
+        Assert.Equal(1, store.RestoreCalls);
+    }
+
+    [Fact]
     public async Task CreateAgentChatAsync_WithPersistedMessages_LoadsHistoryIntoChat()
     {
         var agentDefinition = CreateEchoPromptAgentDefinition();

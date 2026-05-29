@@ -427,9 +427,10 @@ public sealed class AgentChat : IAsyncDisposable
        var restoredAgentDefinitionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentDefinitionJson : null;
        var restoredAgentSessionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentSessionJson : null;
 
-       var resolvedAgentDefinition = restoredAgentDefinitionJson is not null
-           ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
-           : this.request.AgentDefinition;
+       var resolvedAgentDefinition = this.request.AgentDefinition
+           ?? (restoredAgentDefinitionJson is not null
+               ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
+               : null);
        if (resolvedAgentDefinition is null)
        {
            throw new InvalidOperationException("Agent definition could not be resolved from request or persistence store.");
