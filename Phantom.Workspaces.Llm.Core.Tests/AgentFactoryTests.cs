@@ -575,7 +575,7 @@ public class AgentFactoryTests
 
         await using var chat = await CreateChatAsync(agent);
         chat.EnqueueUserMessage("hello");
-        await Task.Delay(150);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "history to include user and assistant items");
 
         Assert.True(chat.History.Count >= 2);
         Assert.Contains(chat.History, static item => item.Role == ChatRole.User);
@@ -599,12 +599,12 @@ public class AgentFactoryTests
             }
             """);
 
-        var store = new CountingAgentPersistenceStore();
+        var store = new RecordingAgentPersistenceStore();
         var services = new AgentServices { AgentPersistenceStoreOverride = store };
 
         await using var chat = await CreateChatAsync(agent, services);
         chat.EnqueueUserMessage("hello");
-        await Task.Delay(500);
+        await store.WaitForStoreCallAsync();
 
         Assert.True(store.ReadCalls >= 1, "ReadMessagesAsync should have been called at least once");
         Assert.True(store.StoreCalls >= 1, "StoreAsync should have been called at least once");
@@ -660,7 +660,7 @@ public class AgentFactoryTests
     [Fact]
     public async Task CreateAgentChatAsync_RequestWithoutResolvableAgentDefinition_Throws()
     {
-        var store = new RestoringAgentPersistenceStore();
+        var store = new RecordingAgentPersistenceStore();
         var services = new AgentServices
         {
             AgentPersistenceStoreOverride = store,
@@ -680,7 +680,7 @@ public class AgentFactoryTests
     [Fact]
     public async Task CreateAgentChatAsync_WithSessionIdAndNoRestore_StoresUsingRequestedSessionId()
     {
-        var store = new RestoringAgentPersistenceStore();
+        var store = new RecordingAgentPersistenceStore();
         var services = new AgentServices
         {
             AgentPersistenceStoreOverride = store,
@@ -707,7 +707,7 @@ public class AgentFactoryTests
                 AgentServices = services,
             });
         chat.EnqueueUserMessage("hello");
-        await Task.Delay(500);
+        await store.WaitForStoreCallAsync();
 
         Assert.Equal("requested-session-id", chat.AgentSessionId);
         Assert.Contains("requested-session-id", store.StoredAgentSessionIds);
@@ -729,7 +729,7 @@ public class AgentFactoryTests
               "tools": []
             }
             """);
-        var store = new RestoringAgentPersistenceStore
+        var store = new RecordingAgentPersistenceStore
         {
             RestoredAgent = new PersistedAgent
             {
@@ -842,12 +842,16 @@ public class AgentFactoryTests
                 AgentServices = services,
             });
         chat.EnqueueUserMessage("hello");
-        await Task.Delay(500);
+        var restoreRequest = new RestoreRequest { AgentSessionId = "in-memory-requested-session-id" };
+        await WaitForConditionAsync(
+            chat,
+            () => inMemoryAgentPersistenceStore.RestoreAsync(restoreRequest, CancellationToken.None).GetAwaiter().GetResult() is not null,
+            "in-memory store to persist the requested session");
 
         Assert.Equal("in-memory-requested-session-id", chat.AgentSessionId);
 
         var restoredAgent = await inMemoryAgentPersistenceStore.RestoreAsync(
-            new RestoreRequest { AgentSessionId = "in-memory-requested-session-id" },
+            restoreRequest,
             CancellationToken.None);
         Assert.NotNull(restoredAgent);
     }
@@ -891,7 +895,7 @@ public class AgentFactoryTests
             }))
         {
             firstChat.EnqueueUserMessage("persist this session");
-            await Task.Delay(500);
+            await WaitForConditionAsync(firstChat, () => firstChat.History.Count >= 2, "history to include assistant response before restore");
         }
 
         await using var restoredChat = await AgentFactory.CreateAgentChatAsync(
@@ -931,50 +935,69 @@ public class AgentFactoryTests
                 AgentServices = agentServices,
             });
 
-    private sealed class CountingAgentPersistenceStore : IAgentPersistenceStore
+    private static async Task WaitForConditionAsync(
+        AgentChat chat,
+        Func<bool> condition,
+        string description)
     {
-        private int readCalls;
-        private int storeCalls;
-
-        public int ReadCalls => this.readCalls;
-        public int StoreCalls => this.storeCalls;
-
-        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        if (condition())
         {
-            Interlocked.Increment(ref this.storeCalls);
-            return ValueTask.CompletedTask;
+            return;
         }
 
-        public ValueTask<PersistedAgent?> RestoreAsync(
-            RestoreRequest request,
-            CancellationToken cancellationToken = default)
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
         {
-            return ValueTask.FromResult<PersistedAgent?>(null);
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
         }
 
-        public ValueTask<ChatMessage[]> ReadMessagesAsync(
-            ReadMessagesRequest request,
-            CancellationToken cancellationToken = default)
+        chat.StateChanged += OnStateChanged;
+        try
         {
-            Interlocked.Increment(ref this.readCalls);
-            return ValueTask.FromResult(Array.Empty<ChatMessage>());
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+        }
+        finally
+        {
+            chat.StateChanged -= OnStateChanged;
         }
     }
 
-    private sealed class RestoringAgentPersistenceStore : IAgentPersistenceStore
+    private sealed class RecordingAgentPersistenceStore : IAgentPersistenceStore
     {
+        private int readCalls;
+        private int storeCalls;
         private int restoreCalls;
         private readonly List<string> storedAgentSessionIds = [];
+        private readonly TaskCompletionSource storeSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public PersistedAgent? RestoredAgent { get; init; }
 
+        public int ReadCalls => this.readCalls;
+        public int StoreCalls => this.storeCalls;
         public int RestoreCalls => this.restoreCalls;
 
         public IReadOnlyList<string> StoredAgentSessionIds => this.storedAgentSessionIds;
 
+        public Task WaitForStoreCallAsync(CancellationToken cancellationToken = default)
+            => this.storeSignal.Task.WaitAsync(cancellationToken);
+
         public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
         {
+            Interlocked.Increment(ref this.storeCalls);
             this.storedAgentSessionIds.Add(request.Agent.AgentSessionId);
+            this.storeSignal.TrySetResult();
             return ValueTask.CompletedTask;
         }
 
@@ -1000,6 +1023,7 @@ public class AgentFactoryTests
             ReadMessagesRequest request,
             CancellationToken cancellationToken = default)
         {
+            Interlocked.Increment(ref this.readCalls);
             return ValueTask.FromResult(Array.Empty<ChatMessage>());
         }
     }

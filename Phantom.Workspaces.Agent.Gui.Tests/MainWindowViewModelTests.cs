@@ -13,47 +13,6 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class MainWindowViewModelTests
 {
-    private sealed class TestAgentPersistenceStore : IAgentPersistenceStore
-    {
-        private readonly List<ChatMessage> messages = [];
-        private PersistedAgent? persistedAgent;
-
-        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
-        {
-            this.persistedAgent = request.Agent;
-            if (request.NewMessages is { Length: > 0 })
-            {
-                this.messages.AddRange(request.NewMessages);
-            }
-
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask<PersistedAgent?> RestoreAsync(
-            RestoreRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            if (this.persistedAgent is { } persisted && persisted.AgentSessionId == request.AgentSessionId)
-            {
-                return ValueTask.FromResult<PersistedAgent?>(persisted);
-            }
-
-            return ValueTask.FromResult<PersistedAgent?>(null);
-        }
-
-        public ValueTask<ChatMessage[]> ReadMessagesAsync(
-            ReadMessagesRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            if (this.persistedAgent is { } persisted && persisted.AgentSessionId == request.AgentSessionId)
-            {
-                return ValueTask.FromResult(this.messages.ToArray());
-            }
-
-            return ValueTask.FromResult(Array.Empty<ChatMessage>());
-        }
-    }
-
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -159,7 +118,7 @@ public sealed class MainWindowViewModelTests
     public async Task CreateAsync_WithRestoredSession_LoadsPersistedMessagesIntoAgentHistory()
     {
         var sessionId = "gui-restored-history";
-        var store = new TestAgentPersistenceStore();
+        var store = new InMemoryAgentPersistenceStore();
         var services = new AgentServices
         {
             AgentPersistenceStoreOverride = store,

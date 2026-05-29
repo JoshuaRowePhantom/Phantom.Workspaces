@@ -40,7 +40,7 @@ public sealed class InputQueueViewModelTests
         viewModel.IsFormattedMode = true;
 
         viewModel.SubmitToDefaultQueue();
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "default queue submission to complete");
 
         Assert.Empty(viewModel.InputText);
         Assert.False(viewModel.IsFormattedMode);
@@ -60,7 +60,7 @@ public sealed class InputQueueViewModelTests
         viewModel.InputText = "queued";
 
         viewModel.SubmitToNewQueue();
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "new queue submission to complete");
 
         Assert.Equal(2, chat.InputQueues.Count);
         Assert.Equal(2, chat.History.Count);
@@ -136,7 +136,7 @@ public sealed class InputQueueViewModelTests
         Assert.Single(viewModel.DefaultComposer.AttachmentPreviews);
 
         viewModel.SubmitToDefaultQueue();
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "image submission to complete");
 
         Assert.False(viewModel.DefaultComposer.HasAttachments);
         Assert.Equal(string.Empty, viewModel.InputText);
@@ -338,5 +338,43 @@ public sealed class InputQueueViewModelTests
         Assert.Same(userQueueVm, viewModel.Queues[1]);
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
-}
 
+    private static async Task WaitForConditionAsync(
+        AgentChat chat,
+        Func<bool> condition,
+        string description)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        {
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.StateChanged += OnStateChanged;
+        try
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+        }
+        finally
+        {
+            chat.StateChanged -= OnStateChanged;
+        }
+    }
+}

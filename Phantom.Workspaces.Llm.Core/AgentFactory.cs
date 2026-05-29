@@ -207,6 +207,7 @@ public static class AgentFactory
                 AgentSessionId = createAgentChatRequest.AgentSessionId,
                 AgentServices = services,
                 ConfiguredStore = configuredStore,
+                ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
             });
     }

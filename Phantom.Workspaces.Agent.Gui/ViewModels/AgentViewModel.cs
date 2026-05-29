@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using Avalonia.Threading;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -113,6 +114,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
             foreach (var item in snapshot.RunningItems)
             {
+                if (this.TryApplyRunningAssistantToPlaceholder(item))
+                {
+                    continue;
+                }
+
                 this.RunningItems.Add(this.CreateRunningItemViewModel(item));
             }
 
@@ -132,9 +138,19 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                 this.History[change.Index].UpdateFrom(change.HistoryItem);
                 break;
             case AgentChatStateChangeKind.RunningAdded when change.RunningItem is not null:
+                if (this.TryApplyRunningAssistantToPlaceholder(change.RunningItem))
+                {
+                    break;
+                }
+
                 this.RunningItems.Add(this.CreateRunningItemViewModel(change.RunningItem));
                 break;
             case AgentChatStateChangeKind.RunningUpdated when change.RunningItem is not null:
+                if (this.TryApplyRunningAssistantToPlaceholder(change.RunningItem))
+                {
+                    break;
+                }
+
                 this.RunningItems.FirstOrDefault(x => x.Source == change.RunningItem)?.UpdateModel();
                 break;
             case AgentChatStateChangeKind.RunningRemoved when change.RunningItem is not null:
@@ -171,6 +187,43 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         var vm = new RunningItemViewModel(item);
         vm.SetReasoningVisible(this.IsReasoningVisible);
         return vm;
+    }
+
+    private bool TryApplyRunningAssistantToPlaceholder(AgentChatRunningItem runningItem)
+    {
+        if (this.History.Count == 0)
+        {
+            return false;
+        }
+
+        var placeholder = this.History[^1];
+        if (placeholder.Role != ChatRole.Assistant || !placeholder.IsInProgress)
+        {
+            return false;
+        }
+
+        var assistant = SelectLatestAssistantContent(runningItem.Items);
+        if (assistant is null)
+        {
+            return false;
+        }
+
+        placeholder.UpdateFrom(assistant with { IsInProgress = true });
+        return true;
+    }
+
+    private static AgentChatHistoryItem? SelectLatestAssistantContent(AgentChatHistoryItem[]? items)
+    {
+        if (items is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        return items
+            .LastOrDefault(static item =>
+                item.Role == ChatRole.Assistant
+                && (!string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.ReasoningText)))
+            ?? items.LastOrDefault(static item => item.Role == ChatRole.Assistant);
     }
 
     public async ValueTask DisposeAsync()

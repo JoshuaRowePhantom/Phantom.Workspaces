@@ -94,10 +94,49 @@ public sealed class AgentChatInputQueueControlKeyTests
         };
 
         var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Return, KeyModifiers.None);
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "return key submission to complete");
 
         Assert.True(handled);
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("hello from return", chat.History[0].Text);
+    }
+
+    private static async Task WaitForConditionAsync(
+        AgentChat chat,
+        Func<bool> condition,
+        string description)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        {
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.StateChanged += OnStateChanged;
+        try
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+        }
+        finally
+        {
+            chat.StateChanged -= OnStateChanged;
+        }
     }
 }

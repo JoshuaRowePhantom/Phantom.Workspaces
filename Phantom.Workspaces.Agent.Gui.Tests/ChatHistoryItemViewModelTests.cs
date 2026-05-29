@@ -215,18 +215,8 @@ public sealed class ChatHistoryItemViewModelTests
         await using var _ = chat;
 
         chat.EnqueueUserMessage("hello");
-
-        AgentChatHistoryItem? assistantHistory = null;
-        for (var i = 0; i < 20; i++)
-        {
-            assistantHistory = chat.History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
-            if (assistantHistory is not null)
-            {
-                break;
-            }
-
-            await Task.Delay(25);
-        }
+        await WaitForConditionAsync(chat, () => chat.History.Any(static item => item.Role == ChatRole.Assistant), "assistant history item");
+        var assistantHistory = chat.History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
 
         Assert.NotNull(assistantHistory);
         var viewModel = new ChatHistoryItemViewModel(assistantHistory!);
@@ -243,5 +233,44 @@ public sealed class ChatHistoryItemViewModelTests
 
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.RenderableContents), changed);
+    }
+
+    private static async Task WaitForConditionAsync(
+        AgentChat chat,
+        Func<bool> condition,
+        string description)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        {
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.StateChanged += OnStateChanged;
+        try
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+        }
+        finally
+        {
+            chat.StateChanged -= OnStateChanged;
+        }
     }
 }

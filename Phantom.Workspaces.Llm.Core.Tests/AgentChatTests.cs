@@ -25,7 +25,14 @@ public sealed class AgentChatTests
             }
             """);
         var persistenceStore = new InMemoryAgentPersistenceStore();
-        var chatClient = new TestChatClient(updates);
+        var chatClient = new DeterministicTestChatClient();
+        var stream = chatClient.EnqueueStreamingResponse();
+        foreach (var update in updates)
+        {
+            stream.EnqueueUpdate(update);
+        }
+
+        stream.Complete();
         return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
@@ -35,7 +42,7 @@ public sealed class AgentChatTests
         }).GetAwaiter().GetResult();
     }
 
-    private static AgentChat CreateBusyChat(IChatClient client)
+    private static AgentChat CreateChat(IChatClient client)
     {
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -60,6 +67,45 @@ public sealed class AgentChatTests
         }).GetAwaiter().GetResult();
     }
 
+    private static async Task WaitForConditionAsync(
+        AgentChat chat,
+        Func<bool> condition,
+        string description)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        {
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.StateChanged += OnStateChanged;
+        try
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+        }
+        finally
+        {
+            chat.StateChanged -= OnStateChanged;
+        }
+    }
+
     [Fact]
     public async Task CreateAsync_WithRestoredSession_LoadsPersistedMessagesIntoHistory()
     {
@@ -78,7 +124,7 @@ public sealed class AgentChatTests
             """);
         var store = new InMemoryAgentPersistenceStore();
         var sessionId = "restored-history-session";
-        var serializerAgent = new ChatClientAgent(new TestChatClient(), new ChatClientAgentOptions { UseProvidedChatClientAsIs = true });
+        var serializerAgent = new ChatClientAgent(new DeterministicTestChatClient(), new ChatClientAgentOptions { UseProvidedChatClientAsIs = true });
         var serializerSession = await serializerAgent.CreateSessionAsync(CancellationToken.None);
         var serializedSession = await serializerAgent.SerializeSessionAsync(serializerSession, cancellationToken: CancellationToken.None);
 
@@ -119,7 +165,7 @@ public sealed class AgentChatTests
 
         var image = new DataContent(new byte[] { 0x01, 0x02 }, "image/png");
         chat.EnqueueUserContents([new TextContent("hello"), image]);
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "history to contain user and assistant placeholder");
 
         Assert.Equal(2, chat.History.Count);
         var userHistory = chat.History[0];
@@ -139,7 +185,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat();
 
         chat.EnqueueUserMessage("hello");
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "history to contain user and assistant placeholder");
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
@@ -159,8 +205,11 @@ public sealed class AgentChatTests
             });
 
         chat.EnqueueUserMessage("hi");
-
-        await Task.Delay(150);
+        await WaitForConditionAsync(chat, () =>
+            chat.History.Count == 2
+            && chat.History[1].Role == ChatRole.Assistant
+            && !chat.History[1].IsInProgress,
+            "assistant placeholder to be replaced by completed streaming response");
 
         Assert.Equal(2, chat.History.Count);
         var assistantItem = chat.History[1];
@@ -168,6 +217,44 @@ public sealed class AgentChatTests
         Assert.Equal("hello world", assistantItem.Text);
         Assert.Equal("Answering", assistantItem.ReasoningText);
         Assert.False(assistantItem.IsInProgress);
+    }
+
+    [Fact]
+    public async Task StreamingInProgress_UsesPlaceholderAndRunningItemBeforeCompletion()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "2+2 "));
+        var blockedSecond = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "equals 4.")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        var blockedComplete = stream.Complete(isReady: false);
+        await using var chat = CreateChat(client);
+
+        chat.EnqueueUserMessage("What is 2+2?");
+        await WaitForConditionAsync(
+            chat,
+            () => chat.History.Count >= 2
+                && chat.History[^1].Role == ChatRole.Assistant
+                && chat.History[^1].IsInProgress
+                && chat.RunningItems.Count == 1,
+            "in-progress placeholder and running item to appear after first streamed token");
+
+        Assert.True(chat.History[^1].IsInProgress);
+        Assert.Contains("2+2", chat.RunningItems[0].Items?.LastOrDefault()?.Text ?? string.Empty, StringComparison.Ordinal);
+
+        blockedSecond.MarkReady();
+        blockedComplete.MarkReady();
+        await WaitForConditionAsync(
+            chat,
+            () => chat.History.Count >= 2
+                && chat.History[^1].Role == ChatRole.Assistant
+                && !chat.History[^1].IsInProgress
+                && chat.History[^1].Text.Contains("2+2 equals 4.", StringComparison.Ordinal),
+            "completed assistant response to replace placeholder after stream release");
     }
 
     [Fact]
@@ -210,7 +297,7 @@ public sealed class AgentChatTests
         var queue = chat.QueueManager.CreateInputQueue();
 
         chat.EnqueueUserMessage("queued later", queue);
-        await Task.Delay(100);
+        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "queued message to publish to history");
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued later", chat.History[0].Text);
@@ -220,29 +307,29 @@ public sealed class AgentChatTests
     [Fact]
     public async Task EnqueueUserMessage_ToQueuedQueue_WaitsWhileBusy()
     {
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var chat = CreateBusyChat(new BusyTestChatClient(
-            started,
-            release,
-            new ChatResponseUpdate(ChatRole.Assistant, "working "),
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "working "));
+        var blockedSecond = stream.EnqueueUpdate(
             new ChatResponseUpdate(ChatRole.Assistant, "done")
             {
                 FinishReason = ChatFinishReason.Stop,
-            }));
+            },
+            isReady: false);
+        var blockedComplete = stream.Complete(isReady: false);
+        await using var chat = CreateChat(client);
 
         var queue = chat.QueueManager.CreateInputQueue();
         chat.EnqueueUserMessage("start");
-
-        await started.Task;
+        await WaitForConditionAsync(chat, () => chat.RunningItems.Count > 0, "first queued run to start");
 
         chat.EnqueueUserMessage("queued while busy", queue);
-
         Assert.Single(queue.Items);
         Assert.Equal(2, chat.History.Count);
 
-        release.SetResult();
-        await Task.Delay(100);
+        blockedSecond.MarkReady();
+        blockedComplete.MarkReady();
+        await WaitForConditionAsync(chat, () => queue.Items.Count == 0 && chat.History.Count >= 4, "busy run to finish and queued message to flush");
 
         Assert.Empty(queue.Items);
         Assert.Equal(4, chat.History.Count);
@@ -287,10 +374,18 @@ public sealed class AgentChatTests
     [Fact]
     public async Task ProviderException_AppendsAssistantErrorContentTurn()
     {
-        await using var chat = CreateBusyChat(new ThrowingTestChatClient("budget limit"));
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueException(new InvalidOperationException("budget limit"));
+        await using var chat = CreateChat(client);
 
         chat.EnqueueUserMessage("hello");
-        await Task.Delay(150);
+        await WaitForConditionAsync(
+            chat,
+            () => chat.History.Any(item =>
+                item.Role == ChatRole.Assistant &&
+                item.Contents.OfType<ErrorContent>().Any()),
+            "error content turn to be appended after provider exception");
 
         var assistantErrorTurn = Assert.Single(
             chat.History.Where(item =>
@@ -352,105 +447,23 @@ public sealed class AgentChatTests
                 FinishReason = ChatFinishReason.Stop,
             });
         var changes = new List<AgentChatStateChangedEventArgs>();
-        chat.StateChanged += (_, change) => changes.Add(change);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.StateChanged += (_, change) =>
+        {
+            changes.Add(change);
+            if (change.ChangeKind == AgentChatStateChangeKind.HistoryReplaced
+                && change.HistoryItem?.Role == ChatRole.Assistant
+                && !change.HistoryItem.IsInProgress)
+            {
+                completed.TrySetResult();
+            }
+        };
 
         chat.EnqueueUserMessage("hi");
-        await Task.Delay(150);
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.User);
         Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.Assistant && c.HistoryItem.IsInProgress);
         Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryReplaced && c.HistoryItem?.Role == ChatRole.Assistant && !c.HistoryItem.IsInProgress);
-    }
-
-    private sealed class BusyTestChatClient : IChatClient
-    {
-        private readonly TaskCompletionSource started;
-        private readonly TaskCompletionSource release;
-        private readonly IReadOnlyCollection<ChatResponseUpdate> updates;
-
-        public BusyTestChatClient(
-            TaskCompletionSource started,
-            TaskCompletionSource release,
-            params ChatResponseUpdate[] updates)
-        {
-            this.started = started;
-            this.release = release;
-            this.updates = updates;
-        }
-
-        public async Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            var content = string.Empty;
-            await foreach (var update in this.GetStreamingResponseAsync(messages, options, cancellationToken))
-            {
-                content += update.Text;
-            }
-
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, content));
-        }
-
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            foreach (var update in this.updates.Take(1))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return update;
-                this.started.TrySetResult();
-                await Task.Yield();
-            }
-
-            await this.release.Task.WaitAsync(cancellationToken);
-
-            foreach (var update in this.updates.Skip(1))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return update;
-                await Task.Yield();
-            }
-
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null)
-            => serviceType == typeof(IChatClient) ? this : null;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class ThrowingTestChatClient(string message) : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException(message);
-
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.Yield();
-            if (cancellationToken.IsCancellationRequested)
-            {
-                yield break;
-            }
-
-            throw new InvalidOperationException(message);
-        }
-
-        public object? GetService(Type serviceType, object? serviceKey = null)
-            => serviceType == typeof(IChatClient) ? this : null;
-
-        public void Dispose()
-        {
-        }
     }
 }
