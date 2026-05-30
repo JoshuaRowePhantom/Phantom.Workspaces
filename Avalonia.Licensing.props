@@ -1,0 +1,7 @@
+<Project>
+  <Import Project="Avalonia.Licensing.Local.props" Condition="Exists('Avalonia.Licensing.Local.props')" />
+
+  <ItemGroup Condition="'$(AVALONIA_UI_LICENSE_KEY)' != ''">
+    <AvaloniaUILicenseKey Include="$(AVALONIA_UI_LICENSE_KEY)" />
+  </ItemGroup>
+</Project>

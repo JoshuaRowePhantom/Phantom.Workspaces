@@ -492,3 +492,4 @@ docs/nuget/research/
 # mongo data started from the examples
 mongo-data
 /build-output.txt
+Avalonia.Licensing.Local.props

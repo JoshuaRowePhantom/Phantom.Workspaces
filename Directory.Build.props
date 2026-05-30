@@ -1,0 +1,3 @@
+<Project>
+  <Import Project="Avalonia.Licensing.props" Condition="Exists('Avalonia.Licensing.props')" />
+</Project>
