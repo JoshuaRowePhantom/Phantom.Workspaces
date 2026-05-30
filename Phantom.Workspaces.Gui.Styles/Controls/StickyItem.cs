@@ -1,7 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 
-namespace Phantom.Workspaces.Controls;
+namespace Phantom.Workspaces.Gui.Styles.Controls;
 
 public static class StickyItem
 {

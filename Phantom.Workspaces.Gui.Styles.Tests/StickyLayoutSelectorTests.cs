@@ -1,6 +1,6 @@
-using Phantom.Workspaces.Controls;
+using Phantom.Workspaces.Gui.Styles.Controls;
 
-namespace Phantom.Workspaces.Tests;
+namespace Phantom.Workspaces.Gui.Styles.Tests;
 
 public class StickyLayoutSelectorTests
 {
@@ -23,7 +23,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_SingleItemAtTopScrolledPast_PinsAtZero()
     {
-        // Item at top=0, height=40 — at scroll offset 0 it should pin at 0
         var result = StickyLayoutSelector.ComputePins([V("a", 0, top: 0, height: 40)]);
         var pin = Assert.Single(result);
         Assert.Equal("a", pin.Key);
@@ -34,7 +33,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_SingleItemNotYetReachedAnchor_NotPinned()
     {
-        // Item at top=100, accumulated starts at 0 — 100 > 0, so not pinned
         var result = StickyLayoutSelector.ComputePins([V("a", 0, top: 100, height: 40)]);
         Assert.Empty(result);
     }
@@ -42,8 +40,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_TwoItemsSameLevel_PinsHigherPositionOne()
     {
-        // Two items at level 0: a at top=0, b at top=50
-        // Accumulated=0: highest position <= 0 is "a" (top=0)
         var result = StickyLayoutSelector.ComputePins(
         [
             V("a", 0, top: 0, height: 40),
@@ -57,8 +53,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_TwoItemsSameLevel_PinsLaterWhenItReachesAnchor()
     {
-        // Item b has scrolled to top <= 0 (both have top <= 0 now)
-        // Highest position wins → b at top=-10 vs a at top=-60: b wins (closer to anchor)
         var result = StickyLayoutSelector.ComputePins(
         [
             V("a", 0, top: -60, height: 40),
@@ -72,8 +66,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_TwoLevels_AccumulatesCorrectly()
     {
-        // Level 0: "parent" at top=0, height=40 → pins at 0, accumulated becomes 40
-        // Level 1: "child" at top=100 (has scrolled past 40 now) → pins at 40
         var result = StickyLayoutSelector.ComputePins(
         [
             V("parent", 0, top: 0, height: 40),
@@ -89,8 +81,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_TwoLevels_ChildNotYetReachedAccumulated_OnlyParentPinned()
     {
-        // Level 0: parent at top=-10 → pins at 0, accumulated = 40
-        // Level 1: child at top=100 (> 40, not yet scrolled to accumulated) → not pinned
         var result = StickyLayoutSelector.ComputePins(
         [
             V("parent", 0, top: -10, height: 40),
@@ -104,9 +94,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_TwoStackedLists_EachListPinsItsOwnParent()
     {
-        // List 1: parent1 at top=0/height=40, child1 at top=40/height=32
-        // List 2: parent2 at top=120/height=40 — NOT yet in view (top=120 > accumulated=0)
-        // After scrolling, parent1 pins at 0; child1 pins at 40
         var result = StickyLayoutSelector.ComputePins(
         [
             V("parent1", 0, top: 0, height: 40),
@@ -114,7 +101,6 @@ public class StickyLayoutSelectorTests
             V("parent2", 0, top: 120, height: 40),
         ]);
 
-        // At accumulated=0: parent1 (top=0 ≤ 0) wins over parent2 (top=120 > 0)
         var parent1Pin = result.Single(p => p.Key.Equals("parent1"));
         var child1Pin = result.Single(p => p.Key.Equals("child1"));
         Assert.Equal(0, parent1Pin.PinY);
@@ -125,8 +111,6 @@ public class StickyLayoutSelectorTests
     [Fact]
     public void ComputePins_TwoStackedLists_SecondListTakesOverWhenItScrollsPastAnchor()
     {
-        // After scrolling: parent1 at top=-120, parent2 at top=-5 (it's closer to the anchor)
-        // parent2 should now be pinned at 0 instead of parent1
         var result = StickyLayoutSelector.ComputePins(
         [
             V("parent1", 0, top: -120, height: 40),
@@ -137,9 +121,7 @@ public class StickyLayoutSelectorTests
 
         var parent2Pin = result.Single(p => p.Key.Equals("parent2"));
         Assert.Equal(0, parent2Pin.PinY);
-        // parent1 should not be pinned (it was overtaken by parent2)
         Assert.DoesNotContain(result, p => p.Key.Equals("parent1"));
-        // child2 at top=80 > accumulated(40), so not pinned
         Assert.DoesNotContain(result, p => p.Key.Equals("child2"));
     }
 

@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+             xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatToolsDetailControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentChatToolsDetailViewModel">
@@ -13,59 +14,10 @@
     </UserControl.Resources>
 
     <TreeView ItemsSource="{Binding DisplayedRootItems}"
+              ItemTemplate="{StaticResource AgentNavigationTreeDetailItemTemplate}"
+              Classes="entity-card-tree entity-card-tree-sticky"
               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
               ScrollViewer.VerticalScrollBarVisibility="Auto"
               ScrollViewer.AllowAutoHide="False">
-        <TreeView.Styles>
-            <Style Selector="TreeViewItem">
-                <Setter Property="IsExpanded" Value="{Binding IsExpanded}"/>
-            </Style>
-            <Style Selector="TreeViewItem /template/ ToggleButton">
-                <Setter Property="IsVisible" Value="False"/>
-                <Setter Property="Width" Value="0"/>
-                <Setter Property="MinWidth" Value="0"/>
-            </Style>
-            <Style Selector="Button.entity-card-expand-button">
-                <Setter Property="Content" Value="▾"/>
-            </Style>
-            <Style Selector="TreeViewItem:expanded Button.entity-card-expand-button">
-                <Setter Property="Content" Value="▴"/>
-            </Style>
-        </TreeView.Styles>
-        <TreeView.ItemTemplate>
-            <TreeDataTemplate ItemsSource="{Binding Children}">
-                <StackPanel Spacing="4"
-                            Margin="0,0,0,8">
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card"
-                            CornerRadius="6,6,0,0">
-                        <StackPanel Spacing="8">
-                            <ContentControl Content="{Binding}"
-                                            ContentTemplate="{StaticResource AgentNavigationHeaderTemplate}"/>
-                            <ContentControl Content="{Binding}"
-                                            ContentTemplate="{StaticResource AgentNavigationDetailTemplate}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border IsVisible="{Binding NotHasChildren}"
-                            Classes="entity-card"
-                            CornerRadius="6">
-                        <StackPanel Spacing="8">
-                            <ContentControl Content="{Binding}"
-                                            ContentTemplate="{StaticResource AgentNavigationHeaderTemplate}"/>
-                            <ContentControl Content="{Binding}"
-                                            ContentTemplate="{StaticResource AgentNavigationDetailTemplate}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card-expand-section"
-                            CornerRadius="0,0,6,6">
-                        <Button Classes="entity-card-expand-button"
-                                HorizontalAlignment="Stretch"
-                                HorizontalContentAlignment="Center"
-                                Command="{Binding ToggleExpandCommand}" />
-                    </Border>
-                </StackPanel>
-            </TreeDataTemplate>
-        </TreeView.ItemTemplate>
     </TreeView>
 </UserControl>

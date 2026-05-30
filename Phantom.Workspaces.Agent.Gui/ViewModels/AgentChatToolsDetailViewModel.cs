@@ -20,12 +20,43 @@ public sealed class AgentChatToolsDetailViewModel : ViewModelBase
         {
             foreach (var tool in this.toolNavigationItems)
             {
-                this.DisplayedRootItems.Add(tool);
+                this.DisplayedRootItems.Add(CloneNavigationItem(tool));
             }
         }
         else
         {
-            this.DisplayedRootItems.Add(item);
+            var sourceItem = FindById(this.toolNavigationItems, item.Id) ?? item;
+            this.DisplayedRootItems.Add(CloneNavigationItem(sourceItem));
         }
+    }
+
+    private static AgentEditorNavigationItemViewModel CloneNavigationItem(AgentEditorNavigationItemViewModel source)
+        => new(
+            source.Id,
+            source.Name,
+            source.ToolId,
+            source.Summary,
+            source.Tool,
+            source.DetailContent,
+            source.Children.Select(CloneNavigationItem).ToArray(),
+            source.IsExpanded);
+
+    private static AgentEditorNavigationItemViewModel? FindById(IEnumerable<AgentEditorNavigationItemViewModel> roots, string id)
+    {
+        foreach (var root in roots)
+        {
+            if (string.Equals(root.Id, id, StringComparison.OrdinalIgnoreCase))
+            {
+                return root;
+            }
+
+            var match = FindById(root.Children, id);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
     }
 }

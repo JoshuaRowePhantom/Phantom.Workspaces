@@ -55,10 +55,6 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Value=\"{Binding IsExpanded}\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "x:Name=\"SplitterHost\"",
             editorControlContent,
             StringComparison.Ordinal);
@@ -96,23 +92,15 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ContentTemplate=\"{StaticResource AgentNavigationHeaderTemplate}\"",
+            "ContentTemplate=\"{StaticResource AgentToolHeaderTemplate}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Classes=\"entity-card\"",
+            "ItemTemplate=\"{StaticResource AgentNavigationTreeHeaderItemTemplate}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Classes=\"entity-card-expand-section\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Classes=\"entity-card-expand-button\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "TreeViewItem /template/ ToggleButton",
+            "Classes=\"entity-card-tree entity-card-tree-sticky\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -120,6 +108,14 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         var toolTemplatesContent = ReadAxaml("AgentChatToolTemplates.axaml");
+        Assert.Contains(
+            "x:Key=\"AgentNavigationTreeHeaderItemTemplate\"",
+            toolTemplatesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "x:Key=\"AgentNavigationTreeDetailItemTemplate\"",
+            toolTemplatesContent,
+            StringComparison.Ordinal);
         Assert.Contains(
             "IsVisible=\"{Binding HasTool}\"",
             toolTemplatesContent,
@@ -138,35 +134,15 @@ public sealed class MainWindowAxamlTests
             toolsControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "TreeViewItem",
+            "Classes=\"entity-card-tree entity-card-tree-sticky\"",
             toolsControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Value=\"{Binding IsExpanded}\"",
+            "ItemTemplate=\"{StaticResource AgentNavigationTreeDetailItemTemplate}\"",
             toolsControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "ScrollViewer.AllowAutoHide=\"False\"",
-            toolsControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ContentTemplate=\"{StaticResource AgentNavigationHeaderTemplate}\"",
-            toolsControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ContentTemplate=\"{StaticResource AgentNavigationDetailTemplate}\"",
-            toolsControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Classes=\"entity-card\"",
-            toolsControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Classes=\"entity-card-expand-section\"",
-            toolsControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Classes=\"entity-card-expand-button\"",
             toolsControlContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -176,6 +152,30 @@ public sealed class MainWindowAxamlTests
         Assert.DoesNotContain(
             "SelectedTool",
             toolsControlContent,
+            StringComparison.Ordinal);
+
+        var appContent = ReadAgentGuiFile("App.axaml");
+        Assert.Contains(
+            "SharedStyles.axaml",
+            appContent,
+            StringComparison.Ordinal);
+
+        var sharedStylesContent = ReadSharedStylesFile();
+        Assert.Contains(
+            "TreeView.entity-card-tree TreeViewItem",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "controls:StickyScroll.IsEnabled",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "controls:TreeSticky.AutoRowLevel",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ContentTemplate=\"{TemplateBinding HeaderTemplate}\"",
+            sharedStylesContent,
             StringComparison.Ordinal);
     }
 
@@ -250,6 +250,18 @@ public sealed class MainWindowAxamlTests
             repositoryRoot.FullName,
             "Phantom.Workspaces.Agent.Gui",
             relativePath);
+
+        return File.ReadAllText(filePath);
+    }
+
+    private static string ReadSharedStylesFile()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var filePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Styles",
+            "Styles",
+            "SharedStyles.axaml");
 
         return File.ReadAllText(filePath);
     }

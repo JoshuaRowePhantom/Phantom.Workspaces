@@ -7,7 +7,7 @@ using Avalonia.Styling;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
-namespace Phantom.Workspaces.Agent.Gui.Tests;
+namespace Phantom.Workspaces.Gui.Styles.Tests;
 
 public sealed class SharedStylesTests
 {
@@ -164,12 +164,12 @@ public sealed class SharedStylesTests
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
     }
 
-    private static Styles LoadSharedStyles()
+    private static Avalonia.Styling.Styles LoadSharedStyles()
     {
         var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml");
         var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
         var loaded = AvaloniaXamlLoader.Load(source, baseUri);
-        return Assert.IsType<Styles>(loaded);
+        return Assert.IsType<Avalonia.Styling.Styles>(loaded);
     }
 
     private static (string ControlTypeName, string[] Classes)? TryParseSimpleSelector(string selectorText)
@@ -222,5 +222,4 @@ public sealed class SharedStylesTests
             return ex.Types.Where(static t => t is not null)!;
         }
     }
-
 }

@@ -3,11 +3,10 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Presenters;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 
-namespace Phantom.Workspaces.Controls;
+namespace Phantom.Workspaces.Gui.Styles.Controls;
 
 public static class StickyScroll
 {
@@ -42,7 +41,7 @@ public static class StickyScroll
     public static bool GetIsEnabled(ScrollViewer element) => element.GetValue(IsEnabledProperty);
     public static void SetIsEnabled(ScrollViewer element, bool value) => element.SetValue(IsEnabledProperty, value);
 
-    private sealed class Engine : IDisposable
+    internal sealed class Engine : IDisposable
     {
         private readonly ScrollViewer scrollViewer;
         private bool disposed;
@@ -70,12 +69,9 @@ public static class StickyScroll
                 return;
             }
 
-            var scrollViewer = this.scrollViewer;
-
             var measurements = new List<StickyItemMeasurement>();
-            var presentersByControl = new Dictionary<Control, ContentPresenter>(ReferenceEqualityComparer.Instance);
 
-            foreach (var descendant in scrollViewer.GetVisualDescendants())
+            foreach (var descendant in this.scrollViewer.GetVisualDescendants())
             {
                 if (descendant is not Control control)
                 {
@@ -95,17 +91,10 @@ public static class StickyScroll
                     tt.Y = 0;
                 }
 
-                var presenter = FindContentPresenter(control, scrollViewer);
-                if (presenter is not null)
-                {
-                    presentersByControl[control] = presenter;
-                    presenter.SetValue(Panel.ZIndexProperty, 0);
-                }
-
-                control.Classes.Remove("sticky-pinned");
+                ResetLayer(control, this.scrollViewer);
             }
 
-            foreach (var descendant in scrollViewer.GetVisualDescendants())
+            foreach (var descendant in this.scrollViewer.GetVisualDescendants())
             {
                 if (descendant is not Control control)
                 {
@@ -119,17 +108,17 @@ public static class StickyScroll
                     continue;
                 }
 
-                var translatedPoint = control.TranslatePoint(new Point(0, 0), scrollViewer);
+                var translatedPoint = control.TranslatePoint(new Point(0, 0), this.scrollViewer);
                 if (translatedPoint is null)
                 {
                     continue;
                 }
 
                 var effectiveRow = row.HasValue
-                    ? row.Value + ComputeBaseRow(control, scrollViewer)
+                    ? row.Value + ComputeBaseRow(control, this.scrollViewer)
                     : (int?)null;
                 var effectiveCol = col.HasValue
-                    ? col.Value + ComputeBaseColumn(control, scrollViewer)
+                    ? col.Value + ComputeBaseColumn(control, this.scrollViewer)
                     : (int?)null;
 
                 measurements.Add(new StickyItemMeasurement(
@@ -151,7 +140,7 @@ public static class StickyScroll
                     continue;
                 }
 
-                var translatedPoint = control.TranslatePoint(new Point(0, 0), scrollViewer);
+                var translatedPoint = control.TranslatePoint(new Point(0, 0), this.scrollViewer);
                 if (translatedPoint is null)
                 {
                     continue;
@@ -173,12 +162,10 @@ public static class StickyScroll
                 control.RenderTransform = translateTransform;
                 control.Classes.Add("sticky-pinned");
 
-                if (presentersByControl.TryGetValue(control, out var presenter))
-                {
-                    var effectiveLevel = (StickyItem.GetRow(control) ?? StickyItem.GetColumn(control) ?? 0)
-                        + ComputeBaseRow(control, scrollViewer);
-                    presenter.SetValue(Panel.ZIndexProperty, 1000 - effectiveLevel);
-                }
+                var effectiveLevel = (StickyItem.GetRow(control) ?? StickyItem.GetColumn(control) ?? 0)
+                    + ComputeBaseRow(control, this.scrollViewer);
+                var zIndex = 2000 - effectiveLevel;
+                ApplyLayer(control, this.scrollViewer, zIndex);
             }
         }
 
@@ -208,20 +195,14 @@ public static class StickyScroll
             return total;
         }
 
-        private static ContentPresenter? FindContentPresenter(Control control, ScrollViewer boundary)
+        private static IEnumerable<Control> EnumerateLayerChain(Control control, ScrollViewer boundary)
         {
-            var current = control.Parent;
-            while (current is Control parent && !ReferenceEquals(parent, boundary))
+            var current = control;
+            while (current is not null && !ReferenceEquals(current, boundary))
             {
-                if (parent is ContentPresenter cp)
-                {
-                    return cp;
-                }
-
-                current = parent.Parent;
+                yield return current;
+                current = current.Parent as Control;
             }
-
-            return null;
         }
 
         public void Dispose()
@@ -235,6 +216,24 @@ public static class StickyScroll
             this.scrollViewer.ScrollChanged -= this.OnScrollChanged;
             this.scrollViewer.LayoutUpdated -= this.OnLayoutUpdated;
             this.scrollViewer.DetachedFromVisualTree -= this.OnDetachedFromVisualTree;
+        }
+
+        internal static void ResetLayer(Control control, ScrollViewer boundary)
+        {
+            foreach (var layerControl in EnumerateLayerChain(control, boundary))
+            {
+                layerControl.SetValue(Panel.ZIndexProperty, 0);
+            }
+
+            control.Classes.Remove("sticky-pinned");
+        }
+
+        internal static void ApplyLayer(Control control, ScrollViewer boundary, int zIndex)
+        {
+            foreach (var layerControl in EnumerateLayerChain(control, boundary))
+            {
+                layerControl.SetValue(Panel.ZIndexProperty, zIndex);
+            }
         }
     }
 }

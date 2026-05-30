@@ -71,4 +71,5 @@ public partial class AgentChatEditorControl : UserControl
             vm.SelectedEditorItem = root;
         }
     }
+
 }

@@ -77,55 +77,14 @@
             </Grid.ColumnDefinitions>
             <TreeView x:Name="NavigationTree"
                       ItemsSource="{Binding EditorItems}"
+                      ItemTemplate="{StaticResource AgentNavigationTreeHeaderItemTemplate}"
+                      Classes="entity-card-tree entity-card-tree-sticky"
                       MinWidth="240"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                       ScrollViewer.VerticalScrollBarVisibility="Auto"
                       ScrollViewer.AllowAutoHide="False"
                       SelectionChanged="OnEditorSelectionChanged"
                       Grid.Column="0">
-                <TreeView.Styles>
-                    <Style Selector="TreeViewItem">
-                        <Setter Property="IsExpanded" Value="{Binding IsExpanded}"/>
-                    </Style>
-                    <Style Selector="TreeViewItem /template/ ToggleButton">
-                        <Setter Property="IsVisible" Value="False"/>
-                        <Setter Property="Width" Value="0"/>
-                        <Setter Property="MinWidth" Value="0"/>
-                    </Style>
-                    <Style Selector="Button.entity-card-expand-button">
-                        <Setter Property="Content" Value="▾"/>
-                    </Style>
-                    <Style Selector="TreeViewItem:expanded Button.entity-card-expand-button">
-                        <Setter Property="Content" Value="▴"/>
-                    </Style>
-                </TreeView.Styles>
-                <TreeView.ItemTemplate>
-                    <TreeDataTemplate ItemsSource="{Binding Children}">
-                        <StackPanel Spacing="4"
-                                    Margin="0,0,0,6">
-                            <Border IsVisible="{Binding HasChildren}"
-                                    Classes="entity-card"
-                                    CornerRadius="6,6,0,0">
-                                <ContentControl Content="{Binding}"
-                                                ContentTemplate="{StaticResource AgentNavigationHeaderTemplate}"/>
-                            </Border>
-                            <Border IsVisible="{Binding NotHasChildren}"
-                                    Classes="entity-card"
-                                    CornerRadius="6">
-                                <ContentControl Content="{Binding}"
-                                                ContentTemplate="{StaticResource AgentNavigationHeaderTemplate}"/>
-                            </Border>
-                            <Border IsVisible="{Binding HasChildren}"
-                                    Classes="entity-card-expand-section"
-                                    CornerRadius="0,0,6,6">
-                                <Button Classes="entity-card-expand-button"
-                                        HorizontalAlignment="Stretch"
-                                        HorizontalContentAlignment="Center"
-                                        Command="{Binding ToggleExpandCommand}" />
-                            </Border>
-                        </StackPanel>
-                    </TreeDataTemplate>
-                </TreeView.ItemTemplate>
             </TreeView>
 
             <GridSplitter x:Name="SplitterHost"

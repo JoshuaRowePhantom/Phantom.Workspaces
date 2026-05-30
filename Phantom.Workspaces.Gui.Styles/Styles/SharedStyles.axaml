@@ -1,5 +1,7 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
+        x:CompileBindings="False">
     <Styles.Resources>
         <!-- Default theme fallbacks for apps that do not inject profile resources. -->
         <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
@@ -110,6 +112,19 @@
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
     </Style>
+    <Style Selector="StackPanel.entity-card-tree-item">
+        <Setter Property="Spacing" Value="4" />
+        <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style Selector="StackPanel.entity-card-tree-item.detail">
+        <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+    <Style Selector="Border.entity-card.branch-header">
+        <Setter Property="CornerRadius" Value="6,6,0,0" />
+    </Style>
+    <Style Selector="Border.entity-card.leaf">
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
     <Style Selector="StackPanel.sticky-pinned > Border.entity-card">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
@@ -127,6 +142,9 @@
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
         <Setter Property="Padding" Value="0" />
     </Style>
+    <Style Selector="Border.entity-card-expand-section.branch-footer">
+        <Setter Property="CornerRadius" Value="0,0,6,6" />
+    </Style>
     <Style Selector="Border.entity-card-expand-section:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
@@ -138,6 +156,43 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem">
+        <Setter Property="IsExpanded" Value="{Binding IsExpanded}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <StackPanel Classes="entity-card-tree-item">
+                    <Border IsVisible="{Binding HasChildren}"
+                            Classes="entity-card branch-header">
+                        <ContentPresenter Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                    </Border>
+                    <Border IsVisible="{Binding NotHasChildren}"
+                            Classes="entity-card leaf">
+                        <ContentPresenter Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                    </Border>
+                    <Border IsVisible="{Binding HasChildren}"
+                            Classes="entity-card-expand-section branch-footer">
+                        <Button Classes="entity-card-expand-button"
+                                Content="▾"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Command="{Binding ToggleExpandCommand}" />
+                    </Border>
+                    <ItemsPresenter Margin="20,0,0,0" />
+                </StackPanel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem:expanded Button.entity-card-expand-button">
+        <Setter Property="Content" Value="▴" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
+        <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
+    </Style>
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky Border.entity-card.branch-header">
+        <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
     </Style>
 
     <Style Selector="Border.window-header">
@@ -213,7 +268,6 @@
         <Setter Property="ResizeBehavior" Value="PreviousAndNext" />
         <Setter Property="ShowsPreview" Value="True" />
     </Style>
-
     <Style Selector="Grid.settings-root">
         <Setter Property="Margin" Value="16" />
     </Style>

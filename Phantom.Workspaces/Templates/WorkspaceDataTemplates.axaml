@@ -2,7 +2,7 @@
                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                xmlns:vm="using:Phantom.Workspaces.ViewModels"
                xmlns:templates="using:Phantom.Workspaces.Templates"
-               xmlns:controls="using:Phantom.Workspaces.Controls"
+               xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
         <StackPanel Spacing="4">
