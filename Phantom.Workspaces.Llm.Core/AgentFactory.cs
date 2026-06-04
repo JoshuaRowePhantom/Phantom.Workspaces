@@ -74,11 +74,43 @@ public static class AgentFactory
     private static void ConfigureChatOptions_Internal(PromptAgent promptAgent, ChatOptions chatOptions)
     {
         chatOptions.Instructions = promptAgent.Instructions;
+        ApplyModelOptions(promptAgent, chatOptions);
 
         if (!string.IsNullOrEmpty(promptAgent.AdditionalInstructions))
         {
             chatOptions.AdditionalProperties ??= [];
             chatOptions.AdditionalProperties["additionalInstructions"] = promptAgent.AdditionalInstructions;
+        }
+    }
+
+    private static void ApplyModelOptions(PromptAgent promptAgent, ChatOptions chatOptions)
+    {
+        var modelOptions = promptAgent.Model?.Options;
+        if (modelOptions is null)
+        {
+            return;
+        }
+
+        chatOptions.Temperature = modelOptions.Temperature;
+        chatOptions.TopP = modelOptions.TopP;
+        chatOptions.FrequencyPenalty = modelOptions.FrequencyPenalty;
+        chatOptions.PresencePenalty = modelOptions.PresencePenalty;
+        chatOptions.MaxOutputTokens = modelOptions.MaxOutputTokens;
+        chatOptions.AdditionalProperties ??= [];
+
+        if (modelOptions.TopK is not null)
+        {
+            chatOptions.AdditionalProperties["topK"] = modelOptions.TopK.Value;
+        }
+
+        if (modelOptions.AdditionalProperties is null)
+        {
+            return;
+        }
+
+        foreach (var (key, value) in modelOptions.AdditionalProperties)
+        {
+            chatOptions.AdditionalProperties[key] = value;
         }
     }
 
@@ -154,9 +186,8 @@ public static class AgentFactory
         => AgentChat.CreateChatClient(agent, services);
 
     /// <summary>
-    /// Creates a initialized <see cref="AgentChat"/> session from an agent definition.
-    /// This returns immediately without waiting for MCP tool setup. Use <see cref="CreateAgentChatAsync"/>
-    /// to include MCP tool initialization.
+    /// Creates an initialized <see cref="AgentChat"/> session from an agent definition,
+    /// including configured tool initialization before returning.
     /// </summary>
     /// <param name="createAgentChatRequest">Request for creating or restoring a chat.</param>
     /// <returns>The running <see cref="AgentChat"/>.</returns>

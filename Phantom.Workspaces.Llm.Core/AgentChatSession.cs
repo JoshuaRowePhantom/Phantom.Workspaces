@@ -19,9 +19,10 @@ public sealed class AgentChatSession
 
     public IAsyncEnumerable<AgentResponseUpdate> RunStreamAsync(
         ChatMessage[] messages,
+        ChatClientAgentRunOptions? runOptions = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
-        return this.Agent.RunStreamingAsync(messages, this.Session, cancellationToken: cancellationToken);
+        return this.Agent.RunStreamingAsync(messages, this.Session, runOptions, cancellationToken);
     }
 }

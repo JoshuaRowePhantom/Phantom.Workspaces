@@ -16,6 +16,7 @@ public sealed class DeterministicTestChatClient : IChatClient
     }
 
     public IReadOnlyList<ChatMessage> LastRequestMessages { get; private set; } = [];
+    public ChatOptions? LastRequestOptions { get; private set; }
 
     public Task WaitForRequestAsync(CancellationToken cancellationToken = default)
         => this.requestReceived.Task.WaitAsync(cancellationToken);
@@ -50,6 +51,7 @@ public sealed class DeterministicTestChatClient : IChatClient
         CancellationToken cancellationToken = default)
     {
         this.LastRequestMessages = messages.ToArray();
+        this.LastRequestOptions = options;
         this.requestReceived.TrySetResult();
 
         await this.responseSignal.WaitAsync(cancellationToken);
@@ -78,6 +80,7 @@ public sealed class DeterministicTestChatClient : IChatClient
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         this.LastRequestMessages = messages.ToArray();
+        this.LastRequestOptions = options;
         this.requestReceived.TrySetResult();
 
         await this.streamSignal.WaitAsync(cancellationToken);

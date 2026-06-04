@@ -13,7 +13,7 @@
                      PlaceholderText="{Binding PlaceholderText}"
                      AcceptsReturn="True"
                      MinHeight="36"
-                     Classes="terminal-mono terminal-editor"/>
+                     Classes="terminal-mono terminal-editor queue-text-editor"/>
             <Button Grid.Column="1"
                     Command="{Binding SubmitCommand}"
                     Content="{Binding SubmitButtonGlyph}"

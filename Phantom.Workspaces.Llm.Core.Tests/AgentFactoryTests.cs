@@ -70,6 +70,47 @@ public class AgentFactoryTests
     }
 
     [Fact]
+    public void ConfigureChatOptions_MapsModelOptionsToChatOptions()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo",
+                "options": {
+                  "temperature": 0.7,
+                  "topP": 0.9,
+                  "topK": 40,
+                  "frequencyPenalty": 0.1,
+                  "presencePenalty": 0.2,
+                  "maxOutputTokens": 2048,
+                  "additionalProperties": {
+                    "num_ctx": 32768
+                  }
+                }
+              },
+              "tools": []
+            }
+            """);
+
+        var chatOptions = new ChatOptions();
+        AgentFactory.ConfigureChatOptions(agent, chatOptions);
+
+        Assert.Equal(0.7f, chatOptions.Temperature);
+        Assert.Equal(0.9f, chatOptions.TopP);
+        Assert.Equal(0.1f, chatOptions.FrequencyPenalty);
+        Assert.Equal(0.2f, chatOptions.PresencePenalty);
+        Assert.Equal(2048, chatOptions.MaxOutputTokens);
+        Assert.NotNull(chatOptions.AdditionalProperties);
+        Assert.Equal(40, chatOptions.AdditionalProperties!["topK"]);
+        Assert.Equal("32768", chatOptions.AdditionalProperties["num_ctx"]?.ToString());
+    }
+
+    [Fact]
     public void ConfigureChatOptions_GitHubProvider_WithThinking_MapsReasoningEffort()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(

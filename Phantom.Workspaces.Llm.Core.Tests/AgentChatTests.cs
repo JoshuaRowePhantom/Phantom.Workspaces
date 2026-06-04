@@ -239,6 +239,44 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task InitializeTools_IncludesConfiguredToolsInFirstLlmRequest()
+    {
+        var client = new DeterministicTestChatClient();
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "web_search", "description": "Search docs" },
+                { "kind": "web_request", "description": "Fetch pages" }
+              ]
+            }
+            """,
+            client);
+
+        Assert.Equal(2, chat.Tools.Count);
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var toolNames = client.LastRequestOptions?.Tools?
+            .Select(static tool => tool.Name)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray()
+            ?? [];
+
+        Assert.Equal(["web_request", "web_search"], toolNames);
+    }
+
+    [Fact]
     public async Task EnqueueUserMessage_AddsPendingAssistantItemImmediately()
     {
         await using var chat = CreateChat();

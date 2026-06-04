@@ -48,10 +48,10 @@
                                                     <StackPanel IsVisible="{Binding IsEditing}"
                                                                Spacing="6">
                                                         <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
-                                                             x:Name="EditBox"
-                                                             AcceptsReturn="False"
-                                                             MinHeight="32"
-                                                             Classes="terminal-mono terminal-editor queue-entry-editor"/>
+                                                                 x:Name="EditBox"
+                                                                 AcceptsReturn="True"
+                                                                 MinHeight="32"
+                                                                 Classes="terminal-mono terminal-editor queue-entry-editor queue-text-editor"/>
                                                     <StackPanel Orientation="Horizontal"
                                                                HorizontalAlignment="Right"
                                                                Spacing="6">

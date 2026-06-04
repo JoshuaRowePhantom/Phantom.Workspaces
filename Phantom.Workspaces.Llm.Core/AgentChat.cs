@@ -497,17 +497,6 @@ public sealed class AgentChat : IAsyncDisposable
        await this.InitializeMcpToolsAsync(this.request.CancellationToken).ConfigureAwait(false);
     }
 
-    private async Task ReinitializeSessionAsync(
-       AgentChatSession nextSession,
-       string agentSessionId,
-       CancellationToken cancellationToken)
-    {
-       await Task.Yield();
-       this.SetSession(nextSession);
-       this.SetAgentSessionId(agentSessionId);
-       await Task.CompletedTask;
-    }
-
     /// <summary>
     /// Fired when the active streaming turn finishes.
     /// The argument is the completed <see cref="AgentChatHistoryItem"/> that was added to <see cref="History"/>.
@@ -607,7 +596,6 @@ public sealed class AgentChat : IAsyncDisposable
                 return;
             }
 
-            await this.RebuildSessionForCurrentToolsAsync(cancellationToken).ConfigureAwait(false);
             this.ToolsChanged?.Invoke(this, EventArgs.Empty);
         }
         finally
@@ -1141,8 +1129,24 @@ public sealed class AgentChat : IAsyncDisposable
         AgentChatSession session,
         CancellationToken cancellationToken)
     {
+        var runOptions = this.CreateRunOptions();
         return session
-            .RunStreamAsync(messages, cancellationToken);
+            .RunStreamAsync(messages, runOptions, cancellationToken);
+    }
+
+    private ChatClientAgentRunOptions? CreateRunOptions()
+    {
+        var chatOptions = this.chatOptions?.ChatOptions;
+        if (chatOptions is null)
+        {
+            return null;
+        }
+
+        chatOptions.Tools = this.GetEnabledRuntimeTools();
+        return new ChatClientAgentRunOptions
+        {
+            ChatOptions = chatOptions,
+        };
     }
 
     private static string ResolveAssistantTextChunk(AgentResponseUpdate update)
@@ -1260,43 +1264,35 @@ public sealed class AgentChat : IAsyncDisposable
         }
 
         await this.toolMutationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        _ = Task.Run(
-            async () =>
+        try
+        {
+            var runtime = await this.CreateRuntimeToolsAsync(
+                agentTools,
+                services,
+                cancellationToken).ConfigureAwait(false);
+
+            this.ReplaceToolNodes(runtime.Roots);
+            var summaryRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
             {
-                try
-                {
-                    var runtime = await this.CreateRuntimeToolsAsync(
-                        agentTools,
-                        services,
-                        cancellationToken).ConfigureAwait(false);
-
-                    this.ReplaceToolNodes(runtime.Roots);
-                    await this.RebuildSessionForCurrentToolsAsync(cancellationToken).ConfigureAwait(false);
-                    var summaryRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
-                    {
-                        Role = AgentChatHistoryItem.DiagnosticChatRole,
-                        Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(this.GetEnabledRuntimeTools())) },
-                    });
-                    this.CompleteRunningItem(summaryRunningItem, true);
-                    this.ToolsChanged?.Invoke(this, EventArgs.Empty);
-                }
-                catch (Exception ex)
-                {
-                    var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
-                    {
-                        Role = AgentChatHistoryItem.DiagnosticChatRole,
-                        Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
-                    });
-                    this.CompleteRunningItem(startupRunningItem, true);
-                }
-                finally
-                {
-                    this.toolMutationLock.Release();
-                }
-            },
-            cancellationToken);
-
-        await Task.CompletedTask;
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(this.GetEnabledRuntimeTools())) },
+            });
+            this.CompleteRunningItem(summaryRunningItem, true);
+            this.ToolsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
+            });
+            this.CompleteRunningItem(startupRunningItem, true);
+        }
+        finally
+        {
+            this.toolMutationLock.Release();
+        }
     }
 
     private async Task<RuntimeToolsInitializationResult> CreateRuntimeToolsAsync(
@@ -1701,44 +1697,6 @@ public sealed class AgentChat : IAsyncDisposable
         foreach (var child in node.Children)
         {
             IndexToolNode(child, index);
-        }
-    }
-
-    private async Task RebuildSessionForCurrentToolsAsync(CancellationToken cancellationToken)
-    {
-        var client = this.client;
-        var chatOptions = this.chatOptions;
-        var persistenceProvider = this.persistenceProvider;
-        if (client is null || chatOptions is null || persistenceProvider is null)
-        {
-            return;
-        }
-
-        var currentQueueStates = this.InputQueues.ToDictionary(queue => queue, queue => queue.IsHeld);
-        foreach (var queueState in currentQueueStates)
-        {
-            this.QueueManager.SetQueueHeld(queueState.Key, held: true);
-        }
-
-        this.Interrupt();
-        try
-        {
-            chatOptions.ChatOptions.Tools = this.GetEnabledRuntimeTools();
-            var rebuiltAgent = new ChatClientAgent(client, chatOptions);
-            this.chatClientAgent = rebuiltAgent;
-            var session = await rebuiltAgent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
-            persistenceProvider.SetAgentSessionId(session, this.AgentSessionId);
-            await this.ReinitializeSessionAsync(
-                new AgentChatSession(rebuiltAgent, session),
-                this.AgentSessionId,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            foreach (var queueState in currentQueueStates)
-            {
-                this.QueueManager.SetQueueHeld(queueState.Key, queueState.Value);
-            }
         }
     }
 

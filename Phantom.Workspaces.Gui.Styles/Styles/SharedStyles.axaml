@@ -402,6 +402,12 @@
     <Style Selector="TextBox.queue-entry-editor">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
     </Style>
+    <Style Selector="TextBox.queue-text-editor">
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="MaxHeight" Value="200" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+    </Style>
     <Style Selector="SelectableTextBlock.queue-entry-content">
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
     </Style>

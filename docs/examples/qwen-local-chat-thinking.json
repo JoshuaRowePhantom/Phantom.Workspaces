@@ -19,7 +19,8 @@
       "maxOutputTokens": 2048,
       "topK": 40,
       "additionalProperties": {
-        "thinking": true
+        "thinking": true,
+        "num_ctx": 32768
       }
     }
   },
