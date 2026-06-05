@@ -128,24 +128,18 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         if (e.Snapshot is not null)
         {
-            Dispatcher.UIThread.Post(() =>
+            lock (this.stateLock)
             {
-                lock (this.stateLock)
-                {
-                    this.ApplySnapshot(e.Snapshot);
-                }
-            });
+                this.ApplySnapshot(e.Snapshot);
+            }
 
             return;
         }
 
-        Dispatcher.UIThread.Post(() =>
+        lock (this.stateLock)
         {
-            lock (this.stateLock)
-            {
-                this.ApplyIncrementalChange(e);
-            }
-        });
+            this.ApplyIncrementalChange(e);
+        }
     }
 
     private void ApplySnapshot(AgentChatStateSnapshot snapshot)

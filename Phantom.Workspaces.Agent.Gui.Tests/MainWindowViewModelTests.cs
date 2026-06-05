@@ -1,4 +1,5 @@
 using AgentSchema;
+using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -114,7 +115,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task CreateAsync_WithRestoredSession_LoadsPersistedMessagesIntoAgentHistory()
     {
         var sessionId = "gui-restored-history";

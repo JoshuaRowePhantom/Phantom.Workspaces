@@ -1154,7 +1154,14 @@ public sealed class AgentChat : IAsyncDisposable
             }
 
             this.processingStarted = true;
-            this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
+            var scheduler = SynchronizationContext.Current is not null
+                ? TaskScheduler.FromCurrentSynchronizationContext()
+                : TaskScheduler.Default;
+            this.processTask = Task.Factory.StartNew(
+                () => this.RunProcessLoopAsync(this.cts.Token),
+                this.cts.Token,
+                TaskCreationOptions.DenyChildAttach,
+                scheduler).Unwrap();
         }
     }
 
