@@ -16,6 +16,12 @@ Or with JSON:
 ./phantom-cli --agent-schema docs/examples/qwen-local-chat.json
 ```
 
+Fast local debug agent (no external model dependency):
+
+```bash
+./phantom-cli --agent-schema docs/examples/echo-chat.json
+```
+
 Load an agent with chat history persistence (MongoDB included in agent definition):
 
 ```bash
@@ -36,6 +42,13 @@ A minimal chat agent that:
 **Prerequisites:**
 - Ollama installed and running
 - Qwen 3.6 model downloaded: `ollama pull qwen-3.6`
+
+### echo-chat.json
+
+A minimal local debug agent that:
+- Uses the built-in **Echo** provider
+- Requires **no external model host** or API key
+- Is ideal for testing queueing, rendering, and interaction flows quickly
 
 ### qwen-local-chat-with-mongodb.json
 

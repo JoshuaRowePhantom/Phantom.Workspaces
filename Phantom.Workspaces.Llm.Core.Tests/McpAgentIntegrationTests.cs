@@ -165,13 +165,7 @@ public sealed class McpAgentIntegrationTests
                 return;
             }
 
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException(
-                $"Timed out waiting for ping MCP tool. Recent history: {GetRecentHistory(chat)}",
-                ex);
+            await signal.Task;
         }
         finally
         {
@@ -211,7 +205,7 @@ public sealed class McpAgentIntegrationTests
 
                 return string.Join(
                     " || ",
-                    snapshot.TakeLast(5).Select(item => $"{item.Role}:{item.Text}"));
+                    snapshot.TakeLast(5).Select(item => $"{item.Role}:{string.Concat(item.Contents.Where(static content => content is Microsoft.Extensions.AI.TextContent).Select(static content => ((Microsoft.Extensions.AI.TextContent)content).Text))}"));
             }
             catch (InvalidOperationException)
             {

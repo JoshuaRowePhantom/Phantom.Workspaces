@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using Avalonia.Threading;
+using Avalonia.Controls.Documents;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -14,11 +16,15 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly AgentChatToolsDetailViewModel toolsDetail;
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
+    private Section outputHistoryRootSection = new();
+    private Section outputRunningRootSection = new();
+    private ChatHistoryDocumentModel? historyDocumentModel;
+    private RunningChatItemsDocumentModel? runningDocumentModel;
     private readonly object stateLock = new();
-    private long appliedStateVersion;
     private bool isReasoningVisible;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
+    private readonly IDisposable stateChangedSubscription;
 
     public AgentViewModel(AgentChat agentChat, string displayName)
     {
@@ -40,10 +46,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.agentChat.DefaultInputQueue,
             this.agentChat.InputQueueManager);
         this.EditorItems = [];
+        this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
+        this.AttachOutputDocumentModels();
 
-        agentChat.StateChanged += this.OnStateChanged;
+        this.stateChangedSubscription = agentChat.SubscribeStateChanged(this.OnStateChanged);
         agentChat.ToolsChanged += this.OnToolsChanged;
-        this.ApplySnapshot(agentChat.GetStateSnapshot());
         this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
     }
 
@@ -67,13 +74,15 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public InputQueueViewModel InputQueue { get; }
 
-    public ObservableCollection<ChatHistoryItemViewModel> History { get; } = [];
+    public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
 
-    public ObservableCollection<RunningItemViewModel> RunningItems { get; } = [];
+    public ObservableCollection<AgentChatRunningItem> RunningItems { get; } = [];
 
     public ObservableCollection<AgentChatToolViewModel> Tools { get; } = [];
 
     public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
+
+    public FlowDocument OutputDocument { get; private set; }
 
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
     {
@@ -111,31 +120,30 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        foreach (var item in this.History)
-        {
-            item.SetReasoningVisible(visible);
-        }
-
-        foreach (var item in this.RunningItems)
-        {
-            item.SetReasoningVisible(visible);
-        }
+        this.historyDocumentModel?.Refresh();
+        this.runningDocumentModel?.Refresh();
     }
 
     private void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
     {
+        if (e.Snapshot is not null)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                lock (this.stateLock)
+                {
+                    this.ApplySnapshot(e.Snapshot);
+                }
+            });
+
+            return;
+        }
+
         Dispatcher.UIThread.Post(() =>
         {
             lock (this.stateLock)
             {
-                if (e.FromVersion != this.appliedStateVersion)
-                {
-                    this.ApplySnapshot(this.agentChat.GetStateSnapshot());
-                    return;
-                }
-
                 this.ApplyIncrementalChange(e);
-                this.appliedStateVersion = e.ToVersion;
             }
         });
     }
@@ -144,37 +152,23 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         lock (this.stateLock)
         {
-            foreach (var historyItem in this.History)
-            {
-                historyItem.Dispose();
-            }
-
-            foreach (var runningItem in this.RunningItems)
-            {
-                runningItem.Dispose();
-            }
-
             this.History.Clear();
             this.RunningItems.Clear();
 
             foreach (var item in snapshot.History)
             {
-                this.History.Add(this.CreateHistoryViewModel(item));
+                this.History.Add(item);
             }
 
             foreach (var item in snapshot.RunningItems)
             {
-                if (this.TryApplyRunningAssistantToPlaceholder(item))
-                {
-                    continue;
-                }
-
-                this.RunningItems.Add(this.CreateRunningItemViewModel(item));
+                this.RunningItems.Add(item);
             }
 
             this.AgentSessionId = snapshot.AgentSessionId;
-            this.appliedStateVersion = snapshot.Version;
         }
+
+        this.ResetOutputDocument();
     }
 
     private void ApplyIncrementalChange(AgentChatStateChangedEventArgs change)
@@ -182,35 +176,77 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         switch (change.ChangeKind)
         {
             case AgentChatStateChangeKind.HistoryAdded when change.HistoryItem is not null:
-                this.History.Add(this.CreateHistoryViewModel(change.HistoryItem));
+                if (change.Index >= 0 && change.Index <= this.History.Count)
+                {
+                    this.History.Insert(change.Index, change.HistoryItem);
+                }
+                else
+                {
+                    this.History.Add(change.HistoryItem);
+                }
                 break;
-            case AgentChatStateChangeKind.HistoryReplaced when change.HistoryItem is not null && change.Index >= 0 && change.Index < this.History.Count:
-                this.History[change.Index].UpdateFrom(change.HistoryItem);
+            case AgentChatStateChangeKind.HistoryReplaced when change.HistoryItem is not null:
+                if (change.Index >= 0 && change.Index < this.History.Count)
+                {
+                    this.History[change.Index] = change.HistoryItem;
+                }
+                else
+                {
+                    this.History.Add(change.HistoryItem);
+                }
                 break;
             case AgentChatStateChangeKind.RunningAdded when change.RunningItem is not null:
-                if (this.TryApplyRunningAssistantToPlaceholder(change.RunningItem))
+                if (change.Index >= 0 && change.Index <= this.RunningItems.Count)
                 {
-                    break;
+                    this.RunningItems.Insert(change.Index, change.RunningItem);
                 }
-
-                this.RunningItems.Add(this.CreateRunningItemViewModel(change.RunningItem));
+                else
+                {
+                    this.RunningItems.Add(change.RunningItem);
+                }
                 break;
             case AgentChatStateChangeKind.RunningUpdated when change.RunningItem is not null:
-                if (this.TryApplyRunningAssistantToPlaceholder(change.RunningItem))
+                AgentChatRunningItem? updatedRunningItem = null;
+                if (change.Index >= 0 && change.Index < this.RunningItems.Count)
                 {
-                    break;
+                    var indexedRunningItem = this.RunningItems[change.Index];
+                    if (ReferenceEquals(indexedRunningItem, change.RunningItem))
+                    {
+                        updatedRunningItem = indexedRunningItem;
+                    }
                 }
 
-                this.RunningItems.FirstOrDefault(x => x.Source == change.RunningItem)?.UpdateModel();
+                updatedRunningItem ??= this.RunningItems.FirstOrDefault(x => ReferenceEquals(x, change.RunningItem));
+                if (updatedRunningItem is not null)
+                {
+                    var updatedIndex = this.RunningItems.IndexOf(updatedRunningItem);
+                    this.RunningItems[updatedIndex] = change.RunningItem;
+                }
+                else if (change.Index >= 0 && change.Index <= this.RunningItems.Count)
+                {
+                    this.RunningItems.Insert(change.Index, change.RunningItem);
+                }
+                else
+                {
+                    this.RunningItems.Add(change.RunningItem);
+                }
                 break;
             case AgentChatStateChangeKind.RunningRemoved when change.RunningItem is not null:
-                var vm = this.RunningItems.FirstOrDefault(x => x.Source == change.RunningItem);
+                AgentChatRunningItem? vm = null;
+                if (change.Index >= 0 && change.Index < this.RunningItems.Count)
+                {
+                    var indexedRunningItem = this.RunningItems[change.Index];
+                    if (ReferenceEquals(indexedRunningItem, change.RunningItem))
+                    {
+                        vm = indexedRunningItem;
+                    }
+                }
+
+                vm ??= this.RunningItems.FirstOrDefault(x => ReferenceEquals(x, change.RunningItem));
                 if (vm is not null)
                 {
                     this.RunningItems.Remove(vm);
-                    vm.Dispose();
                 }
-
                 break;
             case AgentChatStateChangeKind.SessionChanged:
                 if (!string.IsNullOrWhiteSpace(change.AgentSessionId))
@@ -225,55 +261,29 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
-    private ChatHistoryItemViewModel CreateHistoryViewModel(AgentChatHistoryItem item)
+    private void ResetOutputDocument()
+        => this.RebuildOutputDocument();
+
+    private void RefreshDocumentSections()
     {
-        var vm = new ChatHistoryItemViewModel(item);
-        vm.SetReasoningVisible(this.IsReasoningVisible);
-        return vm;
+        this.historyDocumentModel?.Refresh();
+        this.runningDocumentModel?.Refresh();
     }
 
-    private RunningItemViewModel CreateRunningItemViewModel(AgentChatRunningItem item)
+    public void RebuildOutputDocument()
     {
-        var vm = new RunningItemViewModel(item);
-        vm.SetReasoningVisible(this.IsReasoningVisible);
-        return vm;
-    }
-
-    private bool TryApplyRunningAssistantToPlaceholder(AgentChatRunningItem runningItem)
-    {
-        if (this.History.Count == 0)
+        lock (this.stateLock)
         {
-            return false;
+            this.historyDocumentModel?.Dispose();
+            this.runningDocumentModel?.Dispose();
+
+            this.outputHistoryRootSection = new Section();
+            this.outputRunningRootSection = new Section();
+            this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
+            this.AttachOutputDocumentModels();
         }
 
-        var placeholder = this.History[^1];
-        if (placeholder.Role != ChatRole.Assistant || !placeholder.IsInProgress)
-        {
-            return false;
-        }
-
-        var assistant = SelectLatestAssistantContent(runningItem.Items);
-        if (assistant is null)
-        {
-            return false;
-        }
-
-        placeholder.UpdateFrom(assistant with { IsInProgress = true });
-        return true;
-    }
-
-    private static AgentChatHistoryItem? SelectLatestAssistantContent(AgentChatHistoryItem[]? items)
-    {
-        if (items is not { Length: > 0 })
-        {
-            return null;
-        }
-
-        return items
-            .LastOrDefault(static item =>
-                item.Role == ChatRole.Assistant
-                && (!string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.ReasoningText)))
-            ?? items.LastOrDefault(static item => item.Role == ChatRole.Assistant);
+        this.RaisePropertyChanged(nameof(this.OutputDocument));
     }
 
     private void OnToolsChanged(object? sender, EventArgs e)
@@ -368,19 +378,20 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var item in this.History)
-        {
-            item.Dispose();
-        }
-
-        foreach (var item in this.RunningItems)
-        {
-            item.Dispose();
-        }
+        this.historyDocumentModel?.Dispose();
+        this.runningDocumentModel?.Dispose();
 
         this.InputQueue.Dispose();
-        this.agentChat.StateChanged -= this.OnStateChanged;
+        this.stateChangedSubscription.Dispose();
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         await this.agentChat.DisposeAsync();
+    }
+
+    private void AttachOutputDocumentModels()
+    {
+        this.OutputDocument.Blocks.Add(this.outputHistoryRootSection);
+        this.OutputDocument.Blocks.Add(this.outputRunningRootSection);
+        this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
+        this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
     }
 }

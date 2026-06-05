@@ -6,6 +6,7 @@ public sealed class AgentInputQueueManager
     {
         ItemAdded,
         ItemRemoved,
+        ConfigurationChanged,
     }
 
     public sealed record QueuePublishedEventArgs
@@ -24,6 +25,7 @@ public sealed class AgentInputQueueManager
 
     private readonly object syncLock = new();
     private readonly List<AgentInputQueue> inputQueues;
+    private readonly Dictionary<AgentInputQueue, EventHandler> queueConfigurationHandlers = [];
 
     public event EventHandler<QueuePublishedEventArgs>? QueuePublished;
     public event EventHandler<QueueStateChangedEventArgs>? QueueStateChanged;
@@ -37,6 +39,8 @@ public sealed class AgentInputQueueManager
                 Immediacy = AgentInputQueueImmediacy.Immediate,
             });
         this.inputQueues = [this.ImmediateQueue];
+        this.queueConfigurationHandlers[this.ImmediateQueue] = this.OnQueueConfigurationChanged;
+        this.ImmediateQueue.ConfigurationChanged += this.OnQueueConfigurationChanged;
     }
 
     public AgentInputQueue ImmediateQueue { get; }
@@ -86,6 +90,8 @@ public sealed class AgentInputQueueManager
             if (!this.inputQueues.Contains(queue))
             {
                 this.inputQueues.Add(queue);
+                this.queueConfigurationHandlers[queue] = this.OnQueueConfigurationChanged;
+                queue.ConfigurationChanged += this.OnQueueConfigurationChanged;
             }
         }
     }
@@ -102,7 +108,13 @@ public sealed class AgentInputQueueManager
                 return false;
             }
 
-            return this.inputQueues.Remove(queue);
+            var removed = this.inputQueues.Remove(queue);
+            if (removed && this.queueConfigurationHandlers.Remove(queue, out var handler))
+            {
+                queue.ConfigurationChanged -= handler;
+            }
+
+            return removed;
         }
     }
 
@@ -166,5 +178,21 @@ public sealed class AgentInputQueueManager
                 return true;
             }
         }
+    }
+
+    private void OnQueueConfigurationChanged(object? sender, EventArgs e)
+    {
+        if (sender is not AgentInputQueue queue)
+        {
+            return;
+        }
+
+        this.QueueStateChanged?.Invoke(
+            this,
+            new QueueStateChangedEventArgs
+            {
+                Queue = queue,
+                ChangeKind = QueueStateChangeKind.ConfigurationChanged,
+            });
     }
 }

@@ -65,4 +65,39 @@ public sealed class AgentInputQueueManagerTests
         Assert.Equal("immediate", input.Messages[0].Text);
         Assert.Single(queue.Items);
     }
+
+    [Fact]
+    public void Configure_ReleasedHeldQueue_PublishesStateChangeAndAllowsDequeue()
+    {
+        var manager = CreateManager();
+        var queue = new AgentInputQueue(
+            new AgentInputQueue.Parameters
+            {
+                Priority = 100,
+                Immediacy = AgentInputQueueImmediacy.Held,
+            });
+        manager.RegisterInputQueue(queue);
+        manager.Enqueue(queue, [Item("queued")]);
+
+        var configurationChanges = 0;
+        manager.QueueStateChanged += (_, e) =>
+        {
+            if (e.ChangeKind == AgentInputQueueManager.QueueStateChangeKind.ConfigurationChanged)
+            {
+                configurationChanges++;
+            }
+        };
+
+        Assert.False(manager.TryDequeueNextImmediateOrQueued(out _));
+
+        queue.Configure(new AgentInputQueue.Parameters
+        {
+            Priority = 100,
+            Immediacy = AgentInputQueueImmediacy.Queue,
+        });
+
+        Assert.True(configurationChanges > 0);
+        Assert.True(manager.TryDequeueNextImmediateOrQueued(out var input));
+        Assert.Equal("queued", input.Messages[0].Text);
+    }
 }

@@ -157,8 +157,14 @@ public sealed class MainWindowViewModelTests
 
         await using var viewModel = await MainWindowViewModel.CreateAsync(parseResult, services);
 
-        Assert.Contains(viewModel.Agent.History, item => item.Role == ChatRole.User && item.Text.Contains("restore me", StringComparison.Ordinal));
-        Assert.Contains(viewModel.Agent.History, item => item.Role == ChatRole.Assistant && item.Text.Contains("restored", StringComparison.Ordinal));
+        Assert.Contains(
+            viewModel.Agent.History,
+            item => item.Role == ChatRole.User
+                && string.Concat(item.Contents.OfType<TextContent>().Select(static content => content.Text)).Contains("restore me", StringComparison.Ordinal));
+        Assert.Contains(
+            viewModel.Agent.History,
+            item => item.Role == ChatRole.Assistant
+                && string.Concat(item.Contents.OfType<TextContent>().Select(static content => content.Text)).Contains("restored", StringComparison.Ordinal));
     }
 
 }

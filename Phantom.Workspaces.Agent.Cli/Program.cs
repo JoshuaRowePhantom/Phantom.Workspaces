@@ -355,9 +355,10 @@ internal sealed class AgentCliApp : IDisposable
     private void OnTurnCompleted(object? sender, AgentChatHistoryItem item)
     {
         Interlocked.Increment(ref this.completedTurnCount);
+        var itemText = string.Concat(item.Contents.OfType<TextContent>().Select(static content => content.Text));
         lock (this.consoleLock)
         {
-            this.lastAccumulatedText = item.Text;
+            this.lastAccumulatedText = itemText;
             this.assistantAccumulatedText.Clear();
             this.assistantAccumulatedText.Append(this.lastAccumulatedText);
         }
@@ -365,7 +366,7 @@ internal sealed class AgentCliApp : IDisposable
         if (!this.supportsInteractiveRendering)
         {
             lock (this.consoleLock)
-                Console.WriteLine($"assistant > {item.Text}");
+                Console.WriteLine($"assistant > {itemText}");
             this.ClearAssistantAccumulatedText();
             return;
         }

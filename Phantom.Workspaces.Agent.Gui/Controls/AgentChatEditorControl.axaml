@@ -40,6 +40,8 @@
                              TextWrapping="Wrap"
                              Classes="agent-detail-value copyable-text"/>
                 </StackPanel>
+                <CheckBox Content="Show reasoning text"
+                          IsChecked="{Binding IsReasoningVisible}"/>
             </StackPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:AgentChatToolsDetailViewModel">

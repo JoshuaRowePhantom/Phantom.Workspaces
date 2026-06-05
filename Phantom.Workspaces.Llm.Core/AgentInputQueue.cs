@@ -13,6 +13,7 @@ public enum AgentInputQueueImmediacy
 public sealed class AgentInputQueue
 {
     public event EventHandler? Changed;
+    public event EventHandler? ConfigurationChanged;
 
     public sealed record Parameters
     {
@@ -52,6 +53,7 @@ public sealed class AgentInputQueue
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;
         this.OnChanged();
+        this.OnConfigurationChanged();
     }
 
     public ImmutableList<AgentInputItem> Enqueue(
@@ -187,5 +189,10 @@ public sealed class AgentInputQueue
     private void OnChanged()
     {
         this.Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnConfigurationChanged()
+    {
+        this.ConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 }

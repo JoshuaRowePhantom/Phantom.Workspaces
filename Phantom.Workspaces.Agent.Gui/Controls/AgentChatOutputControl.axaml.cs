@@ -1,7 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
@@ -16,18 +16,13 @@ public partial class AgentChatOutputControl : UserControl
         this.Loaded += this.OnLoaded;
     }
 
-    private async void OnHistoryImageClicked(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Control control || control.DataContext is not ChatHistoryImageViewModel image || image.Preview is null)
-        {
-            return;
-        }
-
-        await ImagePreviewPresenter.ShowAsync(this, image.Preview, image.Label);
-    }
-
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
+        if (this.DataContext is AgentViewModel agent)
+        {
+            agent.RebuildOutputDocument();
+        }
+
         if (this.hasAppliedInitialOutputScroll)
         {
             return;
@@ -39,6 +34,13 @@ public partial class AgentChatOutputControl : UserControl
 
     private void ScrollHistoryToBottom()
     {
-        this.HistoryScroll.Offset = new Avalonia.Vector(this.HistoryScroll.Offset.X, double.MaxValue);
+        var viewer = this.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        if (viewer is null)
+        {
+            return;
+        }
+
+        var maxVerticalOffset = Math.Max(0, viewer.Extent.Height - viewer.Viewport.Height);
+        viewer.Offset = new Avalonia.Vector(viewer.Offset.X, maxVerticalOffset);
     }
 }

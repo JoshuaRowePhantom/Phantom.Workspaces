@@ -17,7 +17,7 @@ public sealed class AgentRunningItems
     public AgentChatRunningItem Create(params AgentChatHistoryItem[] items)
     {
         var runningItem = new AgentChatRunningItem();
-        runningItem.Items = items;
+        SyncItems(runningItem.Items, items);
         this.items.Add(runningItem);
         return runningItem;
     }
@@ -26,7 +26,7 @@ public sealed class AgentRunningItems
     {
         ArgumentNullException.ThrowIfNull(runningItem);
         ArgumentNullException.ThrowIfNull(items);
-        runningItem.Items = items;
+        SyncItems(runningItem.Items, items);
         var index = this.items.IndexOf(runningItem);
         if (index >= 0)
         {
@@ -41,6 +41,26 @@ public sealed class AgentRunningItems
         if (removed && this.items.Count == 0)
         {
             this.Idle?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private static void SyncItems(ObservableCollection<AgentChatHistoryItem> target, IReadOnlyList<AgentChatHistoryItem> source)
+    {
+        for (var index = 0; index < source.Count; index++)
+        {
+            if (index < target.Count)
+            {
+                target[index] = source[index];
+            }
+            else
+            {
+                target.Add(source[index]);
+            }
+        }
+
+        while (target.Count > source.Count)
+        {
+            target.RemoveAt(target.Count - 1);
         }
     }
 }

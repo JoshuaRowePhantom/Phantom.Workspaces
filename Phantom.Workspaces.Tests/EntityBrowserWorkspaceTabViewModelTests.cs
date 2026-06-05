@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
@@ -65,7 +66,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             Title = "Entity Browser",
         };
 
-        await WaitForConditionAsync(() =>
+        await WaitForConditionAsync(viewModel, () =>
             viewModel.EntityList.Items.Any(item =>
                 string.Equals(item.ItemKey, "[\"entity-types\"]", StringComparison.Ordinal)
                 && item.HasChildren));
@@ -86,7 +87,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Contains("[\"entity-types\",\"workspace\"]", parentItem.ChildItemKeys);
 
         parentItem.IsExpanded = true;
-        await WaitForConditionAsync(() =>
+        await WaitForConditionAsync(viewModel, () =>
             viewModel.EntityList.Items.Any(item =>
                 string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal)));
 
@@ -154,20 +155,37 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     }
 
     private static async Task WaitForConditionAsync(
+        EntityBrowserWorkspaceTabViewModel viewModel,
         Func<bool> condition)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var timeout = TimeSpan.FromSeconds(5);
-        var pollInterval = TimeSpan.FromMilliseconds(25);
-        var start = DateTime.UtcNow;
-        while (!condition())
+        if (condition())
         {
-            if (DateTime.UtcNow - start > timeout)
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        NotifyCollectionChangedEventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            if (condition())
             {
-                throw new TimeoutException("Timed out waiting for expected browser state.");
+                signal.TrySetResult();
+            }
+        };
+
+        viewModel.EntityList.Items.CollectionChanged += handler;
+        try
+        {
+            if (condition())
+            {
+                return;
             }
 
-            await Task.Delay(pollInterval, ct);
+            await signal.Task;
+        }
+        finally
+        {
+            viewModel.EntityList.Items.CollectionChanged -= handler;
         }
     }
 }

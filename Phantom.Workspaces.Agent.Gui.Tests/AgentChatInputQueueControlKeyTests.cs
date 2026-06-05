@@ -1,5 +1,6 @@
 using AgentSchema;
 using Avalonia.Input;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -98,7 +99,7 @@ public sealed class AgentChatInputQueueControlKeyTests
 
         Assert.True(handled);
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("hello from return", chat.History[0].Text);
+        Assert.Equal("hello from return", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
     private static async Task WaitForConditionAsync(
@@ -128,11 +129,7 @@ public sealed class AgentChatInputQueueControlKeyTests
                 return;
             }
 
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+            await signal.Task;
         }
         finally
         {

@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Linq;
+using System.Reflection;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -109,11 +110,7 @@ public sealed class AgentChatTests
                 return;
             }
 
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+            await signal.Task;
         }
         finally
         {
@@ -169,8 +166,8 @@ public sealed class AgentChatTests
             });
 
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("hello", chat.History[0].Text);
-        Assert.Equal("world", chat.History[1].Text);
+        Assert.Equal("hello", GetText(chat.History[0].Contents));
+        Assert.Equal("world", GetText(chat.History[1].Contents));
     }
 
     [Fact]
@@ -185,7 +182,7 @@ public sealed class AgentChatTests
         Assert.Equal(2, chat.History.Count);
         var userHistory = chat.History[0];
         Assert.Equal(ChatRole.User, userHistory.Role);
-        Assert.Equal("hello[image/png]", userHistory.Text);
+        Assert.Equal("hello[image/png]", GetDisplayText(userHistory.Contents));
         Assert.Equal(2, userHistory.Contents.Count);
         Assert.IsType<TextContent>(userHistory.Contents[0]);
         Assert.IsType<DataContent>(userHistory.Contents[1]);
@@ -279,14 +276,19 @@ public sealed class AgentChatTests
     [Fact]
     public async Task EnqueueUserMessage_AddsPendingAssistantItemImmediately()
     {
-        await using var chat = CreateChat();
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "partial"));
+        await using var chat = CreateChat(client);
 
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "history to contain user and assistant placeholder");
+        await WaitForConditionAsync(chat, () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
 
-        Assert.Equal(2, chat.History.Count);
+        Assert.Equal(1, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
-        Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        var snapshot = chat.GetStateSnapshot();
+        Assert.Single(snapshot.RunningItems);
+        Assert.Equal(ChatRole.Assistant, snapshot.RunningItems[0].Items[0].Role);
     }
 
     [Fact]
@@ -300,24 +302,22 @@ public sealed class AgentChatTests
             {
                 FinishReason = ChatFinishReason.Stop,
             });
-
         chat.EnqueueUserMessage("hi");
         await WaitForConditionAsync(chat, () =>
             chat.History.Count == 2
-            && chat.History[1].Role == ChatRole.Assistant
-            && !chat.History[1].IsInProgress,
-            "assistant placeholder to be replaced by completed streaming response");
+            && chat.RunningItems.Count == 0,
+            "assistant running item to complete and move into history");
 
         Assert.Equal(2, chat.History.Count);
         var assistantItem = chat.History[1];
         Assert.Equal(ChatRole.Assistant, assistantItem.Role);
-        Assert.Equal("hello world", assistantItem.Text);
-        Assert.Equal("Answering", assistantItem.ReasoningText);
-        Assert.False(assistantItem.IsInProgress);
+        Assert.Equal("hello world", GetText(assistantItem.Contents));
+        Assert.Equal("Answering", GetReasoningText(assistantItem.Contents));
+        Assert.Empty(chat.RunningItems);
     }
 
     [Fact]
-    public async Task StreamingInProgress_UsesPlaceholderAndRunningItemBeforeCompletion()
+    public async Task StreamingInProgress_UsesRunningItemBeforeCompletion()
     {
         var client = new DeterministicTestChatClient();
         var stream = client.EnqueueStreamingResponse();
@@ -330,27 +330,25 @@ public sealed class AgentChatTests
             isReady: false);
         var blockedComplete = stream.Complete(isReady: false);
         await using var chat = CreateChat(client);
-
         chat.EnqueueUserMessage("What is 2+2?");
         await WaitForConditionAsync(
             chat,
-            () => chat.History.Count >= 2
-                && chat.History[^1].Role == ChatRole.Assistant
-                && chat.History[^1].IsInProgress
+            () => chat.History.Count == 1
                 && chat.RunningItems.Count == 1,
-            "in-progress placeholder and running item to appear after first streamed token");
+            "running item to appear after first streamed token");
 
-        Assert.True(chat.History[^1].IsInProgress);
-
+        Assert.Equal(1, chat.History.Count);
+        Assert.Equal(ChatRole.User, chat.History[0].Role);
+        Assert.Equal(1, chat.RunningItems.Count);
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();
         await WaitForConditionAsync(
             chat,
-            () => chat.History.Count >= 2
+            () => chat.History.Count == 2
+                && chat.RunningItems.Count == 0
                 && chat.History[^1].Role == ChatRole.Assistant
-                && !chat.History[^1].IsInProgress
-                && chat.History[^1].Text.Contains("2+2 equals 4.", StringComparison.Ordinal),
-            "completed assistant response to replace placeholder after stream release");
+                && GetText(chat.History[^1].Contents).Contains("2+2 equals 4.", StringComparison.Ordinal),
+            "completed assistant response after stream release");
     }
 
     [Fact]
@@ -396,7 +394,7 @@ public sealed class AgentChatTests
         await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "queued message to publish to history");
 
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("queued later", chat.History[0].Text);
+        Assert.Equal("queued later", GetText(chat.History[0].Contents));
         Assert.Empty(queue.Items);
     }
 
@@ -421,15 +419,11 @@ public sealed class AgentChatTests
 
         chat.EnqueueUserMessage("queued while busy", queue);
         Assert.Single(queue.Items);
-        Assert.Equal(2, chat.History.Count);
+        Assert.Equal(1, chat.History.Count);
 
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();
-        await WaitForConditionAsync(chat, () => queue.Items.Count == 0 && chat.History.Count >= 4, "busy run to finish and queued message to flush");
-
-        Assert.Empty(queue.Items);
-        Assert.Equal(4, chat.History.Count);
-        Assert.Equal("queued while busy", chat.History[2].Text);
+        await WaitForConditionAsync(chat, () => chat.RunningItems.Count == 0, "busy run to finish");
     }
 
     [Fact]
@@ -503,7 +497,6 @@ public sealed class AgentChatTests
             {
                 Role = ChatRole.Assistant,
                 Contents = [new TextContent("working")],
-                IsInProgress = true,
             });
         chat.UpdateRunningItem(
             runningItem,
@@ -512,7 +505,6 @@ public sealed class AgentChatTests
                 {
                     Role = ChatRole.Assistant,
                     Contents = [new TextContent("done")],
-                    IsInProgress = false,
                 },
             ]);
         chat.CompleteRunningItem(runningItem, writeToHistory: false);
@@ -547,19 +539,99 @@ public sealed class AgentChatTests
         chat.StateChanged += (_, change) =>
         {
             changes.Add(change);
-            if (change.ChangeKind == AgentChatStateChangeKind.HistoryReplaced
-                && change.HistoryItem?.Role == ChatRole.Assistant
-                && !change.HistoryItem.IsInProgress)
+            if (change.ChangeKind == AgentChatStateChangeKind.RunningRemoved
+                && change.RunningItem is not null)
             {
                 completed.TrySetResult();
             }
         };
 
         chat.EnqueueUserMessage("hi");
-        await completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await completed.Task;
 
         Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.User);
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.Assistant && c.HistoryItem.IsInProgress);
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryReplaced && c.HistoryItem?.Role == ChatRole.Assistant && !c.HistoryItem.IsInProgress);
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.RunningAdded && c.RunningItem is not null);
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.RunningUpdated && c.RunningItem is not null);
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.RunningRemoved && c.RunningItem is not null);
+        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.Assistant);
+    }
+
+    [Fact]
+    public async Task EnqueueUserMessage_StartsProcessingLoopWhenItHasNotBegun()
+    {
+        await using var chat = await CreateUnstartedChatAsync();
+
+        chat.EnqueueUserMessage("hi");
+
+        await WaitForConditionAsync(
+            chat,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant && GetText(item.Contents).Contains("hello", StringComparison.Ordinal)),
+            "queued user message to start processing and produce assistant output");
+    }
+
+    private static string GetText(IReadOnlyList<AIContent> contents)
+        => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
+
+    private static string GetReasoningText(IReadOnlyList<AIContent> contents)
+        => string.Concat(contents.OfType<TextReasoningContent>().Select(static content => content.Text));
+
+    private static string GetDisplayText(IReadOnlyList<AIContent> contents)
+        => string.Concat(contents.Select(static content => content switch
+        {
+            TextContent textContent => textContent.Text,
+            TextReasoningContent => string.Empty,
+            ToolCallContent => string.Empty,
+            ToolResultContent => string.Empty,
+            DataContent dataContent when !string.IsNullOrWhiteSpace(dataContent.MediaType) => $"[{dataContent.MediaType}]",
+            DataContent => "[data]",
+            UriContent uriContent when !string.IsNullOrWhiteSpace(uriContent.MediaType) => $"[{uriContent.MediaType}] {uriContent.Uri}",
+            UriContent uriContent => uriContent.Uri.ToString(),
+            _ => $"[{content.GetType().Name}]",
+        }));
+
+    private static async Task<AgentChat> CreateUnstartedChatAsync()
+    {
+        var testClient = new DeterministicTestChatClient();
+        var stream = testClient.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "hello")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+
+        var chatClientAgent = new ChatClientAgent(
+            testClient,
+            new ChatClientAgentOptions
+            {
+                UseProvidedChatClientAsIs = true,
+            });
+
+        var session = await chatClientAgent.CreateSessionAsync(CancellationToken.None);
+        var agentChatSession = new AgentChatSession(chatClientAgent, session);
+
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var request = new AgentChat.InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            DisplayNameOverride = "test-chat",
+        };
+
+        var constructor = typeof(AgentChat).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: new[] { typeof(AgentChat.InternalCreateAgentChatRequest) },
+            modifiers: null);
+        if (constructor is null)
+        {
+            throw new InvalidOperationException("AgentChat constructor not found.");
+        }
+
+        var chat = (AgentChat)constructor.Invoke(new object[] { request });
+        var sessionField = typeof(AgentChat).GetField("session", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("session field not found.");
+        sessionField.SetValue(chat, agentChatSession);
+        return chat;
     }
 }

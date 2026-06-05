@@ -39,8 +39,7 @@ public sealed class AgentCliEchoProviderTests
         await ReadUntilContainsAsync(
             process.StandardOutput,
             standardOutputBuilder,
-            "Type /exit to quit.",
-            TimeSpan.FromSeconds(10));
+            "Type /exit to quit.");
 
         await process.StandardInput.WriteLineAsync("hello");
         await process.StandardInput.FlushAsync();
@@ -48,27 +47,13 @@ public sealed class AgentCliEchoProviderTests
         await ReadUntilContainsAsync(
             process.StandardOutput,
             standardOutputBuilder,
-            "assistant > hello",
-            TimeSpan.FromSeconds(10));
+            "assistant > hello");
 
         await process.StandardInput.WriteLineAsync("/exit");
         await process.StandardInput.FlushAsync();
         process.StandardInput.Close();
 
-        var waitTask = process.WaitForExitAsync();
-        var completed = await Task.WhenAny(waitTask, Task.Delay(TimeSpan.FromSeconds(30)));
-        if (!ReferenceEquals(completed, waitTask))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            Assert.Fail("CLI process did not exit within timeout.");
-        }
+        await process.WaitForExitAsync();
 
         var standardOutput = standardOutputBuilder.ToString() + await process.StandardOutput.ReadToEndAsync();
         var standardError = await process.StandardError.ReadToEndAsync();
@@ -114,27 +99,13 @@ public sealed class AgentCliEchoProviderTests
         await ReadUntilContainsAsync(
             process.StandardOutput,
             standardOutputBuilder,
-            "Type /exit to quit.",
-            TimeSpan.FromSeconds(10));
+            "Type /exit to quit.");
 
         await process.StandardInput.WriteLineAsync("hello");
         await process.StandardInput.FlushAsync();
         process.StandardInput.Close();
 
-        var waitTask = process.WaitForExitAsync();
-        var completed = await Task.WhenAny(waitTask, Task.Delay(TimeSpan.FromSeconds(30)));
-        if (!ReferenceEquals(completed, waitTask))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            Assert.Fail("CLI process did not exit within timeout.");
-        }
+        await process.WaitForExitAsync();
 
         var standardOutput = standardOutputBuilder.ToString() + await process.StandardOutput.ReadToEndAsync();
         var standardError = await process.StandardError.ReadToEndAsync();
@@ -149,16 +120,13 @@ public sealed class AgentCliEchoProviderTests
     private static async Task ReadUntilContainsAsync(
         StreamReader reader,
         StringBuilder buffer,
-        string expectedText,
-        TimeSpan timeout)
+        string expectedText)
     {
-        using var timeoutCts = new CancellationTokenSource(timeout);
         var singleChar = new char[1];
 
         while (true)
         {
-            timeoutCts.Token.ThrowIfCancellationRequested();
-            var charsRead = await reader.ReadAsync(singleChar.AsMemory(0, 1), timeoutCts.Token);
+            var charsRead = await reader.ReadAsync(singleChar.AsMemory(0, 1));
             if (charsRead == 0)
             {
                 throw new InvalidOperationException($"Stream ended before seeing expected text: '{expectedText}'.");

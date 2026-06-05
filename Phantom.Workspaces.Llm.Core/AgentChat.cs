@@ -15,6 +15,7 @@ using System.ClientModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -29,29 +30,6 @@ public sealed record AgentChatHistoryItem
 
     /// <summary>Structured content blocks for this turn.</summary>
     public IReadOnlyList<AIContent> Contents { get; init; } = [];
-
-    public string Text => string.Concat(this.Contents.Select(FormatContentAsText));
-
-    public string ReasoningText => string.Concat(
-        this.Contents.OfType<TextReasoningContent>().Select(static content => content.Text));
-
-    /// <summary>True while this assistant item is still pending or streaming.</summary>
-    public bool IsInProgress { get; init; }
-
-    public bool HasText => !string.IsNullOrWhiteSpace(this.Text);
-
-    private static string FormatContentAsText(AIContent content) => content switch
-    {
-        TextContent textContent => textContent.Text,
-        TextReasoningContent => string.Empty,
-        ToolCallContent => string.Empty,
-        ToolResultContent => string.Empty,
-        DataContent dataContent when !string.IsNullOrWhiteSpace(dataContent.MediaType) => $"[{dataContent.MediaType}]",
-        DataContent => "[data]",
-        UriContent uriContent when !string.IsNullOrWhiteSpace(uriContent.MediaType) => $"[{uriContent.MediaType}] {uriContent.Uri}",
-        UriContent uriContent => uriContent.Uri.ToString(),
-        _ => $"[{content.GetType().Name}]",
-    };
 }
 
 /// <summary>
@@ -59,7 +37,7 @@ public sealed record AgentChatHistoryItem
 /// </summary>
 public sealed class AgentChatRunningItem
 {
-    public AgentChatHistoryItem[]? Items { get; set; }
+    public ObservableCollection<AgentChatHistoryItem> Items { get; } = [];
 }
 
 public enum AgentChatStateChangeKind
@@ -96,6 +74,8 @@ public sealed class AgentChatStateChangedEventArgs : EventArgs
     public AgentChatRunningItem? RunningItem { get; init; }
 
     public string? AgentSessionId { get; init; }
+
+    public AgentChatStateSnapshot? Snapshot { get; init; }
 }
 
 /// <summary>
@@ -185,6 +165,7 @@ public sealed class AgentChat : IAsyncDisposable
     private readonly CancellationTokenSource cts = new();
     private Task processTask = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
+    private readonly object stateChangedSubscriptionLock = new();
 
     private bool isBusy;
     private bool processingStarted;
@@ -205,7 +186,7 @@ public sealed class AgentChat : IAsyncDisposable
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
     {
        var chat = new AgentChat(request);
-       await chat.InitializeAsync().ConfigureAwait(false);
+       await chat.InitializeAsync();
        return chat;
     }
 
@@ -423,7 +404,7 @@ public sealed class AgentChat : IAsyncDisposable
                {
                    AgentSessionId = this.request.AgentSessionId,
                },
-               this.request.CancellationToken).ConfigureAwait(false);
+               this.request.CancellationToken);
        }
 
        var restoredAgentDefinitionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentDefinitionJson : null;
@@ -468,7 +449,7 @@ public sealed class AgentChat : IAsyncDisposable
            {
                var serializedSession = await this.chatClientAgent.SerializeSessionAsync(
                    session,
-                   cancellationToken: token).ConfigureAwait(false);
+                   cancellationToken: token);
                return serializedSession.ToBsonDocument();
            });
 
@@ -476,8 +457,8 @@ public sealed class AgentChat : IAsyncDisposable
            ? await this.chatClientAgent.DeserializeSessionAsync(
                restoredAgentSessionJson.ToJsonElement()
                    ?? throw new InvalidOperationException("Stored agent session JSON could not be read."),
-               cancellationToken: this.request.CancellationToken).ConfigureAwait(false)
-           : await this.chatClientAgent.CreateSessionAsync(this.request.CancellationToken).ConfigureAwait(false);
+               cancellationToken: this.request.CancellationToken)
+           : await this.chatClientAgent.CreateSessionAsync(this.request.CancellationToken);
 
        if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
        {
@@ -487,14 +468,14 @@ public sealed class AgentChat : IAsyncDisposable
        var resolvedAgentSessionId = this.persistenceProvider.ExtractAgentSessionId(frameworkSession);
        var persistedMessages = await this.request.ConfiguredStore.ReadMessagesAsync(
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
-           this.request.CancellationToken).ConfigureAwait(false);
+           this.request.CancellationToken);
 
        this.LoadInitialHistory(persistedMessages);
        this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
        this.SetAgentSessionId(resolvedAgentSessionId);
        this.StartProcessingLoop();
 
-       await this.InitializeMcpToolsAsync(this.request.CancellationToken).ConfigureAwait(false);
+       await this.InitializeMcpToolsAsync(this.request.CancellationToken);
     }
 
     /// <summary>
@@ -573,7 +554,7 @@ public sealed class AgentChat : IAsyncDisposable
             throw new ArgumentException("Tool id is required.", nameof(toolId));
         }
 
-        await this.toolMutationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await this.toolMutationLock.WaitAsync(cancellationToken);
         try
         {
             var changed = false;
@@ -637,7 +618,7 @@ public sealed class AgentChat : IAsyncDisposable
         }
 
         targetQueue ??= this.DefaultInputQueue;
-
+        this.StartProcessingLoop();
         this.queueManager.Enqueue(
             targetQueue.Queue,
             [
@@ -729,14 +710,11 @@ public sealed class AgentChat : IAsyncDisposable
         var isIdle = false;
         if (writeToHistory)
         {
-            if (item.Items != null)
+            foreach (var historyItem in item.Items)
             {
-                foreach (var historyItem in item.Items)
-                {
-                    historyStateChanges ??= [];
-                    historyStateChanges.Add(this.AddHistoryItem(historyItem));
-                    this.TurnCompleted?.Invoke(this, historyItem);
-                }
+                historyStateChanges ??= [];
+                historyStateChanges.Add(this.AddHistoryItem(historyItem));
+                this.TurnCompleted?.Invoke(this, historyItem);
             }
         }
 
@@ -782,24 +760,6 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
-    private AgentChatStateChangedEventArgs? ReplaceHistoryItem(int index, AgentChatHistoryItem item)
-    {
-        lock (this.stateLock)
-        {
-            if (index < 0 || index >= this.History.Count)
-            {
-                return null;
-            }
-
-            this.History[index] = item;
-            return this.CreateStateChangedEvent(
-                AgentChatStateChangeKind.HistoryReplaced,
-                index: index,
-                count: 1,
-                historyItem: item);
-        }
-    }
-
     private void AppendUserMessagesToHistory(IReadOnlyList<ChatMessage> requestMessages)
     {
         foreach (var message in requestMessages)
@@ -818,11 +778,6 @@ public sealed class AgentChat : IAsyncDisposable
             AgentChatStateChangedEventArgs? stateChange = null;
             lock (this.stateLock)
             {
-                if (this.History.Count > 0 && AreEquivalent(this.History[^1], nextItem))
-                {
-                    continue;
-                }
-
                 this.History.Add(nextItem);
                 stateChange = this.CreateStateChangedEvent(
                     AgentChatStateChangeKind.HistoryAdded,
@@ -833,14 +788,6 @@ public sealed class AgentChat : IAsyncDisposable
 
             this.RaiseStateChanged(stateChange);
         }
-    }
-
-    private static bool AreEquivalent(AgentChatHistoryItem left, AgentChatHistoryItem right)
-    {
-        return left.Role == right.Role
-            && left.Text == right.Text
-            && left.ReasoningText == right.ReasoningText
-            && left.IsInProgress == right.IsInProgress;
     }
 
     private AgentChatStateChangedEventArgs CreateStateChangedEvent(
@@ -873,7 +820,36 @@ public sealed class AgentChat : IAsyncDisposable
             return;
         }
 
-        this.StateChanged?.Invoke(this, stateChange);
+        lock (this.stateChangedSubscriptionLock)
+        {
+            this.StateChanged?.Invoke(this, stateChange);
+        }
+    }
+
+    private sealed class StateChangedSubscription : IDisposable
+    {
+        private AgentChat? owner;
+        private readonly EventHandler<AgentChatStateChangedEventArgs> handler;
+
+        public StateChangedSubscription(AgentChat owner, EventHandler<AgentChatStateChangedEventArgs> handler)
+        {
+            this.owner = owner;
+            this.handler = handler;
+        }
+
+        public void Dispose()
+        {
+            var owner = Interlocked.Exchange(ref this.owner, null);
+            if (owner is null)
+            {
+                return;
+            }
+
+            lock (owner.stateChangedSubscriptionLock)
+            {
+                owner.StateChanged -= this.handler;
+            }
+        }
     }
 
     public void RegisterOwnedResource(IAsyncDisposable resource)
@@ -923,7 +899,6 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = message.Role,
                 Contents = message.Contents.ToArray(),
-                IsInProgress = false,
             });
             this.RaiseStateChanged(stateChange);
         }
@@ -975,7 +950,6 @@ public sealed class AgentChat : IAsyncDisposable
                 new AgentChatHistoryItem
                 {
                     Role = ChatRole.Assistant,
-                    IsInProgress = true,
                 }
             };
         }
@@ -984,9 +958,6 @@ public sealed class AgentChat : IAsyncDisposable
         {
             Role = message.Role,
             Contents = message.Contents.ToArray(),
-            IsInProgress = index == 0
-                && !lastIsToolResult
-                && !IsTerminalAssistantUpdate(agentResponseUpdate)
         }).Reverse().Concat(finalItem).ToArray();
 
         this.UpdateRunningItem(currentRunningItem, chatHistoryItems);
@@ -1032,27 +1003,13 @@ public sealed class AgentChat : IAsyncDisposable
                     }
                 }
 
-                var useHistoryPlaceholder = true;
-                var historyPlaceholderIndex = -1;
-                if (useHistoryPlaceholder)
-                {
-                    this.AppendUserMessagesToHistory(chatMessagesToSubmit);
-                    var historyAdded = this.AddHistoryItem(new AgentChatHistoryItem
-                    {
-                        Role = ChatRole.Assistant,
-                        IsInProgress = true,
-                    });
-                    this.RaiseStateChanged(historyAdded);
-                    historyPlaceholderIndex = historyAdded.Index;
-                }
+                this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
                 AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
                     new AgentChatHistoryItem
                     {
                         Role = ChatRole.Assistant,
-                        IsInProgress = true,
                     }]);
-                var shouldWriteRunningItemToHistory = false;
 
                 try
                 {
@@ -1068,37 +1025,26 @@ public sealed class AgentChat : IAsyncDisposable
                             update,
                             agentResponseUpdates);
                     }
-
-                    shouldWriteRunningItemToHistory = false;
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     var runningItem = currentPartialTextResponseItem
                         ?? throw new InvalidOperationException("Running item was unexpectedly null while handling a provider error.");
-                    var existingItems = runningItem.Items ?? [];
-                    var errorItems = existingItems
-                        .Select(item => item with { IsInProgress = false })
+                    var errorItems = runningItem.Items
                         .Concat([
                             new AgentChatHistoryItem
                             {
                                 Role = ChatRole.Assistant,
                                 Contents = [new ErrorContent($"Provider error: {ex.Message}")],
-                                IsInProgress = false,
                             },
                         ])
                         .ToArray();
 
                     this.UpdateRunningItem(runningItem, errorItems);
-                    shouldWriteRunningItemToHistory = false;
                 }
                 finally
                 {
-                    if (useHistoryPlaceholder && historyPlaceholderIndex >= 0)
-                    {
-                        this.CommitRunningItemToHistoryPlaceholder(currentPartialTextResponseItem, historyPlaceholderIndex);
-                    }
-
-                    this.CompleteRunningItem(currentPartialTextResponseItem, shouldWriteRunningItemToHistory);
+                    this.CompleteRunningItem(currentPartialTextResponseItem);
                 }
             }
         }
@@ -1108,7 +1054,12 @@ public sealed class AgentChat : IAsyncDisposable
         finally
         {
             this.queueManager.QueueStateChanged -= OnQueueStateChanged;
-            this.isBusy = false;
+            lock (this.processingStateLock)
+            {
+                this.isBusy = false;
+                this.processingStarted = false;
+                this.activeRunCancellation = null;
+            }
         }
     }
 
@@ -1174,46 +1125,6 @@ public sealed class AgentChat : IAsyncDisposable
             || finishReasonText.Contains("function", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsTerminalAssistantUpdate(AgentResponseUpdate update)
-    {
-        if (update.Role != ChatRole.Assistant)
-        {
-            return false;
-        }
-
-        if (update.FinishReason is null)
-        {
-            return false;
-        }
-
-        return !IsToolContinuationFinishReason(update.FinishReason);
-    }
-
-    private void CommitRunningItemToHistoryPlaceholder(AgentChatRunningItem? runningItem, int placeholderIndex)
-    {
-        if (runningItem?.Items is null || runningItem.Items.Length == 0)
-        {
-            return;
-        }
-
-        var finalItem = runningItem.Items
-            .LastOrDefault(static item =>
-                item.Role == ChatRole.Assistant
-                && (!string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.ReasoningText)))
-            ?? runningItem.Items
-            .LastOrDefault(static item => item.Role == ChatRole.Assistant)
-            ?? runningItem.Items[^1];
-        finalItem = finalItem with { IsInProgress = false };
-
-        var stateChange = this.ReplaceHistoryItem(placeholderIndex, finalItem);
-        this.RaiseStateChanged(stateChange);
-
-        if (finalItem.Role == ChatRole.Assistant)
-        {
-            this.TurnCompleted?.Invoke(this, finalItem);
-        }
-    }
-
     private AgentChatSession GetSession()
     {
         lock (this.sessionLock)
@@ -1235,13 +1146,16 @@ public sealed class AgentChat : IAsyncDisposable
 
     private void StartProcessingLoop()
     {
-        if (this.processingStarted)
+        lock (this.processingStateLock)
         {
-            return;
-        }
+            if (this.cts.IsCancellationRequested || this.processingStarted)
+            {
+                return;
+            }
 
-        this.processingStarted = true;
-        this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
+            this.processingStarted = true;
+            this.processTask = Task.Run(() => this.RunProcessLoopAsync(this.cts.Token));
+        }
     }
 
     private async Task InitializeMcpToolsAsync(CancellationToken cancellationToken = default)
@@ -1263,13 +1177,13 @@ public sealed class AgentChat : IAsyncDisposable
             return;
         }
 
-        await this.toolMutationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await this.toolMutationLock.WaitAsync(cancellationToken);
         try
         {
             var runtime = await this.CreateRuntimeToolsAsync(
                 agentTools,
                 services,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken);
 
             this.ReplaceToolNodes(runtime.Roots);
             var summaryRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
@@ -1306,7 +1220,7 @@ public sealed class AgentChat : IAsyncDisposable
         }
 
         var toolTasks = agentTools.Select(tool => this.InitializeRuntimeToolAsync(tool, services, cancellationToken)).ToArray();
-        var results = await Task.WhenAll(toolTasks).ConfigureAwait(false);
+        var results = await Task.WhenAll(toolTasks);
         var roots = results.SelectMany(static result => result.Roots).ToList();
         var resolvedTools = results.SelectMany(static result => result.RuntimeTools).ToList();
         return new RuntimeToolsInitializationResult(roots, resolvedTools);
@@ -1319,7 +1233,7 @@ public sealed class AgentChat : IAsyncDisposable
     {
         return tool switch
         {
-            McpTool mcpTool => await this.InitializeMcpRuntimeToolAsync(mcpTool, services, cancellationToken).ConfigureAwait(false),
+            McpTool mcpTool => await this.InitializeMcpRuntimeToolAsync(mcpTool, services, cancellationToken),
             CustomTool { Kind: "web_search" } customTool => this.InitializeCustomRuntimeTool(
                 customTool,
                 "web_search",
@@ -1401,10 +1315,10 @@ public sealed class AgentChat : IAsyncDisposable
                 transport,
                 null,
                 services?.LoggerFactory,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken);
             this.RegisterOwnedResource(client);
 
-            var mcpTools = await client.ListToolsAsync(options: null, cancellationToken).ConfigureAwait(false);
+            var mcpTools = await client.ListToolsAsync(options: null, cancellationToken);
             var allowed = mcpTool.AllowedTools;
             if (allowed is { Count: > 0 })
             {
@@ -1804,4 +1718,42 @@ public sealed class AgentChat : IAsyncDisposable
         IReadOnlyList<ToolStateNode> Roots,
         IReadOnlyList<AITool> RuntimeTools);
 
+    public IDisposable SubscribeStateChanged(EventHandler<AgentChatStateChangedEventArgs> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+
+        lock (this.stateLock)
+        {
+            lock (this.stateChangedSubscriptionLock)
+            {
+                this.StateChanged += handler;
+                try
+                {
+                    handler(
+                        this,
+                        new AgentChatStateChangedEventArgs
+                        {
+                            FromVersion = this.stateVersion,
+                            ToVersion = this.stateVersion,
+                            ChangeKind = AgentChatStateChangeKind.Reset,
+                            Snapshot = new AgentChatStateSnapshot(
+                                this.stateVersion,
+                                this.agentSessionId,
+                                this.History.ToArray(),
+                                this.RunningItems.ToArray()),
+                        });
+                }
+                catch
+                {
+                    this.StateChanged -= handler;
+                    throw;
+                }
+            }
+        }
+
+        return new StateChangedSubscription(this, handler);
+    }
+
 }
+
+

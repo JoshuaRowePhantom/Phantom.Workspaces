@@ -55,16 +55,44 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("response"), new TextReasoningContent("hidden reasoning")],
-            IsInProgress = true,
         };
 
-        var viewModel = new ChatHistoryItemViewModel(source);
+        var viewModel = new ChatHistoryItemViewModel(source, isInProgress: true);
 
         Assert.False(viewModel.IsUser);
         Assert.Equal("assistant", viewModel.RoleLabel);
         Assert.Equal("response", viewModel.Text);
+        Assert.Empty(viewModel.ReasoningDisplayText);
+        Assert.False(viewModel.HasReasoningLine);
+    }
+
+    [Fact]
+    public void Constructor_AssistantInProgressWithoutText_ShowsThinking()
+    {
+        var source = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+        };
+
+        var viewModel = new ChatHistoryItemViewModel(source, isInProgress: true);
+
         Assert.Equal("Thinking ...", viewModel.ReasoningDisplayText);
         Assert.True(viewModel.HasReasoningLine);
+    }
+
+    [Fact]
+    public void Constructor_AssistantInProgressWithText_DoesNotShowThinking()
+    {
+        var source = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("hello")],
+        };
+
+        var viewModel = new ChatHistoryItemViewModel(source, isInProgress: true);
+
+        Assert.Empty(viewModel.ReasoningDisplayText);
+        Assert.False(viewModel.HasReasoningLine);
     }
 
     [Fact]
@@ -74,18 +102,15 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("streaming")],
-            IsInProgress = true,
-        });
+        }, isInProgress: true);
 
         viewModel.UpdateFrom(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("complete"), new TextReasoningContent("because")],
-            IsInProgress = false,
         });
 
         Assert.Equal("complete", viewModel.Text);
-        Assert.False(viewModel.IsInProgress);
         Assert.Empty(viewModel.ReasoningDisplayText);
     }
 
@@ -96,8 +121,7 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("streaming")],
-            IsInProgress = true,
-        });
+        }, isInProgress: true);
 
         var changed = new List<string>();
         viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName!);
@@ -106,10 +130,8 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("complete"), new TextReasoningContent("because")],
-            IsInProgress = false,
         });
 
-        Assert.Contains(nameof(ChatHistoryItemViewModel.IsInProgress), changed);
         Assert.Contains(nameof(ChatHistoryItemViewModel.HasReasoningLine), changed);
         Assert.Contains(nameof(ChatHistoryItemViewModel.ReasoningDisplayText), changed);
         Assert.False(viewModel.HasReasoningLine);
@@ -123,8 +145,7 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("answer"), new TextReasoningContent("step 1")],
-            IsInProgress = true,
-        });
+        }, isInProgress: true);
 
         viewModel.SetReasoningVisible(true);
 
@@ -138,7 +159,6 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("answer"), new TextReasoningContent("step 1")],
-            IsInProgress = false,
         });
 
         viewModel.SetReasoningVisible(true);
@@ -169,8 +189,7 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("same content")],
-            IsInProgress = true,
-        });
+        }, isInProgress: true);
 
         var changed = new List<string>();
         viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName!);
@@ -179,14 +198,13 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("same content")],
-            IsInProgress = false,
         });
 
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
     }
 
     [Fact]
-    public void Constructor_RenderableContents_FiltersReasoningAndImageData()
+    public void Constructor_RenderableContents_IncludesAllContents()
     {
         var imageBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
         var call = new FunctionCallContent("web_request", "{\"url\":\"https://example.com\"}");
@@ -202,10 +220,8 @@ public sealed class ChatHistoryItemViewModelTests
             ],
         });
 
-        Assert.Collection(
-            viewModel.RenderableContents,
-            content => Assert.IsType<TextContent>(content),
-            content => Assert.Same(call, content));
+        Assert.Equal(4, viewModel.RenderableContents.Count);
+        Assert.Same(call, viewModel.RenderableContents[3]);
     }
 
     [Fact]
@@ -215,8 +231,8 @@ public sealed class ChatHistoryItemViewModelTests
         await using var _ = chat;
 
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat, () => chat.History.Any(static item => item.Role == ChatRole.Assistant), "assistant history item");
-        var assistantHistory = chat.History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
+        await WaitForConditionAsync(chat, () => chat.GetStateSnapshot().History.Any(static item => item.Role == ChatRole.Assistant), "assistant history item");
+        var assistantHistory = chat.GetStateSnapshot().History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
 
         Assert.NotNull(assistantHistory);
         var viewModel = new ChatHistoryItemViewModel(assistantHistory!);
@@ -228,7 +244,6 @@ public sealed class ChatHistoryItemViewModelTests
         {
             Role = ChatRole.Assistant,
             Contents = assistantHistory!.Contents,
-            IsInProgress = assistantHistory.IsInProgress,
         });
 
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
@@ -262,11 +277,7 @@ public sealed class ChatHistoryItemViewModelTests
                 return;
             }
 
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+            await signal.Task;
         }
         finally
         {

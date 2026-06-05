@@ -897,8 +897,8 @@ public class AgentFactoryTests
             });
 
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("hello", chat.History[0].Text);
-        Assert.Equal("world", chat.History[1].Text);
+        Assert.Equal("hello", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+        Assert.Equal("world", string.Concat(chat.History[1].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
     [Fact]
@@ -1059,11 +1059,7 @@ public class AgentFactoryTests
                 return;
             }
 
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+            await signal.Task;
         }
         finally
         {

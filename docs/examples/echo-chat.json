@@ -1,0 +1,18 @@
+{
+  "kind": "prompt",
+  "name": "echo-chat",
+  "displayName": "Echo Chat",
+  "description": "A local debug chat agent using the built-in Echo provider",
+  "model": {
+    "id": "echo",
+    "provider": "echo",
+    "apiType": "Echo"
+  },
+  "instructions": "You are an echo test agent used for local debugging.",
+  "tools": [],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": ["debug", "echo", "local"]
+  }
+}

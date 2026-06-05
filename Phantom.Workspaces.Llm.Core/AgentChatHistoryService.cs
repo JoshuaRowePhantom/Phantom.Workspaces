@@ -56,44 +56,8 @@ internal sealed class AgentChatHistoryService
                 Contents = contents,
             };
 
-            if (this.history.Count > 0 && AreEquivalent(this.history[^1], nextItem))
-            {
-                continue;
-            }
-
             this.history.Add(nextItem);
         }
-    }
-
-    private AgentChatHistoryItem? CommitFromMessages(IReadOnlyList<ChatMessage> messages)
-    {
-        foreach (var message in messages)
-        {
-            var contents = message.Contents.ToArray();
-            var nextItem = new AgentChatHistoryItem
-            {
-                Role = message.Role,
-                Contents = contents,
-                IsInProgress = false,
-            };
-
-            if (this.history.Count > 0 && AreEquivalent(this.history[^1], nextItem))
-            {
-                continue;
-            }
-
-            this.history.Add(nextItem);
-        }
-
-        return this.history.LastOrDefault(static item => item.Role == ChatRole.Assistant);
-    }
-
-    private static bool AreEquivalent(AgentChatHistoryItem left, AgentChatHistoryItem right)
-    {
-        return left.Role == right.Role
-            && left.Text == right.Text
-            && left.ReasoningText == right.ReasoningText
-            && left.IsInProgress == right.IsInProgress;
     }
 
     // Invocation and response history are applied by AgentChat's run loop to keep UI ordering stable.

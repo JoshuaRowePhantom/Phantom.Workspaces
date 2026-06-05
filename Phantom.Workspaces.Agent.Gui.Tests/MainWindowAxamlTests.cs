@@ -71,6 +71,14 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
+            "Content=\"Show reasoning text\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsChecked=\"{Binding IsReasoningVisible}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "<controls:AgentChatToolsDetailControl/>",
             editorControlContent,
             StringComparison.Ordinal);

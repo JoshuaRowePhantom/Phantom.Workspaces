@@ -1,0 +1,48 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Role label styles -->
+    <Style Selector="Paragraph.agent-chat-role-label">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0" />
+    </Style>
+
+    <Style Selector="Paragraph.agent-chat-role-label-user">
+        <Setter Property="Foreground" Value="#99D98C" />
+    </Style>
+
+    <Style Selector="Paragraph.agent-chat-role-label-assistant">
+        <Setter Property="Foreground" Value="#82CFFF" />
+    </Style>
+
+    <!-- Reasoning paragraph style -->
+    <Style Selector="Paragraph.agent-chat-reasoning">
+        <Setter Property="FontStyle" Value="Italic" />
+        <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+        <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+
+    <!-- Body paragraph style -->
+    <Style Selector="Paragraph.agent-chat-body">
+        <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+
+    <!-- Meta paragraph style -->
+    <Style Selector="Paragraph.agent-chat-meta">
+        <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+        <Setter Property="Margin" Value="12,2,0,0" />
+    </Style>
+
+    <!-- Monospace paragraph style -->
+    <Style Selector="Paragraph.agent-chat-monospace">
+        <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
+        <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+
+    <!-- Error paragraph style -->
+    <Style Selector="Paragraph.agent-chat-error">
+        <Setter Property="Foreground" Value="#FFB3B3" />
+        <Setter Property="Margin" Value="12,0,0,0" />
+    </Style>
+
+</Styles>

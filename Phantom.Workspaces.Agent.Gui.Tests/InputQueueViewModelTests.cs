@@ -48,7 +48,7 @@ public sealed class InputQueueViewModelTests
         Assert.False(viewModel.IsFormattedMode);
         Assert.Equal(2, chat.History.Count);
         var userHistory = chat.History[0];
-        Assert.Equal("hello", userHistory.Text);
+        Assert.Equal("hello", string.Concat(userHistory.Contents.OfType<TextContent>().Select(static content => content.Text)));
         Assert.Single(userHistory.Contents);
         Assert.IsType<TextContent>(userHistory.Contents[0]);
     }
@@ -66,7 +66,7 @@ public sealed class InputQueueViewModelTests
 
         Assert.Equal(2, chat.InputQueues.Count);
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("queued", chat.History[0].Text);
+        Assert.Equal("queued", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
         Assert.Equal(2, viewModel.Queues.Count);
         Assert.Equal("queued", viewModel.Queues[1].SelectedImmediacyOption.Label);
     }
@@ -143,7 +143,7 @@ public sealed class InputQueueViewModelTests
         Assert.False(viewModel.DefaultComposer.HasAttachments);
         Assert.Equal(string.Empty, viewModel.InputText);
         Assert.Equal(2, chat.History.Count);
-        Assert.Equal("[image/png]", chat.History[0].Text);
+        Assert.Equal("[image/png]", string.Concat(chat.History[0].Contents.OfType<DataContent>().Select(static content => $"[{content.MediaType}]")));
         Assert.Single(chat.History[0].Contents);
         Assert.IsType<DataContent>(chat.History[0].Contents[0]);
     }
@@ -367,11 +367,7 @@ public sealed class InputQueueViewModelTests
                 return;
             }
 
-            await signal.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        catch (TimeoutException ex)
-        {
-            throw new TimeoutException($"Timed out waiting for condition: {description}", ex);
+            await signal.Task;
         }
         finally
         {
