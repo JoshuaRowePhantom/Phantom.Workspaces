@@ -999,7 +999,7 @@ public sealed class AgentChat : IAsyncDisposable
 
                     if (chatMessagesToSubmit.Count == 0)
                     {
-                        queueStateSignal.Wait(cancellationToken);
+                        await queueStateSignal.WaitAsync(cancellationToken);
                     }
                 }
 

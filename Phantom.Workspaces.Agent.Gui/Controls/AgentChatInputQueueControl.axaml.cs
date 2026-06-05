@@ -65,7 +65,7 @@ public partial class AgentChatInputQueueControl : UserControl
             return;
         }
 
-        Dispatcher.UIThread.Post(() => this.FocusEditBox(item));
+        this.FocusEditBox(item);
     }
 
     private void WireEditHandlers(InputQueueViewModel vm)

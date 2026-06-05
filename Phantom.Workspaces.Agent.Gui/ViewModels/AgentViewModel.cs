@@ -281,7 +281,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     }
 
     private void OnToolsChanged(object? sender, EventArgs e)
-        => Dispatcher.UIThread.Post(() => this.ApplyToolSnapshot(this.agentChat.GetToolSnapshot()));
+        => this.ApplyToolSnapshot(this.agentChat.GetToolSnapshot());
 
     private void ApplyToolSnapshot(IReadOnlyList<AgentChatToolItem> tools)
     {

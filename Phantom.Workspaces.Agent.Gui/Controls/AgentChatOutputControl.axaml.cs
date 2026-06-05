@@ -29,7 +29,7 @@ public partial class AgentChatOutputControl : UserControl
         }
 
         this.hasAppliedInitialOutputScroll = true;
-        Dispatcher.UIThread.Post(this.ScrollHistoryToBottom, DispatcherPriority.Background);
+        this.ScrollHistoryToBottom();
     }
 
     private void ScrollHistoryToBottom()

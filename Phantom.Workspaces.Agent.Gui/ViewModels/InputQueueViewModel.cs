@@ -276,7 +276,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     private void OnInputQueuesChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        Dispatcher.UIThread.Post(this.RebuildQueues);
+        this.RebuildQueues();
     }
 
     private void OnQueueChanged(object? sender, EventArgs e)
@@ -286,7 +286,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        Dispatcher.UIThread.Post(() => this.RefreshQueue(queue));
+        this.RefreshQueue(queue);
     }
 
     private void RebuildQueues()
