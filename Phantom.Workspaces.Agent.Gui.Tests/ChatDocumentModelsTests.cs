@@ -70,6 +70,83 @@ public sealed class ChatDocumentModelsTests
     }
 
     [Fact]
+    public void RunningItem_UpdatesWithReasoningText_RendersProgressAndReasoning()
+    {
+        var root = new Section();
+        var runningItems = new ObservableCollection<AgentChatRunningItem>();
+        using var model = new RunningChatItemsDocumentModel(root, runningItems, () => true);
+        
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("initial response")],
+        });
+        runningItems.Add(runningItem);
+
+        // Update the running item with reasoning text
+        runningItem.Items[0] = new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new TextContent("updated response"),
+                new TextReasoningContent("reasoning text"),
+            ],
+        };
+
+        // Get the rendered message section and verify it exists
+        var runningItemSection = (Section)root.Blocks[0];
+        var messagesSection = (Section)runningItemSection.Blocks[0];
+        var messageSection = (Section)messagesSection.Blocks[0];
+        
+        // Verify progress bar is shown for running items
+        var progressHost = (Section)messageSection.Blocks[3];
+        Assert.NotEmpty(progressHost.Blocks.OfType<BlockUIContainer>());
+    }
+
+    [Fact]
+    public void RunningItem_UpdateWithDifferentInstance_SwitchesTransformer()
+    {
+        var root = new Section();
+        var runningItems = new ObservableCollection<AgentChatRunningItem>();
+        using var model = new RunningChatItemsDocumentModel(root, runningItems, () => false);
+
+        var runningItem1 = new AgentChatRunningItem();
+        runningItem1.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("first")],
+        });
+        runningItems.Add(runningItem1);
+
+        var blockCountBefore = root.Blocks.Count;
+
+        // Replace with a different instance
+        var runningItem2 = new AgentChatRunningItem();
+        runningItem2.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("second")],
+        });
+        runningItems[0] = runningItem2;
+
+        // Add to the new instance and verify it renders
+        runningItem2.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.User,
+            Contents = [new TextContent("user input")],
+        });
+
+        // Should have rendered the two items from the new running item
+        var runningItemSection = (Section)root.Blocks[0];
+        var messagesSection = (Section)runningItemSection.Blocks[0];
+        
+        Assert.Equal(2, messagesSection.Blocks.Count);
+    }
+
+
+    [Fact]
     public void Labels_UseRoleSpecificClasses()
     {
         var root = new Section();

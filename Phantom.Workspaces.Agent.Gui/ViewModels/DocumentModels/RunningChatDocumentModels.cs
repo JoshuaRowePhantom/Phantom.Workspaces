@@ -71,8 +71,11 @@ internal sealed class RunningChatItemDocumentModelTransformer : AgentChatDocumen
         ArgumentNullException.ThrowIfNull(messagesSection);
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         this.isReasoningVisible = isReasoningVisible;
+        this.HistoryItems = historyItems;
         this.ApplyInitialTransform();
     }
+
+    public IReadOnlyList<AgentChatHistoryItem> HistoryItems { get; }
 
     protected override ChatMessageDocumentModel CreateBlockModel(AgentChatHistoryItem sourceItem)
         => new(sourceItem, isRunning: true, this.isReasoningVisible);
@@ -84,7 +87,7 @@ internal sealed class RunningChatItemDocumentModelTransformer : AgentChatDocumen
 internal sealed class RunningChatItemDocumentModel : AgentChatDocumentBlockModel, IDisposable
 {
     private readonly Func<bool> isReasoningVisible;
-    private readonly RunningChatItemDocumentModelTransformer transformer;
+    private RunningChatItemDocumentModelTransformer transformer;
     private readonly List<ChatMessageDocumentModel> messageModels = [];
     private readonly Section messagesSection = new();
 
@@ -107,6 +110,15 @@ internal sealed class RunningChatItemDocumentModel : AgentChatDocumentBlockModel
     public void Update(AgentChatRunningItem runningItem)
     {
         this.Source = runningItem;
+        
+        // If it's a different running item, recreate the transformer to watch the new Items collection
+        if (!ReferenceEquals(this.transformer.HistoryItems, runningItem.Items))
+        {
+            this.transformer.Dispose();
+            this.messageModels.Clear();
+            this.messagesSection.Blocks.Clear();
+            this.transformer = new RunningChatItemDocumentModelTransformer(this.messagesSection, runningItem.Items, this.isReasoningVisible, this.messageModels);
+        }
     }
 
     public void Refresh()
