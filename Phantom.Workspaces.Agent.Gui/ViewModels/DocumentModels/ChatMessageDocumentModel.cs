@@ -27,10 +27,24 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 
     public override Block Block => this.Section;
 
-    public void Update(AgentChatHistoryItem item)
+public void Update(AgentChatHistoryItem item)
     {
         this.Source = item;
         this.Render();
+    }
+
+    public void UpdateReasoningVisibility()
+    {
+        // Only update the reasoning section without re-rendering the entire message
+        var reasoningText = this.GetReasoningText(this.Source.Contents);
+        var reasoningSection = (Section)this.Section.Blocks[1];
+        
+        DocumentBlockUtilities.ClearBlocksSafely(reasoningSection);
+        
+        if (this.isReasoningVisible() && !string.IsNullOrWhiteSpace(reasoningText))
+        {
+            reasoningSection.Blocks.Add(DocumentBlockUtilities.CreateReasoningParagraph(reasoningText));
+        }
     }
 
     private void Render()

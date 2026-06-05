@@ -231,6 +231,96 @@ public sealed class ChatDocumentModelsTests
         Assert.Contains("reasoning text", paragraph.Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReasoningVisibilityToggle_UpdatesDocumentWithoutErrors()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new TextContent("answer"),
+                    new TextReasoningContent("reasoning text"),
+                ],
+            },
+        };
+         
+        var isReasoningVisible = false;
+        var root = new Section();
+         
+        using var model = new ChatHistoryDocumentModel(root, history, () => isReasoningVisible);
+         
+        // Initially reasoning is hidden
+        var messageSection = (Section)root.Blocks[0];
+        var reasoningHostBefore = (Section)messageSection.Blocks[1];
+        Assert.Empty(reasoningHostBefore.Blocks.OfType<Paragraph>());
+         
+        // Toggle visibility to true
+        isReasoningVisible = true;
+        model.Refresh();
+         
+        // Should now show reasoning without errors
+        var reasoningHostAfter = (Section)messageSection.Blocks[1];
+        var paragraph = Assert.Single(reasoningHostAfter.Blocks.OfType<Paragraph>());
+        Assert.Contains("reasoning text", paragraph.Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
+         
+        // Toggle back to false
+        isReasoningVisible = false;
+        model.Refresh();
+         
+        // Should be empty again without errors
+        var reasoningHostAfterToggle = (Section)messageSection.Blocks[1];
+        Assert.Empty(reasoningHostAfterToggle.Blocks.OfType<Paragraph>());
+    }
+
+    [Fact]
+    public void RunningItem_ReasoningVisibilityToggle_UpdatesWithoutErrors()
+    {
+        var runningItems = new ObservableCollection<AgentChatRunningItem>();
+        var isReasoningVisible = false;
+        var root = new Section();
+         
+        using var model = new RunningChatItemsDocumentModel(root, runningItems, () => isReasoningVisible);
+         
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new TextContent("response"),
+                new TextReasoningContent("reasoning text"),
+            ],
+        });
+        runningItems.Add(runningItem);
+         
+        // Initially reasoning is hidden
+        var runningItemSection = (Section)root.Blocks[0];
+        var messagesSection = (Section)runningItemSection.Blocks[0];
+        var messageSection = (Section)messagesSection.Blocks[0];
+        var reasoningHostBefore = (Section)messageSection.Blocks[1];
+        Assert.Empty(reasoningHostBefore.Blocks.OfType<Paragraph>());
+         
+        // Toggle visibility to true
+        isReasoningVisible = true;
+        model.Refresh();
+         
+        // Should now show reasoning without errors
+        var reasoningHostAfter = (Section)messageSection.Blocks[1];
+        var paragraph = Assert.Single(reasoningHostAfter.Blocks.OfType<Paragraph>());
+        Assert.Contains("reasoning text", paragraph.Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
+         
+        // Toggle back to false
+        isReasoningVisible = false;
+        model.Refresh();
+         
+        // Should be empty again without errors
+        var reasoningHostAfterToggle = (Section)messageSection.Blocks[1];
+        Assert.Empty(reasoningHostAfterToggle.Blocks.OfType<Paragraph>());
+    }
+
     private static Paragraph GetFirstContentParagraph(Section historyRoot, int messageIndex)
     {
         var messageSection = (Section)historyRoot.Blocks[messageIndex];

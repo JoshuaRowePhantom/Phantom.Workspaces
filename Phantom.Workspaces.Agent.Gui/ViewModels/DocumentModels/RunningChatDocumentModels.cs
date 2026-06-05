@@ -125,7 +125,7 @@ internal sealed class RunningChatItemDocumentModel : AgentChatDocumentBlockModel
     {
         for (var index = 0; index < this.messageModels.Count; index++)
         {
-            this.messageModels[index].Update(this.messageModels[index].Source);
+            this.messageModels[index].UpdateReasoningVisibility();
         }
     }
 
