@@ -120,8 +120,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        this.historyDocumentModel?.Refresh();
-        this.runningDocumentModel?.Refresh();
+        lock (this.stateLock)
+        {
+            this.historyDocumentModel?.Refresh();
+            this.runningDocumentModel?.Refresh();
+        }
     }
 
     private void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
@@ -161,8 +164,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
             this.AgentSessionId = snapshot.AgentSessionId;
         }
-
-        this.ResetOutputDocument();
     }
 
     private void ApplyIncrementalChange(AgentChatStateChangedEventArgs change)

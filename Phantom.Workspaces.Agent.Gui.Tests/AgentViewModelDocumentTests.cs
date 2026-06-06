@@ -703,6 +703,75 @@ public sealed class AgentViewModelDocumentTests
     }
 
     [Fact]
+    public async Task ToggleReasoningVisibility_DuringRunningItem_DoesNotBreakSubsequentHistoryInsert()
+    {
+        var chat = await CreateChatAsync();
+        await using var viewModel = new AgentViewModel(chat, "test-agent");
+
+        ApplyIncrementalChange(
+            viewModel,
+            new AgentChatStateChangedEventArgs
+            {
+                FromVersion = 0,
+                ToVersion = 1,
+                ChangeKind = AgentChatStateChangeKind.HistoryAdded,
+                HistoryItem = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.User,
+                    Contents = [new TextContent("hello")],
+                },
+            });
+
+        var firstHistorySection = (Section)GetHistoryRoot(viewModel).Blocks[0];
+        var firstContentSection = (Section)firstHistorySection.Blocks[1];
+
+        var runningItem = new AgentChatRunningItem
+        {
+            Items =
+            {
+                new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Contents = [new TextContent("working")],
+                },
+            },
+        };
+
+        ApplyIncrementalChange(
+            viewModel,
+            new AgentChatStateChangedEventArgs
+            {
+                FromVersion = 1,
+                ToVersion = 2,
+                ChangeKind = AgentChatStateChangeKind.RunningAdded,
+                RunningItem = runningItem,
+            });
+
+        viewModel.SetReasoningVisibility(true);
+
+        Assert.Same(firstHistorySection, GetHistoryRoot(viewModel).Blocks[0]);
+        Assert.Same(firstContentSection, ((Section)GetHistoryRoot(viewModel).Blocks[0]).Blocks[1]);
+
+        ApplyIncrementalChange(
+            viewModel,
+            new AgentChatStateChangedEventArgs
+            {
+                FromVersion = 2,
+                ToVersion = 3,
+                ChangeKind = AgentChatStateChangeKind.HistoryAdded,
+                HistoryItem = new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Contents = [new TextContent("done")],
+                },
+            });
+
+        Assert.Equal(2, viewModel.History.Count);
+        Assert.Single(viewModel.RunningItems);
+        Assert.Equal(2, GetHistoryRoot(viewModel).Blocks.OfType<Section>().Count());
+    }
+
+    [Fact]
     public async Task HistoryReplaced_WithCompletedEmptyAssistant_ReplacesPlaceholder()
     {
         var chat = await CreateChatAsync();
@@ -804,6 +873,50 @@ public sealed class AgentViewModelDocumentTests
         Assert.Equal(ChatRole.User, viewModel.History[0].Role);
         Assert.Contains("hello", GetText(viewModel.History[0].Contents), StringComparison.Ordinal);
         Assert.Equal(ChatRole.Assistant, viewModel.History[1].Role);
+    }
+
+    [Fact]
+    public async Task ApplySnapshot_DoesNotReplaceOutputDocument()
+    {
+        var chat = await CreateChatAsync();
+        await using var viewModel = new AgentViewModel(chat, "test-agent");
+
+        var outputDocumentBefore = viewModel.OutputDocument;
+        var historyRootBefore = GetHistoryRoot(viewModel);
+        var runningRootBefore = GetRunningRoot(viewModel);
+
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("streaming")],
+        });
+
+        var snapshot = new AgentChatStateSnapshot(
+            Version: 10,
+            AgentSessionId: "session",
+            History:
+            [
+                new AgentChatHistoryItem
+                {
+                    Role = ChatRole.User,
+                    Contents = [new TextContent("hello")],
+                },
+                new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Contents = [new TextContent("world")],
+                },
+            ],
+            RunningItems: [runningItem]);
+
+        ApplySnapshot(viewModel, snapshot);
+
+        Assert.Same(outputDocumentBefore, viewModel.OutputDocument);
+        Assert.Same(historyRootBefore, GetHistoryRoot(viewModel));
+        Assert.Same(runningRootBefore, GetRunningRoot(viewModel));
+        Assert.Equal(2, viewModel.History.Count);
+        Assert.Single(viewModel.RunningItems);
     }
 
     [Fact]

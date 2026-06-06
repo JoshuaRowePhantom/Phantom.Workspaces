@@ -24,7 +24,7 @@ internal sealed class ChatHistoryDocumentModelTransformer : AgentChatDocumentBlo
     }
 
     protected override ChatMessageDocumentModel CreateBlockModel(AgentChatHistoryItem sourceItem)
-        => new(sourceItem, isRunning: false, this.isReasoningVisible);
+        => new(sourceItem, this.isReasoningVisible);
 
     protected override void UpdateBlockModel(ChatMessageDocumentModel model, AgentChatHistoryItem sourceItem)
         => model.Update(sourceItem);

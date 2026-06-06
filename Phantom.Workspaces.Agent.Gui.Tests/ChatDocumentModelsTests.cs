@@ -75,7 +75,7 @@ public sealed class ChatDocumentModelsTests
         var root = new Section();
         var runningItems = new ObservableCollection<AgentChatRunningItem>();
         using var model = new RunningChatItemsDocumentModel(root, runningItems, () => true);
-        
+         
         var runningItem = new AgentChatRunningItem();
         runningItem.Items.Add(new AgentChatHistoryItem
         {
@@ -97,12 +97,10 @@ public sealed class ChatDocumentModelsTests
 
         // Get the rendered message section and verify it exists
         var runningItemSection = (Section)root.Blocks[0];
-        var messagesSection = (Section)runningItemSection.Blocks[0];
-        var messageSection = (Section)messagesSection.Blocks[0];
-        
-        // Verify progress bar is shown for running items
-        var progressHost = (Section)messageSection.Blocks[3];
-        Assert.NotEmpty(progressHost.Blocks.OfType<BlockUIContainer>());
+         
+        // Verify progress bar is shown at the running item level (not per message)
+        var progressSection = (Section)runningItemSection.Blocks[1];
+        Assert.NotEmpty(progressSection.Blocks.OfType<BlockUIContainer>());
     }
 
     [Fact]
@@ -141,7 +139,7 @@ public sealed class ChatDocumentModelsTests
         // Should have rendered the two items from the new running item
         var runningItemSection = (Section)root.Blocks[0];
         var messagesSection = (Section)runningItemSection.Blocks[0];
-        
+         
         Assert.Equal(2, messagesSection.Blocks.Count);
     }
 
@@ -188,8 +186,9 @@ public sealed class ChatDocumentModelsTests
         };
         using var model = new ChatHistoryDocumentModel(root, history, () => false);
 
-        Assert.Equal(4, ((Section)root.Blocks[0]).Blocks.Count);
-        Assert.Equal(4, ((Section)root.Blocks[1]).Blocks.Count);
+        // History items have 2 blocks: label, content
+        Assert.Equal(2, ((Section)root.Blocks[0]).Blocks.Count);
+        Assert.Equal(2, ((Section)root.Blocks[1]).Blocks.Count);
     }
 
     [Fact]
@@ -203,8 +202,8 @@ public sealed class ChatDocumentModelsTests
         using var model = new ChatHistoryDocumentModel(root, history, () => false);
 
         var messageSection = (Section)root.Blocks[0];
-        var progressHost = (Section)messageSection.Blocks[3];
-        Assert.Empty(progressHost.Blocks.OfType<BlockUIContainer>());
+        // History items only have 2 blocks: label, content (no progress section)
+        Assert.Equal(2, messageSection.Blocks.Count);
     }
 
     [Fact]
@@ -226,9 +225,10 @@ public sealed class ChatDocumentModelsTests
         using var model = new ChatHistoryDocumentModel(root, history, () => true);
 
         var messageSection = (Section)root.Blocks[0];
-        var reasoningHost = (Section)messageSection.Blocks[1];
-        var paragraph = Assert.Single(reasoningHost.Blocks.OfType<Paragraph>());
-        Assert.Contains("reasoning text", paragraph.Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
+        var contentSection = (Section)messageSection.Blocks[1];
+        var paragraphs = contentSection.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, paragraphs.Count);
+        Assert.Contains("reasoning text", paragraphs[1].Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -252,27 +252,28 @@ public sealed class ChatDocumentModelsTests
          
         using var model = new ChatHistoryDocumentModel(root, history, () => isReasoningVisible);
          
-        // Initially reasoning is hidden
+        // Initially reasoning is hidden, only 1 paragraph (answer)
         var messageSection = (Section)root.Blocks[0];
-        var reasoningHostBefore = (Section)messageSection.Blocks[1];
-        Assert.Empty(reasoningHostBefore.Blocks.OfType<Paragraph>());
+        var contentSection = (Section)messageSection.Blocks[1];
+        Assert.Single(contentSection.Blocks.OfType<Paragraph>());
          
         // Toggle visibility to true
         isReasoningVisible = true;
         model.Refresh();
          
-        // Should now show reasoning without errors
-        var reasoningHostAfter = (Section)messageSection.Blocks[1];
-        var paragraph = Assert.Single(reasoningHostAfter.Blocks.OfType<Paragraph>());
-        Assert.Contains("reasoning text", paragraph.Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
+        // Should now show both answer and reasoning paragraphs
+        var contentSectionAfter = (Section)messageSection.Blocks[1];
+        var paragraphs = contentSectionAfter.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, paragraphs.Count);
+        Assert.Contains("reasoning text", paragraphs[1].Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
          
         // Toggle back to false
         isReasoningVisible = false;
         model.Refresh();
          
-        // Should be empty again without errors
-        var reasoningHostAfterToggle = (Section)messageSection.Blocks[1];
-        Assert.Empty(reasoningHostAfterToggle.Blocks.OfType<Paragraph>());
+        // Should be back to just answer paragraph
+        var contentSectionAfterToggle = (Section)messageSection.Blocks[1];
+        Assert.Single(contentSectionAfterToggle.Blocks.OfType<Paragraph>());
     }
 
     [Fact]
@@ -296,46 +297,227 @@ public sealed class ChatDocumentModelsTests
         });
         runningItems.Add(runningItem);
          
-        // Initially reasoning is hidden
+        // Initially reasoning is hidden, only 1 paragraph (response)
         var runningItemSection = (Section)root.Blocks[0];
         var messagesSection = (Section)runningItemSection.Blocks[0];
         var messageSection = (Section)messagesSection.Blocks[0];
-        var reasoningHostBefore = (Section)messageSection.Blocks[1];
-        Assert.Empty(reasoningHostBefore.Blocks.OfType<Paragraph>());
+        var contentSection = (Section)messageSection.Blocks[1];
+        Assert.Single(contentSection.Blocks.OfType<Paragraph>());
          
         // Toggle visibility to true
         isReasoningVisible = true;
         model.Refresh();
          
-        // Should now show reasoning without errors
-        var reasoningHostAfter = (Section)messageSection.Blocks[1];
-        var paragraph = Assert.Single(reasoningHostAfter.Blocks.OfType<Paragraph>());
-        Assert.Contains("reasoning text", paragraph.Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
+        // Should now show both response and reasoning paragraphs
+        var contentSectionAfter = (Section)messageSection.Blocks[1];
+        var paragraphs = contentSectionAfter.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, paragraphs.Count);
+        Assert.Contains("reasoning text", paragraphs[1].Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
          
         // Toggle back to false
         isReasoningVisible = false;
         model.Refresh();
          
-        // Should be empty again without errors
-        var reasoningHostAfterToggle = (Section)messageSection.Blocks[1];
-        Assert.Empty(reasoningHostAfterToggle.Blocks.OfType<Paragraph>());
+        // Should be back to just response paragraph
+        var contentSectionAfterToggle = (Section)messageSection.Blocks[1];
+        Assert.Single(contentSectionAfterToggle.Blocks.OfType<Paragraph>());
     }
 
     private static Paragraph GetFirstContentParagraph(Section historyRoot, int messageIndex)
     {
         var messageSection = (Section)historyRoot.Blocks[messageIndex];
-        var contentHost = (Section)messageSection.Blocks[2];
+        var contentHost = (Section)messageSection.Blocks[1];
         return (Paragraph)contentHost.Blocks[0];
+    }
+
+    [Fact]
+    public void ToggleReasoningVisibility_PreservesDocumentStructure()
+    {
+        var root = new Section();
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.User,
+                Contents = [new TextContent("question")],
+            },
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new TextContent("answer part 1"),
+                    new TextReasoningContent("reasoning text"),
+                    new TextContent("answer part 2"),
+                ],
+            },
+        };
+
+        var isReasoningVisible = false;
+        using var model = new ChatHistoryDocumentModel(root, history, () => isReasoningVisible);
+
+        // Both messages should have 2 blocks (label + content)
+        Assert.Equal(2, ((Section)root.Blocks[0]).Blocks.Count);
+        Assert.Equal(2, ((Section)root.Blocks[1]).Blocks.Count);
+
+        var message1Section = (Section)root.Blocks[0];
+        var message2Section = (Section)root.Blocks[1];
+
+        // Message 1 should have 1 paragraph (the question)
+        var msg1Content = (Section)message1Section.Blocks[1];
+        var msg1Paragraphs = msg1Content.Blocks.OfType<Paragraph>().ToList();
+        Assert.Single(msg1Paragraphs);
+
+        // Message 2 should have 2 paragraphs (answer part 1 and answer part 2, but no reasoning)
+        var msg2Content = (Section)message2Section.Blocks[1];
+        var msg2ParagraphsBefore = msg2Content.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, msg2ParagraphsBefore.Count);
+
+        // Capture the paragraph reference to verify it's preserved
+        var msg2FirstParagraphBefore = msg2ParagraphsBefore[0];
+
+        // Toggle visibility to true
+        isReasoningVisible = true;
+        model.Refresh();
+
+        // Structure should still be 2 blocks per message
+        Assert.Equal(2, ((Section)root.Blocks[0]).Blocks.Count);
+        Assert.Equal(2, ((Section)root.Blocks[1]).Blocks.Count);
+
+        // Message 2 should now have 3 paragraphs (answer 1, reasoning, answer 2)
+        var msg2ParagraphsAfter = ((Section)((Section)root.Blocks[1]).Blocks[1]).Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(3, msg2ParagraphsAfter.Count);
+        Assert.Contains("reasoning text", msg2ParagraphsAfter[1].Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
+
+        // Toggle back to false
+        isReasoningVisible = false;
+        model.Refresh();
+
+        // Should be back to 2 paragraphs
+        var msg2ParagraphsAfterToggle = ((Section)((Section)root.Blocks[1]).Blocks[1]).Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, msg2ParagraphsAfterToggle.Count);
     }
 
     private static AgentChatHistoryItem CreateHistoryItem(ChatRole role, string text)
         => new()
         {
             Role = role,
+
             Contents = [new TextContent(text)],
         };
 
+    [Fact]
+    public void ToggleReasoningVisibility_WithRunningItems_PreservesContent()
+    {
+        var root = new Section();
+        var runningItems = new ObservableCollection<AgentChatRunningItem>();
+        var isReasoningVisible = false;
+        
+        using var model = new RunningChatItemsDocumentModel(root, runningItems, () => isReasoningVisible);
+        
+        // Add a running item
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new TextContent("answer part 1"),
+                new TextReasoningContent("reasoning text"),
+                new TextContent("answer part 2"),
+            ],
+        });
+        runningItems.Add(runningItem);
+        
+        // Should have 1 running item block
+        Assert.Single(root.Blocks);
+        var runningItemSection = (Section)root.Blocks[0];
+        
+        // Running item should have messagesSection and progressSection (2 blocks)
+        Assert.Equal(2, runningItemSection.Blocks.Count);
+        
+        // Messages section should have 1 message with 2 content blocks (no reasoning yet)
+        var messagesSection = (Section)runningItemSection.Blocks[0];
+        var messageSection = (Section)messagesSection.Blocks[0];
+        var contentSection = (Section)messageSection.Blocks[1];
+        var paragraphs = contentSection.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, paragraphs.Count);
+        
+        // Toggle visibility to true
+        isReasoningVisible = true;
+        model.Refresh();
+        
+        // Root should still have 1 running item block
+        Assert.Single(root.Blocks);
+        
+        // Running item should still have messagesSection and progressSection
+        var runningItemSectionAfter = (Section)root.Blocks[0];
+        Assert.Equal(2, runningItemSectionAfter.Blocks.Count);
+        
+        // Message should now have 3 paragraphs (reasoning is now visible)
+        var messagesSectionAfter = (Section)runningItemSectionAfter.Blocks[0];
+        var messageSectionAfter = (Section)messagesSectionAfter.Blocks[0];
+        var contentSectionAfter = (Section)messageSectionAfter.Blocks[1];
+        var paragraphsAfter = contentSectionAfter.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(3, paragraphsAfter.Count);
+    }
+
+    [Fact]
+    public void ToggleReasoningVisibility_HistoryWithRunningItems_PreservesHistoryContent()
+    {
+        var historyRoot = new Section();
+        var history = new ObservableCollection<AgentChatHistoryItem>();
+        var isReasoningVisible = false;
+        
+        var historyModel = new ChatHistoryDocumentModel(historyRoot, history, () => isReasoningVisible);
+        
+        // Add history items
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.User,
+            Contents = [new TextContent("user message")],
+        });
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new TextContent("answer 1"),
+                new TextReasoningContent("reasoning 1"),
+                new TextContent("answer 2"),
+            ],
+        });
+        
+        // Should have 2 message blocks in history
+        Assert.Equal(2, historyRoot.Blocks.Count);
+        var firstMessageSection = (Section)historyRoot.Blocks[0];
+        Assert.Equal(2, firstMessageSection.Blocks.Count); // label + content
+        
+        var secondMessageSection = (Section)historyRoot.Blocks[1];
+        Assert.Equal(2, secondMessageSection.Blocks.Count); // label + content (reasoning hidden)
+        
+        var secondContentSection = (Section)secondMessageSection.Blocks[1];
+        var beforeParagraphs = secondContentSection.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(2, beforeParagraphs.Count); // answer 1 and answer 2 only
+        
+        // Toggle visibility to true
+        isReasoningVisible = true;
+        historyModel.Refresh();
+        
+        // History should still have 2 messages
+        Assert.Equal(2, historyRoot.Blocks.Count);
+        
+        // Second message should now have reasoning visible
+        var secondMessageSectionAfter = (Section)historyRoot.Blocks[1];
+        var secondContentSectionAfter = (Section)secondMessageSectionAfter.Blocks[1];
+        var afterParagraphs = secondContentSectionAfter.Blocks.OfType<Paragraph>().ToList();
+        Assert.Equal(3, afterParagraphs.Count); // answer 1, reasoning, answer 2
+        
+        historyModel.Dispose();
+    }
+
     private static AgentChatRunningItem CreateRunningItem(string text)
+
     {
         var runningItem = new AgentChatRunningItem();
         runningItem.Items.Add(new AgentChatHistoryItem

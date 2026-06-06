@@ -9,15 +9,17 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 {
     private readonly Func<bool> isReasoningVisible;
-    private readonly bool isRunning;
+    private readonly Section labelSection = new();
+    private readonly Section contentSection = new();
 
-    public ChatMessageDocumentModel(AgentChatHistoryItem item, bool isRunning, Func<bool> isReasoningVisible)
+    public ChatMessageDocumentModel(AgentChatHistoryItem item, Func<bool> isReasoningVisible)
     {
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         this.Source = item;
-        this.isRunning = isRunning;
         this.isReasoningVisible = isReasoningVisible;
         this.Section = new Section();
+        this.Section.Blocks.Add(this.labelSection);
+        this.Section.Blocks.Add(this.contentSection);
         this.Render();
     }
 
@@ -27,7 +29,7 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 
     public override Block Block => this.Section;
 
-public void Update(AgentChatHistoryItem item)
+    public void Update(AgentChatHistoryItem item)
     {
         this.Source = item;
         this.Render();
@@ -35,69 +37,32 @@ public void Update(AgentChatHistoryItem item)
 
     public void UpdateReasoningVisibility()
     {
-        // Only update the reasoning section without re-rendering the entire message
-        var reasoningText = this.GetReasoningText(this.Source.Contents);
-        var reasoningSection = (Section)this.Section.Blocks[1];
-        
-        DocumentBlockUtilities.ClearBlocksSafely(reasoningSection);
-        
-        if (this.isReasoningVisible() && !string.IsNullOrWhiteSpace(reasoningText))
-        {
-            reasoningSection.Blocks.Add(DocumentBlockUtilities.CreateReasoningParagraph(reasoningText));
-        }
+        this.Render();
     }
 
     private void Render()
     {
-        DocumentBlockUtilities.ClearBlocksSafely(this.Section);
-
-        var labelSection = new Section();
-        labelSection.Blocks.Add(DocumentBlockUtilities.CreateLabelParagraph(
+        DocumentBlockUtilities.ClearBlocksSafely(this.labelSection);
+        this.labelSection.Blocks.Add(DocumentBlockUtilities.CreateLabelParagraph(
             this.Source.Role.Value.ToLowerInvariant(),
             this.Source.Role.Value));
-        this.Section.Blocks.Add(labelSection);
 
-        var reasoningSection = new Section();
-        var reasoningText = this.GetReasoningText(this.Source.Contents);
-        if (this.isReasoningVisible() && !string.IsNullOrWhiteSpace(reasoningText))
-        {
-            reasoningSection.Blocks.Add(DocumentBlockUtilities.CreateReasoningParagraph(reasoningText));
-        }
-
-        this.Section.Blocks.Add(reasoningSection);
-
-        var contentSection = new Section();
+        DocumentBlockUtilities.ClearBlocksSafely(this.contentSection);
         foreach (var content in this.Source.Contents)
         {
-            if (content is TextReasoningContent)
-            {
-                continue;
-            }
-
-            this.AppendContent(contentSection, content);
+            this.AppendContent(this.contentSection, content);
         }
-
-        this.Section.Blocks.Add(contentSection);
-
-        var progressSection = new Section();
-        if (this.isRunning)
-        {
-            progressSection.Blocks.Add(new BlockUIContainer(
-                new ProgressBar
-                {
-                    IsIndeterminate = true,
-                    Margin = new Thickness(12, 2, 0, 0),
-                    MinHeight = 2,
-                }));
-        }
-
-        this.Section.Blocks.Add(progressSection);
     }
 
     private void AppendContent(Section section, AIContent content)
     {
         switch (content)
         {
+            case TextReasoningContent reasoningContent when this.isReasoningVisible() && !string.IsNullOrWhiteSpace(reasoningContent.Text):
+                section.Blocks.Add(DocumentBlockUtilities.CreateReasoningParagraph(reasoningContent.Text));
+                return;
+            case TextReasoningContent:
+                return;
             case TextContent textContent when !string.IsNullOrWhiteSpace(textContent.Text):
                 section.Blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(textContent.Text));
                 return;
@@ -161,6 +126,4 @@ public void Update(AgentChatHistoryItem item)
         section.Blocks.Add(new BlockUIContainer(imageContainer));
     }
 
-    private string GetReasoningText(IReadOnlyList<AIContent> contents)
-        => string.Concat(contents.OfType<TextReasoningContent>().Select(static content => content.Text));
 }

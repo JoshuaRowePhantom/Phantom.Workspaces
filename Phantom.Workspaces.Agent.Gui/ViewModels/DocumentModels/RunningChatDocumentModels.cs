@@ -1,3 +1,5 @@
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Phantom.Workspaces.Llm;
 
@@ -78,7 +80,7 @@ internal sealed class RunningChatItemDocumentModelTransformer : AgentChatDocumen
     public IReadOnlyList<AgentChatHistoryItem> HistoryItems { get; }
 
     protected override ChatMessageDocumentModel CreateBlockModel(AgentChatHistoryItem sourceItem)
-        => new(sourceItem, isRunning: true, this.isReasoningVisible);
+        => new(sourceItem, this.isReasoningVisible);
 
     protected override void UpdateBlockModel(ChatMessageDocumentModel model, AgentChatHistoryItem sourceItem)
         => model.Update(sourceItem);
@@ -90,6 +92,7 @@ internal sealed class RunningChatItemDocumentModel : AgentChatDocumentBlockModel
     private RunningChatItemDocumentModelTransformer transformer;
     private readonly List<ChatMessageDocumentModel> messageModels = [];
     private readonly Section messagesSection = new();
+    private readonly Section progressSection = new();
 
     public RunningChatItemDocumentModel(AgentChatRunningItem runningItem, Func<bool> isReasoningVisible)
     {
@@ -98,6 +101,16 @@ internal sealed class RunningChatItemDocumentModel : AgentChatDocumentBlockModel
         this.Source = runningItem;
         this.Section = new Section();
         this.Section.Blocks.Add(this.messagesSection);
+        this.Section.Blocks.Add(this.progressSection);
+        
+        // Add progress bar for the running item
+        var progressBar = new ProgressBar
+        {
+            IsIndeterminate = true,
+        };
+        progressBar.Classes.Add("agent-chat-running-progress");
+        this.progressSection.Blocks.Add(new BlockUIContainer(progressBar));
+        
         this.transformer = new RunningChatItemDocumentModelTransformer(this.messagesSection, runningItem.Items, this.isReasoningVisible, this.messageModels);
     }
 
