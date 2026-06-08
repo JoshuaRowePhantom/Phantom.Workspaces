@@ -12,122 +12,10 @@ using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.ClientModel;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Phantom.Workspaces.Llm;
-
-/// <summary>
-/// A single chat history entry (user or completed assistant turn).
-/// </summary>
-public sealed record AgentChatHistoryItem
-{
-    public static ChatRole DiagnosticChatRole { get; } = new("diagnostic");
-
-    public ChatRole Role { get; init; }
-
-    /// <summary>Structured content blocks for this turn.</summary>
-    public IReadOnlyList<AIContent> Contents { get; init; } = [];
-}
-
-/// <summary>
-/// A currently-running item with model payload for GUI data templates.
-/// </summary>
-public sealed class AgentChatRunningItem
-{
-    public ObservableCollection<AgentChatHistoryItem> Items { get; } = [];
-}
-
-public enum AgentChatStateChangeKind
-{
-    Reset = 0,
-    HistoryAdded = 1,
-    HistoryReplaced = 2,
-    RunningAdded = 3,
-    RunningUpdated = 4,
-    RunningRemoved = 5,
-    SessionChanged = 6,
-}
-
-public sealed record AgentChatStateSnapshot(
-    long Version,
-    string AgentSessionId,
-    IReadOnlyList<AgentChatHistoryItem> History,
-    IReadOnlyList<AgentChatRunningItem> RunningItems);
-
-public sealed class AgentChatStateChangedEventArgs : EventArgs
-{
-    public required long FromVersion { get; init; }
-
-    public required long ToVersion { get; init; }
-
-    public required AgentChatStateChangeKind ChangeKind { get; init; }
-
-    public int Index { get; init; } = -1;
-
-    public int Count { get; init; }
-
-    public AgentChatHistoryItem? HistoryItem { get; init; }
-
-    public AgentChatRunningItem? RunningItem { get; init; }
-
-    public string? AgentSessionId { get; init; }
-
-    public AgentChatStateSnapshot? Snapshot { get; init; }
-}
-
-/// <summary>
-/// Placeholder for items awaiting approval.
-/// </summary>
-public sealed class AgentChatPendingApprovalItem
-{
-    public string Description { get; init; } = string.Empty;
-}
-
-public sealed record AgentChatToolItem(
-    string Id,
-    string Name,
-    string Description,
-    string Instructions,
-    string Kind,
-    bool IsEnabled,
-    IReadOnlyList<AgentChatToolItem> Children,
-    string? Status = null);
-
-/// <summary>
-/// The default queue abstraction for the chat UI.
-/// </summary>
-public sealed class AgentChatQueue
-{
-    internal AgentChatQueue(AgentInputQueue queue, string name, bool isDefault, bool isImmediate = false)
-    {
-        this.Queue = queue;
-        this.Name = name;
-        this.IsDefault = isDefault;
-        this.IsImmediate = isImmediate;
-        this.Queue.Changed += this.OnQueueChanged;
-    }
-
-    internal AgentInputQueue Queue { get; }
-
-    public string Name { get; }
-
-    public bool IsDefault { get; }
-
-    public bool IsImmediate { get; }
-
-    public bool IsHeld => this.Queue.Immediacy == AgentInputQueueImmediacy.Held;
-
-    public AgentInputQueueImmediacy Immediacy => this.Queue.Immediacy;
-
-    public IReadOnlyList<AgentInputItem> Items => this.Queue.Items;
-
-    public event EventHandler? Changed;
-
-    private void OnQueueChanged(object? sender, EventArgs e) => this.Changed?.Invoke(this, EventArgs.Empty);
-}
 
 /// <summary>
 /// Core session model for an agent conversation.
@@ -143,7 +31,6 @@ public sealed class AgentChat : IAsyncDisposable
     private const string RunningPartAssistantText = "assistant-text";
 
     private readonly object sessionLock = new();
-    private readonly object stateLock = new();
     private readonly InternalCreateAgentChatRequest request;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
@@ -155,7 +42,10 @@ public sealed class AgentChat : IAsyncDisposable
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;
     private AgentChatHistoryService? historyService;
-    private readonly AgentRunningItems runningItems;
+    private readonly AgentChatHistoryCollection history = new();
+    private readonly AgentChatRunningItemCollection runningItems = new();
+    private readonly AgentRunningItems runningItemOperations;
+    private readonly ObservableCollection<AgentChatPendingApprovalItem> pendingApprovalItems = [];
     private readonly List<IAsyncDisposable> ownedResources;
     private readonly object ownedResourcesLock = new();
     private readonly object toolsLock = new();
@@ -165,22 +55,21 @@ public sealed class AgentChat : IAsyncDisposable
     private readonly CancellationTokenSource cts = new();
     private Task processTask = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
-    private readonly object stateChangedSubscriptionLock = new();
 
     private bool isBusy;
     private bool processingStarted;
     private readonly object processingStateLock = new();
     private CancellationTokenSource? activeRunCancellation;
-    private long stateVersion;
+    private int disposeStarted;
 
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
        this.request = request;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
-       this.runningItems = new AgentRunningItems(this.RunningItems);
-       this.runningItems.Idle += this.OnRunningItemsIdle;
+       this.runningItemOperations = new AgentRunningItems(this.runningItems);
        this.ownedResources = request.OwnedResources?.ToList() ?? [];
+       this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
@@ -188,210 +77,6 @@ public sealed class AgentChat : IAsyncDisposable
        var chat = new AgentChat(request);
        await chat.InitializeAsync();
        return chat;
-    }
-
-    internal sealed record InternalCreateAgentChatRequest
-    {
-       public required AgentDefinition? AgentDefinition { get; init; }
-
-       public string? AgentSessionId { get; init; }
-
-       public AgentServices? AgentServices { get; init; }
-
-       public required IAgentPersistenceStore ConfiguredStore { get; init; }
-
-       public IChatClient? ClientOverride { get; init; }
-
-       public string? DisplayNameOverride { get; init; }
-
-       public IReadOnlyList<IAsyncDisposable>? OwnedResources { get; init; }
-
-       public CancellationToken CancellationToken { get; init; } = default;
-    }
-
-    internal static (IChatClient client, string displayName) CreateChatClient(
-       AgentDefinition agent,
-       AgentServices? services = null)
-    {
-       var model = (agent as PromptAgent)?.Model;
-       if (model is null || string.IsNullOrEmpty(model.Id))
-       {
-           throw new InvalidOperationException("Agent definition does not specify a model ID.");
-       }
-
-       if (string.Equals(model.Id, "test", StringComparison.OrdinalIgnoreCase))
-       {
-           return (new TestProviderChatClient(), "Test Chat Client");
-       }
-
-       var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
-       return provider switch
-       {
-           "echo" => (new EchoChatClient(), "Echo Chat Client"),
-           "github" => CreateGitHubModelsClient(model),
-           "ollama" => CreateOllamaClient(model, services),
-           "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
-           "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
-           _ => throw new InvalidOperationException(
-               $"Unknown or unsupported provider: {provider}. Supported: echo, test, github, ollama, openai, azure"),
-       };
-    }
-
-    private static (IChatClient client, string displayName) CreateOllamaClient(Model model, AgentServices? services)
-    {
-       var connection = model.Connection as AgentSchema.AnonymousConnection
-           ?? throw new InvalidOperationException("Ollama model requires an AnonymousConnection.");
-
-       var endpoint = connection.Endpoint
-           ?? throw new InvalidOperationException("Ollama connection requires an endpoint URL.");
-
-       var modelId = model.Id ?? "mistral";
-
-       try
-       {
-           IChatClient client;
-           if (services?.LogHttpRequests == true)
-           {
-               var logger = services.LoggerFactory!.CreateLogger<HttpRequestLoggingHandler>();
-               var handler = new HttpRequestLoggingHandler(logger)
-               {
-                   InnerHandler = new HttpClientHandler(),
-               };
-               var httpClient = new HttpClient(handler)
-               {
-                   BaseAddress = new Uri(endpoint),
-               };
-               client = new OllamaApiClient(httpClient, modelId, jsonSerializerContext: null);
-           }
-           else
-           {
-               client = new OllamaApiClient(new Uri(endpoint), modelId);
-           }
-
-           var displayName = $"Ollama ({modelId} at {endpoint})";
-           return (client, displayName);
-       }
-       catch (Exception ex)
-       {
-           throw new InvalidOperationException(
-               $"Failed to create Ollama client for model '{modelId}' at '{endpoint}': {ex.Message}", ex);
-       }
-    }
-
-    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model)
-    {
-       var connection = model.Connection as ApiKeyConnection
-           ?? throw new InvalidOperationException("GitHub provider requires an ApiKeyConnection.");
-
-       var endpoint = string.IsNullOrWhiteSpace(connection.Endpoint)
-           ? GitHubModelsInferenceEndpoint
-           : connection.Endpoint;
-
-       var apiKey = ResolveApiKey(connection.ApiKey, "github-models");
-       var modelId = model.Id
-           ?? throw new InvalidOperationException("GitHub provider requires a model id.");
-
-       try
-       {
-           var openAiClient = new OpenAIClient(
-               new ApiKeyCredential(apiKey),
-               new OpenAIClientOptions
-               {
-                   Endpoint = new Uri(endpoint, UriKind.Absolute),
-               });
-
-           IChatClient client = openAiClient.GetChatClient(modelId).AsIChatClient();
-           var displayName = $"GitHub Models ({modelId} at {endpoint})";
-           return (client, displayName);
-       }
-       catch (Exception ex)
-       {
-           throw new InvalidOperationException(
-               $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
-               ex);
-       }
-    }
-
-    private static string ResolveApiKey(
-       string? apiKeyValue,
-       string? serverName)
-    {
-       if (string.IsNullOrWhiteSpace(apiKeyValue))
-       {
-           throw new InvalidOperationException($"MCP tool '{serverName ?? "unknown"}' API key is required.");
-       }
-
-       var trimmed = apiKeyValue.Trim();
-       if (trimmed.StartsWith("${", StringComparison.Ordinal) && trimmed.EndsWith("}", StringComparison.Ordinal))
-       {
-           var envVarName = trimmed[2..^1];
-           if (string.IsNullOrWhiteSpace(envVarName))
-           {
-               throw new InvalidOperationException("MCP API key environment variable name cannot be empty.");
-           }
-
-           var envValue = Environment.GetEnvironmentVariable(envVarName);
-           if (string.IsNullOrWhiteSpace(envValue))
-           {
-               if (string.Equals(envVarName, "GITHUB_TOKEN", StringComparison.OrdinalIgnoreCase))
-               {
-                   var githubCliToken = ResolveGithubTokenFromCli();
-                   if (!string.IsNullOrWhiteSpace(githubCliToken))
-                   {
-                       return githubCliToken;
-                   }
-               }
-
-               throw new InvalidOperationException(
-                   $"Environment variable '{envVarName}' for MCP tool '{serverName ?? "unknown"}' was not found or is empty.");
-           }
-
-           return envValue;
-       }
-
-       return trimmed;
-    }
-
-    private static string? ResolveGithubTokenFromCli()
-    {
-       Process? process;
-       try
-       {
-           process = Process.Start(new ProcessStartInfo
-           {
-               FileName = "gh",
-               Arguments = "auth token",
-               RedirectStandardOutput = true,
-               RedirectStandardError = true,
-               UseShellExecute = false,
-               CreateNoWindow = true,
-           });
-       }
-       catch (Win32Exception)
-       {
-           return null;
-       }
-
-       if (process is null)
-       {
-           return null;
-       }
-
-       using (process)
-       {
-           if (!process.WaitForExit(10000))
-           {
-               process.Kill(entireProcessTree: true);
-               throw new InvalidOperationException("Timed out while resolving GITHUB_TOKEN via 'gh auth token'.");
-           }
-
-           if (process.ExitCode != 0)
-           {
-               return null;
-           }
-
-           return process.StandardOutput.ReadToEnd().Trim();
-       }
     }
 
     private async Task InitializeAsync()
@@ -422,7 +107,7 @@ public sealed class AgentChat : IAsyncDisposable
        this.agentDefinition = resolvedAgentDefinition;
        var clientInfo = this.request.ClientOverride is not null
            ? (this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
+           : AgentFactory.CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
        var resolvedClient = clientInfo.Item1;
        if (this.request.AgentServices?.LogChat == true)
        {
@@ -485,22 +170,18 @@ public sealed class AgentChat : IAsyncDisposable
     /// </summary>
     public event EventHandler<AgentChatHistoryItem>? TurnCompleted;
 
-    public event EventHandler? Idle;
-
     public event EventHandler<string>? AgentSessionIdChanged;
-
-    public event EventHandler<AgentChatStateChangedEventArgs>? StateChanged;
 
     public event EventHandler? ToolsChanged;
 
     /// <summary>Completed conversation turns, in order.</summary>
-    public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
+    public AgentChatHistoryCollection History => this.history;
 
     /// <summary>Currently executing agent response items.</summary>
-    public ObservableCollection<AgentChatRunningItem> RunningItems { get; } = [];
+    public AgentChatRunningItemCollection RunningItems => this.runningItems;
 
     /// <summary>All known input queues, including the default queue.</summary>
-    public ObservableCollection<AgentChatQueue> InputQueues => this.chatQueueManager.InputQueues;
+    public ReadOnlyObservableCollection<AgentChatQueue> InputQueues => this.chatQueueManager.InputQueues;
 
     /// <summary>The default input queue.</summary>
     public AgentChatQueue DefaultInputQueue => this.chatQueueManager.DefaultInputQueue;
@@ -509,7 +190,7 @@ public sealed class AgentChat : IAsyncDisposable
     public AgentChatQueue ImmediateInputQueue => this.chatQueueManager.ImmediateInputQueue;
 
     /// <summary>Items awaiting user approval.</summary>
-    public ObservableCollection<AgentChatPendingApprovalItem> PendingApprovalItems { get; } = [];
+    public ReadOnlyObservableCollection<AgentChatPendingApprovalItem> PendingApprovalItems { get; }
 
     /// <summary>Underlying queue manager, for advanced queue behaviors.</summary>
     public AgentInputQueueManager InputQueueManager => this.queueManager;
@@ -523,18 +204,6 @@ public sealed class AgentChat : IAsyncDisposable
     public string AgentSessionId => this.agentSessionId;
 
     public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
-
-    public AgentChatStateSnapshot GetStateSnapshot()
-    {
-        lock (this.stateLock)
-        {
-            return new AgentChatStateSnapshot(
-                this.stateVersion,
-                this.agentSessionId,
-                this.History.ToArray(),
-                this.RunningItems.ToArray());
-        }
-    }
 
     public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()
     {
@@ -665,38 +334,12 @@ public sealed class AgentChat : IAsyncDisposable
 
     public AgentChatRunningItem CreateRunningItem(params AgentChatHistoryItem[] items)
     {
-        AgentChatRunningItem runningItem;
-        AgentChatStateChangedEventArgs? stateChange = null;
-        lock (this.stateLock)
-        {
-            runningItem = this.runningItems.Create(items);
-            var index = this.RunningItems.IndexOf(runningItem);
-            stateChange = this.CreateStateChangedEvent(
-                AgentChatStateChangeKind.RunningAdded,
-                index: index,
-                count: 1,
-                runningItem: runningItem);
-        }
-
-        this.RaiseStateChanged(stateChange);
-        return runningItem;
+        return this.runningItemOperations.Create(items);
     }
 
     public void UpdateRunningItem(AgentChatRunningItem item, AgentChatHistoryItem[] model)
     {
-        AgentChatStateChangedEventArgs? stateChange = null;
-        lock (this.stateLock)
-        {
-            this.runningItems.Update(item, model);
-            var index = this.RunningItems.IndexOf(item);
-            stateChange = this.CreateStateChangedEvent(
-                AgentChatStateChangeKind.RunningUpdated,
-                index: index,
-                count: 1,
-                runningItem: item);
-        }
-
-        this.RaiseStateChanged(stateChange);
+        this.runningItemOperations.Update(item, model);
     }
 
     public void CompleteRunningItem(
@@ -705,59 +348,21 @@ public sealed class AgentChat : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        List<AgentChatStateChangedEventArgs>? historyStateChanges = null;
-        AgentChatStateChangedEventArgs? runningStateChange = null;
-        var isIdle = false;
         if (writeToHistory)
         {
             foreach (var historyItem in item.Items)
             {
-                historyStateChanges ??= [];
-                historyStateChanges.Add(this.AddHistoryItem(historyItem));
+                this.AddHistoryItem(historyItem);
                 this.TurnCompleted?.Invoke(this, historyItem);
             }
         }
 
-        lock (this.stateLock)
-        {
-            var index = this.RunningItems.IndexOf(item);
-            this.runningItems.Remove(item);
-            runningStateChange = this.CreateStateChangedEvent(
-                AgentChatStateChangeKind.RunningRemoved,
-                index: index,
-                count: 1,
-                runningItem: item);
-            isIdle = this.RunningItems.Count == 0;
-        }
-
-        if (historyStateChanges is not null)
-        {
-            foreach (var change in historyStateChanges)
-            {
-                this.RaiseStateChanged(change);
-            }
-        }
-
-        this.RaiseStateChanged(runningStateChange);
-
-        if (isIdle)
-        {
-            this.Idle?.Invoke(this, EventArgs.Empty);
-        }
+        this.runningItemOperations.Remove(item);
     }
 
-    private AgentChatStateChangedEventArgs AddHistoryItem(AgentChatHistoryItem item)
+    private void AddHistoryItem(AgentChatHistoryItem item)
     {
-        lock (this.stateLock)
-        {
-            this.History.Add(item);
-            var index = this.History.Count - 1;
-            return this.CreateStateChangedEvent(
-                AgentChatStateChangeKind.HistoryAdded,
-                index: index,
-                count: 1,
-                historyItem: item);
-        }
+        this.History.Add(item);
     }
 
     private void AppendUserMessagesToHistory(IReadOnlyList<ChatMessage> requestMessages)
@@ -775,80 +380,7 @@ public sealed class AgentChat : IAsyncDisposable
                 Contents = message.Contents.ToArray(),
             };
 
-            AgentChatStateChangedEventArgs? stateChange = null;
-            lock (this.stateLock)
-            {
-                this.History.Add(nextItem);
-                stateChange = this.CreateStateChangedEvent(
-                    AgentChatStateChangeKind.HistoryAdded,
-                    index: this.History.Count - 1,
-                    count: 1,
-                    historyItem: nextItem);
-            }
-
-            this.RaiseStateChanged(stateChange);
-        }
-    }
-
-    private AgentChatStateChangedEventArgs CreateStateChangedEvent(
-        AgentChatStateChangeKind changeKind,
-        int index = -1,
-        int count = 0,
-        AgentChatHistoryItem? historyItem = null,
-        AgentChatRunningItem? runningItem = null,
-        string? agentSessionId = null)
-    {
-        var fromVersion = this.stateVersion;
-        this.stateVersion++;
-        return new AgentChatStateChangedEventArgs
-        {
-            FromVersion = fromVersion,
-            ToVersion = this.stateVersion,
-            ChangeKind = changeKind,
-            Index = index,
-            Count = count,
-            HistoryItem = historyItem,
-            RunningItem = runningItem,
-            AgentSessionId = agentSessionId,
-        };
-    }
-
-    private void RaiseStateChanged(AgentChatStateChangedEventArgs? stateChange)
-    {
-        if (stateChange is null)
-        {
-            return;
-        }
-
-        lock (this.stateChangedSubscriptionLock)
-        {
-            this.StateChanged?.Invoke(this, stateChange);
-        }
-    }
-
-    private sealed class StateChangedSubscription : IDisposable
-    {
-        private AgentChat? owner;
-        private readonly EventHandler<AgentChatStateChangedEventArgs> handler;
-
-        public StateChangedSubscription(AgentChat owner, EventHandler<AgentChatStateChangedEventArgs> handler)
-        {
-            this.owner = owner;
-            this.handler = handler;
-        }
-
-        public void Dispose()
-        {
-            var owner = Interlocked.Exchange(ref this.owner, null);
-            if (owner is null)
-            {
-                return;
-            }
-
-            lock (owner.stateChangedSubscriptionLock)
-            {
-                owner.StateChanged -= this.handler;
-            }
+            this.History.Add(nextItem);
         }
     }
 
@@ -873,17 +405,9 @@ public sealed class AgentChat : IAsyncDisposable
             return;
         }
 
-        AgentChatStateChangedEventArgs? stateChange;
-        lock (this.stateLock)
-        {
-            this.agentSessionId = agentSessionId;
-            stateChange = this.CreateStateChangedEvent(
-                AgentChatStateChangeKind.SessionChanged,
-                agentSessionId: agentSessionId);
-        }
+        this.agentSessionId = agentSessionId;
 
         this.AgentSessionIdChanged?.Invoke(this, agentSessionId);
-        this.RaiseStateChanged(stateChange);
     }
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
@@ -895,18 +419,21 @@ public sealed class AgentChat : IAsyncDisposable
 
         foreach (var message in initialMessages)
         {
-            var stateChange = this.AddHistoryItem(new AgentChatHistoryItem
+            this.AddHistoryItem(new AgentChatHistoryItem
             {
                 Role = message.Role,
                 Contents = message.Contents.ToArray(),
             });
-            this.RaiseStateChanged(stateChange);
         }
     }
 
     public async ValueTask DisposeAsync()
     {
-        this.runningItems.Idle -= this.OnRunningItemsIdle;
+        if (Interlocked.Exchange(ref this.disposeStarted, 1) != 0)
+        {
+            return;
+        }
+
         await this.cts.CancelAsync();
         try
         {
@@ -1425,7 +952,7 @@ public sealed class AgentChat : IAsyncDisposable
                 services?.LoggerFactory),
             ApiKeyConnection apiKey => CreateTransportFromEndpoint(
                 apiKey.Endpoint,
-                ResolveApiKey(apiKey.ApiKey, tool.ServerName),
+                AgentFactory.ResolveApiKey(apiKey.ApiKey, tool.ServerName),
                 tool.ServerName,
                 services?.LoggerFactory),
             null => throw new InvalidOperationException($"MCP tool '{tool.Name}' must define a connection."),
@@ -1585,9 +1112,6 @@ public sealed class AgentChat : IAsyncDisposable
         return candidates.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
     }
 
-    private void OnRunningItemsIdle(object? sender, EventArgs e)
-        => this.Idle?.Invoke(this, EventArgs.Empty);
-
     private static string BuildCustomToolId(Tool tool)
         => $"custom:{tool.Kind}:{tool.Name}";
 
@@ -1725,42 +1249,4 @@ public sealed class AgentChat : IAsyncDisposable
         IReadOnlyList<ToolStateNode> Roots,
         IReadOnlyList<AITool> RuntimeTools);
 
-    public IDisposable SubscribeStateChanged(EventHandler<AgentChatStateChangedEventArgs> handler)
-    {
-        ArgumentNullException.ThrowIfNull(handler);
-
-        lock (this.stateLock)
-        {
-            lock (this.stateChangedSubscriptionLock)
-            {
-                this.StateChanged += handler;
-                try
-                {
-                    handler(
-                        this,
-                        new AgentChatStateChangedEventArgs
-                        {
-                            FromVersion = this.stateVersion,
-                            ToVersion = this.stateVersion,
-                            ChangeKind = AgentChatStateChangeKind.Reset,
-                            Snapshot = new AgentChatStateSnapshot(
-                                this.stateVersion,
-                                this.agentSessionId,
-                                this.History.ToArray(),
-                                this.RunningItems.ToArray()),
-                        });
-                }
-                catch
-                {
-                    this.StateChanged -= handler;
-                    throw;
-                }
-            }
-        }
-
-        return new StateChangedSubscription(this, handler);
-    }
-
 }
-
-

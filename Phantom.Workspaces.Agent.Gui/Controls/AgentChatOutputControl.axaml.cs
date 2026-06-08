@@ -1,6 +1,5 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 
@@ -18,11 +17,6 @@ public partial class AgentChatOutputControl : UserControl
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
-        if (this.DataContext is AgentViewModel agent)
-        {
-            agent.RebuildOutputDocument();
-        }
-
         if (this.hasAppliedInitialOutputScroll)
         {
             return;

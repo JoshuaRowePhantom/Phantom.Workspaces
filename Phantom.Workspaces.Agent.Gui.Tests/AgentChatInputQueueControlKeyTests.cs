@@ -95,7 +95,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         };
 
         var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Return, KeyModifiers.None);
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "return key submission to complete");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "return key submission to complete");
 
         Assert.True(handled);
         Assert.Equal(2, chat.History.Count);
@@ -103,7 +103,7 @@ public sealed class AgentChatInputQueueControlKeyTests
     }
 
     private static async Task WaitForConditionAsync(
-        AgentChat chat,
+        System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
         string description)
     {
@@ -113,7 +113,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         }
 
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
             if (condition())
             {
@@ -121,7 +121,7 @@ public sealed class AgentChatInputQueueControlKeyTests
             }
         }
 
-        chat.StateChanged += OnStateChanged;
+        collection.CollectionChanged += OnCollectionChanged;
         try
         {
             if (condition())
@@ -133,7 +133,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         }
         finally
         {
-            chat.StateChanged -= OnStateChanged;
+            collection.CollectionChanged -= OnCollectionChanged;
         }
     }
 }

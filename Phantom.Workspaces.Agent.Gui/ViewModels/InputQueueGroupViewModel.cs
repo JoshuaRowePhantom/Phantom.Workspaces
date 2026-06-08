@@ -28,6 +28,8 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable
 
     public QueueComposerViewModel Composer { get; }
 
+    internal AgentChatQueue Queue => this.queue;
+
     public string? Name => this.ShowName ? this.queue.Name : null;
 
     public bool ShowName => this.parent.HasMultipleQueues || !this.queue.IsDefault;
@@ -138,6 +140,8 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(this.ItemCount));
         this.RaisePropertyChanged(nameof(this.ItemCountText));
         this.RaisePropertyChanged(nameof(this.HasItems));
+        this.RaisePropertyChanged(nameof(this.Name));
+        this.RaisePropertyChanged(nameof(this.ShowName));
         this.RaisePropertyChanged(nameof(this.IsHeld));
         this.RaisePropertyChanged(nameof(this.IsImmediate));
         this.RaisePropertyChanged(nameof(this.IsQueued));

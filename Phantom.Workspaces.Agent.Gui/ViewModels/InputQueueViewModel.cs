@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -17,6 +18,7 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly AgentChat agentChat;
     private readonly AgentInputQueueManager? inputQueueManager;
     private readonly Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels = [];
+    private readonly InputQueueCollectionTransformer queueCollectionTransformer;
     private AgentChatQueue? mostRecentlyCreatedQueue;
     private bool hasMultipleQueues;
     private readonly ICommand holdAllQueuesCommand;
@@ -40,8 +42,7 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.toggleHoldAllQueuesCommand = new RelayCommand(this.ToggleHoldAllQueues);
         this.submitToMostRecentQueueCommand = new RelayCommand(this.SubmitToMostRecentQueue);
         this.submitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
-        this.agentChat.InputQueues.CollectionChanged += this.OnInputQueuesChanged;
-        this.RebuildQueues();
+        this.queueCollectionTransformer = new InputQueueCollectionTransformer(this, this.agentChat.InputQueues, this.Queues, this.queueViewModels);
     }
 
     public AgentChatQueue DefaultInputQueue { get; }
@@ -58,7 +59,7 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public ObservableCollection<InputQueueGroupViewModel> Queues { get; } = [];
 
-    public ObservableCollection<AgentChatQueue> InputQueues => this.agentChat.InputQueues;
+    public ReadOnlyObservableCollection<AgentChatQueue> InputQueues => this.agentChat.InputQueues;
 
     public string InputText
     {
@@ -143,7 +144,6 @@ public sealed class InputQueueViewModel : ViewModelBase
                 : AgentInputQueueImmediacy.Queue);
         this.mostRecentlyCreatedQueue = queue;
         this.SubmitToQueue(queue);
-        this.RebuildQueues();
     }
 
     public void ToggleHoldAllQueues()
@@ -175,10 +175,15 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void Dispose()
     {
-        this.agentChat.InputQueues.CollectionChanged -= this.OnInputQueuesChanged;
+        this.queueCollectionTransformer.Dispose();
         foreach (var queue in this.queueViewModels.Keys)
         {
             queue.Changed -= this.OnQueueChanged;
+        }
+
+        foreach (var viewModel in this.queueViewModels.Values)
+        {
+            viewModel.Dispose();
         }
     }
 
@@ -214,7 +219,6 @@ public sealed class InputQueueViewModel : ViewModelBase
             this.mostRecentlyCreatedQueue = this.DefaultInputQueue;
         }
 
-        this.RebuildQueues();
         return true;
     }
 
@@ -274,11 +278,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         }
     }
 
-    private void OnInputQueuesChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        this.RebuildQueues();
-    }
-
     private void OnQueueChanged(object? sender, EventArgs e)
     {
         if (sender is not AgentChatQueue queue)
@@ -289,39 +288,23 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queue);
     }
 
-    private void RebuildQueues()
-    {
-        foreach (var queue in this.queueViewModels.Keys.ToArray())
-        {
-            queue.Changed -= this.OnQueueChanged;
-        }
-
-        this.queueViewModels.Clear();
-        this.Queues.Clear();
-
-        foreach (var queue in this.agentChat.InputQueues)
-        {
-            queue.Changed += this.OnQueueChanged;
-            var composer = queue.IsDefault
-                ? this.DefaultComposer
-                : new QueueComposerViewModel(this, queue, isDefaultComposer: false);
-            var vm = new InputQueueGroupViewModel(this, queue, composer);
-            this.queueViewModels[queue] = vm;
-            this.Queues.Add(vm);
-        }
-
-        this.HasMultipleQueues = this.Queues.Count > 1;
-    }
-
     private void RefreshQueue(AgentChatQueue queue)
     {
         if (!this.queueViewModels.TryGetValue(queue, out var viewModel))
         {
-            this.RebuildQueues();
             return;
         }
 
         viewModel.Refresh();
+    }
+
+    private void UpdateQueueCollectionState()
+    {
+        this.HasMultipleQueues = this.Queues.Count > 1;
+        foreach (var queueViewModel in this.queueViewModels.Values)
+        {
+            queueViewModel.Refresh();
+        }
     }
 
     private void SetAllQueuesHeld(bool held)
@@ -354,5 +337,46 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.InputText = string.Empty;
         this.IsFormattedMode = false;
         this.RefreshQueue(queue);
+    }
+
+    private sealed class InputQueueCollectionTransformer : CollectionTransformer<AgentChatQueue, InputQueueGroupViewModel>
+    {
+        private readonly InputQueueViewModel parent;
+        private readonly Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels;
+
+        public InputQueueCollectionTransformer(
+            InputQueueViewModel parent,
+            IReadOnlyList<AgentChatQueue> source,
+            IList<InputQueueGroupViewModel> target,
+            Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels)
+            : base(source, target)
+        {
+            this.parent = parent;
+            this.queueViewModels = queueViewModels;
+            this.ApplyInitialTransform();
+        }
+
+        protected override InputQueueGroupViewModel Create(AgentChatQueue sourceItem)
+        {
+            var composer = sourceItem.IsDefault
+                ? this.parent.DefaultComposer
+                : new QueueComposerViewModel(this.parent, sourceItem, isDefaultComposer: false);
+            return new InputQueueGroupViewModel(this.parent, sourceItem, composer);
+        }
+
+        protected override void OnInsert(int index, InputQueueGroupViewModel target)
+        {
+            target.Queue.Changed += this.parent.OnQueueChanged;
+            this.queueViewModels[target.Queue] = target;
+            this.parent.UpdateQueueCollectionState();
+        }
+
+        protected override void OnRemoveAt(int index, InputQueueGroupViewModel target)
+        {
+            target.Queue.Changed -= this.parent.OnQueueChanged;
+            this.queueViewModels.Remove(target.Queue);
+            target.Dispose();
+            this.parent.UpdateQueueCollectionState();
+        }
     }
 }

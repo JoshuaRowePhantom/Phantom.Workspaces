@@ -1,27 +1,22 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Phantom.Workspaces.Data</RootNamespace>
   </PropertyGroup>
-
   <ItemGroup>
     <None Remove="JsonSchemas\*.json" />
     <None Remove="JsonEntities\**\*.json" />
     <None Remove="JsonEntities\**\*.md" />
   </ItemGroup>
-
   <ItemGroup>
     <EmbeddedResource Include="JsonSchemas\*.json" />
     <EmbeddedResource Include="JsonEntities\**\*.json" />
     <EmbeddedResource Include="JsonEntities\**\*.md" />
   </ItemGroup>
-
   <ItemGroup>
-    <PackageReference Include="JsonPatch.Net" Version="5.0.2" />
-    <PackageReference Include="JsonSchema.Net" Version="9.2.1" />
+    <PackageReference Include="JsonPatch.Net" />
+    <PackageReference Include="JsonSchema.Net" />
   </ItemGroup>
-
 </Project>

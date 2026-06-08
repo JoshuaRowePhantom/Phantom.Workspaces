@@ -1,30 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Phantom.Workspaces.Data.MongoDB</RootNamespace>
   </PropertyGroup>
-
   <ItemGroup>
-    <PackageReference Include="JsonSchema.Net" Version="9.2.1" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.6.1" />
-    <PackageReference Include="MongoDB.Driver" Version="3.4.0" />
+    <PackageReference Include="JsonSchema.Net" />
+    <PackageReference Include="Microsoft.Agents.AI" />
+    <PackageReference Include="MongoDB.Driver" />
   </ItemGroup>
-
   <ItemGroup>
     <None Remove="JsonSchemas\mongo-db-connection.json" />
   </ItemGroup>
-
   <ItemGroup>
     <EmbeddedResource Include="JsonSchemas\mongo-db-connection.json" />
   </ItemGroup>
-
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Containers\Phantom.Workspaces.Containers.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Interfaces\Phantom.Workspaces.Llm.Interfaces.csproj" />
   </ItemGroup>
-
 </Project>

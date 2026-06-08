@@ -8,22 +8,13 @@ using OllamaSharp;
 using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
-using System.ComponentModel;
+using System.Collections;
 using System.ClientModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
-using System.Collections;
 
 namespace Phantom.Workspaces.Llm;
-
-public struct CreateAgentChatRequest
-{
-    public string? AgentSessionId { get; init; }
-
-    public AgentDefinition? AgentDefinition { get; init; }
-
-    public AgentServices? AgentServices { get; init; }
-}
 
 /// <summary>
 /// Factory for creating Agent components from AgentSchema definitions.
@@ -172,7 +163,7 @@ public static class AgentFactory
     /// <returns>A tuple of (ChatClient, display name).</returns>
     /// <exception cref="InvalidOperationException">If the agent is invalid or provider is unsupported.</exception>
     public static (IChatClient client, string displayName) CreateChatClient(AgentDefinition agent)
-        => AgentChat.CreateChatClient(agent, services: null);
+        => CreateChatClient(agent, services: null);
 
     /// <summary>
     /// Creates a ChatClient from an AgentDefinition, resolving provider and optional service integrations.
@@ -183,7 +174,30 @@ public static class AgentFactory
     public static (IChatClient client, string displayName) CreateChatClient(
         AgentDefinition agent,
         AgentServices? services)
-        => AgentChat.CreateChatClient(agent, services);
+    {
+        var model = (agent as PromptAgent)?.Model;
+        if (model is null || string.IsNullOrEmpty(model.Id))
+        {
+            throw new InvalidOperationException("Agent definition does not specify a model ID.");
+        }
+
+        if (string.Equals(model.Id, "test", StringComparison.OrdinalIgnoreCase))
+        {
+            return (new TestProviderChatClient(), "Test Chat Client");
+        }
+
+        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
+        return provider switch
+        {
+            "echo" => (new EchoChatClient(), "Echo Chat Client"),
+            "github" => CreateGitHubModelsClient(model),
+            "ollama" => CreateOllamaClient(model, services),
+            "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
+            "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
+            _ => throw new InvalidOperationException(
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github, ollama, openai, azure"),
+        };
+    }
 
     /// <summary>
     /// Creates an initialized <see cref="AgentChat"/> session from an agent definition,
@@ -232,7 +246,7 @@ public static class AgentFactory
         }
 
         return await AgentChat.CreateAsync(
-            new AgentChat.InternalCreateAgentChatRequest
+            new InternalCreateAgentChatRequest
             {
                 AgentDefinition = requestedAgentDefinition,
                 AgentSessionId = createAgentChatRequest.AgentSessionId,
@@ -367,7 +381,7 @@ public static class AgentFactory
         }
     }
 
-    private static string ResolveApiKey(
+    internal static string ResolveApiKey(
         string? apiKeyValue,
         string? serverName)
     {
@@ -450,4 +464,3 @@ public static class AgentFactory
     }
 
 }
-

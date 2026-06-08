@@ -42,7 +42,7 @@ public sealed class InputQueueViewModelTests
         viewModel.IsFormattedMode = true;
 
         viewModel.SubmitToDefaultQueue();
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "default queue submission to complete");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "default queue submission to complete");
 
         Assert.Empty(viewModel.InputText);
         Assert.False(viewModel.IsFormattedMode);
@@ -62,7 +62,7 @@ public sealed class InputQueueViewModelTests
         viewModel.InputText = "queued";
 
         viewModel.SubmitToNewQueue();
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "new queue submission to complete");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "new queue submission to complete");
 
         Assert.Equal(2, chat.InputQueues.Count);
         Assert.Equal(2, chat.History.Count);
@@ -138,7 +138,7 @@ public sealed class InputQueueViewModelTests
         Assert.Single(viewModel.DefaultComposer.AttachmentPreviews);
 
         viewModel.SubmitToDefaultQueue();
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "image submission to complete");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "image submission to complete");
 
         Assert.False(viewModel.DefaultComposer.HasAttachments);
         Assert.Equal(string.Empty, viewModel.InputText);
@@ -341,7 +341,7 @@ public sealed class InputQueueViewModelTests
     }
 
     private static async Task WaitForConditionAsync(
-        AgentChat chat,
+        System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
         string description)
     {
@@ -351,7 +351,7 @@ public sealed class InputQueueViewModelTests
         }
 
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
             if (condition())
             {
@@ -359,7 +359,7 @@ public sealed class InputQueueViewModelTests
             }
         }
 
-        chat.StateChanged += OnStateChanged;
+        collection.CollectionChanged += OnCollectionChanged;
         try
         {
             if (condition())
@@ -371,7 +371,7 @@ public sealed class InputQueueViewModelTests
         }
         finally
         {
-            chat.StateChanged -= OnStateChanged;
+            collection.CollectionChanged -= OnCollectionChanged;
         }
     }
 }

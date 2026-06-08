@@ -1,5 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -8,17 +7,13 @@
     <RootNamespace>Phantom.Workspaces.Containers</RootNamespace>
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
-
   <ItemGroup>
-    <PackageReference Include="JsonSchema.Net" Version="9.2.1" />
+    <PackageReference Include="JsonSchema.Net" />
   </ItemGroup>
-
   <ItemGroup>
     <None Remove="JsonSchemas\*.json" />
   </ItemGroup>
-
   <ItemGroup>
     <EmbeddedResource Include="JsonSchemas\*.json" />
   </ItemGroup>
-
 </Project>

@@ -7,13 +7,13 @@ namespace Phantom.Workspaces.Llm;
 
 internal sealed class AgentChatHistoryService
 {
-    private readonly ObservableCollection<AgentChatHistoryItem> history;
+    private readonly AgentChatHistoryCollection history;
     private readonly AgentFrameworkChatHistoryProvider configuredProvider;
     private AgentSession? activeSession;
     private AgentFrameworkChatHistoryProvider? provider;
 
     public AgentChatHistoryService(
-        ObservableCollection<AgentChatHistoryItem> history,
+        AgentChatHistoryCollection history,
         AgentFrameworkChatHistoryProvider chatHistoryProvider)
     {
         this.history = history;

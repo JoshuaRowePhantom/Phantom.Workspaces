@@ -231,8 +231,8 @@ public sealed class ChatHistoryItemViewModelTests
         await using var _ = chat;
 
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat, () => chat.GetStateSnapshot().History.Any(static item => item.Role == ChatRole.Assistant), "assistant history item");
-        var assistantHistory = chat.GetStateSnapshot().History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
+        await WaitForConditionAsync(chat.History, () => chat.History.Any(static item => item.Role == ChatRole.Assistant), "assistant history item");
+        var assistantHistory = chat.History.LastOrDefault(static item => item.Role == ChatRole.Assistant);
 
         Assert.NotNull(assistantHistory);
         var viewModel = new ChatHistoryItemViewModel(assistantHistory!);
@@ -251,7 +251,7 @@ public sealed class ChatHistoryItemViewModelTests
     }
 
     private static async Task WaitForConditionAsync(
-        AgentChat chat,
+        System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
         string description)
     {
@@ -261,7 +261,7 @@ public sealed class ChatHistoryItemViewModelTests
         }
 
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
             if (condition())
             {
@@ -269,7 +269,7 @@ public sealed class ChatHistoryItemViewModelTests
             }
         }
 
-        chat.StateChanged += OnStateChanged;
+        collection.CollectionChanged += OnCollectionChanged;
         try
         {
             if (condition())
@@ -281,7 +281,7 @@ public sealed class ChatHistoryItemViewModelTests
         }
         finally
         {
-            chat.StateChanged -= OnStateChanged;
+            collection.CollectionChanged -= OnCollectionChanged;
         }
     }
 }

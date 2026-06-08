@@ -616,7 +616,7 @@ public class AgentFactoryTests
 
         await using var chat = await CreateChatAsync(agent);
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "history to include user and assistant items");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "history to include user and assistant items");
 
         Assert.True(chat.History.Count >= 2);
         Assert.Contains(chat.History, static item => item.Role == ChatRole.User);
@@ -941,7 +941,7 @@ public class AgentFactoryTests
         chat.EnqueueUserMessage("hello");
         var restoreRequest = new RestoreRequest { AgentSessionId = "in-memory-requested-session-id" };
         await WaitForConditionAsync(
-            chat,
+            chat.History,
             () => inMemoryAgentPersistenceStore.RestoreAsync(restoreRequest, CancellationToken.None).GetAwaiter().GetResult() is not null,
             "in-memory store to persist the requested session");
 
@@ -992,7 +992,7 @@ public class AgentFactoryTests
             }))
         {
             firstChat.EnqueueUserMessage("persist this session");
-            await WaitForConditionAsync(firstChat, () => firstChat.History.Count >= 2, "history to include assistant response before restore");
+            await WaitForConditionAsync(firstChat.History, () => firstChat.History.Count >= 2, "history to include assistant response before restore");
         }
 
         await using var restoredChat = await AgentFactory.CreateAgentChatAsync(
@@ -1033,7 +1033,7 @@ public class AgentFactoryTests
             });
 
     private static async Task WaitForConditionAsync(
-        AgentChat chat,
+        System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
         string description)
     {
@@ -1043,7 +1043,7 @@ public class AgentFactoryTests
         }
 
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
             if (condition())
             {
@@ -1051,7 +1051,7 @@ public class AgentFactoryTests
             }
         }
 
-        chat.StateChanged += OnStateChanged;
+        collection.CollectionChanged += OnCollectionChanged;
         try
         {
             if (condition())
@@ -1063,7 +1063,7 @@ public class AgentFactoryTests
         }
         finally
         {
-            chat.StateChanged -= OnStateChanged;
+            collection.CollectionChanged -= OnCollectionChanged;
         }
     }
 

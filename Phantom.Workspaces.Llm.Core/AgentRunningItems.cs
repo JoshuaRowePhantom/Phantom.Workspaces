@@ -4,11 +4,9 @@ namespace Phantom.Workspaces.Llm;
 
 public sealed class AgentRunningItems
 {
-    private readonly ObservableCollection<AgentChatRunningItem> items;
+    private readonly AgentChatRunningItemCollection items;
 
-    public event EventHandler? Idle;
-
-    public AgentRunningItems(ObservableCollection<AgentChatRunningItem> items)
+    public AgentRunningItems(AgentChatRunningItemCollection items)
     {
         ArgumentNullException.ThrowIfNull(items);
         this.items = items;
@@ -30,18 +28,14 @@ public sealed class AgentRunningItems
         var index = this.items.IndexOf(runningItem);
         if (index >= 0)
         {
-            this.items[index] = runningItem;
+            this.items.SetItem(index, runningItem);
         }
     }
 
     public void Remove(AgentChatRunningItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
-        var removed = this.items.Remove(item);
-        if (removed && this.items.Count == 0)
-        {
-            this.Idle?.Invoke(this, EventArgs.Empty);
-        }
+        this.items.Remove(item);
     }
 
     private static void SyncItems(ObservableCollection<AgentChatHistoryItem> target, IReadOnlyList<AgentChatHistoryItem> source)

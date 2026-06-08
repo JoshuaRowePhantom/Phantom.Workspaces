@@ -20,11 +20,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private Section outputRunningRootSection = new();
     private ChatHistoryDocumentModel? historyDocumentModel;
     private RunningChatItemsDocumentModel? runningDocumentModel;
-    private readonly object stateLock = new();
     private bool isReasoningVisible;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
-    private readonly IDisposable stateChangedSubscription;
 
     public AgentViewModel(AgentChat agentChat, string displayName)
     {
@@ -49,7 +47,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
         this.AttachOutputDocumentModels();
 
-        this.stateChangedSubscription = agentChat.SubscribeStateChanged(this.OnStateChanged);
+        this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         agentChat.ToolsChanged += this.OnToolsChanged;
         this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
     }
@@ -74,9 +72,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public InputQueueViewModel InputQueue { get; }
 
-    public ObservableCollection<AgentChatHistoryItem> History { get; } = [];
+    public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
-    public ObservableCollection<AgentChatRunningItem> RunningItems { get; } = [];
+    public ReadOnlyObservableCollection<AgentChatRunningItem> RunningItems => this.agentChat.RunningItems;
 
     public ObservableCollection<AgentChatToolViewModel> Tools { get; } = [];
 
@@ -120,165 +118,13 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        lock (this.stateLock)
-        {
-            this.historyDocumentModel?.Refresh();
-            this.runningDocumentModel?.Refresh();
-        }
-    }
-
-    private void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
-    {
-        if (e.Snapshot is not null)
-        {
-            lock (this.stateLock)
-            {
-                this.ApplySnapshot(e.Snapshot);
-            }
-
-            return;
-        }
-
-        lock (this.stateLock)
-        {
-            this.ApplyIncrementalChange(e);
-        }
-    }
-
-    private void ApplySnapshot(AgentChatStateSnapshot snapshot)
-    {
-        lock (this.stateLock)
-        {
-            this.History.Clear();
-            this.RunningItems.Clear();
-
-            foreach (var item in snapshot.History)
-            {
-                this.History.Add(item);
-            }
-
-            foreach (var item in snapshot.RunningItems)
-            {
-                this.RunningItems.Add(item);
-            }
-
-            this.AgentSessionId = snapshot.AgentSessionId;
-        }
-    }
-
-    private void ApplyIncrementalChange(AgentChatStateChangedEventArgs change)
-    {
-        switch (change.ChangeKind)
-        {
-            case AgentChatStateChangeKind.HistoryAdded when change.HistoryItem is not null:
-                if (change.Index >= 0 && change.Index <= this.History.Count)
-                {
-                    this.History.Insert(change.Index, change.HistoryItem);
-                }
-                else
-                {
-                    this.History.Add(change.HistoryItem);
-                }
-                break;
-            case AgentChatStateChangeKind.HistoryReplaced when change.HistoryItem is not null:
-                if (change.Index >= 0 && change.Index < this.History.Count)
-                {
-                    this.History[change.Index] = change.HistoryItem;
-                }
-                else
-                {
-                    this.History.Add(change.HistoryItem);
-                }
-                break;
-            case AgentChatStateChangeKind.RunningAdded when change.RunningItem is not null:
-                if (change.Index >= 0 && change.Index <= this.RunningItems.Count)
-                {
-                    this.RunningItems.Insert(change.Index, change.RunningItem);
-                }
-                else
-                {
-                    this.RunningItems.Add(change.RunningItem);
-                }
-                break;
-            case AgentChatStateChangeKind.RunningUpdated when change.RunningItem is not null:
-                AgentChatRunningItem? updatedRunningItem = null;
-                if (change.Index >= 0 && change.Index < this.RunningItems.Count)
-                {
-                    var indexedRunningItem = this.RunningItems[change.Index];
-                    if (ReferenceEquals(indexedRunningItem, change.RunningItem))
-                    {
-                        updatedRunningItem = indexedRunningItem;
-                    }
-                }
-
-                updatedRunningItem ??= this.RunningItems.FirstOrDefault(x => ReferenceEquals(x, change.RunningItem));
-                if (updatedRunningItem is not null)
-                {
-                    var updatedIndex = this.RunningItems.IndexOf(updatedRunningItem);
-                    this.RunningItems[updatedIndex] = change.RunningItem;
-                }
-                else if (change.Index >= 0 && change.Index <= this.RunningItems.Count)
-                {
-                    this.RunningItems.Insert(change.Index, change.RunningItem);
-                }
-                else
-                {
-                    this.RunningItems.Add(change.RunningItem);
-                }
-                break;
-            case AgentChatStateChangeKind.RunningRemoved when change.RunningItem is not null:
-                AgentChatRunningItem? vm = null;
-                if (change.Index >= 0 && change.Index < this.RunningItems.Count)
-                {
-                    var indexedRunningItem = this.RunningItems[change.Index];
-                    if (ReferenceEquals(indexedRunningItem, change.RunningItem))
-                    {
-                        vm = indexedRunningItem;
-                    }
-                }
-
-                vm ??= this.RunningItems.FirstOrDefault(x => ReferenceEquals(x, change.RunningItem));
-                if (vm is not null)
-                {
-                    this.RunningItems.Remove(vm);
-                }
-                break;
-            case AgentChatStateChangeKind.SessionChanged:
-                if (!string.IsNullOrWhiteSpace(change.AgentSessionId))
-                {
-                    this.AgentSessionId = change.AgentSessionId;
-                }
-
-                break;
-            case AgentChatStateChangeKind.Reset:
-                this.ApplySnapshot(this.agentChat.GetStateSnapshot());
-                break;
-        }
-    }
-
-    private void ResetOutputDocument()
-        => this.RebuildOutputDocument();
-
-    private void RefreshDocumentSections()
-    {
         this.historyDocumentModel?.Refresh();
         this.runningDocumentModel?.Refresh();
     }
 
-    public void RebuildOutputDocument()
+    private void OnAgentSessionIdChanged(object? sender, string sessionId)
     {
-        lock (this.stateLock)
-        {
-            this.historyDocumentModel?.Dispose();
-            this.runningDocumentModel?.Dispose();
-
-            this.outputHistoryRootSection = new Section();
-            this.outputRunningRootSection = new Section();
-            this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
-            this.AttachOutputDocumentModels();
-        }
-
-        this.RaisePropertyChanged(nameof(this.OutputDocument));
+        this.AgentSessionId = sessionId;
     }
 
     private void OnToolsChanged(object? sender, EventArgs e)
@@ -377,7 +223,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.runningDocumentModel?.Dispose();
 
         this.InputQueue.Dispose();
-        this.stateChangedSubscription.Dispose();
+        this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         await this.agentChat.DisposeAsync();
     }

@@ -36,7 +36,7 @@ public sealed class AgentChatTests
         }
 
         stream.Complete();
-        return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
+        return AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
@@ -49,7 +49,7 @@ public sealed class AgentChatTests
     {
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
-        return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
+        return AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
@@ -74,7 +74,7 @@ public sealed class AgentChatTests
             }
             """);
         var persistenceStore = new InMemoryAgentPersistenceStore();
-        return AgentChat.CreateAsync(new AgentChat.InternalCreateAgentChatRequest
+        return AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
@@ -84,7 +84,7 @@ public sealed class AgentChatTests
     }
 
     private static async Task WaitForConditionAsync(
-        AgentChat chat,
+        System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
         string description)
     {
@@ -94,7 +94,7 @@ public sealed class AgentChatTests
         }
 
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnStateChanged(object? sender, AgentChatStateChangedEventArgs e)
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
             if (condition())
             {
@@ -102,7 +102,7 @@ public sealed class AgentChatTests
             }
         }
 
-        chat.StateChanged += OnStateChanged;
+        collection.CollectionChanged += OnCollectionChanged;
         try
         {
             if (condition())
@@ -114,7 +114,7 @@ public sealed class AgentChatTests
         }
         finally
         {
-            chat.StateChanged -= OnStateChanged;
+            collection.CollectionChanged -= OnCollectionChanged;
         }
     }
 
@@ -158,7 +158,7 @@ public sealed class AgentChatTests
             CancellationToken.None);
 
         await using var chat = await AgentChat.CreateAsync(
-            new AgentChat.InternalCreateAgentChatRequest
+            new InternalCreateAgentChatRequest
             {
                 AgentSessionId = sessionId,
                 AgentDefinition = null,
@@ -177,7 +177,7 @@ public sealed class AgentChatTests
 
         var image = new DataContent(new byte[] { 0x01, 0x02 }, "image/png");
         chat.EnqueueUserContents([new TextContent("hello"), image]);
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "history to contain user and assistant placeholder");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "history to contain user and assistant placeholder");
 
         Assert.Equal(2, chat.History.Count);
         var userHistory = chat.History[0];
@@ -211,7 +211,6 @@ public sealed class AgentChatTests
             }
             """);
 
-        await WaitForConditionAsync(chat, () => chat.Tools.Count == 2, "tool model initialization");
         Assert.Collection(
             chat.Tools.OrderBy(static tool => tool.Kind),
             item =>
@@ -228,10 +227,9 @@ public sealed class AgentChatTests
                 Assert.True(item.IsEnabled);
                 Assert.Empty(item.Children);
             });
-
         var requestTool = chat.Tools.Single(static tool => tool.Kind == "web_request");
         await chat.SetToolEnabledAsync(requestTool.Id, enabled: false);
-        await WaitForConditionAsync(chat, () => !chat.Tools.Any(static tool => tool.Kind == "web_request" && tool.IsEnabled), "tool disable state");
+        await chat.SetToolEnabledAsync(requestTool.Id, enabled: false);
         Assert.False(chat.Tools.Single(static tool => tool.Kind == "web_request").IsEnabled);
     }
 
@@ -282,13 +280,12 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
 
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat, () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
 
         Assert.Equal(1, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
-        var snapshot = chat.GetStateSnapshot();
-        Assert.Single(snapshot.RunningItems);
-        Assert.Equal(ChatRole.Assistant, snapshot.RunningItems[0].Items[0].Role);
+        Assert.Single(chat.RunningItems);
+        Assert.Equal(ChatRole.Assistant, chat.RunningItems[0].Items[0].Role);
     }
 
     [Fact]
@@ -303,7 +300,7 @@ public sealed class AgentChatTests
                 FinishReason = ChatFinishReason.Stop,
             });
         chat.EnqueueUserMessage("hi");
-        await WaitForConditionAsync(chat, () =>
+        await WaitForConditionAsync(chat.History, () =>
             chat.History.Count == 2
             && chat.RunningItems.Count == 0,
             "assistant running item to complete and move into history");
@@ -332,7 +329,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
         chat.EnqueueUserMessage("What is 2+2?");
         await WaitForConditionAsync(
-            chat,
+            chat.RunningItems,
             () => chat.History.Count == 1
                 && chat.RunningItems.Count == 1,
             "running item to appear after first streamed token");
@@ -343,7 +340,7 @@ public sealed class AgentChatTests
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();
         await WaitForConditionAsync(
-            chat,
+            chat.RunningItems,
             () => chat.History.Count == 2
                 && chat.RunningItems.Count == 0
                 && chat.History[^1].Role == ChatRole.Assistant
@@ -391,7 +388,7 @@ public sealed class AgentChatTests
         var queue = chat.QueueManager.CreateInputQueue();
 
         chat.EnqueueUserMessage("queued later", queue);
-        await WaitForConditionAsync(chat, () => chat.History.Count >= 2, "queued message to publish to history");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "queued message to publish to history");
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued later", GetText(chat.History[0].Contents));
@@ -415,7 +412,7 @@ public sealed class AgentChatTests
 
         var queue = chat.QueueManager.CreateInputQueue();
         chat.EnqueueUserMessage("start");
-        await WaitForConditionAsync(chat, () => chat.RunningItems.Count > 0, "first queued run to start");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "first queued run to start");
 
         chat.EnqueueUserMessage("queued while busy", queue);
         Assert.Single(queue.Items);
@@ -423,7 +420,7 @@ public sealed class AgentChatTests
 
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();
-        await WaitForConditionAsync(chat, () => chat.RunningItems.Count == 0, "busy run to finish");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "busy run to finish");
     }
 
     [Fact]
@@ -471,7 +468,7 @@ public sealed class AgentChatTests
 
         chat.EnqueueUserMessage("hello");
         await WaitForConditionAsync(
-            chat,
+            chat.History,
             () => chat.History.Any(item =>
                 item.Role == ChatRole.Assistant &&
                 item.Contents.OfType<ErrorContent>().Any()),
@@ -486,11 +483,9 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task StateChanged_UsesMonotonicVersions_AndSnapshotMatchesLatestVersion()
+    public async Task CreateUpdateCompleteRunningItem_ChangesCollectionsAndSessionId()
     {
         await using var chat = CreateChat();
-        var changes = new List<AgentChatStateChangedEventArgs>();
-        chat.StateChanged += (_, change) => changes.Add(change);
 
         var runningItem = chat.CreateRunningItem(
             new AgentChatHistoryItem
@@ -510,50 +505,30 @@ public sealed class AgentChatTests
         chat.CompleteRunningItem(runningItem, writeToHistory: false);
         chat.SetAgentSessionId("next-session-id");
 
-        Assert.Equal(4, changes.Count);
-        Assert.Equal(AgentChatStateChangeKind.RunningAdded, changes[0].ChangeKind);
-        Assert.Equal(AgentChatStateChangeKind.RunningUpdated, changes[1].ChangeKind);
-        Assert.Equal(AgentChatStateChangeKind.RunningRemoved, changes[2].ChangeKind);
-        Assert.Equal(AgentChatStateChangeKind.SessionChanged, changes[3].ChangeKind);
-
-        for (var i = 1; i < changes.Count; i++)
-        {
-            Assert.Equal(changes[i - 1].ToVersion, changes[i].FromVersion);
-        }
-
-        var snapshot = chat.GetStateSnapshot();
-        Assert.Equal(changes[^1].ToVersion, snapshot.Version);
-        Assert.Equal(chat.AgentSessionId, snapshot.AgentSessionId);
+        Assert.Empty(chat.RunningItems);
+        Assert.Equal("next-session-id", chat.AgentSessionId);
     }
 
     [Fact]
-    public async Task EnqueueUserMessage_RaisesHistoryAddAndReplaceStateChanges()
+    public async Task EnqueueUserMessage_UpdatesHistoryAndRunningCollections()
     {
         await using var chat = CreateChat(
             new ChatResponseUpdate(ChatRole.Assistant, "hello")
             {
                 FinishReason = ChatFinishReason.Stop,
             });
-        var changes = new List<AgentChatStateChangedEventArgs>();
-        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        chat.StateChanged += (_, change) =>
-        {
-            changes.Add(change);
-            if (change.ChangeKind == AgentChatStateChangeKind.RunningRemoved
-                && change.RunningItem is not null)
-            {
-                completed.TrySetResult();
-            }
-        };
 
         chat.EnqueueUserMessage("hi");
-        await completed.Task;
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2 && chat.RunningItems.Count == 0,
+            "user message to complete and move the assistant response into history");
 
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.User);
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.RunningAdded && c.RunningItem is not null);
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.RunningUpdated && c.RunningItem is not null);
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.RunningRemoved && c.RunningItem is not null);
-        Assert.Contains(changes, c => c.ChangeKind == AgentChatStateChangeKind.HistoryAdded && c.HistoryItem?.Role == ChatRole.Assistant);
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal(ChatRole.User, chat.History[0].Role);
+        Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        Assert.Equal("hello", GetText(chat.History[1].Contents));
+        Assert.Empty(chat.RunningItems);
     }
 
     [Fact]
@@ -564,7 +539,7 @@ public sealed class AgentChatTests
         chat.EnqueueUserMessage("hi");
 
         await WaitForConditionAsync(
-            chat,
+            chat.History,
             () => chat.History.Any(item => item.Role == ChatRole.Assistant && GetText(item.Contents).Contains("hello", StringComparison.Ordinal)),
             "queued user message to start processing and produce assistant output");
     }
@@ -611,7 +586,7 @@ public sealed class AgentChatTests
 
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
-        var request = new AgentChat.InternalCreateAgentChatRequest
+        var request = new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
@@ -621,7 +596,7 @@ public sealed class AgentChatTests
         var constructor = typeof(AgentChat).GetConstructor(
             BindingFlags.Instance | BindingFlags.NonPublic,
             binder: null,
-            types: new[] { typeof(AgentChat.InternalCreateAgentChatRequest) },
+            types: new[] { typeof(InternalCreateAgentChatRequest) },
             modifiers: null);
         if (constructor is null)
         {

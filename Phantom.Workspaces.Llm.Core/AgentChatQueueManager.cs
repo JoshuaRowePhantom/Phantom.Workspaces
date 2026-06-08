@@ -7,6 +7,7 @@ namespace Phantom.Workspaces.Llm;
 public sealed class AgentChatQueueManager
 {
     private readonly AgentInputQueueManager inputQueueManager;
+    private readonly ObservableCollection<AgentChatQueue> inputQueues = [];
     private int nextUserQueuePriority = 10;
     private int userQueueSequence = 1;
 
@@ -28,10 +29,11 @@ public sealed class AgentChatQueueManager
             "Immediate Queue",
             isDefault: false,
             isImmediate: true);
-        this.InputQueues.Add(this.DefaultInputQueue);
+        this.inputQueues.Add(this.DefaultInputQueue);
+        this.InputQueues = new ReadOnlyObservableCollection<AgentChatQueue>(this.inputQueues);
     }
 
-    public ObservableCollection<AgentChatQueue> InputQueues { get; } = [];
+    public ReadOnlyObservableCollection<AgentChatQueue> InputQueues { get; }
 
     public AgentChatQueue DefaultInputQueue { get; }
 
@@ -52,7 +54,7 @@ public sealed class AgentChatQueueManager
             : name;
         var wrapped = new AgentChatQueue(queue, queueName, isDefault: false);
         this.inputQueueManager.RegisterInputQueue(queue);
-        this.InputQueues.Add(wrapped);
+        this.inputQueues.Add(wrapped);
         return wrapped;
     }
 
@@ -67,7 +69,7 @@ public sealed class AgentChatQueueManager
         var removedFromManager = this.inputQueueManager.UnregisterInputQueue(queue.Queue);
         if (removedFromManager)
         {
-            this.InputQueues.Remove(queue);
+            this.inputQueues.Remove(queue);
         }
 
         return removedFromManager;

@@ -8,9 +8,21 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 
 internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 {
+    private sealed class ContentBinding
+    {
+        public required AIContent Content { get; init; }
+
+        public List<Block> Blocks { get; } = [];
+
+        public bool IsVisible { get; set; }
+
+        public bool IsReasoning => this.Content is TextReasoningContent;
+    }
+
     private readonly Func<bool> isReasoningVisible;
     private readonly Section labelSection = new();
     private readonly Section contentSection = new();
+    private readonly List<ContentBinding> contentBindings = [];
 
     public ChatMessageDocumentModel(AgentChatHistoryItem item, Func<bool> isReasoningVisible)
     {
@@ -37,7 +49,7 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 
     public void UpdateReasoningVisibility()
     {
-        this.Render();
+        this.SyncReasoningVisibility();
     }
 
     private void Render()
@@ -48,53 +60,136 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
             this.Source.Role.Value));
 
         DocumentBlockUtilities.ClearBlocksSafely(this.contentSection);
+        this.contentBindings.Clear();
         foreach (var content in this.Source.Contents)
         {
-            this.AppendContent(this.contentSection, content);
+            var contentBinding = new ContentBinding
+            {
+                Content = content,
+            };
+            this.contentBindings.Add(contentBinding);
+            this.RenderContentBinding(contentBinding, this.isReasoningVisible());
+            if (contentBinding.IsVisible)
+            {
+                foreach (var block in contentBinding.Blocks)
+                {
+                    this.contentSection.Blocks.Add(block);
+                }
+            }
         }
     }
 
-    private void AppendContent(Section section, AIContent content)
+    private void SyncReasoningVisibility()
+    {
+        for (var bindingIndex = 0; bindingIndex < this.contentBindings.Count; bindingIndex++)
+        {
+            var contentBinding = this.contentBindings[bindingIndex];
+            if (!contentBinding.IsReasoning)
+            {
+                continue;
+            }
+
+            var expectedVisible = this.isReasoningVisible() && this.ShouldRenderReasoningContent(contentBinding.Content);
+            if (expectedVisible == contentBinding.IsVisible)
+            {
+                continue;
+            }
+
+            if (expectedVisible)
+            {
+                this.RenderContentBinding(contentBinding, includeReasoningContent: true);
+                var targetIndex = this.GetTargetContentIndex(bindingIndex);
+                for (var blockIndex = 0; blockIndex < contentBinding.Blocks.Count; blockIndex++)
+                {
+                    this.contentSection.Blocks.Insert(targetIndex + blockIndex, contentBinding.Blocks[blockIndex]);
+                }
+            }
+            else
+            {
+                foreach (var block in contentBinding.Blocks)
+                {
+                    this.contentSection.Blocks.Remove(block);
+                }
+                contentBinding.Blocks.Clear();
+                contentBinding.IsVisible = false;
+            }
+        }
+    }
+
+    private int GetTargetContentIndex(int bindingIndex)
+    {
+        var targetIndex = 0;
+        for (var index = 0; index < bindingIndex; index++)
+        {
+            if (!this.contentBindings[index].IsVisible)
+            {
+                continue;
+            }
+
+            targetIndex += this.contentBindings[index].Blocks.Count;
+        }
+
+        return targetIndex;
+    }
+
+    private bool ShouldRenderReasoningContent(AIContent content)
+    {
+        if (content is not TextReasoningContent reasoningContent)
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(reasoningContent.Text);
+    }
+
+    private void RenderContentBinding(ContentBinding contentBinding, bool includeReasoningContent)
+    {
+        contentBinding.Blocks.Clear();
+        this.AppendContent(contentBinding.Blocks, contentBinding.Content, includeReasoningContent);
+        contentBinding.IsVisible = contentBinding.Blocks.Count > 0;
+    }
+
+    private void AppendContent(IList<Block> blocks, AIContent content, bool includeReasoningContent)
     {
         switch (content)
         {
-            case TextReasoningContent reasoningContent when this.isReasoningVisible() && !string.IsNullOrWhiteSpace(reasoningContent.Text):
-                section.Blocks.Add(DocumentBlockUtilities.CreateReasoningParagraph(reasoningContent.Text));
+            case TextReasoningContent reasoningContent when includeReasoningContent && !string.IsNullOrWhiteSpace(reasoningContent.Text):
+                blocks.Add(DocumentBlockUtilities.CreateReasoningParagraph(reasoningContent.Text));
                 return;
             case TextReasoningContent:
                 return;
             case TextContent textContent when !string.IsNullOrWhiteSpace(textContent.Text):
-                section.Blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(textContent.Text));
+                blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(textContent.Text));
                 return;
             case ErrorContent errorContent:
-                section.Blocks.Add(DocumentBlockUtilities.CreateErrorParagraph(errorContent.Message));
+                blocks.Add(DocumentBlockUtilities.CreateErrorParagraph(errorContent.Message));
                 return;
             case FunctionCallContent functionCall:
-                section.Blocks.Add(DocumentBlockUtilities.CreateMetaParagraph($"tool call: {functionCall.Name}"));
-                section.Blocks.Add(DocumentBlockUtilities.CreateMonospaceParagraph(DocumentBlockUtilities.PrettyJson(functionCall.Arguments)));
+                blocks.Add(DocumentBlockUtilities.CreateMetaParagraph($"tool call: {functionCall.Name}"));
+                blocks.Add(DocumentBlockUtilities.CreateMonospaceParagraph(DocumentBlockUtilities.PrettyJson(functionCall.Arguments)));
                 return;
             case FunctionResultContent functionResult:
-                section.Blocks.Add(DocumentBlockUtilities.CreateMetaParagraph($"tool result: {functionResult.CallId}"));
-                section.Blocks.Add(DocumentBlockUtilities.CreateMonospaceParagraph(DocumentBlockUtilities.PrettyJson(functionResult.Result)));
+                blocks.Add(DocumentBlockUtilities.CreateMetaParagraph($"tool result: {functionResult.CallId}"));
+                blocks.Add(DocumentBlockUtilities.CreateMonospaceParagraph(DocumentBlockUtilities.PrettyJson(functionResult.Result)));
                 return;
             case DataContent dataContent:
-                this.AppendDataContent(section, dataContent);
+                this.AppendDataContent(blocks, dataContent);
                 return;
             case UriContent uriContent:
-                section.Blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(uriContent.Uri.ToString()));
+                blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(uriContent.Uri.ToString()));
                 return;
             default:
-                section.Blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(content.ToString() ?? string.Empty));
+                blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(content.ToString() ?? string.Empty));
                 return;
         }
     }
 
-    private void AppendDataContent(Section section, DataContent dataContent)
+    private void AppendDataContent(IList<Block> blocks, DataContent dataContent)
     {
         if (!DocumentBlockUtilities.IsImageMediaType(dataContent.MediaType))
         {
             var mediaLabel = string.IsNullOrWhiteSpace(dataContent.MediaType) ? "[data]" : $"[{dataContent.MediaType}]";
-            section.Blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(mediaLabel));
+            blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(mediaLabel));
             return;
         }
 
@@ -102,7 +197,7 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
         var imagePreview = DocumentBlockUtilities.TryCreatePreview(dataContent.Data.ToArray());
         if (imagePreview is null)
         {
-            section.Blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(imageLabel));
+            blocks.Add(DocumentBlockUtilities.CreateBodyParagraph(imageLabel));
             return;
         }
 
@@ -123,7 +218,7 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
             FontSize = 11,
             Foreground = Avalonia.Media.Brushes.Gray,
         });
-        section.Blocks.Add(new BlockUIContainer(imageContainer));
+        blocks.Add(new BlockUIContainer(imageContainer));
     }
 
 }
