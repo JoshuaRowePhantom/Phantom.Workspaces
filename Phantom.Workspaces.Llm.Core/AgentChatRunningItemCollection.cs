@@ -28,6 +28,4 @@ public sealed class AgentChatRunningItemCollection : ReadOnlyObservableCollectio
     internal bool Remove(AgentChatRunningItem item) => this.items.Remove(item);
 
     internal void Clear() => this.items.Clear();
-
-    internal int IndexOf(AgentChatRunningItem item) => this.items.IndexOf(item);
 }

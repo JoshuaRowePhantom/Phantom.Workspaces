@@ -12,7 +12,7 @@ internal static class DocumentBlockUtilities
         WriteIndented = true,
     };
 
-    public static void ClearBlocksSafely(Section section)
+    public static void ClearBlocks(Section section)
     {
         while (section.Blocks.Count > 0)
         {

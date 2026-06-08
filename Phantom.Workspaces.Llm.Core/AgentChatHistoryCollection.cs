@@ -26,6 +26,4 @@ public sealed class AgentChatHistoryCollection : ReadOnlyObservableCollection<Ag
     internal bool Remove(AgentChatHistoryItem item) => this.items.Remove(item);
 
     internal void Clear() => this.items.Clear();
-
-    internal int IndexOf(AgentChatHistoryItem item) => this.items.IndexOf(item);
 }

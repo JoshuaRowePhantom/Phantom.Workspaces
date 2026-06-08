@@ -300,7 +300,7 @@ public sealed class AgentChatTests
                 FinishReason = ChatFinishReason.Stop,
             });
         chat.EnqueueUserMessage("hi");
-        await WaitForConditionAsync(chat.History, () =>
+        await WaitForConditionAsync(chat.RunningItems, () =>
             chat.History.Count == 2
             && chat.RunningItems.Count == 0,
             "assistant running item to complete and move into history");
@@ -341,8 +341,11 @@ public sealed class AgentChatTests
         blockedComplete.MarkReady();
         await WaitForConditionAsync(
             chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "running item to complete after stream release");
+        await WaitForConditionAsync(
+            chat.History,
             () => chat.History.Count == 2
-                && chat.RunningItems.Count == 0
                 && chat.History[^1].Role == ChatRole.Assistant
                 && GetText(chat.History[^1].Contents).Contains("2+2 equals 4.", StringComparison.Ordinal),
             "completed assistant response after stream release");
@@ -520,7 +523,7 @@ public sealed class AgentChatTests
 
         chat.EnqueueUserMessage("hi");
         await WaitForConditionAsync(
-            chat.History,
+            chat.RunningItems,
             () => chat.History.Count == 2 && chat.RunningItems.Count == 0,
             "user message to complete and move the assistant response into history");
 

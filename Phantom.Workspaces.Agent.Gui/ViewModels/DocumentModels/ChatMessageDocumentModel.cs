@@ -54,12 +54,12 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 
     private void Render()
     {
-        DocumentBlockUtilities.ClearBlocksSafely(this.labelSection);
+        DocumentBlockUtilities.ClearBlocks(this.labelSection);
         this.labelSection.Blocks.Add(DocumentBlockUtilities.CreateLabelParagraph(
             this.Source.Role.Value.ToLowerInvariant(),
             this.Source.Role.Value));
 
-        DocumentBlockUtilities.ClearBlocksSafely(this.contentSection);
+        DocumentBlockUtilities.ClearBlocks(this.contentSection);
         this.contentBindings.Clear();
         foreach (var content in this.Source.Contents)
         {
