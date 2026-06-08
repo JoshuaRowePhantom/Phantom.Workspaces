@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatFlowDocumentBuilderTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void CreateHistorySection_RendersRoleAndMessageText()
     {
         var viewModel = CreateHistoryItemViewModel(
@@ -21,7 +21,7 @@ public sealed class AgentChatFlowDocumentBuilderTests
         Assert.Contains("hello world", paragraphTexts);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void UpdateHistorySection_ReusesSectionAndReplacesContent()
     {
         var viewModel = CreateHistoryItemViewModel(
@@ -42,7 +42,7 @@ public sealed class AgentChatFlowDocumentBuilderTests
         Assert.DoesNotContain("old text", paragraphTexts);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void UpdateRunningSection_ReusesSectionAndUpdatesRunningContent()
     {
         var running = new AgentChatRunningItem
@@ -76,7 +76,7 @@ public sealed class AgentChatFlowDocumentBuilderTests
         Assert.DoesNotContain("first token", paragraphTexts);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void UpdateHistorySection_AttachedToDocument_DoesNotThrow()
     {
         var viewModel = CreateHistoryItemViewModel(
@@ -100,7 +100,7 @@ public sealed class AgentChatFlowDocumentBuilderTests
         Assert.Contains("updated text", paragraphTexts);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void UpdateRunningSection_AttachedToDocument_DoesNotThrow()
     {
         var running = new AgentChatRunningItem

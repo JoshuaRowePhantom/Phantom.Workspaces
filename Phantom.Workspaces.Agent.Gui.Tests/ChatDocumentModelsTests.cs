@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class ChatDocumentModelsTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void ChatHistory_NoOpUpdate_PreservesRenderedTextParagraphReference()
     {
         var root = new Section();
@@ -23,7 +23,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Same(firstParagraph, secondParagraph);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ChatHistory_SecondMessageChange_LeavesFirstMessageBlocksUntouched()
     {
         var root = new Section();
@@ -49,7 +49,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Equal("after", secondParagraphAfter.Inlines.OfType<RichRun>().Single().Text);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void RunningItems_MiddleInsert_PreservesExistingTrailingSection()
     {
         var root = new Section();
@@ -69,7 +69,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Same(trailingBefore, trailingAfter);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void RunningItem_UpdatesWithReasoningText_RendersProgressAndReasoning()
     {
         var root = new Section();
@@ -103,7 +103,7 @@ public sealed class ChatDocumentModelsTests
         Assert.NotEmpty(progressSection.Blocks.OfType<BlockUIContainer>());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void RunningItem_UpdateWithDifferentInstance_SwitchesTransformer()
     {
         var root = new Section();
@@ -144,7 +144,7 @@ public sealed class ChatDocumentModelsTests
     }
 
 
-    [Fact]
+    [AvaloniaFact]
     public void Labels_UseRoleSpecificClasses()
     {
         var root = new Section();
@@ -161,7 +161,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Contains("agent-chat-role-label-assistant", assistantLabel.Classes);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void TextContentParagraph_UsesBodyClass()
     {
         var root = new Section();
@@ -175,7 +175,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Contains("agent-chat-body", paragraph.Classes);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void Message_DoesNotRenderTrailingSpacer()
     {
         var root = new Section();
@@ -191,7 +191,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Equal(2, ((Section)root.Blocks[1]).Blocks.Count);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void HistoryItem_DoesNotShowProgressBar()
     {
         var root = new Section();
@@ -206,7 +206,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Equal(2, messageSection.Blocks.Count);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ReasoningVisible_RendersReasoningParagraph()
     {
         var root = new Section();
@@ -231,7 +231,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Contains("reasoning text", paragraphs[1].Inlines.OfType<RichRun>().Single().Text, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ReasoningVisibilityToggle_UpdatesDocumentWithoutErrors()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -276,7 +276,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Single(contentSectionAfterToggle.Blocks.OfType<Paragraph>());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void RunningItem_ReasoningVisibilityToggle_UpdatesWithoutErrors()
     {
         var runningItems = new ObservableCollection<AgentChatRunningItem>();
@@ -330,7 +330,7 @@ public sealed class ChatDocumentModelsTests
         return (Paragraph)contentHost.Blocks[0];
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ToggleReasoningVisibility_PreservesDocumentStructure()
     {
         var root = new Section();
@@ -406,7 +406,7 @@ public sealed class ChatDocumentModelsTests
             Contents = [new TextContent(text)],
         };
 
-    [Fact]
+    [AvaloniaFact]
     public void ToggleReasoningVisibility_WithRunningItems_PreservesContent()
     {
         var root = new Section();
@@ -462,7 +462,7 @@ public sealed class ChatDocumentModelsTests
         Assert.Equal(3, paragraphsAfter.Count);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ToggleReasoningVisibility_HistoryWithRunningItems_PreservesHistoryContent()
     {
         var historyRoot = new Section();

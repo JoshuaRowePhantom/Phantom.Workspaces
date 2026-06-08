@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListViewModelTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void SetItems_OrdersByOrderAndPreservesHierarchyLevel()
     {
         var list = new EntityListViewModel();
@@ -35,7 +35,7 @@ public sealed class EntityListViewModelTests
         Assert.True(list.Items[0].IsExpanded);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void TreeNode_CornerRadiusAndVisibility_TrackChildExpansionState()
     {
         var parent = new EntityListNodeViewModel(

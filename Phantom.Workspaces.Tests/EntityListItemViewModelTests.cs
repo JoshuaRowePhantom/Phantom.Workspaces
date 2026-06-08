@@ -4,7 +4,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListItemViewModelTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void ToggleExpandCommand_UpdatesItemAndNodeExpansionState()
     {
         var node = new EntityListNodeViewModel(
@@ -31,7 +31,7 @@ public sealed class EntityListItemViewModelTests
         Assert.Equal("▴", item.ExpandArrow);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void ToggleExpandCommand_DisabledWhenNoChildren()
     {
         var node = new EntityListNodeViewModel(

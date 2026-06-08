@@ -2,7 +2,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ProfileStoreTests
 {
-    [Fact]
+    [AvaloniaFact]
     public async Task GetOrInitializeProfileAsync_DefaultsThemeAndDebugging()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -32,7 +32,7 @@ public sealed class ProfileStoreTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SetThemeAndDebuggingAsync_PreserveEachOther()
     {
         var ct = TestContext.Current.CancellationToken;

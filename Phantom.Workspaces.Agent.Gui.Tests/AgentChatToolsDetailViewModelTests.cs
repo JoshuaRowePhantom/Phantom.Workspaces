@@ -4,7 +4,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatToolsDetailViewModelTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void SetRootItem_UsesClonedNodes_InsteadOfSharedNavigationInstances()
     {
         var detail = new AgentChatToolsDetailViewModel();

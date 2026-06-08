@@ -32,7 +32,7 @@ public sealed class InputQueueViewModelTests
                 AgentServices = agentServices,
             });
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SubmitToDefaultQueue_QueuesTextAndClearsInput()
     {
         await using var chat = await CreateChatAsync();
@@ -53,7 +53,7 @@ public sealed class InputQueueViewModelTests
         Assert.IsType<TextContent>(userHistory.Contents[0]);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SubmitToNewQueue_CreatesQueueWhenManagerIsBound()
     {
         await using var chat = await CreateChatAsync();
@@ -71,7 +71,7 @@ public sealed class InputQueueViewModelTests
         Assert.Equal("queued", viewModel.Queues[1].SelectedImmediacyOption.Label);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SubmitToNewQueue_ProvidesRemoveCommandForQueuedItems()
     {
         await using var chat = await CreateChatAsync();
@@ -86,7 +86,7 @@ public sealed class InputQueueViewModelTests
         Assert.Empty(viewModel.Queues[1].Items);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueComposer_AppendsTextToExistingQueue()
     {
         await using var chat = await CreateChatAsync();
@@ -108,7 +108,7 @@ public sealed class InputQueueViewModelTests
         Assert.Empty(chat.History);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueComposer_SubmitStatusOptionTracksQueueState()
     {
         await using var chat = await CreateChatAsync();
@@ -125,7 +125,7 @@ public sealed class InputQueueViewModelTests
         Assert.Equal("held", queueVm.Composer.SubmitStatusOption.Label);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueComposer_CanAttachImageAndSubmitStructuredContent()
     {
         await using var chat = await CreateChatAsync();
@@ -148,7 +148,7 @@ public sealed class InputQueueViewModelTests
         Assert.IsType<DataContent>(chat.History[0].Contents[0]);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueComposer_BackspaceRemovesImageAttachment()
     {
         await using var chat = await CreateChatAsync();
@@ -170,7 +170,7 @@ public sealed class InputQueueViewModelTests
         Assert.False(viewModel.DefaultComposer.HasAttachments);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SubmitToNewQueue_WhenQueuesAreHeld_CreatesHeldQueue()
     {
         await using var chat = await CreateChatAsync();
@@ -188,7 +188,7 @@ public sealed class InputQueueViewModelTests
         Assert.Empty(chat.History);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueImmediacy_CanBeChangedInPlace()
     {
         await using var chat = await CreateChatAsync();
@@ -204,7 +204,7 @@ public sealed class InputQueueViewModelTests
         Assert.Equal("held", queue.SelectedImmediacyOption.Label);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SingleQueue_HidesNameUntilSecondQueueExists()
     {
         await using var chat = await CreateChatAsync();
@@ -219,7 +219,7 @@ public sealed class InputQueueViewModelTests
         Assert.True(viewModel.Queues[0].ShowName);
         Assert.True(viewModel.Queues[1].ShowName);
     }
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueItem_CanBeEditedInPlace()
     {
         await using var chat = await CreateChatAsync();
@@ -242,7 +242,7 @@ public sealed class InputQueueViewModelTests
         Assert.Empty(chat.History);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task QueueItem_CanRemoveImageAttachment()
     {
         await using var chat = await CreateChatAsync();
@@ -262,7 +262,7 @@ public sealed class InputQueueViewModelTests
         Assert.Single(chat.InputQueues[1].Items[0].Contents);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ToggleHoldAllQueues_WhenAnyNotHeld_HoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -275,7 +275,7 @@ public sealed class InputQueueViewModelTests
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ToggleHoldAllQueues_WhenAllHeld_UnholdsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -289,7 +289,7 @@ public sealed class InputQueueViewModelTests
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task HoldAllQueues_AlwaysHoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -306,7 +306,7 @@ public sealed class InputQueueViewModelTests
         Assert.Same(queueVm, viewModel.Queues[1]);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task UnholdAllQueues_AlwaysUnholdsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -320,7 +320,7 @@ public sealed class InputQueueViewModelTests
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task HoldAndUnholdAllQueues_PreserveQueueViewModels()
     {
         await using var chat = await CreateChatAsync();

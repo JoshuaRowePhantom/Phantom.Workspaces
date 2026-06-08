@@ -29,7 +29,7 @@ public sealed class MainWindowViewModelTests
             }
             """);
 
-    [Fact]
+    [AvaloniaFact]
     public async Task Constructor_WithLoggingFlags_DoesNotThrow()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -44,7 +44,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task Constructor_WithSchemaPath_AppendsSchemaFileToDisplayName()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -61,7 +61,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ToggleReasoningVisibility_UpdatesAgentState()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -79,7 +79,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task HandleKey_CtrlT_TogglesReasoningVisibility()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -98,7 +98,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task CreateAsync_WithAgentSessionId_UsesRequestedSessionId()
     {
         var parseResult = new AgentDefinitionParseResult(

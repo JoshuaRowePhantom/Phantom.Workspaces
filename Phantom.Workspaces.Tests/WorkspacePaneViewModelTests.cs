@@ -6,7 +6,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacePaneViewModelTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void HasNoRegions_IsTrueWhenEmpty_AndFalseWhenRegionsExist()
     {
         var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());

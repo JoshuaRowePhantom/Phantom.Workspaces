@@ -22,7 +22,9 @@ namespace Phantom.Workspaces.Llm;
 /// Owns the <see cref="AgentInputQueueManager"/> and drives the processing loop.
 /// Exposes observable collections and events that consumers (e.g. ViewModels, CLI) can
 /// subscribe to and marshal onto their own thread as needed.
-/// All events and collection mutations fire on the background processing thread.
+/// Events and collection mutations run on the processing loop scheduler: this is
+/// the current synchronization context if one is present when processing starts,
+/// otherwise the default task scheduler.
 /// </summary>
 public sealed class AgentChat : IAsyncDisposable
 {

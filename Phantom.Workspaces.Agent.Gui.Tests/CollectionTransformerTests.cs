@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class CollectionTransformerTests
 {
-    [Fact]
+    [AvaloniaFact]
     public void SourceInsert_UpdatesTargetCollection()
     {
         var source = new ObservableCollection<SourceItem>
@@ -26,7 +26,7 @@ public sealed class CollectionTransformerTests
         Assert.Same(preservedC, target[2]);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void SourceMove_ReordersTargetCollection()
     {
         var source = new ObservableCollection<SourceItem>
@@ -45,7 +45,7 @@ public sealed class CollectionTransformerTests
         Assert.Same(first, target[1]);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void Dispose_StopsCollectionSubscriptions()
     {
         var source = new ObservableCollection<SourceItem>
@@ -62,7 +62,7 @@ public sealed class CollectionTransformerTests
         Assert.Equal("a", target[0].Id);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void InitialTransform_PopulatesTargetCollectionOnConstruction()
     {
         var source = new ObservableCollection<SourceItem>
@@ -80,7 +80,7 @@ public sealed class CollectionTransformerTests
         Assert.Equal("c", target[2].Id);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void SourceRemove_DisposesDisposableTargetItem()
     {
         var source = new ObservableCollection<SourceItem>
@@ -98,7 +98,7 @@ public sealed class CollectionTransformerTests
         Assert.True(removed.IsDisposed);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void SourceClear_DisposesAllDisposableTargetItems()
     {
         var source = new ObservableCollection<SourceItem>
@@ -121,7 +121,7 @@ public sealed class CollectionTransformerTests
         Assert.True(third.IsDisposed);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public void SourceRemoveMultiple_DisposesAllRemovedItems()
     {
         var source = new ObservableCollection<SourceItem>

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrokerTests
 {
-    [Fact]
+    [AvaloniaFact]
     public async Task CreateInitializedAsync_PopulatesRepositoryForInMemorySource()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -20,7 +20,7 @@ public sealed class EntityBrokerTests
         Assert.NotEmpty(snapshots);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task CreateSubscriptionAsync_LoadsBindableEntities()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -49,7 +49,7 @@ public sealed class EntityBrokerTests
         Assert.Equal("entity", entity.EntityType);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task RefreshAsync_UpdatesBindableEntityObject()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -93,7 +93,7 @@ public sealed class EntityBrokerTests
         Assert.Contains("\"Updated\"", entity.Data?.GetRawText(), StringComparison.Ordinal);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task RefreshAsync_SkipsCollectedSubscriptions()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -136,7 +136,7 @@ public sealed class EntityBrokerTests
         await broker.RefreshAsync(ct);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task UpdateAsync_UpdatesSubscribedEntityWithoutRefreshAsync()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -190,7 +190,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(entityId, changedEntityIds);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task SubscribeGetAsync_LoadsInitialResults()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -244,7 +244,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(secondId, resultIds);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task RefreshAsync_SubscribedGetRerunsGetAndReplacesResultCollection()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -319,7 +319,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(secondId, resultIds);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task RefreshAsync_SubscribedGet_UsesIncrementalCollectionNotifications()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -399,7 +399,7 @@ public sealed class EntityBrokerTests
         Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task RefreshAsync_SubscribedGet_DoesNotClearAndRecreateCollection_WhenMembershipUnchanged()
     {
         var ct = TestContext.Current.CancellationToken;

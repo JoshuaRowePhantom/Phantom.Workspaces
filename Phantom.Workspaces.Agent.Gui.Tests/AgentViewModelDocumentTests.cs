@@ -1,5 +1,6 @@
 using System.Reflection;
 using AgentSchema;
+using Avalonia.Headless.XUnit;
 using Avalonia.Controls.Documents;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -9,7 +10,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentViewModelDocumentTests
 {
-    [Fact]
+    [AvaloniaFact]
     public async Task LiveCollections_RenderHistoryAndRunningItemsInOrder()
     {
         await using var chat = await CreateChatAsync();
@@ -47,7 +48,7 @@ public sealed class AgentViewModelDocumentTests
         Assert.Empty(GetRunningRoot(viewModel).Blocks.OfType<Section>());
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task AgentSessionIdChanged_UpdatesTheViewModel()
     {
         await using var chat = await CreateChatAsync();

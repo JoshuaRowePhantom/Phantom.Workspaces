@@ -32,7 +32,7 @@ public sealed class AgentChatInputQueueControlKeyTests
                 AgentServices = agentServices,
             });
 
-    [Fact]
+    [AvaloniaFact]
     public async Task HoldAllQueuesCommand_HoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -44,7 +44,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task UnholdAllQueuesCommand_UnholdsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -57,7 +57,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ToggleHoldAllQueuesCommand_TogglesHoldState()
     {
         await using var chat = await CreateChatAsync();
@@ -69,7 +69,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task HandleInputKey_CtrlShiftQ_WhenQueuesAreHeld_CreatesHeldQueue()
     {
         await using var chat = await CreateChatAsync();
@@ -85,7 +85,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Single(viewModel.Queues[1].Items);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task HandleInputKey_Return_SubmitsToDefaultQueue()
     {
         await using var chat = await CreateChatAsync();

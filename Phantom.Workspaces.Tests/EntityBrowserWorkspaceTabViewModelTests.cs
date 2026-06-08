@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrowserWorkspaceTabViewModelTests
 {
-    [Fact]
+    [AvaloniaFact]
     public async Task BrowserList_TracksParentChildMetadataAndExpansion()
     {
         var broker = await CreateBrokerAsync();

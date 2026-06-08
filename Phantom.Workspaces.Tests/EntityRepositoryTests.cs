@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityRepositoryTests
 {
-    [Fact]
+    [AvaloniaFact]
     public async Task TryGetEntityByName_FindsSeededMainView()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -22,7 +22,7 @@ public sealed class EntityRepositoryTests
         Assert.NotNull(mainView);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ExportEntitySnapshotsAsync_ReturnsLatestEntityVersion()
     {
         var ct = TestContext.Current.CancellationToken;
