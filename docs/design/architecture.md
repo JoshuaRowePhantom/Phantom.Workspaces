@@ -31,10 +31,6 @@ The system separates UI, agent execution, data access, and external integrations
        - merging, security, and shared DAL behaviors
      - `Phantom.Workspaces.Data.Offline`
        - `InMemory`, filesystem, and git-backed DALs
-     - `Phantom.Workspaces.Data.CosmosDB`
-       - Cosmos DB DAL
-     - `Phantom.Workspaces.Data.Sql`
-       - SQL DAL
      - `Phantom.Workspaces.Data.Web.Client`
        - web client DAL
      - `Phantom.Workspaces.Data.Web.Server`
@@ -57,12 +53,10 @@ The system separates UI, agent execution, data access, and external integrations
 2. Every client data access layer call must:
    - authenticate the calling user identity, and
    - authorize the requested operation against resource-level access rules.
-3. Data access implementations (`InMemory`, `Web`, `CosmosDB`, SQL) must enforce a consistent authorization contract so behavior is uniform regardless of backend.
+3. Data access implementations (`InMemory`, `Web`) must enforce a consistent authorization contract so behavior is uniform regardless of backend.
 4. Planned DAL backends include:
    - `InMemory`
    - `Web`
-   - `CosmosDB`
-   - SQL
    - filesystem-based storage
    - git-based storage built on top of filesystem storage
 
