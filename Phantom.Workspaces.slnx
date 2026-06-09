@@ -30,8 +30,6 @@
   <Project Path="Phantom.Workspaces.Llm.Test.Mcp/Phantom.Workspaces.Llm.Test.Mcp.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Interfaces/Phantom.Workspaces.Llm.Interfaces.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Echo/Phantom.Workspaces.Llm.Echo.csproj" />
-  <Project Path="Phantom.Workspaces.Llm.Tools.Tests/Phantom.Workspaces.Llm.Tools.Tests.csproj" />
-  <Project Path="Phantom.Workspaces.Llm.Tools/Phantom.Workspaces.Llm.Tools.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server.Tests/Phantom.Workspaces.Web.Server.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server/Phantom.Workspaces.Web.Server.csproj" />
   <Project Path="Phantom.Workspaces/Phantom.Workspaces.csproj" />
