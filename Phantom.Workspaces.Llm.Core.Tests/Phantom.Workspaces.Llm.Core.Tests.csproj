@@ -20,7 +20,6 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Test.Mcp\Phantom.Workspaces.Llm.Test.Mcp.csproj" />
-    <ProjectReference Include="..\Phantom.Workspaces.Host\Phantom.Workspaces.Host.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

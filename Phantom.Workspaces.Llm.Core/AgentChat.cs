@@ -13,6 +13,7 @@ using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.ClientModel;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 
 namespace Phantom.Workspaces.Llm;
@@ -778,7 +779,30 @@ public sealed class AgentChat : IAsyncDisposable
                 customTool,
                 "web_request",
                 new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>())),
+            CustomTool { Kind: "filesystem" } customTool => await this.InitializeToolsetRuntimeToolsAsync(
+                customTool,
+                "filesystem",
+                new FilesystemServiceToolset(
+                    editStoreConnectionJson: TryGetConnectionJson(customTool),
+                    loggerFactory: services?.LoggerFactory),
+                cancellationToken),
             _ => new ToolInitializationResult([], []),
+        };
+    }
+
+    private static string? TryGetConnectionJson(CustomTool tool)
+    {
+        if (tool.Options is null
+            || !tool.Options.TryGetValue("connection", out var connection)
+            || connection is null)
+        {
+            return null;
+        }
+
+        return connection switch
+        {
+            JsonElement jsonElement => jsonElement.GetRawText(),
+            _ => JsonSerializer.Serialize(connection),
         };
     }
 
@@ -813,6 +837,69 @@ public sealed class AgentChat : IAsyncDisposable
                 Contents = new AIContent[] { new TextContent($"Opened tool '{displayName}'.") },
             }]);
             return new ToolInitializationResult([root], [runtimeTool]);
+        }
+        finally
+        {
+            this.CompleteRunningItem(runningItem, true);
+        }
+    }
+
+    private async Task<ToolInitializationResult> InitializeToolsetRuntimeToolsAsync(
+        CustomTool tool,
+        string kind,
+        IToolset toolset,
+        CancellationToken cancellationToken)
+    {
+        var displayName = kind;
+        var summary = tool.Description ?? string.Empty;
+        var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = new AIContent[] { new TextContent($"Initializing toolset '{displayName}'...") },
+        });
+
+        try
+        {
+            if (toolset is IAsyncDisposable asyncDisposable)
+            {
+                this.RegisterOwnedResource(asyncDisposable);
+            }
+
+            var runtimeTools = await toolset.ListToolsAsync();
+            var root = new ToolStateNode(
+                id: BuildCustomToolId(tool),
+                name: displayName,
+                description: summary,
+                instructions: summary,
+                kind: kind,
+                runtimeTool: null,
+                parent: null,
+                isEnabled: true,
+                status: runtimeTools.Count == 0
+                    ? "Loaded no tools."
+                    : $"Loaded {runtimeTools.Count} tool{(runtimeTools.Count == 1 ? string.Empty : "s")}.");
+
+            foreach (var runtimeTool in runtimeTools)
+            {
+                var childName = string.IsNullOrWhiteSpace(runtimeTool.Name) ? "(unnamed)" : runtimeTool.Name;
+                root.Children.Add(new ToolStateNode(
+                    id: BuildCustomChildToolId(tool, childName),
+                    name: childName,
+                    description: runtimeTool.Description ?? string.Empty,
+                    instructions: runtimeTool.Description ?? string.Empty,
+                    kind: "custom-tool",
+                    runtimeTool: runtimeTool,
+                    parent: root,
+                    isEnabled: true,
+                    status: null));
+            }
+
+            this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = new AIContent[] { new TextContent($"Opened toolset '{displayName}' ({runtimeTools.Count} tools).") },
+            }]);
+            return new ToolInitializationResult([root], runtimeTools.ToList());
         }
         finally
         {
@@ -1116,6 +1203,9 @@ public sealed class AgentChat : IAsyncDisposable
 
     private static string BuildCustomToolId(Tool tool)
         => $"custom:{tool.Kind}:{tool.Name}";
+
+    private static string BuildCustomChildToolId(Tool tool, string toolName)
+        => $"{BuildCustomToolId(tool)}:{toolName}";
 
     private static string BuildMcpServerToolId(string? serverName)
         => $"mcp:{serverName ?? "(server)"}";

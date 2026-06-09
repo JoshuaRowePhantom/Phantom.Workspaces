@@ -17,8 +17,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core.Tests\Phantom.Workspaces.Data.Core.Tests.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\AgentPersistenceStoreContractTests.cs" Link="AgentPersistenceStoreContractTests.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\FilesystemEditStoreContractTests.cs" Link="FilesystemEditStoreContractTests.cs" />
   </ItemGroup>
 </Project>

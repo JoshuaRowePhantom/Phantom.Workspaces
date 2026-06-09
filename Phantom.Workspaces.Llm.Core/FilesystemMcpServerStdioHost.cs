@@ -2,23 +2,25 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
-using Phantom.Workspaces.Llm;
 using System.ComponentModel;
 using System.Text.Json;
 
-namespace Phantom.Workspaces.Host;
+namespace Phantom.Workspaces.Llm;
 
 internal static class FilesystemMcpServerStdioHost
 {
-    public static async Task RunAsync(CancellationToken cancellationToken)
+    public static async Task RunAsync(
+        CancellationToken cancellationToken,
+        string? editStoreConnectionJson = null)
     {
+        var editStore = await FilesystemEditStoreFactory.CreateAsync(editStoreConnectionJson, cancellationToken);
         var builder = global::Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
         builder.Logging.AddConsole(consoleLogOptions =>
         {
             consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
         });
 
-        builder.Services.AddSingleton<IFilesystemEditStore, InMemoryFilesystemEditStore>();
+        builder.Services.AddSingleton<IFilesystemEditStore>(editStore);
         builder.Services.AddSingleton<FilesystemMcpToolService>();
         builder.Services
             .AddMcpServer()

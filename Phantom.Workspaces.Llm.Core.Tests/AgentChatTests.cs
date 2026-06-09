@@ -272,6 +272,71 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task InitializeTools_FilesystemServiceToolset_UsesFilesystemRootAndChildTools()
+    {
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "filesystem", "description": "Workspace files" }
+              ]
+            }
+            """);
+
+        var root = Assert.Single(chat.Tools);
+        Assert.Equal("filesystem", root.Kind);
+        Assert.Equal("filesystem", root.Name);
+        Assert.True(root.IsEnabled);
+        Assert.Contains(root.Children, static child => child.Name == "read");
+        Assert.Contains(root.Children, static child => child.Name == "search");
+        Assert.Contains(root.Children, static child => child.Name == "edit");
+    }
+
+    [Fact]
+    public async Task InitializeTools_FilesystemServiceToolset_IncludesFilesystemToolsInFirstLlmRequest()
+    {
+        var client = new DeterministicTestChatClient();
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "filesystem", "description": "Workspace files" }
+              ]
+            }
+            """,
+            client);
+
+        chat.EnqueueUserMessage("hello");
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var toolNames = client.LastRequestOptions?.Tools?
+            .Select(static tool => tool.Name)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray()
+            ?? [];
+
+        Assert.Equal(
+            ["describe_edit", "edit", "edit_apply", "make_directory", "move_item", "read", "remove_item", "search"],
+            toolNames);
+    }
+
+    [Fact]
     public async Task EnqueueUserMessage_AddsPendingAssistantItemImmediately()
     {
         var client = new DeterministicTestChatClient();
@@ -284,8 +349,9 @@ public sealed class AgentChatTests
 
         Assert.Equal(1, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
-        Assert.Single(chat.RunningItems);
-        Assert.Equal(ChatRole.Assistant, chat.RunningItems[0].Items[0].Role);
+        Assert.Equal(1, chat.RunningItems.Count);
+        var runningAssistant = chat.RunningItems[0];
+        Assert.Equal(ChatRole.Assistant, runningAssistant.Items[0].Role);
     }
 
     [Fact]
