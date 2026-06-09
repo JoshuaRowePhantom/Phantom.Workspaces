@@ -50,31 +50,23 @@
     ],
     "$defs": {
       "user-name": {
-        "anyOf": [
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 4,
+        "prefixItems": [
           {
-            "type": "string",
-            "pattern": "^users(?:/|$)"
+            "const": "users"
           },
           {
-            "type": "array",
-            "minItems": 3,
-            "maxItems": 4,
-            "prefixItems": [
-              {
-                "const": "users"
-              },
-              {
-                "type": "string"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "items": {
-              "type": "string"
-            }
+            "type": "string"
+          },
+          {
+            "type": "string"
           }
-        ]
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     }
   }
