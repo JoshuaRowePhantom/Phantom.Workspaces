@@ -70,6 +70,26 @@ public sealed class ChatDocumentModelsTests
     }
 
     [AvaloniaFact]
+    public void RunningItem_WhenAdded_ShowsProgressBarImmediately()
+    {
+        var root = new Section();
+        var runningItems = new ObservableCollection<AgentChatRunningItem>();
+        using var model = new RunningChatItemsDocumentModel(root, runningItems, () => false);
+
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("thinking")],
+        });
+        runningItems.Add(runningItem);
+
+        var runningItemSection = (Section)root.Blocks[0];
+        var progressSection = (Section)runningItemSection.Blocks[1];
+        Assert.NotEmpty(progressSection.Blocks.OfType<BlockUIContainer>());
+    }
+
+    [AvaloniaFact]
     public void RunningItem_UpdatesWithReasoningText_RendersProgressAndReasoning()
     {
         var root = new Section();

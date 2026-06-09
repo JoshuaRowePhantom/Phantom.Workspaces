@@ -19,7 +19,7 @@ public sealed class AgentChatFlowDocumentBuilderTests
     [AvaloniaFact]
     public void ClearBlocks_AfterEnsuringTextDocument_DoesNotThrow()
     {
-        var document = AgentChatFlowDocumentBuilder.CreateDocument();
+        var document = new FlowDocument();
         var section = new Section();
         section.Blocks.Add(new Paragraph(new RichRun("hello")));
         document.Blocks.Add(section);
@@ -28,5 +28,22 @@ public sealed class AgentChatFlowDocumentBuilderTests
         DocumentBlockUtilities.ClearBlocks(section);
 
         Assert.Empty(section.Blocks);
+    }
+
+    [AvaloniaFact]
+    public void RemoveNestedSection_AfterEnsuringTextDocument_KeepsParentSectionInDocument()
+    {
+        var document = new FlowDocument();
+        var sectionA = new Section();
+        var sectionB = new Section();
+        sectionB.Blocks.Add(new Paragraph(new RichRun("nested")));
+        sectionA.Blocks.Add(sectionB);
+        document.Blocks.Add(sectionA);
+        sectionA.Blocks.RemoveAt(0);
+        _ = document.EnsureTextDocument();
+
+        Assert.Single(document.Blocks);
+        Assert.Same(sectionA, document.Blocks[0]);
+        Assert.Empty(sectionA.Blocks);
     }
 }
