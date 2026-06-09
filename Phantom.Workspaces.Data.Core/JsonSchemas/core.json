@@ -121,6 +121,10 @@
           "sort-direction"
         ],
         "unevaluatedProperties": false
+      },
+      "hosted-on-computer": {
+        "$comment": "Base type for entities that are hosted on or associated with a computer. Requires either 'computer' or 'computer-user-profile' in the names array.",
+        "type": "object"
       }
     }
   }

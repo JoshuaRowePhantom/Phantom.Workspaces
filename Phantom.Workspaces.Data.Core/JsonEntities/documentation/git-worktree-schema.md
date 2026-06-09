@@ -1,42 +1,54 @@
 # Git Worktree Schema
 
-Git worktree entities represent a git working directory instance, including its filesystem location and current branch state.
+A git worktree entity representing a git working tree on a filesystem.
 
-## Expected shape
+## Description
 
-```json
-{
-  "entity-id": "<stable deterministic id>",
-  "entity-types": ["git-worktree"],
-  "$schema": "https://schemas.workspaces.phantom.to/workspaces/data/core/git-worktree.json",
-  "names": [["workspaces", "my-worktree"]],
-  "filesystem-path": "<filesystem-path-entity-id>",
-  "current-branch": {
-    "name": "main",
-    "filtered-log": [
-      {
-        "commit-hash": "abc123def456",
-        "author": "Jane Smith",
-        "message": "Feature implementation",
-        "timestamp": "2024-01-15T10:30:00Z"
-      }
-    ]
-  }
-}
-```
-
-## Required Fields
-
-- `filesystem-path`: Reference to a filesystem-path entity identifying the worktree location
+The `git-worktree` schema represents a git worktree, which is a lightweight working directory associated with a git repository. It inherits from both `entity.json` and `filesystem-path.json`, meaning it automatically has the `hosted-on-computer` requirement (must be associated with a computer or user profile on a computer).
 
 ## Properties
 
-- `current-branch` (git-branch): The currently checked-out branch with its associated git log
+### Inherited from filesystem-path.json
+- `path`: The filesystem path of the worktree
 
-## Guidance
+### Inherited from entity.json
+- `entity-id`: Unique identifier for this entity
+- `entity-types`: Classification of entity types
+- `names`: Array name patterns for identification
+- `display-name`: Human-readable name with language localization
+- `content`: Associated content with MIME type and reference
 
-- A git-worktree entity connects a filesystem location with git version control information
-- Use this to represent isolated working directories within a workspace
-- The filesystem-path should point to the root directory of the git repository
-- The current-branch tracks which branch is currently checked out and includes its recent commit history
-- Multiple git-worktree entities can reference different filesystem paths or different branches
+## Constraints
+
+Entities of type `git-worktree` must:
+1. Be of type both `git-worktree` and `filesystem-path`
+2. Have a `path` property defining the filesystem location
+3. Have at least one name entry that references either:
+   - A `computer` entity: `["computer", "<name-type>", "<value>"]`
+   - A `computer-user-profile` entity: `["computer-user-profiles", "<computer>", "<user>"]`
+
+These constraints ensure that worktrees are always associated with a specific computer or user profile on a computer.
+
+## Example
+
+```json
+{
+  "entity-id": "44444444-5555-6666-7777-888888888888",
+  "entity-types": ["git-worktree", "filesystem-path"],
+  "names": [
+    ["git-worktrees", "feature-branch"],
+    ["computer", "hostname", "devbox"]
+  ],
+  "display-name": {
+    "default": "Feature Branch Worktree"
+  },
+  "path": "/home/dev/repos/myproject-feature"
+}
+```
+
+## See Also
+
+- [entity.json](entity-schema.md) - Base entity schema
+- [filesystem-path.json](filesystem-path-schema.md) - Filesystem path schema
+- [computer.json](computer-schema.md) - Computer schema
+- [git.json](git-schema.md) - Git schema

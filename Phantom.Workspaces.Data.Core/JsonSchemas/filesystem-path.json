@@ -28,6 +28,9 @@
     "allOf": [
       {
         "$ref": "entity.json"
+      },
+      {
+        "$ref": "core.json#/$defs/hosted-on-computer"
       }
     ],
     "type": "object",

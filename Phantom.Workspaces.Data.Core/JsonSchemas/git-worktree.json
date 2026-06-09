@@ -28,14 +28,13 @@
     "allOf": [
       {
         "$ref": "entity.json"
+      },
+      {
+        "$ref": "filesystem-path.json"
       }
     ],
     "type": "object",
     "properties": {
-      "filesystem-path": {
-        "type": "string",
-        "description": "Reference to filesystem-path entity"
-      }
     }
   }
 }
