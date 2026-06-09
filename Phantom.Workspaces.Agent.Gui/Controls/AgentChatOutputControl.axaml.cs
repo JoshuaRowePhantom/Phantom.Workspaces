@@ -34,7 +34,7 @@ public partial class AgentChatOutputControl : UserControl
                 hasPendingChange = true;
                 Task.Factory.StartNew(async () =>
                 {
-                    await Task.Delay(100);
+                    await Task.Delay(250);
                     var document = this.HistoryDocument.Document;
                     this.HistoryDocument.Document = null;
                     this.HistoryDocument.Document = document;
