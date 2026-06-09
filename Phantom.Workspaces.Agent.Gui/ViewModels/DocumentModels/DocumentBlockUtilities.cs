@@ -14,10 +14,7 @@ internal static class DocumentBlockUtilities
 
     public static void ClearBlocks(Section section)
     {
-        while (section.Blocks.Count > 0)
-        {
-            section.Blocks.RemoveAt(section.Blocks.Count - 1);
-        }
+        section.Blocks.Clear();
     }
 
     public static Paragraph CreateLabelParagraph(

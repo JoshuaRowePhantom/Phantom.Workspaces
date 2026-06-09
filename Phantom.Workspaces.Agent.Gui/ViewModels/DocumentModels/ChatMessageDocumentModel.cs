@@ -47,99 +47,39 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
         this.Render();
     }
 
-    public void UpdateReasoningVisibility()
+    public void Refresh()
     {
-        this.SyncReasoningVisibility();
+        this.Render();
     }
 
     private void Render()
     {
-        DocumentBlockUtilities.ClearBlocks(this.labelSection);
-        this.labelSection.Blocks.Add(DocumentBlockUtilities.CreateLabelParagraph(
-            this.Source.Role.Value.ToLowerInvariant(),
-            this.Source.Role.Value));
-
-        DocumentBlockUtilities.ClearBlocks(this.contentSection);
-        this.contentBindings.Clear();
-        foreach (var content in this.Source.Contents)
+        using (this.labelSection.TextDocument?.BeginChange())
         {
-            var contentBinding = new ContentBinding
+            DocumentBlockUtilities.ClearBlocks(this.labelSection);
+            this.labelSection.Blocks.Add(DocumentBlockUtilities.CreateLabelParagraph(
+                this.Source.Role.Value.ToLowerInvariant(),
+                this.Source.Role.Value));
+
+            DocumentBlockUtilities.ClearBlocks(this.contentSection);
+            this.contentBindings.Clear();
+            foreach (var content in this.Source.Contents)
             {
-                Content = content,
-            };
-            this.contentBindings.Add(contentBinding);
-            this.RenderContentBinding(contentBinding, this.isReasoningVisible());
-            if (contentBinding.IsVisible)
-            {
-                foreach (var block in contentBinding.Blocks)
+                var contentBinding = new ContentBinding
                 {
-                    this.contentSection.Blocks.Add(block);
+                    Content = content,
+                };
+                this.contentBindings.Add(contentBinding);
+                this.RenderContentBinding(contentBinding, this.isReasoningVisible());
+                if (contentBinding.IsVisible)
+                {
+                    foreach (var block in contentBinding.Blocks)
+                    {
+                        this.contentSection.Blocks.Add(block);
+                    }
                 }
             }
         }
-    }
-
-    private void SyncReasoningVisibility()
-    {
-        for (var bindingIndex = 0; bindingIndex < this.contentBindings.Count; bindingIndex++)
-        {
-            var contentBinding = this.contentBindings[bindingIndex];
-            if (!contentBinding.IsReasoning)
-            {
-                continue;
-            }
-
-            var expectedVisible = this.isReasoningVisible() && this.ShouldRenderReasoningContent(contentBinding.Content);
-            if (expectedVisible == contentBinding.IsVisible)
-            {
-                continue;
-            }
-
-            if (expectedVisible)
-            {
-                this.RenderContentBinding(contentBinding, includeReasoningContent: true);
-                var targetIndex = this.GetTargetContentIndex(bindingIndex);
-                for (var blockIndex = 0; blockIndex < contentBinding.Blocks.Count; blockIndex++)
-                {
-                    this.contentSection.Blocks.Insert(targetIndex + blockIndex, contentBinding.Blocks[blockIndex]);
-                }
-            }
-            else
-            {
-                foreach (var block in contentBinding.Blocks)
-                {
-                    this.contentSection.Blocks.Remove(block);
-                }
-                contentBinding.Blocks.Clear();
-                contentBinding.IsVisible = false;
-            }
-        }
-    }
-
-    private int GetTargetContentIndex(int bindingIndex)
-    {
-        var targetIndex = 0;
-        for (var index = 0; index < bindingIndex; index++)
-        {
-            if (!this.contentBindings[index].IsVisible)
-            {
-                continue;
-            }
-
-            targetIndex += this.contentBindings[index].Blocks.Count;
-        }
-
-        return targetIndex;
-    }
-
-    private bool ShouldRenderReasoningContent(AIContent content)
-    {
-        if (content is not TextReasoningContent reasoningContent)
-        {
-            return false;
-        }
-
-        return !string.IsNullOrWhiteSpace(reasoningContent.Text);
     }
 
     private void RenderContentBinding(ContentBinding contentBinding, bool includeReasoningContent)

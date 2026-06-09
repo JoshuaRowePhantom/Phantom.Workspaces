@@ -45,5 +45,7 @@ public sealed class AgentChatFlowDocumentBuilderTests
         Assert.Single(document.Blocks);
         Assert.Same(sectionA, document.Blocks[0]);
         Assert.Empty(sectionA.Blocks);
+
+        document.InitializeTextDocument();
     }
 }
