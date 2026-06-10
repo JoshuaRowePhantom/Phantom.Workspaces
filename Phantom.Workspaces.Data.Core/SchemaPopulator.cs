@@ -86,6 +86,7 @@ public sealed class SchemaPopulator
         ICollection<UpdateError> errors)
     {
         var assembly = Assembly.GetExecutingAssembly();
+        var markdownResourcesByPath = this.GetMarkdownResourcesByPath(assembly);
         var entityChanges = new List<EntityChange>();
 
         foreach (var resourceName in assembly.GetManifestResourceNames())
@@ -128,7 +129,12 @@ public sealed class SchemaPopulator
 
             using (document)
             {
-                var entityElement = document.RootElement.Clone();
+                var entityElement = this.MaterializeMarkdownAttachments(
+                    document.RootElement,
+                    resourceName,
+                    assembly,
+                    markdownResourcesByPath,
+                    errors);
                 var entityId = this.GetEntityId(entityElement);
                 entityChanges.Add(
                     new EntityChange
@@ -141,6 +147,168 @@ public sealed class SchemaPopulator
         }
 
         return entityChanges;
+    }
+
+    private JsonElement MaterializeMarkdownAttachments(
+        JsonElement element,
+        string sourceResourceName,
+        Assembly assembly,
+        IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        ICollection<UpdateError> errors)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        this.WriteMaterializedElement(element, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+        writer.Flush();
+        using var document = JsonDocument.Parse(stream.ToArray());
+        return document.RootElement.Clone();
+    }
+
+    private void WriteMaterializedElement(
+        JsonElement element,
+        string sourceResourceName,
+        Assembly assembly,
+        IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        ICollection<UpdateError> errors,
+        Utf8JsonWriter writer)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                this.WriteMaterializedObject(element, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+                return;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    this.WriteMaterializedElement(item, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+                }
+
+                writer.WriteEndArray();
+                return;
+            default:
+                element.WriteTo(writer);
+                return;
+        }
+    }
+
+    private void WriteMaterializedObject(
+        JsonElement element,
+        string sourceResourceName,
+        Assembly assembly,
+        IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        ICollection<UpdateError> errors,
+        Utf8JsonWriter writer)
+    {
+        var markdownText = string.Empty;
+        var shouldInjectMarkdownText =
+            this.TryReadMarkdownUrl(element, out var markdownUrl)
+            && !this.HasInlineTextContent(element)
+            && this.TryLoadEmbeddedMarkdownText(markdownUrl, sourceResourceName, assembly, markdownResourcesByPath, errors, out markdownText);
+
+        writer.WriteStartObject();
+        foreach (var property in element.EnumerateObject())
+        {
+            writer.WritePropertyName(property.Name);
+            this.WriteMaterializedElement(property.Value, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+        }
+
+        if (shouldInjectMarkdownText)
+        {
+            writer.WritePropertyName("content");
+            writer.WriteStartObject();
+            writer.WriteString("text", markdownText);
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private bool TryReadMarkdownUrl(
+        JsonElement element,
+        out string markdownUrl)
+    {
+        markdownUrl = string.Empty;
+        if (!element.TryGetProperty("mime-type", out var mimeType)
+            || mimeType.ValueKind != JsonValueKind.String
+            || !string.Equals(mimeType.GetString(), "text/markdown", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!element.TryGetProperty("url", out var url)
+            || url.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(url.GetString()))
+        {
+            return false;
+        }
+
+        markdownUrl = url.GetString()!;
+        return true;
+    }
+
+    private bool HasInlineTextContent(
+        JsonElement element)
+    {
+        return element.TryGetProperty("content", out var content)
+            && content.ValueKind == JsonValueKind.Object
+            && content.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String;
+    }
+
+    private bool TryLoadEmbeddedMarkdownText(
+        string markdownUrl,
+        string sourceResourceName,
+        Assembly assembly,
+        IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        ICollection<UpdateError> errors,
+        out string markdownText)
+    {
+        markdownText = string.Empty;
+        var normalizedPath = markdownUrl.Replace('\\', '/');
+        if (!normalizedPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!markdownResourcesByPath.TryGetValue(normalizedPath, out var markdownResourceName))
+        {
+            return false;
+        }
+
+        using var markdownStream = assembly.GetManifestResourceStream(markdownResourceName);
+        if (markdownStream is null)
+        {
+            return false;
+        }
+
+        using var markdownReader = new StreamReader(markdownStream);
+        markdownText = markdownReader.ReadToEnd();
+        return true;
+    }
+
+    private IReadOnlyDictionary<string, string> GetMarkdownResourcesByPath(
+        Assembly assembly)
+    {
+        const string jsonEntitiesPrefix = "Phantom.Workspaces.Data.JsonEntities.";
+        var markdownResourcesByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var resourceName in assembly.GetManifestResourceNames())
+        {
+            if (!resourceName.StartsWith(jsonEntitiesPrefix, StringComparison.Ordinal)
+                || !resourceName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var relativeName = resourceName[jsonEntitiesPrefix.Length..];
+            var relativeWithoutExtension = relativeName[..^3];
+            var logicalPath = $"{relativeWithoutExtension.Replace('.', '/')}.md";
+            markdownResourcesByPath[logicalPath] = resourceName;
+        }
+
+        return markdownResourcesByPath;
     }
 
     private EntityId? GetEntityId(

@@ -134,7 +134,7 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
-    public async Task Populate_SetsGettingStartedContent_ToMarkdownAttachment()
+    public async Task Populate_MaterializesGettingStartedMarkdownUrl_ToInlineContent()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
         var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
@@ -169,8 +169,56 @@ public sealed class SchemaPopulatorTests
             && string.Equals(mimeType.GetString(), "text/markdown", StringComparison.Ordinal)
             && defaultContent.TryGetProperty("url", out var url)
             && url.ValueKind == JsonValueKind.String
-            && string.Equals(url.GetString(), "documentation/getting-started.md", StringComparison.Ordinal),
-            "getting-started content was not populated as a markdown attachment");
+            && string.Equals(url.GetString(), "documentation/getting-started.md", StringComparison.Ordinal)
+            && defaultContent.TryGetProperty("content", out var inlineContent)
+            && inlineContent.ValueKind == JsonValueKind.Object
+            && inlineContent.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String
+            && text.GetString()!.Contains("# Getting Started", StringComparison.Ordinal),
+            "getting-started markdown attachment was not materialized into inline content");
+    }
+
+    [Fact]
+    public async Task Populate_MaterializesSchemaDocumentationMarkdownUrl_ToInlineContent()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var coreSchemaEntity = exportResult.ChangeBatches
+            .SelectMany(static changeBatch => changeBatch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray().Select(static part => part.GetString()).SequenceEqual(
+                        ["json-schemas", "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json"])));
+
+        Assert.True(
+            coreSchemaEntity.TryGetProperty("content", out var content)
+            && content.ValueKind == JsonValueKind.Object
+            && content.TryGetProperty("default", out var defaultContent)
+            && defaultContent.ValueKind == JsonValueKind.Object
+            && defaultContent.TryGetProperty("url", out var url)
+            && url.ValueKind == JsonValueKind.String
+            && string.Equals(url.GetString(), "documentation/core-schema.md", StringComparison.Ordinal)
+            && defaultContent.TryGetProperty("content", out var inlineContent)
+            && inlineContent.ValueKind == JsonValueKind.Object
+            && inlineContent.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String
+            && text.GetString()!.Contains("# Core schema", StringComparison.Ordinal),
+            "schema documentation markdown attachment was not materialized into inline content");
     }
 
     [Fact]

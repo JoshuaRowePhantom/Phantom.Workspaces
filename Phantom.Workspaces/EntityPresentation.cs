@@ -1,8 +1,6 @@
 using System;
 using System.Globalization;
 using System.Collections.Generic;
-using System.IO;
-using System.Reflection;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -156,45 +154,7 @@ public static class EntityPresentation
         {
             return text.GetString();
         }
-
-        if (!defaultContent.TryGetProperty("url", out var url)
-            || url.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        return LoadEmbeddedMarkdown(url.GetString());
-    }
-
-    private static string? LoadEmbeddedMarkdown(
-        string? resourcePath)
-    {
-        if (string.IsNullOrWhiteSpace(resourcePath))
-        {
-            return null;
-        }
-
-        var assembly = Assembly.GetAssembly(typeof(EntityId));
-        if (assembly is null)
-        {
-            return null;
-        }
-
-        var normalizedPath = resourcePath.Replace('/', '.').Replace('\\', '.');
-        var resourceName = assembly.GetManifestResourceNames()
-            .FirstOrDefault(name => name.EndsWith(normalizedPath, StringComparison.OrdinalIgnoreCase));
-        if (resourceName is null)
-        {
-            return null;
-        }
-
-        using var stream = assembly.GetManifestResourceStream(resourceName);
-        if (stream is null)
-        {
-            return null;
-        }
-
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        
+        return null;
     }
 }
