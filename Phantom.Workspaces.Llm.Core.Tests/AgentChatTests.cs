@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Moq;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Linq;
@@ -367,14 +368,17 @@ public sealed class AgentChatTests
     [Fact]
     public async Task InitializeTools_UsesAgentServicesToolsetFactory()
     {
+        var underlyingToolsetFactory = new Mock<IToolsetFactory>();
+        underlyingToolsetFactory
+            .Setup(factory => factory.CreateToolsetAsync(It.IsAny<AgentSchema.Tool>(), It.IsAny<AgentServices>()))
+            .ReturnsAsync((IToolset?)null);
         var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
-            name: "custom_kind",
-            createToolsetAsync: static (_, _, _) =>
+            kind: "custom_kind",
+            createToolsetAsync: static (_, _) =>
             {
-                IToolset toolset = new SingleToolset(new WebSearchTool());
-                return Task.FromResult(toolset);
+                return Task.FromResult<IToolset?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool()));
             },
-            underlyingInstance: NoOpToolsetFactory.Instance);
+            underlyingInstance: underlyingToolsetFactory.Object);
         var services = new AgentServices
         {
             ToolsetFactory = toolsetFactory,
@@ -746,34 +750,4 @@ public sealed class AgentChatTests
         return chat;
     }
 
-    private sealed class SingleToolset : IToolset
-    {
-        private readonly IList<AITool> tools;
-
-        public SingleToolset(AITool tool)
-        {
-            this.tools = [tool];
-        }
-
-        public Task<IList<AITool>> ListToolsAsync()
-        {
-            return Task.FromResult(this.tools);
-        }
-    }
-
-    private sealed class NoOpToolsetFactory : IToolsetFactory
-    {
-        public static readonly NoOpToolsetFactory Instance = new();
-
-        public Task<IToolset> CreateToolsetAsync(
-            string name,
-            Dictionary<string, object> properties,
-            AgentServices agentServices)
-        {
-            _ = name;
-            _ = properties;
-            _ = agentServices;
-            throw new InvalidOperationException("No-op test factory should not be invoked.");
-        }
-    }
 }

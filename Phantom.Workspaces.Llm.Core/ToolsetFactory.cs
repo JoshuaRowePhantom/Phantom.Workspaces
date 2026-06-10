@@ -5,141 +5,141 @@ using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm;
 
+using CreateToolsetFunction = System.Func<AgentSchema.Tool, AgentServices, System.Threading.Tasks.Task<Phantom.Workspaces.Llm.Interfaces.IToolset?>>;
+
 public sealed class ToolsetFactory : IToolsetFactory
 {
-    private readonly IReadOnlyDictionary<string, Func<Dictionary<string, object>, AgentServices, Task<IToolset>>> createToolsetByName;
+    private readonly CreateToolsetFunction createToolset;
 
     private ToolsetFactory(
-        IReadOnlyDictionary<string, Func<Dictionary<string, object>, AgentServices, Task<IToolset>>> createToolsetByName)
+        CreateToolsetFunction createToolset)
     {
-        this.createToolsetByName = createToolsetByName;
+        this.createToolset = createToolset;
     }
 
-    public Task<IToolset> CreateToolsetAsync(
-        string name,
-        Dictionary<string, object> properties,
+    public async Task<IToolset?> CreateToolsetAsync(
+        AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        _ = agentServices;
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new ArgumentException("Toolset name is required.", nameof(name));
-        }
-
-        if (!this.createToolsetByName.TryGetValue(name, out var createToolset))
-        {
-            throw new InvalidOperationException($"No toolset factory is registered for '{name}'.");
-        }
-
-        return createToolset(properties, agentServices);
+        return await createToolset(tool, agentServices);
     }
 
     public static IToolsetFactory CreateNamedToolsetFactory(
-        string name,
-        Func<string, Dictionary<string, object>, AgentServices, Task<IToolset>> createToolsetAsync,
-        IToolsetFactory underlyingInstance)
+        string kind,
+        CreateToolsetFunction createToolsetAsync,
+        IToolsetFactory? underlyingInstance = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentNullException.ThrowIfNull(createToolsetAsync);
-        ArgumentNullException.ThrowIfNull(underlyingInstance);
+        var resolvedUnderlyingInstance = underlyingInstance ?? EmptyToolsetFactory.Instance;
 
-        var normalizedName = name.Trim();
-        var map = new Dictionary<string, Func<Dictionary<string, object>, AgentServices, Task<IToolset>>>(StringComparer.OrdinalIgnoreCase)
-        {
-            [normalizedName] = (properties, agentServices) =>
+        return new ToolsetFactory(
+            async (tool, agentServices) =>
             {
-                _ = underlyingInstance;
-                return createToolsetAsync(normalizedName, properties ?? [], agentServices);
-            },
-        };
-        return new ToolsetFactory(map);
+                if (string.Equals(tool.Kind, kind))
+                {
+                    return await createToolsetAsync(tool, agentServices);
+                }
+                return await resolvedUnderlyingInstance.CreateToolsetAsync(tool, agentServices);
+            });
     }
 
-    public static IToolsetFactory CreateWebSearchToolsetFactory(IToolsetFactory? underlyingToolsetFactory = null)
+    private class FixedToolset : IToolset
     {
-        var resolvedUnderlyingToolsetFactory = underlyingToolsetFactory ?? EmptyToolsetFactory.Instance;
-        return CreateNamedToolsetFactory("web_search", CreateWebSearchToolsetAsync, resolvedUnderlyingToolsetFactory);
+        private readonly AITool[] tools;
+
+        public FixedToolset(AITool[] tools)
+        {
+            this.tools = tools;
+        }
+        public Task<AITool[]> ListToolsAsync()
+        {
+            return Task.FromResult(this.tools);
+        }
+    }
+
+    public static IToolset CreateFixedToolset(
+        params AITool[] tools)
+    {
+        return new FixedToolset(tools);
+    }
+
+    public static IToolsetFactory CreateWebSearchToolsetFactory(
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        return CreateNamedToolsetFactory("web_search", CreateWebSearchToolsetAsync, underlyingToolsetFactory);
     }
 
     public static IToolsetFactory CreateWebRequestToolsetFactory(IToolsetFactory? underlyingToolsetFactory = null)
     {
-        var resolvedUnderlyingToolsetFactory = underlyingToolsetFactory ?? EmptyToolsetFactory.Instance;
-        return CreateNamedToolsetFactory("web_request", CreateWebRequestToolsetAsync, resolvedUnderlyingToolsetFactory);
+        return CreateNamedToolsetFactory("web_request", CreateWebRequestToolsetAsync, underlyingToolsetFactory);
     }
 
     public static IToolsetFactory CreateWebToolsetFactory(IToolsetFactory? underlyingToolsetFactory = null)
     {
-        var resolvedUnderlyingToolsetFactory = underlyingToolsetFactory ?? EmptyToolsetFactory.Instance;
-        return CreateNamedToolsetFactory("web", CreateWebToolsetAsync, resolvedUnderlyingToolsetFactory);
+        return CreateNamedToolsetFactory("web", CreateWebToolsetAsync, underlyingToolsetFactory);
     }
 
     public static IToolsetFactory CreateFilesystemToolsetFactory(IToolsetFactory? underlyingToolsetFactory = null)
     {
-        var resolvedUnderlyingToolsetFactory = underlyingToolsetFactory ?? EmptyToolsetFactory.Instance;
-        return CreateNamedToolsetFactory("filesystem", CreateFilesystemToolsetAsync, resolvedUnderlyingToolsetFactory);
+        return CreateNamedToolsetFactory("filesystem", CreateFilesystemToolsetAsync, underlyingToolsetFactory);
     }
 
-    private static Task<IToolset> CreateWebSearchToolsetAsync(
-        string name,
-        Dictionary<string, object> properties,
+    private static Task<IToolset?> CreateWebSearchToolsetAsync(
+        AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        _ = name;
-        _ = properties;
-        IToolset toolset = new FixedToolset(
-        [
+        return Task.FromResult<IToolset?>(CreateFixedToolset(
+            new WebSearchTool(logger: agentServices.LoggerFactory?.CreateLogger<WebSearchTool>())));
+    }
+
+    private static Task<IToolset?> CreateWebRequestToolsetAsync(
+        AgentSchema.Tool tool,
+        AgentServices agentServices)
+    {
+        return Task.FromResult<IToolset?>(CreateFixedToolset(
+            new WebRequestTool(logger: agentServices.LoggerFactory?.CreateLogger<WebRequestTool>())));
+    }
+
+    private static Task<IToolset?> CreateWebToolsetAsync(
+        AgentSchema.Tool tool,
+        AgentServices agentServices)
+    {
+        return Task.FromResult<IToolset?>(CreateFixedToolset(
             new WebSearchTool(logger: agentServices.LoggerFactory?.CreateLogger<WebSearchTool>()),
-        ]);
-        return Task.FromResult(toolset);
+            new WebRequestTool(logger: agentServices.LoggerFactory?.CreateLogger<WebRequestTool>())));
     }
 
-    private static Task<IToolset> CreateWebRequestToolsetAsync(
-        string name,
-        Dictionary<string, object> properties,
+    private static Task<IToolset?> CreateFilesystemToolsetAsync(
+        AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        _ = name;
-        _ = properties;
-        IToolset toolset = new FixedToolset(
-        [
-            new WebRequestTool(logger: agentServices.LoggerFactory?.CreateLogger<WebRequestTool>()),
-        ]);
-        return Task.FromResult(toolset);
-    }
-
-    private static Task<IToolset> CreateWebToolsetAsync(
-        string name,
-        Dictionary<string, object> properties,
-        AgentServices agentServices)
-    {
-        _ = name;
-        _ = properties;
-        IToolset toolset = new FixedToolset(
-        [
-            new WebSearchTool(logger: agentServices.LoggerFactory?.CreateLogger<WebSearchTool>()),
-            new WebRequestTool(logger: agentServices.LoggerFactory?.CreateLogger<WebRequestTool>()),
-        ]);
-        return Task.FromResult(toolset);
-    }
-
-    private static Task<IToolset> CreateFilesystemToolsetAsync(
-        string name,
-        Dictionary<string, object> properties,
-        AgentServices agentServices)
-    {
-        _ = name;
-        properties.TryGetValue("connection", out var connection);
+        var connection = (tool as AgentSchema.CustomTool)?.Connection;
         var connectionJson = connection switch
         {
             null => null,
-            JsonElement jsonElement => jsonElement.GetRawText(),
             _ => JsonSerializer.Serialize(connection),
         };
 
         IToolset toolset = new FilesystemServiceToolset(
             editStoreConnectionJson: connectionJson,
             loggerFactory: agentServices.LoggerFactory);
-        return Task.FromResult(toolset);
+        return Task.FromResult<IToolset?>(toolset);
+    }
+
+    public static IToolsetFactory Combine(params IToolsetFactory[] factories)
+    {
+        return new ToolsetFactory(
+            async (tool, agentServices) =>
+            {
+                foreach (var factory in factories)
+                {
+                    var toolset = await factory.CreateToolsetAsync(tool, agentServices);
+                    if (toolset != null)
+                    {
+                        return toolset;
+                    }
+                }
+                return null;
+            });
     }
 
     public static IToolsetFactory CreateDefaultToolsetFactory(IToolsetFactory? underlyingToolsetFactory = null)
@@ -152,50 +152,6 @@ public sealed class ToolsetFactory : IToolsetFactory
             CreateFilesystemToolsetFactory(resolvedUnderlyingToolsetFactory));
     }
 
-    public static IToolsetFactory Combine(params IToolsetFactory[] factories)
-    {
-        ArgumentNullException.ThrowIfNull(factories);
-
-        var combinedMap = new Dictionary<string, Func<Dictionary<string, object>, AgentServices, Task<IToolset>>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var factory in factories)
-        {
-            if (factory is null)
-            {
-                continue;
-            }
-
-            if (factory is ToolsetFactory concreteFactory)
-            {
-                foreach (var (name, createToolset) in concreteFactory.createToolsetByName)
-                {
-                    combinedMap[name] = createToolset;
-                }
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Cannot combine factory type '{factory.GetType().Name}'. Only {nameof(ToolsetFactory)} instances are supported.");
-            }
-        }
-
-        return new ToolsetFactory(combinedMap);
-    }
-
-    private sealed class FixedToolset : IToolset
-    {
-        private readonly IList<AITool> tools;
-
-        public FixedToolset(IList<AITool> tools)
-        {
-            this.tools = tools ?? throw new ArgumentNullException(nameof(tools));
-        }
-
-        public Task<IList<AITool>> ListToolsAsync()
-        {
-            return Task.FromResult(this.tools);
-        }
-    }
-
     private sealed class EmptyToolsetFactory : IToolsetFactory
     {
         public static readonly EmptyToolsetFactory Instance = new();
@@ -204,14 +160,13 @@ public sealed class ToolsetFactory : IToolsetFactory
         {
         }
 
-        public Task<IToolset> CreateToolsetAsync(
-            string name,
-            Dictionary<string, object> properties,
+        public Task<IToolset?> CreateToolsetAsync(
+            AgentSchema.Tool tool,
             AgentServices agentServices)
         {
-            _ = properties;
+            _ = tool;
             _ = agentServices;
-            throw new InvalidOperationException($"No underlying toolset factory is configured for '{name}'.");
+            return Task.FromResult<IToolset?>(null);
         }
     }
 }

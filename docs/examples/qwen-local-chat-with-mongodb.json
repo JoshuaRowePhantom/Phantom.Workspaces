@@ -27,12 +27,10 @@
   "instructions": "You are a helpful AI assistant powered by Qwen 3.6.\nRespond to user queries clearly and concisely.\nYou can search the web and fetch URLs when needed to provide accurate, up-to-date information.",
   "tools": [
     {
-      "kind": "web_search",
-      "description": "Search the web for information"
+      "kind": "web"
     },
     {
-      "kind": "web_request",
-      "description": "Make HTTP requests to fetch web pages and resources"
+      "kind": "filesystem"
     },
     {
       "name": "github",

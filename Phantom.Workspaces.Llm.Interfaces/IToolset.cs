@@ -4,5 +4,5 @@ namespace Phantom.Workspaces.Llm.Interfaces;
 
 public interface IToolset
 {
-    Task<IList<AITool>> ListToolsAsync();
+    Task<AITool[]> ListToolsAsync();
 }

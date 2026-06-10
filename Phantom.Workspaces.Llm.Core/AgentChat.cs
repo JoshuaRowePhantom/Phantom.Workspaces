@@ -791,12 +791,9 @@ public sealed class AgentChat : IAsyncDisposable
             ?? ToolsetFactory.CreateDefaultToolsetFactory();
         var properties = BuildToolsetProperties(tool.Options);
         var resolvedServices = services ?? new AgentServices();
-        IToolset toolset;
-        try
-        {
-            toolset = await toolsetFactory.CreateToolsetAsync(kind, properties, resolvedServices);
-        }
-        catch (InvalidOperationException)
+        var toolset = await toolsetFactory.CreateToolsetAsync(tool, resolvedServices);
+
+        if (toolset == null)
         {
             return new ToolInitializationResult([], []);
         }
@@ -843,7 +840,7 @@ public sealed class AgentChat : IAsyncDisposable
             }
 
             var runtimeTools = await toolset.ListToolsAsync();
-            var singleRuntimeTool = runtimeTools.Count == 1 ? runtimeTools[0] : null;
+            var singleRuntimeTool = runtimeTools.Length== 1 ? runtimeTools[0] : null;
             var shouldAttachSingleRuntimeToolToRoot =
                 singleRuntimeTool is not null
                 && string.Equals(singleRuntimeTool.Name, displayName, StringComparison.Ordinal);
@@ -856,9 +853,9 @@ public sealed class AgentChat : IAsyncDisposable
                 runtimeTool: shouldAttachSingleRuntimeToolToRoot ? singleRuntimeTool : null,
                 parent: null,
                 isEnabled: true,
-                status: runtimeTools.Count == 0
+                status: runtimeTools.Length == 0
                     ? "Loaded no tools."
-                    : $"Loaded {runtimeTools.Count} tool{(runtimeTools.Count == 1 ? string.Empty : "s")}.");
+                    : $"Loaded {runtimeTools.Length} tool{(runtimeTools.Length == 1 ? string.Empty : "s")}.");
 
             if (!shouldAttachSingleRuntimeToolToRoot)
             {
@@ -881,7 +878,7 @@ public sealed class AgentChat : IAsyncDisposable
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent($"Opened toolset '{displayName}' ({runtimeTools.Count} tools).") },
+                Contents = new AIContent[] { new TextContent($"Opened toolset '{displayName}' ({runtimeTools.Length} tools).") },
             }]);
             return new ToolInitializationResult([root], runtimeTools.ToList());
         }

@@ -27,7 +27,7 @@ public sealed class FilesystemServiceToolsetTests
         var firstTools = await toolset.ListToolsAsync();
         var secondTools = await toolset.ListToolsAsync();
 
-        Assert.Equal(firstTools.Count, secondTools.Count);
+        Assert.Equal(firstTools.Length, secondTools.Length);
         Assert.NotEmpty(firstTools);
     }
 

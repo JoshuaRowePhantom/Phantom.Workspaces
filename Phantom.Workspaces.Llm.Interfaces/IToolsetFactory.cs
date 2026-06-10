@@ -4,8 +4,7 @@ namespace Phantom.Workspaces.Llm.Interfaces;
 
 public interface IToolsetFactory
 {
-    Task<IToolset> CreateToolsetAsync(
-        string name,
-        Dictionary<string, object> properties,
+    Task<IToolset?> CreateToolsetAsync(
+        AgentSchema.Tool tool,
         AgentServices agentServices);
 }

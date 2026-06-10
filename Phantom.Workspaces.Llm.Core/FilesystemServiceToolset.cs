@@ -21,7 +21,7 @@ public sealed class FilesystemServiceToolset : IToolset, IAsyncDisposable
         this.loggerFactory = loggerFactory;
     }
 
-    public async Task<IList<AITool>> ListToolsAsync()
+    public async Task<AITool[]> ListToolsAsync()
     {
         await this.initializeLock.WaitAsync();
         try
@@ -32,7 +32,7 @@ public sealed class FilesystemServiceToolset : IToolset, IAsyncDisposable
             }
 
             var mcpTools = await this.client.ListToolsAsync(options: null, cancellationToken: CancellationToken.None);
-            return mcpTools.Cast<AITool>().ToList();
+            return mcpTools.Cast<AITool>().ToArray();
         }
         finally
         {

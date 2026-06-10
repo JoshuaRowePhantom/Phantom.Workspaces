@@ -38,7 +38,7 @@ internal sealed class AgentFrameworkChatHistoryProvider : ChatHistoryProvider
     {
         this.InvocationStarting?.Invoke(
             this,
-            new InvocationStartingEventArgs(context.Session, context.RequestMessages.ToArray()));
+            new InvocationStartingEventArgs(context.Session!, context.RequestMessages.ToArray()));
 
         return InvokeProvideChatHistoryAsync(context, cancellationToken);
     }
@@ -57,7 +57,7 @@ internal sealed class AgentFrameworkChatHistoryProvider : ChatHistoryProvider
         await InvokeStoreChatHistoryAsync(context, cancellationToken);
         this.HistoryStored?.Invoke(
             this,
-            new HistoryStoredEventArgs(context.Session, context.ResponseMessages?.ToArray() ?? Array.Empty<ChatMessage>()));
+            new HistoryStoredEventArgs(context.Session!, context.ResponseMessages?.ToArray() ?? Array.Empty<ChatMessage>()));
     }
 
     private ValueTask<IEnumerable<ChatMessage>> InvokeProvideChatHistoryAsync(
