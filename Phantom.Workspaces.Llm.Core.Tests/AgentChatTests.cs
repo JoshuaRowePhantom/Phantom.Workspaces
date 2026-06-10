@@ -276,6 +276,30 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task EnqueueUserMessage_DoesNotDuplicateCurrentUserMessageInRequestHistory()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "ok")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = CreateChat(client);
+
+        chat.EnqueueUserMessage("world");
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var matchingUserMessages = client.LastRequestMessages
+            .Where(static message => message.Role == ChatRole.User)
+            .SelectMany(static message => message.Contents.OfType<TextContent>())
+            .Count(static content => string.Equals(content.Text, "world", StringComparison.Ordinal));
+
+        Assert.Equal(1, matchingUserMessages);
+    }
+
+    [Fact]
     public async Task InitializeTools_FilesystemServiceToolset_UsesFilesystemRootAndChildTools()
     {
         await using var chat = CreateChatFromJson(

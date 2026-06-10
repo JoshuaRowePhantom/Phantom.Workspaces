@@ -91,6 +91,9 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
         ArgumentNullException.ThrowIfNull(context.Session);
 
         var agentSessionId = this.ExtractAgentSessionId(context.Session);
+        var existingMessages = await this.store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = agentSessionId },
+            cancellationToken).ConfigureAwait(false);
 
         var requestMessages = context.RequestMessages.ToArray();
         if (requestMessages.Length > 0)
@@ -109,9 +112,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
                 cancellationToken).ConfigureAwait(false);
         }
 
-        return await this.store.ReadMessagesAsync(
-            new ReadMessagesRequest { AgentSessionId = agentSessionId },
-            cancellationToken).ConfigureAwait(false);
+        return existingMessages;
     }
 
     protected override async ValueTask StoreChatHistoryAsync(
