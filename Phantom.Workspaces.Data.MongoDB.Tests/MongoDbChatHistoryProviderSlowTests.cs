@@ -4,12 +4,12 @@ using Phantom.Workspaces.Llm.Tests;
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
 [Trait("Category", "SlowDocker")]
-[Collection(MongoTestDatabaseCollection.CollectionName)]
+[Collection(MongoDbTestDatabaseCollection.CollectionName)]
 public sealed class MongoDbAgentPersistenceStoreSlowTests : AgentPersistenceStoreContractTests
 {
-    private readonly MongoTestDatabaseFixture _fixture;
+    private readonly MongoDbTestDatabaseFixture _fixture;
 
-    public MongoDbAgentPersistenceStoreSlowTests(MongoTestDatabaseFixture fixture)
+    public MongoDbAgentPersistenceStoreSlowTests(MongoDbTestDatabaseFixture fixture)
     {
         _fixture = fixture;
     }
@@ -18,7 +18,7 @@ public sealed class MongoDbAgentPersistenceStoreSlowTests : AgentPersistenceStor
     {
         return ValueTask.FromResult<IAgentPersistenceStore>(new MongoDbAgentPersistenceStore(
             _fixture.Database,
-            MongoTestDatabaseFixture.ChatHistoryCollectionName));
+            MongoDbTestDatabaseFixture.ChatHistoryCollectionName));
     }
 
     protected override async ValueTask ResetStoreAsync()

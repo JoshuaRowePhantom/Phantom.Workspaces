@@ -3,7 +3,7 @@ using Json.Schema;
 
 namespace Phantom.Workspaces.Data.MongoDB;
 
-public static class MongoDBConnectionDefinitionJsonSchema
+public static class MongoDbConnectionDefinitionJsonSchema
 {
     private const string ResourceName = "Phantom.Workspaces.Data.MongoDB.JsonSchemas.mongo-db-connection.json";
 

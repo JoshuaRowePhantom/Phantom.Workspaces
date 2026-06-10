@@ -4,15 +4,15 @@ using Phantom.Workspaces.Data.Tests;
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
 [Trait("Category", "SlowDocker")]
-[Collection(MongoTestDatabaseCollection.CollectionName)]
-public sealed class MongoEntityDataAccessLayerSlowTests : DataAccessLayerNonQueryWithoutHistoryTests
+[Collection(MongoDbTestDatabaseCollection.CollectionName)]
+public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQueryWithoutHistoryTests
 {
     private static new readonly EntityId SampleEntityId = new("b17c2f1a-98fb-4e59-9902-f86af1f0f6a9");
 
-    private readonly MongoTestDatabaseFixture _fixture;
+    private readonly MongoDbTestDatabaseFixture _fixture;
 
-    public MongoEntityDataAccessLayerSlowTests(
-        MongoTestDatabaseFixture fixture)
+    public MongoDbEntityDataAccessLayerSlowTests(
+        MongoDbTestDatabaseFixture fixture)
     {
         _fixture = fixture;
         _fixture.ResetCollectionAsync().GetAwaiter().GetResult();
@@ -172,7 +172,7 @@ public sealed class MongoEntityDataAccessLayerSlowTests : DataAccessLayerNonQuer
 
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
-        return new MongoEntityDataAccessLayer(_fixture.Database, MongoTestDatabaseFixture.EntityCollectionName);
+        return new MongoDbEntityDataAccessLayer(_fixture.Database, MongoDbTestDatabaseFixture.EntityCollectionName);
     }
 
     private static JsonElement ParseEntityData(

@@ -2,14 +2,14 @@ using Phantom.Workspaces.Containers;
 
 namespace Phantom.Workspaces.Data.MongoDB;
 
-public sealed class MongoDBContainerDefinitionGenerator
+public sealed class MongoDbContainerDefinitionGenerator
 {
     private const string MongoImageName = "mongo:latest";
     private const string MongoDataDirectory = "/data/db";
     private const int MongoContainerPort = 27017;
 
     public ContainerDefinition Generate(
-        MongoDBContainerConnectionDefinition connectionDefinition)
+        MongoDbContainerConnectionDefinition connectionDefinition)
     {
         ArgumentNullException.ThrowIfNull(connectionDefinition);
 

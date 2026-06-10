@@ -45,7 +45,10 @@ public sealed class AgentChatTests
         }).GetAwaiter().GetResult();
     }
 
-    private static AgentChat CreateChatFromJson(string agentDefinitionJson, IChatClient? client = null)
+    private static AgentChat CreateChatFromJson(
+        string agentDefinitionJson,
+        IChatClient? client = null,
+        AgentServices? agentServices = null)
     {
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
@@ -55,6 +58,7 @@ public sealed class AgentChatTests
             ConfiguredStore = persistenceStore,
             ClientOverride = client ?? new DeterministicTestChatClient(),
             DisplayNameOverride = "test-chat",
+            AgentServices = agentServices,
         }).GetAwaiter().GetResult();
     }
 
@@ -334,6 +338,45 @@ public sealed class AgentChatTests
         Assert.Equal(
             ["describe_edit", "edit", "edit_apply", "make_directory", "move_item", "read", "remove_item", "search"],
             toolNames);
+    }
+
+    [Fact]
+    public async Task InitializeTools_UsesAgentServicesToolsetFactory()
+    {
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            name: "custom_kind",
+            createToolsetAsync: static (_, _, _) =>
+            {
+                IToolset toolset = new SingleToolset(new WebSearchTool());
+                return Task.FromResult(toolset);
+            },
+            underlyingInstance: NoOpToolsetFactory.Instance);
+        var services = new AgentServices
+        {
+            ToolsetFactory = toolsetFactory,
+        };
+
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "custom_kind", "description": "Custom tools" }
+              ]
+            }
+            """,
+            agentServices: services);
+
+        var root = Assert.Single(chat.Tools);
+        Assert.Equal("custom_kind", root.Kind);
+        Assert.Single(root.Children);
+        Assert.Equal("web_search", root.Children[0].Name);
     }
 
     [Fact]
@@ -677,5 +720,36 @@ public sealed class AgentChatTests
             ?? throw new InvalidOperationException("session field not found.");
         sessionField.SetValue(chat, agentChatSession);
         return chat;
+    }
+
+    private sealed class SingleToolset : IToolset
+    {
+        private readonly IList<AITool> tools;
+
+        public SingleToolset(AITool tool)
+        {
+            this.tools = [tool];
+        }
+
+        public Task<IList<AITool>> ListToolsAsync()
+        {
+            return Task.FromResult(this.tools);
+        }
+    }
+
+    private sealed class NoOpToolsetFactory : IToolsetFactory
+    {
+        public static readonly NoOpToolsetFactory Instance = new();
+
+        public Task<IToolset> CreateToolsetAsync(
+            string name,
+            Dictionary<string, object> properties,
+            AgentServices agentServices)
+        {
+            _ = name;
+            _ = properties;
+            _ = agentServices;
+            throw new InvalidOperationException("No-op test factory should not be invoked.");
+        }
     }
 }

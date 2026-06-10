@@ -4,12 +4,12 @@ using Phantom.Workspaces.Containers;
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
 [CollectionDefinition(CollectionName)]
-public sealed class MongoTestDatabaseCollection : ICollectionFixture<MongoTestDatabaseFixture>
+public sealed class MongoDbTestDatabaseCollection : ICollectionFixture<MongoDbTestDatabaseFixture>
 {
     public const string CollectionName = "MongoTestDatabase";
 }
 
-public sealed class MongoTestDatabaseFixture : IAsyncLifetime
+public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 {
     public const string ContainerName = "pw-mongodb-test";
     public const string DatabaseName = "pw_mongodb_test_db";
@@ -21,11 +21,11 @@ public sealed class MongoTestDatabaseFixture : IAsyncLifetime
     private static readonly string DataDirectory = Path.Combine(Path.GetTempPath(), "pw-mongodb-test-data");
 
     private readonly ContainerEngine _containerEngine = new WindowsDockerDesktopEngine();
-    private readonly MongoConnectionBroker _connectionBroker;
+    private readonly MongoDbConnectionBroker _connectionBroker;
 
-    public MongoTestDatabaseFixture()
+    public MongoDbTestDatabaseFixture()
     {
-        ConnectionDefinition = new MongoDBContainerConnectionDefinition
+        ConnectionDefinition = new MongoDbContainerConnectionDefinition
         {
             ContainerName = ContainerName,
             DataDirectory = DataDirectory,
@@ -33,10 +33,10 @@ public sealed class MongoTestDatabaseFixture : IAsyncLifetime
             CollectionName = EntityCollectionName,
             HostPort = HostPort,
         };
-        _connectionBroker = new MongoConnectionBroker(_containerEngine);
+        _connectionBroker = new MongoDbConnectionBroker(_containerEngine);
     }
 
-    public MongoDBContainerConnectionDefinition ConnectionDefinition { get; }
+    public MongoDbContainerConnectionDefinition ConnectionDefinition { get; }
 
     public IMongoDatabase Database { get; private set; } = null!;
 

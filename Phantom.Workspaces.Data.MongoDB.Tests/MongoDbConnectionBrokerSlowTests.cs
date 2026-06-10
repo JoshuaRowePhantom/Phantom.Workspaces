@@ -4,13 +4,13 @@ using MongoDB.Driver;
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
 [Trait("Category", "SlowDocker")]
-[Collection(MongoTestDatabaseCollection.CollectionName)]
-public sealed class MongoConnectionBrokerSlowTests
+[Collection(MongoDbTestDatabaseCollection.CollectionName)]
+public sealed class MongoDbConnectionBrokerSlowTests
 {
-    private readonly MongoTestDatabaseFixture _fixture;
+    private readonly MongoDbTestDatabaseFixture _fixture;
 
-    public MongoConnectionBrokerSlowTests(
-        MongoTestDatabaseFixture fixture)
+    public MongoDbConnectionBrokerSlowTests(
+        MongoDbTestDatabaseFixture fixture)
     {
         _fixture = fixture;
     }
@@ -20,7 +20,7 @@ public sealed class MongoConnectionBrokerSlowTests
     {
         await _fixture.ResetCollectionAsync();
 
-        var broker = new MongoConnectionBroker();
+        var broker = new MongoDbConnectionBroker();
         var client = await broker.GetClientAsync(_fixture.ConnectionDefinition);
         var database = client.GetDatabase(_fixture.ConnectionDefinition.DatabaseName);
         var collection = database.GetCollection<BsonDocument>(_fixture.ConnectionDefinition.CollectionName);
@@ -40,7 +40,7 @@ public sealed class MongoConnectionBrokerSlowTests
     {
         await _fixture.ResetCollectionAsync();
 
-        var collection = _fixture.Database.GetCollection<BsonDocument>(MongoTestDatabaseFixture.EntityCollectionName);
+        var collection = _fixture.Database.GetCollection<BsonDocument>(MongoDbTestDatabaseFixture.EntityCollectionName);
         var documentId = "non-query-document";
 
         await collection.InsertOneAsync(new BsonDocument

@@ -26,11 +26,11 @@ public static class FilesystemEditStoreFactory
         MongoDbChatHistoryProviderDefinition mongoDefinition,
         CancellationToken cancellationToken)
     {
-        MongoDBConnectionDefinition mongoConnectionDefinition;
+        MongoDbConnectionDefinition mongoConnectionDefinition;
 
         if (mongoDefinition.MongoProvider.Equals("container", StringComparison.OrdinalIgnoreCase))
         {
-            mongoConnectionDefinition = MongoDBConnectionDefinition.CreateContainer(
+            mongoConnectionDefinition = MongoDbConnectionDefinition.CreateContainer(
                 mongoDefinition.ContainerName!,
                 mongoDefinition.DataDirectory!,
                 mongoDefinition.DatabaseName,
@@ -39,7 +39,7 @@ public static class FilesystemEditStoreFactory
         }
         else if (mongoDefinition.MongoProvider.Equals("external", StringComparison.OrdinalIgnoreCase))
         {
-            mongoConnectionDefinition = MongoDBConnectionDefinition.CreateExternal(
+            mongoConnectionDefinition = MongoDbConnectionDefinition.CreateExternal(
                 mongoDefinition.ConnectionString!,
                 mongoDefinition.DatabaseName,
                 mongoDefinition.CollectionName);
@@ -49,7 +49,7 @@ public static class FilesystemEditStoreFactory
             throw new InvalidOperationException($"Unknown MongoDB provider type: {mongoDefinition.MongoProvider}");
         }
 
-        var broker = new MongoConnectionBroker();
+        var broker = new MongoDbConnectionBroker();
         var client = await broker.GetClientAsync(mongoConnectionDefinition, cancellationToken).ConfigureAwait(false);
         var database = client.GetDatabase(mongoDefinition.DatabaseName);
         var collection = database.GetCollection<MongoDbFilesystemEditDocument>(mongoDefinition.CollectionName);

@@ -5,12 +5,12 @@ using Phantom.Workspaces.Llm.Tests;
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
 [Trait("Category", "SlowDocker")]
-[Collection(MongoTestDatabaseCollection.CollectionName)]
+[Collection(MongoDbTestDatabaseCollection.CollectionName)]
 public sealed class MongoDbFilesystemEditStoreSlowTests : FilesystemEditStoreContractTests
 {
-    private readonly MongoTestDatabaseFixture fixture;
+    private readonly MongoDbTestDatabaseFixture fixture;
 
-    public MongoDbFilesystemEditStoreSlowTests(MongoTestDatabaseFixture fixture)
+    public MongoDbFilesystemEditStoreSlowTests(MongoDbTestDatabaseFixture fixture)
     {
         this.fixture = fixture;
     }
@@ -18,7 +18,7 @@ public sealed class MongoDbFilesystemEditStoreSlowTests : FilesystemEditStoreCon
     protected override ValueTask<IFilesystemEditStore> CreateStoreAsync()
     {
         var collection = this.fixture.Database.GetCollection<MongoDbFilesystemEditDocument>(
-            MongoTestDatabaseFixture.FilesystemEditCollectionName);
+            MongoDbTestDatabaseFixture.FilesystemEditCollectionName);
         return ValueTask.FromResult<IFilesystemEditStore>(new MongoDbFilesystemEditStore(collection));
     }
 
@@ -31,7 +31,7 @@ public sealed class MongoDbFilesystemEditStoreSlowTests : FilesystemEditStoreCon
     public async Task GetEditAsync_WhenIdIsNotObjectId_ReturnsNull()
     {
         var collection = this.fixture.Database.GetCollection<MongoDbFilesystemEditDocument>(
-            MongoTestDatabaseFixture.FilesystemEditCollectionName);
+            MongoDbTestDatabaseFixture.FilesystemEditCollectionName);
         var store = new MongoDbFilesystemEditStore(collection);
 
         var stored = await store.GetEditAsync("not-an-object-id", CancellationToken.None);

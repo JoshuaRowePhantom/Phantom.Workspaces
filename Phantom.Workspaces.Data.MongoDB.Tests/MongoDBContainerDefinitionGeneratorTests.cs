@@ -5,13 +5,13 @@ using Json.Schema;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
-public sealed class MongoDBContainerDefinitionGeneratorTests
+public sealed class MongoDbContainerDefinitionGeneratorTests
 {
     [Fact]
     public void Generate_WhenContainerConnectionDefinition_ReturnsMongoContainerDefinition()
     {
-        var generator = new MongoDBContainerDefinitionGenerator();
-        var connectionDefinition = new MongoDBContainerConnectionDefinition
+        var generator = new MongoDbContainerDefinitionGenerator();
+        var connectionDefinition = new MongoDbContainerConnectionDefinition
         {
             ContainerName = "mongo-db",
             DataDirectory = "C:\\mongo-data",

@@ -5,11 +5,11 @@ using MongoDB.Driver;
 
 namespace Phantom.Workspaces.Data.MongoDB;
 
-public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
+public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 {
-    private readonly IMongoCollection<MongoEntityDocument> _entityCollection;
+    private readonly IMongoCollection<MongoDbEntityDocument> _entityCollection;
 
-    public MongoEntityDataAccessLayer(
+    public MongoDbEntityDataAccessLayer(
         IMongoDatabase database,
         string collectionName)
     {
@@ -19,7 +19,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
             throw new ArgumentException("Collection name is required.", nameof(collectionName));
         }
 
-        _entityCollection = database.GetCollection<MongoEntityDocument>($"{collectionName}_entities");
+        _entityCollection = database.GetCollection<MongoDbEntityDocument>($"{collectionName}_entities");
     }
 
     public async Task<UpdateResult> UpdateAsync(
@@ -29,7 +29,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         ArgumentNullException.ThrowIfNull(request);
 
         var results = new List<EntityUpdateResult>();
-        var pendingWrites = new List<MongoEntityDocument>();
+        var pendingWrites = new List<MongoDbEntityDocument>();
 
         var requestedEntityIds = request.Changes
             .Select(static change => ResolveEntityId(change))
@@ -113,13 +113,13 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
             var nextDataJson = change.Data?.GetRawText();
             var (names, typeNames) = ExtractNamesAndTypes(change.Data);
 
-            var updatedDocument = currentDocument ?? new MongoEntityDocument
+            var updatedDocument = currentDocument ?? new MongoDbEntityDocument
             {
                 Id = entityId.Value.ToString(),
                 Versions = [],
             };
 
-            updatedDocument.Versions.Add(new MongoEntityVersion
+            updatedDocument.Versions.Add(new MongoDbEntityVersion
             {
                 VersionId = nextVersionId,
                 TimestampUtc = nowUtc,
@@ -154,7 +154,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         {
             await _entityCollection
                 .ReplaceOneAsync(
-                    Builders<MongoEntityDocument>.Filter.Eq(static document => document.Id, pendingWrite.Id),
+                    Builders<MongoDbEntityDocument>.Filter.Eq(static document => document.Id, pendingWrite.Id),
                     pendingWrite,
                     new ReplaceOptions { IsUpsert = true },
                     cancellationToken)
@@ -175,7 +175,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
 
         var timestamps = request.Timestamps?.ToArray() ?? [null];
         var allDocuments = await _entityCollection
-            .Find(FilterDefinition<MongoEntityDocument>.Empty)
+            .Find(FilterDefinition<MongoDbEntityDocument>.Empty)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -267,7 +267,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         CancellationToken cancellationToken = default)
     {
         var allDocuments = await _entityCollection
-            .Find(FilterDefinition<MongoEntityDocument>.Empty)
+            .Find(FilterDefinition<MongoDbEntityDocument>.Empty)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -352,7 +352,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         };
     }
 
-    private async Task<Dictionary<string, MongoEntityDocument>> LoadEntitiesByIdAsync(
+    private async Task<Dictionary<string, MongoDbEntityDocument>> LoadEntitiesByIdAsync(
         IReadOnlyCollection<EntityId> entityIds,
         CancellationToken cancellationToken)
     {
@@ -362,13 +362,13 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         }
 
         var ids = entityIds.Select(static entityId => entityId.ToString()).ToArray();
-        var filter = Builders<MongoEntityDocument>.Filter.In(static document => document.Id, ids);
+        var filter = Builders<MongoDbEntityDocument>.Filter.In(static document => document.Id, ids);
         var documents = await _entityCollection.Find(filter).ToListAsync(cancellationToken).ConfigureAwait(false);
         return documents.ToDictionary(static document => document.Id, StringComparer.Ordinal);
     }
 
     private static bool IsAfter(
-        MongoEntityVersion version,
+        MongoDbEntityVersion version,
         Timestamp timestamp)
     {
         var requestedTime = timestamp.DateTime.UtcDateTime;
@@ -381,8 +381,8 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
                && string.CompareOrdinal(version.VersionId.ToString(), timestamp.ChangeId) > 0;
     }
 
-    private static MongoEntityVersion? ResolveVersionAtTimestamp(
-        MongoEntityDocument document,
+    private static MongoDbEntityVersion? ResolveVersionAtTimestamp(
+        MongoDbEntityDocument document,
         Timestamp? timestamp)
     {
         if (timestamp is null)
@@ -477,8 +477,8 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         return (names, typeNames.Distinct(StringComparer.Ordinal).ToArray());
     }
 
-    private static IEnumerable<MongoEntityDocument> ResolveMatchingDocuments(
-        IReadOnlyCollection<MongoEntityDocument> allDocuments,
+    private static IEnumerable<MongoDbEntityDocument> ResolveMatchingDocuments(
+        IReadOnlyCollection<MongoDbEntityDocument> allDocuments,
         GetEntityRequest request)
     {
         if (request.EntityId is not null)
@@ -540,7 +540,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
     }
 
     private static IReadOnlyCollection<EntitySnapshot> ResolveRelationshipsForEntity(
-        IReadOnlyCollection<MongoEntityDocument> allDocuments,
+        IReadOnlyCollection<MongoDbEntityDocument> allDocuments,
         EntityId entityId,
         IReadOnlyCollection<GetRelationshipRequest>? relationshipRequests)
     {
@@ -638,7 +638,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
     private static EntityUpdateResult CreateFailedResult(
         EntityId entityId,
         ConcurrencyTag? currentTag,
-        MongoEntityVersion currentVersion,
+        MongoDbEntityVersion currentVersion,
         string message)
     {
         return new EntityUpdateResult
@@ -662,7 +662,7 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
 
     private static EntitySnapshot CreateSnapshot(
         EntityId entityId,
-        MongoEntityVersion version)
+        MongoDbEntityVersion version)
     {
         return new EntitySnapshot
         {
@@ -674,15 +674,15 @@ public sealed class MongoEntityDataAccessLayer : IDataAccessLayer
         };
     }
 
-    private sealed class MongoEntityDocument
+    private sealed class MongoDbEntityDocument
     {
         [BsonId]
         public string Id { get; init; } = string.Empty;
 
-        public List<MongoEntityVersion> Versions { get; init; } = [];
+        public List<MongoDbEntityVersion> Versions { get; init; } = [];
     }
 
-    private sealed class MongoEntityVersion
+    private sealed class MongoDbEntityVersion
     {
         public ObjectId VersionId { get; init; }
 

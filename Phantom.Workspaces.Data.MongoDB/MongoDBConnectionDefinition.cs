@@ -5,23 +5,23 @@ using Json.Schema;
 namespace Phantom.Workspaces.Data.MongoDB;
 
  [JsonPolymorphic(TypeDiscriminatorPropertyName = "provider")]
- [JsonDerivedType(typeof(MongoDBContainerConnectionDefinition), "container")]
- [JsonDerivedType(typeof(MongoDBExternalConnectionDefinition), "external")]
-public abstract class MongoDBConnectionDefinition
+ [JsonDerivedType(typeof(MongoDbContainerConnectionDefinition), "container")]
+ [JsonDerivedType(typeof(MongoDbExternalConnectionDefinition), "external")]
+public abstract class MongoDbConnectionDefinition
 {
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
 
     [JsonIgnore]
-    public abstract MongoDBConnectionProvider Provider { get; }
+    public abstract MongoDbConnectionProvider Provider { get; }
 
-    public static MongoDBConnectionDefinition CreateContainer(
+    public static MongoDbConnectionDefinition CreateContainer(
         string containerName,
         string dataDirectory,
         string databaseName,
         string collectionName,
         int? hostPort = null)
     {
-        return new MongoDBContainerConnectionDefinition
+        return new MongoDbContainerConnectionDefinition
         {
             ContainerName = containerName,
             DataDirectory = dataDirectory,
@@ -31,12 +31,12 @@ public abstract class MongoDBConnectionDefinition
         };
     }
 
-    public static MongoDBConnectionDefinition CreateExternal(
+    public static MongoDbConnectionDefinition CreateExternal(
         string connectionString,
         string databaseName,
         string collectionName)
     {
-        return new MongoDBExternalConnectionDefinition
+        return new MongoDbExternalConnectionDefinition
         {
             ConnectionString = connectionString,
             DatabaseName = databaseName,
@@ -46,17 +46,17 @@ public abstract class MongoDBConnectionDefinition
 
     public string ToJson()
     {
-        var json = JsonSerializer.Serialize(this, typeof(MongoDBConnectionDefinition), SerializerOptions);
+        var json = JsonSerializer.Serialize(this, typeof(MongoDbConnectionDefinition), SerializerOptions);
         ValidateJson(json);
         return json;
     }
 
-    public static MongoDBConnectionDefinition FromJson(
+    public static MongoDbConnectionDefinition FromJson(
         string json)
     {
         ValidateJson(json);
-        return JsonSerializer.Deserialize<MongoDBConnectionDefinition>(json, SerializerOptions)
-               ?? throw new JsonException("MongoDB connection definition JSON could not be deserialized.");
+        return JsonSerializer.Deserialize<MongoDbConnectionDefinition>(json, SerializerOptions)
+               ?? throw new JsonException("MongoDb connection definition JSON could not be deserialized.");
     }
 
     private static void ValidateJson(
@@ -69,7 +69,7 @@ public abstract class MongoDBConnectionDefinition
     private static void ValidateJson(
         JsonElement element)
     {
-        var result = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var result = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             element,
             new EvaluationOptions
             {
@@ -79,7 +79,7 @@ public abstract class MongoDBConnectionDefinition
 
         if (!result.IsValid)
         {
-            throw new JsonException("MongoDB connection definition JSON does not match the mongo-db-connection schema.");
+            throw new JsonException("MongoDb connection definition JSON does not match the mongo-db-connection schema.");
         }
     }
 
@@ -96,10 +96,10 @@ public abstract class MongoDBConnectionDefinition
     }
 }
 
-public sealed class MongoDBContainerConnectionDefinition : MongoDBConnectionDefinition
+public sealed class MongoDbContainerConnectionDefinition : MongoDbConnectionDefinition
 {
     [JsonIgnore]
-    public override MongoDBConnectionProvider Provider => MongoDBConnectionProvider.Container;
+    public override MongoDbConnectionProvider Provider => MongoDbConnectionProvider.Container;
 
     [JsonPropertyName("container-name")]
     public string ContainerName { get; init; } = string.Empty;
@@ -117,10 +117,10 @@ public sealed class MongoDBContainerConnectionDefinition : MongoDBConnectionDefi
     public int? HostPort { get; init; }
 }
 
-public sealed class MongoDBExternalConnectionDefinition : MongoDBConnectionDefinition
+public sealed class MongoDbExternalConnectionDefinition : MongoDbConnectionDefinition
 {
     [JsonIgnore]
-    public override MongoDBConnectionProvider Provider => MongoDBConnectionProvider.External;
+    public override MongoDbConnectionProvider Provider => MongoDbConnectionProvider.External;
 
     [JsonPropertyName("connection-string")]
     public string ConnectionString { get; init; } = string.Empty;
@@ -132,7 +132,7 @@ public sealed class MongoDBExternalConnectionDefinition : MongoDBConnectionDefin
     public string CollectionName { get; init; } = string.Empty;
 }
 
-public enum MongoDBConnectionProvider
+public enum MongoDbConnectionProvider
 {
     Container,
     External,

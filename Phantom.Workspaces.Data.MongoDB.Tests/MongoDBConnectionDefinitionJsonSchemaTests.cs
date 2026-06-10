@@ -3,7 +3,7 @@ using Json.Schema;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
-public sealed class MongoDBConnectionDefinitionJsonSchemaTests
+public sealed class MongoDbConnectionDefinitionJsonSchemaTests
 {
     [Fact]
     public void Value_WhenValidContainerConnection_IsValid()
@@ -20,7 +20,7 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             }
             """);
 
-        var result = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var result = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             instance,
             new EvaluationOptions
             {
@@ -44,7 +44,7 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             }
             """);
 
-        var result = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var result = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             instance,
             new EvaluationOptions
             {
@@ -68,7 +68,7 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             }
             """);
 
-        var result = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var result = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             instance,
             new EvaluationOptions
             {
@@ -94,7 +94,7 @@ public sealed class MongoDBConnectionDefinitionJsonSchemaTests
             }
             """);
 
-        var result = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var result = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             instance,
             new EvaluationOptions
             {

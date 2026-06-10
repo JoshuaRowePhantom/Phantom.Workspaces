@@ -4,18 +4,18 @@ using Phantom.Workspaces.Containers;
 
 namespace Phantom.Workspaces.Data.MongoDB;
 
-public sealed class MongoConnectionBroker
+public sealed class MongoDbConnectionBroker
 {
     private const int DefaultMongoPort = 27017;
 
     private readonly ContainerEngine _containerEngine;
-    private readonly MongoDBContainerDefinitionGenerator _containerDefinitionGenerator;
+    private readonly MongoDbContainerDefinitionGenerator _containerDefinitionGenerator;
     private readonly int _connectVerificationAttempts;
     private readonly TimeSpan _connectRetryDelay;
 
-    public MongoConnectionBroker(
+    public MongoDbConnectionBroker(
         ContainerEngine? containerEngine = null,
-        MongoDBContainerDefinitionGenerator? containerDefinitionGenerator = null,
+        MongoDbContainerDefinitionGenerator? containerDefinitionGenerator = null,
         int connectVerificationAttempts = 8,
         TimeSpan? connectRetryDelay = null)
     {
@@ -25,30 +25,30 @@ public sealed class MongoConnectionBroker
         }
 
         _containerEngine = containerEngine ?? new WindowsDockerDesktopEngine();
-        _containerDefinitionGenerator = containerDefinitionGenerator ?? new MongoDBContainerDefinitionGenerator();
+        _containerDefinitionGenerator = containerDefinitionGenerator ?? new MongoDbContainerDefinitionGenerator();
         _connectVerificationAttempts = connectVerificationAttempts;
         _connectRetryDelay = connectRetryDelay ?? TimeSpan.FromMilliseconds(250);
     }
 
     public async ValueTask<IMongoClient> GetClientAsync(
-        MongoDBConnectionDefinition connectionDefinition,
+        MongoDbConnectionDefinition connectionDefinition,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(connectionDefinition);
 
         return connectionDefinition switch
         {
-            MongoDBContainerConnectionDefinition containerConnection =>
+            MongoDbContainerConnectionDefinition containerConnection =>
                 await ConnectContainerAsync(containerConnection, cancellationToken).ConfigureAwait(false),
-            MongoDBExternalConnectionDefinition externalConnection =>
+            MongoDbExternalConnectionDefinition externalConnection =>
                 await ConnectExternalAsync(externalConnection, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException(
-                $"Unsupported MongoDB connection provider: {connectionDefinition.Provider}.")
+                $"Unsupported MongoDb connection provider: {connectionDefinition.Provider}.")
         };
     }
 
     private async ValueTask<IMongoClient> ConnectContainerAsync(
-        MongoDBContainerConnectionDefinition connectionDefinition,
+        MongoDbContainerConnectionDefinition connectionDefinition,
         CancellationToken cancellationToken)
     {
         await EnsureContainerStartedAsync(connectionDefinition, cancellationToken).ConfigureAwait(false);
@@ -60,7 +60,7 @@ public sealed class MongoConnectionBroker
     }
 
     private async ValueTask<IMongoClient> ConnectExternalAsync(
-        MongoDBExternalConnectionDefinition connectionDefinition,
+        MongoDbExternalConnectionDefinition connectionDefinition,
         CancellationToken cancellationToken)
     {
         var client = CreateClient(connectionDefinition.ConnectionString);
@@ -79,7 +79,7 @@ public sealed class MongoConnectionBroker
     }
 
     private async ValueTask EnsureContainerStartedAsync(
-        MongoDBContainerConnectionDefinition connectionDefinition,
+        MongoDbContainerConnectionDefinition connectionDefinition,
         CancellationToken cancellationToken)
     {
         try
@@ -125,7 +125,7 @@ public sealed class MongoConnectionBroker
         }
 
         throw new InvalidOperationException(
-            "MongoDB connection could not be verified after retrying.",
+            "MongoDb connection could not be verified after retrying.",
             lastException);
     }
 

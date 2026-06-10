@@ -22,11 +22,11 @@ public static class AgentPersistenceStoreFactory
         MongoDbChatHistoryProviderDefinition mongoDefinition,
         CancellationToken cancellationToken)
     {
-        MongoDBConnectionDefinition mongoConnectionDefinition;
+        MongoDbConnectionDefinition mongoConnectionDefinition;
 
         if (mongoDefinition.MongoProvider.Equals("container", StringComparison.OrdinalIgnoreCase))
         {
-            mongoConnectionDefinition = MongoDBConnectionDefinition.CreateContainer(
+            mongoConnectionDefinition = MongoDbConnectionDefinition.CreateContainer(
                 mongoDefinition.ContainerName!,
                 mongoDefinition.DataDirectory!,
                 mongoDefinition.DatabaseName,
@@ -35,7 +35,7 @@ public static class AgentPersistenceStoreFactory
         }
         else if (mongoDefinition.MongoProvider.Equals("external", StringComparison.OrdinalIgnoreCase))
         {
-            mongoConnectionDefinition = MongoDBConnectionDefinition.CreateExternal(
+            mongoConnectionDefinition = MongoDbConnectionDefinition.CreateExternal(
                 mongoDefinition.ConnectionString!,
                 mongoDefinition.DatabaseName,
                 mongoDefinition.CollectionName);
@@ -45,7 +45,7 @@ public static class AgentPersistenceStoreFactory
             throw new InvalidOperationException($"Unknown MongoDB provider type: {mongoDefinition.MongoProvider}");
         }
 
-        var broker = new MongoConnectionBroker();
+        var broker = new MongoDbConnectionBroker();
         var client = await broker.GetClientAsync(mongoConnectionDefinition, cancellationToken).ConfigureAwait(false);
         var database = client.GetDatabase(mongoDefinition.DatabaseName);
         return new MongoDbAgentPersistenceStore(database, mongoDefinition.CollectionName);

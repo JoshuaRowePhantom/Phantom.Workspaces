@@ -4,12 +4,12 @@ using Phantom.Workspaces.Data.MongoDB;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
-public sealed class MongoDBConnectionDefinitionTests
+public sealed class MongoDbConnectionDefinitionTests
 {
     [Fact]
     public void Value_RoundTrips_ForContainerBranch()
     {
-        var definition = new MongoDBContainerConnectionDefinition
+        var definition = new MongoDbContainerConnectionDefinition
         {
             ContainerName = "mongo-db",
             DataDirectory = "C:\\mongo-data",
@@ -25,11 +25,11 @@ public sealed class MongoDBConnectionDefinitionTests
         Assert.Contains("\"database-name\":\"workspace-db\"", json);
         Assert.Contains("\"collection-name\":\"workspace-collection\"", json);
         Assert.Contains("\"host-port\":37017", json);
-        var roundTrip = MongoDBConnectionDefinition.FromJson(json);
+        var roundTrip = MongoDbConnectionDefinition.FromJson(json);
 
-        var containerRoundTrip = Assert.IsType<MongoDBContainerConnectionDefinition>(roundTrip);
+        var containerRoundTrip = Assert.IsType<MongoDbContainerConnectionDefinition>(roundTrip);
 
-        Assert.Equal(MongoDBConnectionProvider.Container, containerRoundTrip.Provider);
+        Assert.Equal(MongoDbConnectionProvider.Container, containerRoundTrip.Provider);
         Assert.Equal("mongo-db", containerRoundTrip.ContainerName);
         Assert.Equal("C:\\mongo-data", containerRoundTrip.DataDirectory);
         Assert.Equal("workspace-db", containerRoundTrip.DatabaseName);
@@ -38,7 +38,7 @@ public sealed class MongoDBConnectionDefinitionTests
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
-        var validation = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var validation = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             root,
             new EvaluationOptions
             {
@@ -59,7 +59,7 @@ public sealed class MongoDBConnectionDefinitionTests
     [Fact]
     public void Value_RoundTrips_ForExternalBranch()
     {
-        var definition = new MongoDBExternalConnectionDefinition
+        var definition = new MongoDbExternalConnectionDefinition
         {
             ConnectionString = "mongodb://localhost:27017",
             DatabaseName = "workspace-db",
@@ -71,18 +71,18 @@ public sealed class MongoDBConnectionDefinitionTests
         Assert.Contains("\"connection-string\":\"mongodb://localhost:27017\"", json);
         Assert.Contains("\"database-name\":\"workspace-db\"", json);
         Assert.Contains("\"collection-name\":\"workspace-collection\"", json);
-        var roundTrip = MongoDBConnectionDefinition.FromJson(json);
+        var roundTrip = MongoDbConnectionDefinition.FromJson(json);
 
-        var externalRoundTrip = Assert.IsType<MongoDBExternalConnectionDefinition>(roundTrip);
+        var externalRoundTrip = Assert.IsType<MongoDbExternalConnectionDefinition>(roundTrip);
 
-        Assert.Equal(MongoDBConnectionProvider.External, externalRoundTrip.Provider);
+        Assert.Equal(MongoDbConnectionProvider.External, externalRoundTrip.Provider);
         Assert.Equal("mongodb://localhost:27017", externalRoundTrip.ConnectionString);
         Assert.Equal("workspace-db", externalRoundTrip.DatabaseName);
         Assert.Equal("workspace-collection", externalRoundTrip.CollectionName);
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
-        var validation = MongoDBConnectionDefinitionJsonSchema.Value.Evaluate(
+        var validation = MongoDbConnectionDefinitionJsonSchema.Value.Evaluate(
             root,
             new EvaluationOptions
             {

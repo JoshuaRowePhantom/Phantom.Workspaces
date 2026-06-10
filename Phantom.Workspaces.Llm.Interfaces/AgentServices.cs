@@ -1,10 +1,10 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm;
 
-public sealed class AgentServices
+public sealed record AgentServices
 {
     public bool LogChat { get; init; }
 
@@ -22,4 +22,9 @@ public sealed class AgentServices
     /// Overrides the chat client used by the agent. Intended for deterministic tests.
     /// </summary>
     public IChatClient? ChatClientOverride { get; init; }
+
+    /// <summary>
+    /// Overrides toolset factory resolution for custom tool kinds.
+    /// </summary>
+    public IToolsetFactory? ToolsetFactory { get; init; }
 }

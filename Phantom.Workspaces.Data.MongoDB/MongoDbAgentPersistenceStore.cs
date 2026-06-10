@@ -9,9 +9,9 @@ namespace Phantom.Workspaces.Data.MongoDB;
 
 public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
 {
-    private readonly IMongoCollection<MongoPersistedSessionDocument> sessionsCollection;
-    private readonly IMongoCollection<MongoPersistedDefinitionDocument> definitionsCollection;
-    private readonly IMongoCollection<MongoPersistedMessageDocument> messagesCollection;
+    private readonly IMongoCollection<MongoDbPersistedSessionDocument> sessionsCollection;
+    private readonly IMongoCollection<MongoDbPersistedDefinitionDocument> definitionsCollection;
+    private readonly IMongoCollection<MongoDbPersistedMessageDocument> messagesCollection;
 
     public MongoDbAgentPersistenceStore(
         IMongoDatabase database,
@@ -23,9 +23,9 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             throw new ArgumentException("Collection name is required.", nameof(collectionName));
         }
 
-        this.sessionsCollection = database.GetCollection<MongoPersistedSessionDocument>($"{collectionName}-sessions");
-        this.definitionsCollection = database.GetCollection<MongoPersistedDefinitionDocument>($"{collectionName}-definitions");
-        this.messagesCollection = database.GetCollection<MongoPersistedMessageDocument>($"{collectionName}-messages");
+        this.sessionsCollection = database.GetCollection<MongoDbPersistedSessionDocument>($"{collectionName}-sessions");
+        this.definitionsCollection = database.GetCollection<MongoDbPersistedDefinitionDocument>($"{collectionName}-definitions");
+        this.messagesCollection = database.GetCollection<MongoDbPersistedMessageDocument>($"{collectionName}-messages");
     }
 
     public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
@@ -34,7 +34,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
 
         if (request.Agent.AgentSessionJson is not null)
         {
-            var persistedSessionDocument = new MongoPersistedSessionDocument
+            var persistedSessionDocument = new MongoDbPersistedSessionDocument
             {
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentSessionJson = request.Agent.AgentSessionJson,
@@ -42,7 +42,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             };
 
             await this.sessionsCollection.ReplaceOneAsync(
-                    filter: Builders<MongoPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId),
+                    filter: Builders<MongoDbPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId),
                     replacement: persistedSessionDocument,
                     options: new ReplaceOptions { IsUpsert = true },
                     cancellationToken: cancellationToken)
@@ -51,7 +51,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
 
         if (request.Agent.AgentDefinitionJson is not null)
         {
-            var persistedDefinitionDocument = new MongoPersistedDefinitionDocument
+            var persistedDefinitionDocument = new MongoDbPersistedDefinitionDocument
             {
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentDefinitionJson = request.Agent.AgentDefinitionJson,
@@ -59,7 +59,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             };
 
             await this.definitionsCollection.ReplaceOneAsync(
-                    filter: Builders<MongoPersistedDefinitionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId),
+                    filter: Builders<MongoDbPersistedDefinitionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId),
                     replacement: persistedDefinitionDocument,
                     options: new ReplaceOptions { IsUpsert = true },
                     cancellationToken: cancellationToken)
@@ -73,7 +73,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         }
 
         var nextSequence = await this.GetNextSequenceAsync(request.Agent.AgentSessionId, cancellationToken).ConfigureAwait(false);
-        var documents = newMessages.Select((message, index) => new MongoPersistedMessageDocument
+        var documents = newMessages.Select((message, index) => new MongoDbPersistedMessageDocument
         {
             AgentSessionId = request.Agent.AgentSessionId,
             Sequence = nextSequence + index,
@@ -94,7 +94,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         ArgumentException.ThrowIfNullOrWhiteSpace(request.AgentSessionId);
 
         var sessionDocument = await this.sessionsCollection
-            .Find(Builders<MongoPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.AgentSessionId))
+            .Find(Builders<MongoDbPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.AgentSessionId))
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -104,7 +104,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         }
 
         var definitionDocument = await this.definitionsCollection
-            .Find(Builders<MongoPersistedDefinitionDocument>.Filter.Eq(static x => x.AgentSessionId, request.AgentSessionId))
+            .Find(Builders<MongoDbPersistedDefinitionDocument>.Filter.Eq(static x => x.AgentSessionId, request.AgentSessionId))
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -123,7 +123,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         ArgumentException.ThrowIfNullOrWhiteSpace(request.AgentSessionId);
 
         var documents = await this.messagesCollection
-            .Find(Builders<MongoPersistedMessageDocument>.Filter.Eq(static x => x.AgentSessionId, request.AgentSessionId))
+            .Find(Builders<MongoDbPersistedMessageDocument>.Filter.Eq(static x => x.AgentSessionId, request.AgentSessionId))
             .SortBy(static x => x.Sequence)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -138,7 +138,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
     private async Task<long> GetNextSequenceAsync(string agentSessionId, CancellationToken cancellationToken)
     {
         var lastMessage = await this.messagesCollection
-            .Find(Builders<MongoPersistedMessageDocument>.Filter.Eq(static x => x.AgentSessionId, agentSessionId))
+            .Find(Builders<MongoDbPersistedMessageDocument>.Filter.Eq(static x => x.AgentSessionId, agentSessionId))
             .SortByDescending(static x => x.Sequence)
             .Limit(1)
             .FirstOrDefaultAsync(cancellationToken)
@@ -147,7 +147,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         return lastMessage is null ? 0 : lastMessage.Sequence + 1;
     }
 
-    private sealed record MongoPersistedSessionDocument
+    private sealed record MongoDbPersistedSessionDocument
     {
         [BsonId]
         public string AgentSessionId { get; init; } = string.Empty;
@@ -157,7 +157,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public DateTime UpdatedUtc { get; init; }
     }
 
-    private sealed record MongoPersistedDefinitionDocument
+    private sealed record MongoDbPersistedDefinitionDocument
     {
         [BsonId]
         public string AgentSessionId { get; init; } = string.Empty;
@@ -167,7 +167,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public DateTime UpdatedUtc { get; init; }
     }
 
-    private sealed record MongoPersistedMessageDocument
+    private sealed record MongoDbPersistedMessageDocument
     {
         [BsonId]
         public ObjectId Id { get; init; }

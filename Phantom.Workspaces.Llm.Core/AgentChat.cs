@@ -771,77 +771,54 @@ public sealed class AgentChat : IAsyncDisposable
         return tool switch
         {
             McpTool mcpTool => await this.InitializeMcpRuntimeToolAsync(mcpTool, services, cancellationToken),
-            CustomTool { Kind: "web_search" } customTool => this.InitializeCustomRuntimeTool(
-                customTool,
-                "web_search",
-                new WebSearchTool(logger: services?.LoggerFactory?.CreateLogger<WebSearchTool>())),
-            CustomTool { Kind: "web_request" } customTool => this.InitializeCustomRuntimeTool(
-                customTool,
-                "web_request",
-                new WebRequestTool(logger: services?.LoggerFactory?.CreateLogger<WebRequestTool>())),
-            CustomTool { Kind: "filesystem" } customTool => await this.InitializeToolsetRuntimeToolsAsync(
-                customTool,
-                "filesystem",
-                new FilesystemServiceToolset(
-                    editStoreConnectionJson: TryGetConnectionJson(customTool),
-                    loggerFactory: services?.LoggerFactory),
-                cancellationToken),
+            CustomTool customTool => await this.InitializeCustomToolsetRuntimeToolsAsync(customTool, services, cancellationToken),
             _ => new ToolInitializationResult([], []),
         };
     }
 
-    private static string? TryGetConnectionJson(CustomTool tool)
+    private async Task<ToolInitializationResult> InitializeCustomToolsetRuntimeToolsAsync(
+        CustomTool tool,
+        AgentServices? services,
+        CancellationToken cancellationToken)
     {
-        if (tool.Options is null
-            || !tool.Options.TryGetValue("connection", out var connection)
-            || connection is null)
+        var kind = tool.Kind;
+        if (string.IsNullOrWhiteSpace(kind))
         {
-            return null;
+            return new ToolInitializationResult([], []);
         }
 
-        return connection switch
-        {
-            JsonElement jsonElement => jsonElement.GetRawText(),
-            _ => JsonSerializer.Serialize(connection),
-        };
-    }
-
-    private ToolInitializationResult InitializeCustomRuntimeTool(
-        CustomTool tool,
-        string kind,
-        AITool runtimeTool)
-    {
-        var displayName = runtimeTool.Name ?? throw new InvalidOperationException($"Custom tool '{kind}' must define an invocation name.");
-        var summary = tool.Description ?? string.Empty;
-        var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
-        {
-            Role = AgentChatHistoryItem.DiagnosticChatRole,
-            Contents = new AIContent[] { new TextContent($"Initializing tool '{displayName}'...") },
-        });
-
+        var toolsetFactory = services?.ToolsetFactory
+            ?? ToolsetFactory.CreateDefaultToolsetFactory();
+        var properties = BuildToolsetProperties(tool.Options);
+        var resolvedServices = services ?? new AgentServices();
+        IToolset toolset;
         try
         {
-            var root = new ToolStateNode(
-                id: BuildCustomToolId(tool),
-                name: displayName,
-                description: summary,
-                instructions: summary,
-                kind: kind,
-                runtimeTool: runtimeTool,
-                parent: null,
-                isEnabled: true,
-                status: null);
-            this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
-            {
-                Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent($"Opened tool '{displayName}'.") },
-            }]);
-            return new ToolInitializationResult([root], [runtimeTool]);
+            toolset = await toolsetFactory.CreateToolsetAsync(kind, properties, resolvedServices);
         }
-        finally
+        catch (InvalidOperationException)
         {
-            this.CompleteRunningItem(runningItem, true);
+            return new ToolInitializationResult([], []);
         }
+
+        return await this.InitializeToolsetRuntimeToolsAsync(
+            tool,
+            kind,
+            toolset,
+            cancellationToken);
+    }
+
+    private static Dictionary<string, object> BuildToolsetProperties(
+        IDictionary<string, object>? options)
+    {
+        if (options is null || options.Count == 0)
+        {
+            return [];
+        }
+
+        return options.ToDictionary(
+            static entry => entry.Key,
+            static entry => entry.Value);
     }
 
     private async Task<ToolInitializationResult> InitializeToolsetRuntimeToolsAsync(
@@ -866,32 +843,39 @@ public sealed class AgentChat : IAsyncDisposable
             }
 
             var runtimeTools = await toolset.ListToolsAsync();
+            var singleRuntimeTool = runtimeTools.Count == 1 ? runtimeTools[0] : null;
+            var shouldAttachSingleRuntimeToolToRoot =
+                singleRuntimeTool is not null
+                && string.Equals(singleRuntimeTool.Name, displayName, StringComparison.Ordinal);
             var root = new ToolStateNode(
                 id: BuildCustomToolId(tool),
                 name: displayName,
                 description: summary,
                 instructions: summary,
                 kind: kind,
-                runtimeTool: null,
+                runtimeTool: shouldAttachSingleRuntimeToolToRoot ? singleRuntimeTool : null,
                 parent: null,
                 isEnabled: true,
                 status: runtimeTools.Count == 0
                     ? "Loaded no tools."
                     : $"Loaded {runtimeTools.Count} tool{(runtimeTools.Count == 1 ? string.Empty : "s")}.");
 
-            foreach (var runtimeTool in runtimeTools)
+            if (!shouldAttachSingleRuntimeToolToRoot)
             {
-                var childName = string.IsNullOrWhiteSpace(runtimeTool.Name) ? "(unnamed)" : runtimeTool.Name;
-                root.Children.Add(new ToolStateNode(
-                    id: BuildCustomChildToolId(tool, childName),
-                    name: childName,
-                    description: runtimeTool.Description ?? string.Empty,
-                    instructions: runtimeTool.Description ?? string.Empty,
-                    kind: "custom-tool",
-                    runtimeTool: runtimeTool,
-                    parent: root,
-                    isEnabled: true,
-                    status: null));
+                foreach (var runtimeTool in runtimeTools)
+                {
+                    var childName = string.IsNullOrWhiteSpace(runtimeTool.Name) ? "(unnamed)" : runtimeTool.Name;
+                    root.Children.Add(new ToolStateNode(
+                        id: BuildCustomChildToolId(tool, childName),
+                        name: childName,
+                        description: runtimeTool.Description ?? string.Empty,
+                        instructions: runtimeTool.Description ?? string.Empty,
+                        kind: "custom-tool",
+                        runtimeTool: runtimeTool,
+                        parent: root,
+                        isEnabled: true,
+                        status: null));
+                }
             }
 
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
