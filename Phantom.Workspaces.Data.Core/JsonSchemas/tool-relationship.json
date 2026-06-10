@@ -1,0 +1,90 @@
+{
+  "entity-id": "5e8a7ac8-9fe8-4dc8-aa31-17e3ff0a00d0",
+  "entity-types": [
+    "relationship-type",
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/tool-relationship.json"
+    ],
+    [
+      "entity-types",
+      "tool-relationship"
+    ]
+  ],
+  "display-name": {
+    "default": "Tool Relationship Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/tool-relationship-schema.md"
+    }
+  },
+  "schema": {
+    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/tool-relationship.json",
+    "allOf": [
+      {
+        "$ref": "relationship.json"
+      }
+    ],
+    "type": "object",
+    "properties": {
+      "entity-types": {
+        "type": "array",
+        "items": {
+          "$ref": "core.json#/$defs/entity-type-id"
+        },
+        "contains": {
+          "const": "tool-relationship"
+        }
+      },
+      "participants": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "allOf": [
+              {
+                "$ref": "core.json#/$defs/entity-id"
+              }
+            ],
+            "x-entity-type": "tool"
+          },
+          "schedule": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "core.json#/$defs/entity-id"
+                }
+              ],
+              "x-entity-type": "schedule"
+            },
+            "minItems": 1
+          },
+          "target": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "core.json#/$defs/entity-id"
+                }
+              ],
+              "x-entity-type": "entity"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "tool",
+          "schedule",
+          "target"
+        ],
+        "unevaluatedProperties": false
+      }
+    }
+  }
+}

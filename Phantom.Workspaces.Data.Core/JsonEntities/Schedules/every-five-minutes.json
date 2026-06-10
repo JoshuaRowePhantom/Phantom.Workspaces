@@ -1,0 +1,20 @@
+{
+  "entity-id": "0b784370-6ba2-4e43-812f-b1ef2bef239c",
+  "entity-types": [
+    "schedule"
+  ],
+  "names": [
+    [
+      "schedule",
+      "every-five-minutes"
+    ]
+  ],
+  "display-name": {
+    "default": "Every five minutes"
+  },
+  "repeat": {
+    "frequency": "00:05:00Z",
+    "days-of-week": [],
+    "start-at": []
+  }
+}

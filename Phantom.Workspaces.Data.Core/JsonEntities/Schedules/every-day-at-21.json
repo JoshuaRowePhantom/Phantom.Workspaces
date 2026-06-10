@@ -1,0 +1,22 @@
+{
+  "entity-id": "d44ee3f2-1791-4698-943d-acee886d110b",
+  "entity-types": [
+    "schedule"
+  ],
+  "names": [
+    [
+      "schedule",
+      "every-day-at-21"
+    ]
+  ],
+  "display-name": {
+    "default": "Every day at 21:00"
+  },
+  "repeat": {
+    "frequency": "00:00:00Z",
+    "days-of-week": [],
+    "start-at": [
+      "21:00:00Z"
+    ]
+  }
+}

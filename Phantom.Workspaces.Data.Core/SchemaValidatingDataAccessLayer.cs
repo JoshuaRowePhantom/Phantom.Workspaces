@@ -8,6 +8,8 @@ namespace Phantom.Workspaces.Data;
 /// </summary>
 /// <remarks>
 /// This data access layer expects UpdateRequests to have had merge processing already performed.
+/// Schemas are loaded fresh for each update from the request payload and the underlying IDataAccessLayer.
+/// This class does not cache schema content between update calls.
 /// </remarks>
 public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
 {
@@ -18,7 +20,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
     private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
     private const string CustomEntityTypeKeyword = "x-entity-type";
-    private static readonly object SchemaRegistryLock = new();
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -32,11 +33,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     {
         var validationResults = new List<EntityUpdateResult>();
         var requestSchemasByName = this.GetSchemasFromRequest(request);
-        await this.RegisterSchemasAsync(requestSchemasByName, cancellationToken);
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(requestSchemasByName, cancellationToken);
 
         foreach (var change in request.Changes)
         {
-            var validationErrors = await this.ValidateChangeAsync(change, requestSchemasByName, cancellationToken);
+            var validationErrors = await this.ValidateChangeAsync(change, requestSchemasByName, schemaRegistry, cancellationToken);
             if (validationErrors.Count == 0)
             {
                 continue;
@@ -68,6 +69,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     protected virtual async Task<IReadOnlyCollection<UpdateError>> ValidateChangeAsync(
         EntityChange change,
         IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
+        SchemaRegistry schemaRegistry,
         CancellationToken cancellationToken)
     {
         if (change.Data is not { } data || data.ValueKind != JsonValueKind.Object)
@@ -87,18 +89,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             if (applicableSchema.SchemaEntity is null)
             {
-                // The base entity schema may not be present in lightweight/test repositories.
-                // In that case, keep validating against whatever schemas are available.
-                if (string.Equals(applicableSchema.SchemaReference, EntitySchemaName, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (string.Equals(applicableSchema.SchemaReference, Draft202012MetaSchema, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
                 errors.Add(
                     new UpdateError
                     {
@@ -126,10 +116,12 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         JsonSchema composedSchema;
         try
         {
-            lock (SchemaRegistryLock)
-            {
-                composedSchema = JsonSchema.FromText(this.BuildComposedSchemaText(resolvedSchemas, shouldCloseUnevaluatedProperties));
-            }
+            composedSchema = JsonSchema.FromText(
+                this.BuildComposedSchemaText(resolvedSchemas, shouldCloseUnevaluatedProperties),
+                new BuildOptions
+                {
+                    SchemaRegistry = schemaRegistry,
+                });
         }
         catch (Exception exception)
         {
@@ -143,16 +135,13 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         EvaluationResults evaluation;
-        lock (SchemaRegistryLock)
-        {
-            evaluation = composedSchema.Evaluate(
-                data,
-                new EvaluationOptions
-                {
-                    OutputFormat = OutputFormat.Hierarchical,
-                    PreserveDroppedAnnotations = true,
-                });
-        }
+        evaluation = composedSchema.Evaluate(
+            data,
+            new EvaluationOptions
+            {
+                OutputFormat = OutputFormat.Hierarchical,
+                PreserveDroppedAnnotations = true,
+            });
         if (!evaluation.IsValid)
         {
             evaluation.ToList();
@@ -173,10 +162,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         return errors;
     }
 
-    protected virtual async Task RegisterSchemasAsync(
+    protected virtual async Task<SchemaRegistry> BuildSchemaRegistryAsync(
         IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
         CancellationToken cancellationToken)
     {
+        var schemaRegistry = new SchemaRegistry();
         var schemaEntitiesById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
 
         foreach (var schemaEntity in requestSchemasByName.Values)
@@ -198,24 +188,29 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 continue;
             }
 
-            this.TryAddSchemaEntityById(schemaEntitiesById, entityData);
+            if (!this.TryGetSchemaPayloadId(entityData, out var schemaId)
+                || !Uri.TryCreate(schemaId, UriKind.Absolute, out _)
+                || schemaEntitiesById.ContainsKey(schemaId))
+            {
+                continue;
+            }
+
+            schemaEntitiesById[schemaId] = entityData;
         }
 
         foreach (var pair in schemaEntitiesById)
         {
-            try
-            {
-                lock (SchemaRegistryLock)
+            var schemaText = this.GetSchemaText(pair.Value);
+            _ = JsonSchema.FromText(
+                schemaText,
+                new BuildOptions
                 {
-                    var schema = JsonSchema.FromText(this.GetSchemaText(pair.Value));
-                    SchemaRegistry.Global.Register(new Uri(pair.Key, UriKind.Absolute), schema);
-                }
-            }
-            catch
-            {
-                // Invalid schemas are reported during per-entity validation.
-            }
+                    SchemaRegistry = schemaRegistry,
+                },
+                new Uri(pair.Key, UriKind.Absolute));
         }
+
+        return schemaRegistry;
     }
 
     private void TryAddSchemaEntityById(

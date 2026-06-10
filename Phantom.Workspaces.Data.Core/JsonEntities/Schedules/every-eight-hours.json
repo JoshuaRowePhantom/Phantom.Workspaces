@@ -1,0 +1,20 @@
+{
+  "entity-id": "d55eecf7-c1b0-4be9-87a2-34cc0eb10d75",
+  "entity-types": [
+    "schedule"
+  ],
+  "names": [
+    [
+      "schedule",
+      "every-eight-hours"
+    ]
+  ],
+  "display-name": {
+    "default": "Every eight hours"
+  },
+  "repeat": {
+    "frequency": "08:00:00Z",
+    "days-of-week": [],
+    "start-at": []
+  }
+}

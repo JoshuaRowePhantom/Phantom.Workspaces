@@ -1,0 +1,20 @@
+{
+  "entity-id": "f45352f3-9795-4b46-9ca7-d52023f6b173",
+  "entity-types": [
+    "schedule"
+  ],
+  "names": [
+    [
+      "schedule",
+      "every-twelve-hours"
+    ]
+  ],
+  "display-name": {
+    "default": "Every twelve hours"
+  },
+  "repeat": {
+    "frequency": "12:00:00Z",
+    "days-of-week": [],
+    "start-at": []
+  }
+}

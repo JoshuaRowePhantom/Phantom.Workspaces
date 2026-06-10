@@ -1,0 +1,22 @@
+{
+  "entity-id": "4fe816fc-1fdb-46f6-b26d-39782fb115a6",
+  "entity-types": [
+    "schedule"
+  ],
+  "names": [
+    [
+      "schedule",
+      "every-day-at-14"
+    ]
+  ],
+  "display-name": {
+    "default": "Every day at 14:00"
+  },
+  "repeat": {
+    "frequency": "00:00:00Z",
+    "days-of-week": [],
+    "start-at": [
+      "14:00:00Z"
+    ]
+  }
+}

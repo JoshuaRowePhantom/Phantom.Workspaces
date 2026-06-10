@@ -59,6 +59,10 @@
           }
         }
       },
+      "time": {
+        "type": "string",
+        "format": "time"
+      },
       "entity-name": {
         "$comment": "An array of strings, used when the name consists of one or more parts that need to be kept separate (e.g. a pull request id in a specific repository).",
         "type": "array",

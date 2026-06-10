@@ -17,6 +17,37 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_IsRejected_WhenBaseEntitySchemaIsUnavailable()
+    {
+        var dataAccessLayer = this.CreateDataAccessLayer();
+        var entityId = new EntityId("f24f2d0b-8d48-4e57-b9f6-ef2eccece2b1");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity without available schemas"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "names": [["missing-schema-entity"]]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("could not be resolved", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("entity.json", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Update_Succeeds_WhenSchemaIsInUnderlyingRepository()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -140,6 +171,89 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                 result.EntityResults.SelectMany(entityResult => entityResult.Errors.Select(error => error.Message))));
         Assert.All(result.EntityResults, entityResult => Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState));
         Assert.DoesNotContain(result.EntityResults, entityResult => entityResult.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
+    public async Task Update_Succeeds_WhenRequestSchemaOverridesPrepopulatedSchema()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var schemaEntityId = new EntityId("8b9d7bd5-bf9d-4e11-b8d9-4da7cf7df6d6");
+        var validatedEntityId = new EntityId("cb40af7f-ff6b-4d7b-98a1-3482ccf2d355");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add prepopulated schema"),
+                new[] { CreateSchemaEntityChange(schemaEntityId, TestSchemaName, "string") }));
+        var currentSchema = Assert.Single(
+            Assert.Single(
+                    (await dataAccessLayer.GetAsync(
+                        CreateGetRequest(
+                            new[] { CreateGetEntityRequest(schemaEntityId, null, null, null) },
+                            null,
+                            new Timestamp?[] { null })))
+                .Batches)
+                .Entities);
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Override schema in request and validate entity"),
+                new EntityChange[]
+                {
+                    CreateValidatedEntityChange(validatedEntityId, 123, TestSchemaName),
+                    CreateSchemaEntityChange(schemaEntityId, currentSchema.ConcurrencyTag, TestSchemaName, "integer"),
+                }));
+
+        Assert.DoesNotContain(result.EntityResults, static entityResult => entityResult.UpdateState == UpdateState.Failed);
+        var validatedEntityResult = Assert.Single(result.EntityResults, entityResult => entityResult.ResultingEntityId == validatedEntityId);
+        Assert.Equal(UpdateState.Added, validatedEntityResult.UpdateState);
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenEntityViolatesRequestUpdatedSchema()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var schemaEntityId = new EntityId("76c5ec45-4950-47c6-b5d6-2e70ff8872f8");
+        var validAgainstStoredSchemaEntityId = new EntityId("ec5bb277-d37d-491e-955e-7448be062e5b");
+        var validatedEntityId = new EntityId("2d64af62-f994-49f0-935e-6fa0384ee4b5");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add prepopulated schema"),
+                new[] { CreateSchemaEntityChange(schemaEntityId, TestSchemaName, "string") }));
+        var currentSchema = Assert.Single(
+            Assert.Single(
+                    (await dataAccessLayer.GetAsync(
+                        CreateGetRequest(
+                            new[] { CreateGetEntityRequest(schemaEntityId, null, null, null) },
+                            null,
+                            new Timestamp?[] { null })))
+                .Batches)
+                .Entities);
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Entity is valid against currently stored schema"),
+                new[] { CreateValidatedEntityChange(validAgainstStoredSchemaEntityId, "one", TestSchemaName) }));
+
+        var result = await RequireUpdateFailsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Override schema in request and fail entity validation"),
+                new EntityChange[]
+                {
+                    CreateValidatedEntityChange(validatedEntityId, "one", TestSchemaName),
+                    CreateSchemaEntityChange(schemaEntityId, currentSchema.ConcurrencyTag, TestSchemaName, "integer"),
+                }));
+
+        var failedResult = Assert.Single(result.EntityResults);
+        Assert.Equal(validatedEntityId, failedResult.ResultingEntityId);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("type", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -579,6 +693,23 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         EntityId entityId,
         string schemaName)
     {
+        return CreateSchemaEntityChange(entityId, schemaName, "string");
+    }
+
+    private static EntityChange CreateSchemaEntityChange(
+        EntityId entityId,
+        string schemaName,
+        string titleType)
+    {
+        return CreateSchemaEntityChange(entityId, null, schemaName, titleType);
+    }
+
+    private static EntityChange CreateSchemaEntityChange(
+        EntityId entityId,
+        ConcurrencyTag? concurrencyTag,
+        string schemaName,
+        string titleType)
+    {
         using var schemaDocument = JsonDocument.Parse(
             $$"""
             {
@@ -589,7 +720,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                 "$id": "{{schemaName}}",
                 "type": "object",
                 "properties": {
-                  "title": { "type": "string" }
+                  "title": { "type": "{{titleType}}" }
                 },
                 "required": ["title"]
               }
@@ -598,7 +729,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
 
         return CreateEntityChange(
             entityId,
-            null,
+            concurrencyTag,
             schemaDocument.RootElement.Clone(),
             EntityChangeMode.Replace);
     }

@@ -1,0 +1,20 @@
+{
+  "entity-id": "9719e2fc-9fe9-474c-870f-b9a0ff5cf301",
+  "entity-types": [
+    "schedule"
+  ],
+  "names": [
+    [
+      "schedule",
+      "every-six-hours"
+    ]
+  ],
+  "display-name": {
+    "default": "Every six hours"
+  },
+  "repeat": {
+    "frequency": "06:00:00Z",
+    "days-of-week": [],
+    "start-at": []
+  }
+}
