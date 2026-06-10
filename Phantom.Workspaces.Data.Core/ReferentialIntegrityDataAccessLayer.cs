@@ -921,7 +921,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 continue;
             }
 
-            this.CollectSchemaTypedReferences(
+            await this.CollectSchemaTypedReferencesAsync(
                 entityData,
                 schemaNode.Value,
                 applicableSchema.SchemaReference,
@@ -933,7 +933,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return references;
     }
 
-    private void CollectSchemaTypedReferences(
+    private async Task CollectSchemaTypedReferencesAsync(
         JsonElement value,
         JsonElement schema,
         string schemaName,
@@ -942,7 +942,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         CancellationToken cancellationToken)
     {
         var directRequiredTypes = this.GetRequiredEntityTypesFromSchema(schema);
-        var resolvedSchema = this.ResolveSchemaNode(schema, schemaName, requestSchemaEntitiesByName, cancellationToken);
+        var resolvedSchema = await this.ResolveSchemaNodeAsync(
+            schema,
+            schemaName,
+            requestSchemaEntitiesByName,
+            cancellationToken);
         if (resolvedSchema is null)
         {
             return;
@@ -973,7 +977,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     continue;
                 }
 
-                this.CollectSchemaTypedReferences(
+                await this.CollectSchemaTypedReferencesAsync(
                     property.Value,
                     propertySchema,
                     schemaName,
@@ -988,7 +992,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         {
             foreach (var item in value.EnumerateArray())
             {
-                this.CollectSchemaTypedReferences(
+                await this.CollectSchemaTypedReferencesAsync(
                     item,
                     itemsSchema,
                     schemaName,
@@ -1013,7 +1017,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     continue;
                 }
 
-                this.CollectSchemaTypedReferences(
+                await this.CollectSchemaTypedReferencesAsync(
                     value,
                     nestedSchema,
                     schemaName,
@@ -1109,7 +1113,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return false;
     }
 
-    private JsonElement? ResolveSchemaNode(
+    private async Task<JsonElement?> ResolveSchemaNodeAsync(
         JsonElement schema,
         string schemaName,
         IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
@@ -1136,9 +1140,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 return localResolution;
             }
 
-            var rootSchema = this.ResolveSchemaAsync(schemaName, requestSchemaEntitiesByName, cancellationToken)
-                .GetAwaiter()
-                .GetResult();
+            var rootSchema = await this.ResolveSchemaAsync(
+                schemaName,
+                requestSchemaEntitiesByName,
+                cancellationToken);
             if (rootSchema is null)
             {
                 return null;
@@ -1165,9 +1170,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             referencedSchemaName = schemaName;
         }
 
-        var referencedSchema = this.ResolveSchemaAsync(referencedSchemaName, requestSchemaEntitiesByName, cancellationToken)
-            .GetAwaiter()
-            .GetResult();
+        var referencedSchema = await this.ResolveSchemaAsync(
+            referencedSchemaName,
+            requestSchemaEntitiesByName,
+            cancellationToken);
         if (referencedSchema is null)
         {
             return null;

@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.MongoDB;
 using Phantom.Workspaces.Data.Offline;
 
 namespace Phantom.Workspaces;
@@ -89,8 +91,41 @@ public sealed class EntityRepository
         return repositorySource.SourceType switch
         {
             RepositorySourceType.LocalGit => new GitDataAccessLayer(repositorySource.RawValue),
+            RepositorySourceType.MongoDb => CreateMongoDbDataAccessLayer(repositorySource),
             _ => new InMemoryDataAccessLayer(),
         };
+    }
+
+    private static IDataAccessLayer CreateMongoDbDataAccessLayer(
+        RepositorySource repositorySource)
+    {
+        if (string.IsNullOrWhiteSpace(repositorySource.MongoDbContainerName))
+        {
+            throw new InvalidOperationException("MongoDb container name is required for MongoDb repository sources.");
+        }
+
+        if (string.IsNullOrWhiteSpace(repositorySource.MongoDbRootCollectionName))
+        {
+            throw new InvalidOperationException("MongoDb root collection name is required for MongoDb repository sources.");
+        }
+
+        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(repositorySource.MongoDbDataDirectory)
+            ? Path.GetFullPath(".\\mongo-data")
+            : repositorySource.MongoDbDataDirectory;
+        var mongoDbDatabaseName = string.IsNullOrWhiteSpace(repositorySource.MongoDbDatabaseName)
+            ? "phantom-workspaces"
+            : repositorySource.MongoDbDatabaseName;
+
+        var connectionDefinition = MongoDbConnectionDefinition.CreateContainer(
+            repositorySource.MongoDbContainerName,
+            mongoDbDataDirectory,
+            mongoDbDatabaseName,
+            repositorySource.MongoDbRootCollectionName,
+            repositorySource.MongoDbHostPort);
+        var mongoDbConnectionBroker = new MongoDbConnectionBroker();
+        var mongoDbClient = mongoDbConnectionBroker.GetClientAsync(connectionDefinition).AsTask().GetAwaiter().GetResult();
+        var mongoDbDatabase = mongoDbClient.GetDatabase(mongoDbDatabaseName);
+        return new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.MongoDbRootCollectionName);
     }
 
     private async Task EnsureSeedDataIfNeededAsync()

@@ -32,12 +32,12 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         CancellationToken cancellationToken = default)
     {
         var validationResults = new List<EntityUpdateResult>();
-        var requestSchemasByName = this.GetSchemasFromRequest(request);
-        var schemaRegistry = await this.BuildSchemaRegistryAsync(requestSchemasByName, cancellationToken);
+        var schemaAccessor = this.CreateSchemaAccessor(request);
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken);
 
         foreach (var change in request.Changes)
         {
-            var validationErrors = await this.ValidateChangeAsync(change, requestSchemasByName, schemaRegistry, cancellationToken);
+            var validationErrors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken);
             if (validationErrors.Count == 0)
             {
                 continue;
@@ -68,7 +68,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
     protected virtual async Task<IReadOnlyCollection<UpdateError>> ValidateChangeAsync(
         EntityChange change,
-        IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
+        ISchemaAccessor schemaAccessor,
         SchemaRegistry schemaRegistry,
         CancellationToken cancellationToken)
     {
@@ -77,7 +77,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return Array.Empty<UpdateError>();
         }
 
-        var applicableSchemas = await this.ResolveApplicableSchemasAsync(data, requestSchemasByName, cancellationToken);
+        var applicableSchemas = await this.ResolveApplicableSchemasAsync(data, schemaAccessor, cancellationToken);
         if (applicableSchemas.Count == 0)
         {
             return Array.Empty<UpdateError>();
@@ -162,55 +162,17 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         return errors;
     }
 
-    protected virtual async Task<SchemaRegistry> BuildSchemaRegistryAsync(
-        IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
+    protected virtual ISchemaAccessor CreateSchemaAccessor(
+        UpdateRequest request)
+    {
+        return new SchemaAccessor(this.UnderlyingDataAccessLayer, request);
+    }
+
+    protected virtual Task<SchemaRegistry> BuildSchemaRegistryAsync(
+        ISchemaAccessor schemaAccessor,
         CancellationToken cancellationToken)
     {
-        var schemaRegistry = new SchemaRegistry();
-        var schemaEntitiesById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-
-        foreach (var schemaEntity in requestSchemasByName.Values)
-        {
-            this.TryAddSchemaEntityById(schemaEntitiesById, schemaEntity);
-        }
-
-#pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
-#pragma warning restore CS0618
-        foreach (var entityData in exportResult.ChangeBatches
-                     .SelectMany(static batch => batch.Entities)
-                     .Select(static entity => entity.Data)
-                     .Where(static data => data is { ValueKind: JsonValueKind.Object })
-                     .Select(static data => data!.Value))
-        {
-            if (!this.IsSchemaEntity(entityData))
-            {
-                continue;
-            }
-
-            if (!this.TryGetSchemaPayloadId(entityData, out var schemaId)
-                || !Uri.TryCreate(schemaId, UriKind.Absolute, out _)
-                || schemaEntitiesById.ContainsKey(schemaId))
-            {
-                continue;
-            }
-
-            schemaEntitiesById[schemaId] = entityData;
-        }
-
-        foreach (var pair in schemaEntitiesById)
-        {
-            var schemaText = this.GetSchemaText(pair.Value);
-            _ = JsonSchema.FromText(
-                schemaText,
-                new BuildOptions
-                {
-                    SchemaRegistry = schemaRegistry,
-                },
-                new Uri(pair.Key, UriKind.Absolute));
-        }
-
-        return schemaRegistry;
+        return schemaAccessor.BuildSchemaRegistryAsync(cancellationToken);
     }
 
     private void TryAddSchemaEntityById(
@@ -282,7 +244,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
     protected async Task<IReadOnlyCollection<ApplicableSchema>> ResolveApplicableSchemasAsync(
         JsonElement entityObject,
-        IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
+        ISchemaAccessor schemaAccessor,
         CancellationToken cancellationToken)
     {
         var schemaReferences = this.GetSchemaReferencesForEntity(entityObject)
@@ -297,7 +259,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         var applicableSchemas = new List<ApplicableSchema>(schemaReferences.Length);
         foreach (var schemaReference in schemaReferences)
         {
-            var schemaEntity = await this.ResolveSchemaAsync(schemaReference, requestSchemasByName, cancellationToken);
+            var schemaEntity = await schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken);
             applicableSchemas.Add(
                 new ApplicableSchema
                 {
@@ -307,6 +269,17 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         return applicableSchemas;
+    }
+
+    protected Task<IReadOnlyCollection<ApplicableSchema>> ResolveApplicableSchemasAsync(
+        JsonElement entityObject,
+        IReadOnlyDictionary<string, JsonElement> requestSchemasByName,
+        CancellationToken cancellationToken)
+    {
+        return this.ResolveApplicableSchemasAsync(
+            entityObject,
+            new SchemaAccessor(this.UnderlyingDataAccessLayer, requestSchemasByName),
+            cancellationToken);
     }
 
     protected IReadOnlyCollection<string> GetSchemaReferencesForEntity(
@@ -395,6 +368,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 foreach (var property in element.EnumerateObject())
                 {
                     if (string.Equals(property.Name, CustomEntityTypeKeyword, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(property.Name, "x-default-mime-type", StringComparison.Ordinal))
                     {
                         continue;
                     }

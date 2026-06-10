@@ -33,14 +33,11 @@ if ($NoBuild)
     $dotnetArgs += '--no-build'
 }
 
-if ($Mode -eq 'full')
-{
-    $dotnetArgs += @(
-        '--blame-hang',
-        '--blame-hang-timeout',
-        $PerTestHangTimeout
-    )
-}
+$dotnetArgs += @(
+    '--blame-hang',
+    '--blame-hang-timeout',
+    $PerTestHangTimeout
+)
 
 $filterClauses = @()
 if ($TestNames -and $TestNames.Count -gt 0)

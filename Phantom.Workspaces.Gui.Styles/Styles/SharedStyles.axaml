@@ -450,6 +450,47 @@
     <Style Selector="ItemsControl.workspace-visible-children">
         <Setter Property="Margin" Value="22,0,0,0" />
     </Style>
+    <Style Selector="StackPanel.workspace-entity-node-root">
+        <Setter Property="Spacing" Value="4" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-card-content">
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-header-row">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="8" />
+    </Style>
+    <Style Selector="TextBlock.workspace-entity-title">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="StackPanel.workspace-template-browser-root">
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="TextBlock.workspace-field-label">
+        <Setter Property="Margin" Value="0,4,8,0" />
+    </Style>
+    <Style Selector="TextBox.workspace-field-value">
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Expander.workspace-field-expander">
+        <Setter Property="IsExpanded" Value="False" />
+    </Style>
+    <Style Selector="ItemsControl.workspace-field-items">
+        <Setter Property="Margin" Value="8,4,0,0" />
+    </Style>
+    <Style Selector="StackPanel.workspace-mime-content">
+        <Setter Property="Margin" Value="8,4,0,0" />
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="TextBox.workspace-markdown-content">
+        <Setter Property="AcceptsReturn" Value="True" />
+        <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="StackPanel.workspace-region-header-row">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="10" />
+    </Style>
     <Style Selector="StackPanel.agent-editor-root">
         <Setter Property="Margin" Value="12" />
     </Style>

@@ -56,6 +56,8 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.Node.DisplayItems;
 
+    public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.Node.FieldEditors;
+
     public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
 
     public CornerRadius ContentCornerRadius => this.HasChildren

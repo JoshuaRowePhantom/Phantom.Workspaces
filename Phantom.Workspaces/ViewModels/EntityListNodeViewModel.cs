@@ -13,15 +13,18 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     private readonly SubscribedEntityViewModel? entity;
     private readonly string displayName;
     private readonly string entityType;
+    private readonly IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
 
     public EntityListNodeViewModel(
         SubscribedEntityViewModel entity,
         IReadOnlyList<string> nameComponents,
-        string sortKey)
+        string sortKey,
+        IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null)
     {
         this.entity = entity;
         this.displayName = entity.DisplayName;
         this.entityType = entity.EntityType;
+        this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(
@@ -34,11 +37,13 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         string entityType,
         IReadOnlyList<string> nameComponents,
         string sortKey,
+        IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
         bool isExpanded = false)
     {
         this.entity = null;
         this.displayName = displayName;
         this.entityType = entityType;
+        this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(
@@ -64,6 +69,8 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     public string EntityType => this.entity?.EntityType ?? this.entityType;
 
     public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.entity?.DisplayItems ?? Array.Empty<EntityDisplayItemViewModel>();
+
+    public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.fieldEditors;
 
     public bool HasChildren => this.Children.Count > 0;
 

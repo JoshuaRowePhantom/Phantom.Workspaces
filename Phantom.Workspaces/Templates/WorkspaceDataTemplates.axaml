@@ -6,21 +6,15 @@
                xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
-        <StackPanel Spacing="4">
+        <StackPanel Classes="workspace-entity-node-root">
             <Border Classes="entity-card"
                     CornerRadius="{Binding ContentCornerRadius}">
-                <StackPanel Spacing="6">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                <StackPanel Classes="workspace-entity-card-content">
+                    <StackPanel Classes="workspace-entity-header-row">
+                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
                         <TextBlock Text="{Binding EntityType}" Classes="muted" />
                     </StackPanel>
-                    <ItemsControl ItemsSource="{Binding DisplayItems}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
-                                <md:Markdown Text="{Binding Text}" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <ItemsControl ItemsSource="{Binding FieldEditors}" />
                 </StackPanel>
             </Border>
             <Border IsVisible="{Binding HasChildren}"
@@ -37,22 +31,16 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityListItemViewModel">
-        <StackPanel Margin="{Binding IndentMargin}" Spacing="4"
+        <StackPanel Margin="{Binding IndentMargin}" Classes="workspace-entity-node-root"
                     controls:StickyItem.Row="{Binding StickyRow}">
             <Border Classes="entity-card"
                     CornerRadius="{Binding ContentCornerRadius}">
-                <StackPanel Spacing="6">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                <StackPanel Classes="workspace-entity-card-content">
+                    <StackPanel Classes="workspace-entity-header-row">
+                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
                         <TextBlock Text="{Binding EntityType}" Classes="muted" />
                     </StackPanel>
-                    <ItemsControl ItemsSource="{Binding DisplayItems}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
-                                <md:Markdown Text="{Binding Text}" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <ItemsControl ItemsSource="{Binding FieldEditors}" />
                 </StackPanel>
             </Border>
             <Border IsVisible="{Binding HasChildren}"
@@ -69,18 +57,70 @@
 
     <DataTemplate DataType="vm:EntityWorkspaceTabViewModel">
         <Border Classes="entity-card">
-            <StackPanel Spacing="6">
+            <StackPanel Classes="workspace-template-browser-root">
                 <TextBlock Text="{Binding Entity.DisplayName}" Classes="heading" />
                 <TextBlock Text="{Binding Entity.EntityType}" Classes="muted" />
-                <ItemsControl ItemsSource="{Binding Entity.DisplayItems}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
-                            <md:Markdown Text="{Binding Text}" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <ItemsControl ItemsSource="{Binding Entity.DisplayItems}" />
             </StackPanel>
         </Border>
+    </DataTemplate>
+
+    <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
+        <md:Markdown Text="{Binding Text}" />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:StringFieldEditorViewModel">
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*"
+              RowDefinitions="Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <TextBox Grid.Column="1"
+                     Text="{Binding Value}"
+                     Classes="workspace-field-value" />
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:LocalStringFieldEditorViewModel">
+        <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <ItemsControl ItemsSource="{Binding LocalizedValues}" Classes="workspace-field-items" />
+        </Expander>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:MimeAttachmentFieldEditorViewModel">
+        <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <StackPanel Classes="workspace-mime-content">
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*">
+                    <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
+                    <TextBox Grid.Column="1" Text="{Binding MimeType}" Classes="workspace-field-value" />
+                </Grid>
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*">
+                    <TextBlock Text="url" Classes="muted workspace-field-label" />
+                    <TextBox Grid.Column="1" Text="{Binding Url}" Classes="workspace-field-value" />
+                </Grid>
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*"
+                      IsVisible="{Binding IsMarkdown}">
+                    <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding TextContent}"
+                             Classes="workspace-field-value workspace-markdown-content" />
+                </Grid>
+            </StackPanel>
+        </Expander>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:ArrayFieldEditorViewModel">
+        <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <ItemsControl ItemsSource="{Binding Items}" Classes="workspace-field-items" />
+        </Expander>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:ObjectFieldEditorViewModel">
+        <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <ItemsControl ItemsSource="{Binding Fields}" Classes="workspace-field-items" />
+        </Expander>
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityBrowserWorkspaceTabViewModel">
@@ -88,7 +128,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:BrowserWorkspaceTabViewModel">
-        <StackPanel Spacing="6">
+        <StackPanel Classes="workspace-template-browser-root">
             <TextBlock Text="Browser" Classes="heading" />
             <TextBlock Text="{Binding Url}" />
         </StackPanel>
@@ -122,7 +162,7 @@
                         <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
                             <Border Classes="workspace-region-card">
                                 <Grid RowDefinitions="Auto,*">
-                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <StackPanel Classes="workspace-region-header-row">
                                         <TextBlock Text="{Binding Title}" Classes="section-title" />
                                         <TextBlock Text="{Binding DockRegion}" Classes="muted" />
                                         <TextBlock Text="{Binding RelativeSize, StringFormat='x{0}'}" Classes="muted" />

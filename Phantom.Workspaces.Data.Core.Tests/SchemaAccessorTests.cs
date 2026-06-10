@@ -1,0 +1,101 @@
+using System.Text.Json;
+using Phantom.Workspaces.Data.Offline;
+
+namespace Phantom.Workspaces.Data.Tests;
+
+public sealed class SchemaAccessorTests
+{
+    [Fact]
+    public async Task ResolveSchemaByReferenceAsync_PrefersRequestSchemaOverStoredSchema()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaId = new EntityId("76ce3bc3-ff8f-4858-bf8b-f11165fdb7f3");
+        const string schemaName = "https://schemas.workspaces.phantom.to/tests/request-precedence.json";
+
+        var addStoredSchemaResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateSchemaChange(schemaId, null, schemaName, "string")));
+        Assert.DoesNotContain(addStoredSchemaResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+        var storedSchemaSnapshot = Assert.Single(addStoredSchemaResult.EntityResults).CurrentEntity;
+        Assert.NotNull(storedSchemaSnapshot);
+
+        var request = CreateUpdateRequest(
+            CreateSchemaChange(schemaId, storedSchemaSnapshot!.ConcurrencyTag, schemaName, "integer"));
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer, request);
+
+        var resolvedSchema = await schemaAccessor.ResolveSchemaByReferenceAsync(schemaName);
+        Assert.NotNull(resolvedSchema);
+        Assert.True(resolvedSchema.Value.TryGetProperty("schema", out var schemaNode));
+        Assert.Equal("integer", schemaNode.GetProperty("properties").GetProperty("title").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task BuildSchemaRegistryAsync_ReturnsCachedRegistryInstance()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        var firstRegistry = await schemaAccessor.BuildSchemaRegistryAsync();
+        var secondRegistry = await schemaAccessor.BuildSchemaRegistryAsync();
+
+        Assert.Same(firstRegistry, secondRegistry);
+    }
+
+    private static async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
+    {
+        var underlying = new InMemoryDataAccessLayer();
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(new ReferentialIntegrityDataAccessLayer(underlying));
+        var populator = new SchemaPopulator(dataAccessLayer);
+        var errors = await populator.Populate();
+        Assert.Empty(errors);
+        return dataAccessLayer;
+    }
+
+    private static UpdateRequest CreateUpdateRequest(
+        EntityChange change)
+    {
+        return new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown
+                {
+                    Text = "SchemaAccessor test update.",
+                },
+            },
+            Changes = [change],
+        };
+    }
+
+    private static EntityChange CreateSchemaChange(
+        EntityId schemaEntityId,
+        ConcurrencyTag? concurrencyTag,
+        string schemaName,
+        string titleType)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{schemaEntityId}}",
+              "entity-types": ["entity-type"],
+              "names": [["json-schemas", "{{schemaName}}"]],
+              "schema": {
+                "$id": "{{schemaName}}",
+                "type": "object",
+                "properties": {
+                  "title": { "type": "{{titleType}}" }
+                },
+                "required": ["title"]
+              }
+            }
+            """);
+        return new EntityChange
+        {
+            EntityId = schemaEntityId,
+            ConcurrencyTag = concurrencyTag,
+            Data = document.RootElement.Clone(),
+            EntityChangeMode = EntityChangeMode.Replace,
+        };
+    }
+}
+

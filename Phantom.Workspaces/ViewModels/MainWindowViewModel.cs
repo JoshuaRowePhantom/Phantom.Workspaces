@@ -122,6 +122,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         RepositorySourceType.Web => $"Web DAL source: {this.RepositorySource.RawValue}",
         RepositorySourceType.LocalGit => $"Local git source: {this.RepositorySource.RawValue}",
+        RepositorySourceType.MongoDb => $"MongoDb DAL source: {this.RepositorySource.MongoDbContainerName}/{this.RepositorySource.MongoDbRootCollectionName}",
         _ => "In-memory repository source.",
     };
 

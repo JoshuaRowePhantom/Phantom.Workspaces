@@ -12,6 +12,8 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 {
     private readonly EntityBroker entityBroker;
+    private readonly ISchemaAccessor schemaAccessor;
+    private readonly FieldTypeResolver fieldTypeResolver;
     private readonly SubscribedGet rootSubscribedGet;
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
@@ -22,9 +24,11 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         SubscribedGet subscribedGet)
     {
         this.entityBroker = entityBroker;
+        this.schemaAccessor = new SchemaAccessor(this.entityBroker.EntityRepository.DataAccessLayer);
+        this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
         this.rootSubscribedGet = subscribedGet;
         this.rootSubscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
-        this.RebuildTree();
+        _ = this.RebuildTreeAsync();
     }
 
     public EntityListViewModel EntityList => this.entityList;
@@ -33,10 +37,10 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
-        this.RebuildTree();
+        _ = this.RebuildTreeAsync();
     }
 
-    private void RebuildTree()
+    private async Task RebuildTreeAsync()
     {
         var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var item in this.entityList.Items)
@@ -44,12 +48,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             expansionStateByPath[item.ItemKey] = item.IsExpanded;
         }
 
-        var rootChildren = this.BuildChildren(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
+        var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
         var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
         this.entityList.SetItems(items);
     }
 
-    private IReadOnlyCollection<EntityListNodeViewModel> BuildChildren(
+    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenAsync(
         IReadOnlyCollection<string> parentPath,
         IReadOnlyCollection<SubscribedEntityViewModel> entities,
         IReadOnlyDictionary<string, bool> expansionStateByPath)
@@ -85,7 +89,11 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     continue;
                 }
 
-                var node = new EntityListNodeViewModel(entity, nameComponents, sortKey);
+                var node = new EntityListNodeViewModel(
+                    entity,
+                    nameComponents,
+                    sortKey,
+                    await this.BuildFieldEditorsAsync(entity));
                 children.Add(sortKey, node);
             }
         }
@@ -102,7 +110,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 continue;
             }
 
-            node.SetChildren(this.BuildChildren(node.NameComponents, childGet.Results, expansionStateByPath));
+            node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
         }
 
         return children
@@ -204,7 +212,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             return;
         }
 
-        this.RebuildTree();
+        _ = this.RebuildTreeAsync();
     }
 
     private void EnsureChildSubscription(
@@ -242,7 +250,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 });
             subscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
             this.subscribedGetsByPath[pathKey] = subscribedGet;
-            this.RebuildTree();
+            await this.RebuildTreeAsync();
         }
         finally
         {
@@ -287,5 +295,129 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 
         entityForPath = null!;
         return false;
+    }
+
+    private async Task<IReadOnlyCollection<EntityFieldEditorViewModel>> BuildFieldEditorsAsync(
+        SubscribedEntityViewModel entity)
+    {
+        if (entity.Data is not JsonElement entityData || entityData.ValueKind != JsonValueKind.Object)
+        {
+            return Array.Empty<EntityFieldEditorViewModel>();
+        }
+
+        var fieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
+            entityData,
+            Array.Empty<string>(),
+            entityData);
+
+        var editors = new List<EntityFieldEditorViewModel>();
+        foreach (var fieldName in fieldNames)
+        {
+            if (!entityData.TryGetProperty(fieldName, out var fieldValue))
+            {
+                using var nullDocument = JsonDocument.Parse("null");
+                fieldValue = nullDocument.RootElement.Clone();
+            }
+
+            editors.Add(await this.CreateFieldEditorAsync(entityData, fieldName, fieldValue, [fieldName]));
+        }
+
+        return editors;
+    }
+
+    private async Task<EntityFieldEditorViewModel> CreateFieldEditorAsync(
+        JsonElement rootEntity,
+        string fieldName,
+        JsonElement fieldValue,
+        IReadOnlyList<string> fieldPath)
+    {
+        var resolvedType = await this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue);
+        switch (resolvedType.TypeName)
+        {
+            case "local-string":
+                if (fieldValue.ValueKind == JsonValueKind.Object)
+                {
+                    var localizedValues = fieldValue.EnumerateObject()
+                        .Where(static property => property.Value.ValueKind == JsonValueKind.String)
+                        .Select(property => new StringFieldEditorViewModel(property.Name, property.Value.GetString() ?? string.Empty))
+                        .ToArray();
+                    return new LocalStringFieldEditorViewModel(fieldName, localizedValues);
+                }
+
+                return new LocalStringFieldEditorViewModel(
+                    fieldName,
+                    [new StringFieldEditorViewModel("default", fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() ?? string.Empty : string.Empty)]);
+            case "mime-attachment":
+                if (fieldValue.ValueKind == JsonValueKind.Object)
+                {
+                    var mimeType = fieldValue.TryGetProperty("mime-type", out var mimeTypeElement)
+                        && mimeTypeElement.ValueKind == JsonValueKind.String
+                        ? mimeTypeElement.GetString()!
+                        : resolvedType.DefaultMimeType ?? "application/octet-stream";
+                    var textContent = fieldValue.TryGetProperty("content", out var contentElement)
+                                      && contentElement.ValueKind == JsonValueKind.Object
+                                      && contentElement.TryGetProperty("text", out var textElement)
+                                      && textElement.ValueKind == JsonValueKind.String
+                        ? textElement.GetString()
+                        : null;
+                    var url = fieldValue.TryGetProperty("url", out var urlElement)
+                              && urlElement.ValueKind == JsonValueKind.String
+                        ? urlElement.GetString()
+                        : null;
+                    return new MimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+                }
+
+                return new MimeAttachmentFieldEditorViewModel(
+                    fieldName,
+                    resolvedType.DefaultMimeType ?? "application/octet-stream",
+                    null,
+                    null);
+            case "array":
+                if (fieldValue.ValueKind != JsonValueKind.Array)
+                {
+                    return new ArrayFieldEditorViewModel(fieldName, Array.Empty<EntityFieldEditorViewModel>());
+                }
+
+                var items = new List<EntityFieldEditorViewModel>();
+                var itemIndex = 0;
+                foreach (var item in fieldValue.EnumerateArray())
+                {
+                    var itemPath = fieldPath.Concat([itemIndex.ToString()]).ToArray();
+                    items.Add(await this.CreateFieldEditorAsync(rootEntity, $"[{itemIndex}]", item, itemPath));
+                    itemIndex++;
+                }
+
+                return new ArrayFieldEditorViewModel(fieldName, items);
+            case "object":
+                if (fieldValue.ValueKind != JsonValueKind.Object)
+                {
+                    return new ObjectFieldEditorViewModel(fieldName, Array.Empty<EntityFieldEditorViewModel>());
+                }
+
+                var childFieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
+                    rootEntity,
+                    fieldPath,
+                    fieldValue);
+                var childEditors = new List<EntityFieldEditorViewModel>();
+                foreach (var childFieldName in childFieldNames)
+                {
+                    if (!fieldValue.TryGetProperty(childFieldName, out var childValue))
+                    {
+                        using var nullDocument = JsonDocument.Parse("null");
+                        childValue = nullDocument.RootElement.Clone();
+                    }
+
+                    childEditors.Add(
+                        await this.CreateFieldEditorAsync(
+                            rootEntity,
+                            childFieldName,
+                            childValue,
+                            fieldPath.Concat([childFieldName]).ToArray()));
+                }
+
+                return new ObjectFieldEditorViewModel(fieldName, childEditors);
+            default:
+                return new StringFieldEditorViewModel(fieldName, fieldValue.ToString());
+        }
     }
 }

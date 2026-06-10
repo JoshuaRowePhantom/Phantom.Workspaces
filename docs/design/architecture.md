@@ -64,7 +64,8 @@ The system separates UI, agent execution, data access, and external integrations
 
 1. DAL operations are designed around complex request/response objects rather than many individual parameters.
 2. When the API surface changes, request/response shapes should evolve by adding struct/class members where possible instead of widening method signatures.
-3. `Update`:
+3. GUI-facing data access paths must be fully asynchronous end-to-end; synchronous blocking data access is disallowed to prevent UI freezes.
+4. `Update`:
    - applies adds, updates, and removals of entities, including relationships,
    - runs as a single transaction,
    - applies optimistic concurrency checks to each entity involved,
@@ -77,13 +78,13 @@ The system separates UI, agent execution, data access, and external integrations
      - the new concurrency tag,
      - whether the concurrency tag matched,
      - the resulting object id when it differs from the supplied id.
-4. Duplicate relationships are coalesced during `Update` and return the GUID of the existing relationship.
-5. `Get`:
+5. Duplicate relationships are coalesced during `Update` and return the GUID of the existing relationship.
+6. `Get`:
    - is the point-get API,
    - given a set of entities, retrieves them,
    - accepts a set of timestamps and returns results for each timestamp,
    - `now` is the latest timestamp when requested.
-6. `Query`:
+7. `Query`:
    - performs a recursive clause-based query,
    - accepts a set of timestamps and returns results for each timestamp,
    - `now` is the latest timestamp when requested.
@@ -112,24 +113,24 @@ The system separates UI, agent execution, data access, and external integrations
    - `top(n)` is a separate clause that limits the results of the nested clause.
    - full-text queries may specify a minimum score threshold.
    - entities that match a full-text query after other filtering must include a score associated with the full-text query identifier.
-7. `Render`:
+8. `Render`:
    - renders a view into the set of entities needed to satisfy that view,
    - when provided with a time index, returns the entities modified for the view since the previous render and a new time index,
    - supports incremental display updates.
-8. `GetHistory`:
+9. `GetHistory`:
    - returns the update timestamps for a set of entities,
    - supports history-aware access to entity versions.
-9. `Export`:
+10. `Export`:
    - returns all entities that have changed since an optional snapshot time,
    - returns the entities as of each change,
    - returns a final snapshot time.
-10. `GetChangedEntities`:
+11. `GetChangedEntities`:
    - accepts a set of entity-id/timestamp pairs,
    - returns only entities with changes later than the provided timestamp.
-11. `Update` must succeed or fail as a single transaction.
-12. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
-13. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
-14. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
+12. `Update` must succeed or fail as a single transaction.
+13. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
+14. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
+15. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
 
 ## Filesystem and Git Data Access
 
