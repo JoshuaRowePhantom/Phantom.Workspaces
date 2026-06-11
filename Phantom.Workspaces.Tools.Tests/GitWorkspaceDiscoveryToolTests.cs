@@ -30,7 +30,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             dataAccessLayer,
             currentProfileRoot,
             otherProfileRoot);
-        var tool = new GitWorkspaceDiscoveryTool();
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([currentProfileRoot]));
 
         await tool.ExecuteAsync(context);
 
@@ -50,6 +50,30 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         Assert.Equal(
             0,
             await CountEntitiesByNameAsync(dataAccessLayer, new EntityName("git-worktrees", otherProfileRepositoryPath)));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRunningAgainstComputerUserProfile_ScansProvidedLocalDrives()
+    {
+        var currentProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "local-drive-root"));
+        var repositoryPath = Path.GetFullPath(Path.Combine(currentProfileRoot, "repo-drive-scan"));
+        InitializeGitRepository(repositoryPath, "https://example.com/drive.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            currentProfileRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
+        context = context with
+        {
+            Participants = [context.CurrentComputerUserProfileEntity],
+        };
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([currentProfileRoot]));
+        await tool.ExecuteAsync(context);
+
+        var discoveredWorktree = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath));
+        Assert.NotNull(discoveredWorktree);
     }
 
     public void Dispose()
@@ -276,6 +300,15 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             {
                 Thread.Sleep(50);
             }
+        }
+    }
+
+    private sealed class FixedLocalDriveRootProvider(
+        IReadOnlyCollection<string> localDriveRoots) : ILocalDriveRootProvider
+    {
+        public IReadOnlyCollection<string> GetLocalDriveRoots()
+        {
+            return localDriveRoots;
         }
     }
 }

@@ -6,11 +6,22 @@ namespace Phantom.Workspaces.Tools;
 
 public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
 {
+    private readonly ILocalDriveRootProvider localDriveRootProvider;
+
+    public GitWorkspaceDiscoveryTool(
+        ILocalDriveRootProvider? localDriveRootProvider = null)
+    {
+        this.localDriveRootProvider = localDriveRootProvider ?? new LocalDriveRootProvider();
+    }
+
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         var currentProfileNames = WorkspaceEntitySnapshotReader.GetEntityNames(context.CurrentComputerUserProfileEntity)
             .ToArray();
-        var scanRoots = this.GetScanRoots(context.Participants, context.CurrentComputerUserProfileEntity, currentProfileNames)
+        var scanRoots = this.GetScanRoots(
+                context.Participants,
+                context.CurrentComputerUserProfileEntity,
+                currentProfileNames)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(Directory.Exists)
             .ToArray();
@@ -87,6 +98,18 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         EntitySnapshot currentComputerUserProfileEntity,
         IReadOnlyCollection<EntityName> currentProfileNames)
     {
+        var currentContextTypes = WorkspaceEntitySnapshotReader.GetEntityTypes(currentComputerUserProfileEntity);
+        if (currentContextTypes.Contains("user-computer-profile", StringComparer.Ordinal))
+        {
+            foreach (var localDriveRoot in this.localDriveRootProvider.GetLocalDriveRoots())
+            {
+                if (!string.IsNullOrWhiteSpace(localDriveRoot))
+                {
+                    yield return localDriveRoot;
+                }
+            }
+        }
+
         foreach (var participant in participants)
         {
             var participantTypes = WorkspaceEntitySnapshotReader.GetEntityTypes(participant);
@@ -201,5 +224,21 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         public string? HeadCommitHash { get; init; }
 
         public string? OriginRemoteUrl { get; init; }
+    }
+}
+
+public interface ILocalDriveRootProvider
+{
+    IReadOnlyCollection<string> GetLocalDriveRoots();
+}
+
+public sealed class LocalDriveRootProvider : ILocalDriveRootProvider
+{
+    public IReadOnlyCollection<string> GetLocalDriveRoots()
+    {
+        return DriveInfo.GetDrives()
+            .Where(static drive => drive.IsReady && drive.DriveType == DriveType.Fixed)
+            .Select(static drive => drive.RootDirectory.FullName)
+            .ToArray();
     }
 }
