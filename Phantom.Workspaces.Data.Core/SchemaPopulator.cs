@@ -225,6 +225,17 @@ public sealed class SchemaPopulator
         ICollection<UpdateError> errors,
         Utf8JsonWriter writer)
     {
+        if (this.TryMaterializeEmbeddedJsonReferenceObject(
+                element,
+                sourceResourceName,
+                assembly,
+                jsonResourcesByPath,
+                out var referencedElement))
+        {
+            referencedElement.WriteTo(writer);
+            return;
+        }
+
         var markdownText = string.Empty;
         var schemaElement = default(JsonElement);
         var shouldInjectMarkdownText =
@@ -272,10 +283,56 @@ public sealed class SchemaPopulator
         if (shouldInjectSchemaFromRef)
         {
             writer.WritePropertyName("schema");
-            schemaElement.WriteTo(writer);
+            this.WriteMaterializedElement(
+                schemaElement,
+                sourceResourceName,
+                assembly,
+                markdownResourcesByPath,
+                jsonResourcesByPath,
+                errors,
+                writer);
         }
 
         writer.WriteEndObject();
+    }
+
+    private bool TryMaterializeEmbeddedJsonReferenceObject(
+        JsonElement element,
+        string sourceResourceName,
+        Assembly assembly,
+        IReadOnlyDictionary<string, string> jsonResourcesByPath,
+        out JsonElement referencedElement)
+    {
+        referencedElement = default;
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        using var enumerator = element.EnumerateObject();
+        if (!enumerator.MoveNext())
+        {
+            return false;
+        }
+
+        var firstProperty = enumerator.Current;
+        if (!string.Equals(firstProperty.Name, "$ref", StringComparison.Ordinal)
+            || firstProperty.Value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        if (enumerator.MoveNext())
+        {
+            return false;
+        }
+
+        return this.TryLoadEmbeddedJsonElement(
+            firstProperty.Value.GetString() ?? string.Empty,
+            sourceResourceName,
+            assembly,
+            jsonResourcesByPath,
+            out referencedElement);
     }
 
     private bool TryReadSchemaResourceReference(
@@ -339,6 +396,7 @@ public sealed class SchemaPopulator
         markdownText = string.Empty;
         var normalizedPath = markdownUrl.Replace('\\', '/');
         if (!normalizedPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+            || !normalizedPath.StartsWith("/", StringComparison.Ordinal)
             || normalizedPath.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
             || normalizedPath.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
@@ -376,7 +434,7 @@ public sealed class SchemaPopulator
 
             var relativeName = resourceName[jsonEntitiesPrefix.Length..];
             var relativeWithoutExtension = relativeName[..^3];
-            var logicalPath = $"{relativeWithoutExtension.Replace('.', '/')}.md";
+            var logicalPath = $"/JsonEntities/{relativeWithoutExtension.Replace('.', '/')}.md";
             markdownResourcesByPath[logicalPath] = resourceName;
         }
 
@@ -398,13 +456,13 @@ public sealed class SchemaPopulator
 
             if (resourceName.StartsWith(jsonSchemasPrefix, StringComparison.Ordinal))
             {
-                this.AddResourcePath(resourcesByPath, resourceName, "JsonSchemas/", jsonSchemasPrefix, includeRelativePath: true);
+                this.AddResourcePath(resourcesByPath, resourceName, "/JsonSchemas/", jsonSchemasPrefix);
                 continue;
             }
 
             if (resourceName.StartsWith(jsonEntitiesPrefix, StringComparison.Ordinal))
             {
-                this.AddResourcePath(resourcesByPath, resourceName, "JsonEntities/", jsonEntitiesPrefix, includeRelativePath: false);
+                this.AddResourcePath(resourcesByPath, resourceName, "/JsonEntities/", jsonEntitiesPrefix);
             }
         }
 
@@ -415,15 +473,9 @@ public sealed class SchemaPopulator
         IDictionary<string, string> resourcesByPath,
         string resourceName,
         string prefix,
-        string resourcePrefix,
-        bool includeRelativePath)
+        string resourcePrefix)
     {
         var relativePath = this.GetResourceRelativePath(resourceName, resourcePrefix);
-        if (includeRelativePath)
-        {
-            resourcesByPath[relativePath] = resourceName;
-        }
-
         resourcesByPath[$"{prefix}{relativePath}"] = resourceName;
     }
 
@@ -444,60 +496,26 @@ public sealed class SchemaPopulator
         out JsonElement jsonElement)
     {
         jsonElement = default;
-        var sourceDirectoryPath = this.GetResourceDirectoryPath(sourceResourceName);
         var normalizedReference = jsonReference.Replace('\\', '/');
-        var candidatePaths = new List<string>
+        if (!normalizedReference.StartsWith("/", StringComparison.Ordinal))
         {
-            normalizedReference,
-        };
-        if (!string.IsNullOrWhiteSpace(sourceDirectoryPath))
-        {
-            candidatePaths.Add($"{sourceDirectoryPath}/{normalizedReference}");
+            return false;
         }
 
-        foreach (var candidatePath in candidatePaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        if (!jsonResourcesByPath.TryGetValue(normalizedReference, out var resourceName))
         {
-            if (!jsonResourcesByPath.TryGetValue(candidatePath, out var resourceName))
-            {
-                continue;
-            }
-
-            using var stream = assembly.GetManifestResourceStream(resourceName);
-            if (stream is null)
-            {
-                continue;
-            }
-
-            using var document = JsonDocument.Parse(stream);
-            jsonElement = document.RootElement.Clone();
-            return true;
+            return false;
         }
 
-        return false;
-    }
-
-    private string GetResourceDirectoryPath(
-        string sourceResourceName)
-    {
-        const string jsonSchemasPrefix = "Phantom.Workspaces.Data.JsonSchemas.";
-        const string jsonEntitiesPrefix = "Phantom.Workspaces.Data.JsonEntities.";
-        string? relativePath = null;
-        if (sourceResourceName.StartsWith(jsonSchemasPrefix, StringComparison.Ordinal))
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream is null)
         {
-            relativePath = this.GetResourceRelativePath(sourceResourceName, jsonSchemasPrefix);
-        }
-        else if (sourceResourceName.StartsWith(jsonEntitiesPrefix, StringComparison.Ordinal))
-        {
-            relativePath = this.GetResourceRelativePath(sourceResourceName, jsonEntitiesPrefix);
+            return false;
         }
 
-        if (relativePath is null)
-        {
-            return string.Empty;
-        }
-
-        var index = relativePath.LastIndexOf('/');
-        return index <= 0 ? string.Empty : relativePath[..index];
+        using var document = JsonDocument.Parse(stream);
+        jsonElement = document.RootElement.Clone();
+        return true;
     }
 
     private EntityId? GetEntityId(

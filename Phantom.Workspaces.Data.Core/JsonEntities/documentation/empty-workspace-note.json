@@ -1,0 +1,21 @@
+{
+  "entity-id": "89eebb70-e859-4b95-9faf-c2cae958f3d0",
+  "entity-types": [
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "empty-workspace"
+    ]
+  ],
+  "display-name": {
+    "default": "Empty Workspace Guidance"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/empty-workspace.md"
+    }
+  }
+}

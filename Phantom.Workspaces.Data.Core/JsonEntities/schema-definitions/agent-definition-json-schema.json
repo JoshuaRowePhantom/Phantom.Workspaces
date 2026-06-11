@@ -1,0 +1,29 @@
+{
+  "entity-id": "219d6c43-fd1e-458e-a08e-67e41d2dd506",
+  "entity-types": [
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/llm/agent-definition.json"
+    ],
+    [
+      "entity-types",
+      "agent-definition-json-schema"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Definition Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-definition-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/llm/AgentDefinition.json"
+  }
+}

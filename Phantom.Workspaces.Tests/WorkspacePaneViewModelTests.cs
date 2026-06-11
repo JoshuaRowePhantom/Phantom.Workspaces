@@ -29,6 +29,46 @@ public sealed class WorkspacePaneViewModelTests
         Assert.True(pane.HasRegions);
     }
 
+    [AvaloniaFact]
+    public void CloseTabCommand_RemovesTab_AndSelectsNeighbor()
+    {
+        var firstTab = new EntityWorkspaceTabViewModel
+        {
+            Id = "first",
+            Title = "First",
+            Entity = CreateWorkspaceEntity(),
+        };
+        var secondTab = new EntityWorkspaceTabViewModel
+        {
+            Id = "second",
+            Title = "Second",
+            Entity = CreateWorkspaceEntity(),
+        };
+        var thirdTab = new EntityWorkspaceTabViewModel
+        {
+            Id = "third",
+            Title = "Third",
+            Entity = CreateWorkspaceEntity(),
+        };
+        var region = new WorkspaceRegionViewModel
+        {
+            Id = "center",
+            Title = "Center",
+            DockRegion = "center",
+            RelativeSize = 1,
+        };
+        region.Tabs.Add(firstTab);
+        region.Tabs.Add(secondTab);
+        region.Tabs.Add(thirdTab);
+        region.SelectedTab = secondTab;
+
+        region.CloseTabCommand.Execute(secondTab);
+
+        Assert.Equal(2, region.Tabs.Count);
+        Assert.DoesNotContain(secondTab, region.Tabs);
+        Assert.Same(thirdTab, region.SelectedTab);
+    }
+
     private static SubscribedEntityViewModel CreateWorkspaceEntity()
     {
         using var document = JsonDocument.Parse(

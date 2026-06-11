@@ -1,0 +1,29 @@
+{
+  "entity-id": "6fdfeb28-6183-42d8-8e0f-a9be86d0d7fd",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/interest.json"
+    ],
+    [
+      "entity-types",
+      "interest"
+    ]
+  ],
+  "display-name": {
+    "default": "Interest Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/interest-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/interest.json"
+  }
+}

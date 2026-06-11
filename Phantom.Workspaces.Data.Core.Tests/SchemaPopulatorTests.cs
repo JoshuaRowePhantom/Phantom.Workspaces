@@ -286,7 +286,7 @@ public sealed class SchemaPopulatorTests
                 const string prefix = "Phantom.Workspaces.Data.JsonEntities.";
                 var relativeName = resourceName[prefix.Length..];
                 var relativeWithoutExtension = relativeName[..^3];
-                return $"{relativeWithoutExtension.Replace('.', '/')}.md";
+                return $"/JsonEntities/{relativeWithoutExtension.Replace('.', '/')}.md";
             })
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 

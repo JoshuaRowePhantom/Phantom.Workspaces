@@ -1,0 +1,30 @@
+{
+  "entity-id": "17ebacfb-8498-4cb7-b2d8-32c852f7db07",
+  "entity-types": [
+    "relationship-type",
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship-type.json"
+    ],
+    [
+      "entity-types",
+      "relationship-type"
+    ]
+  ],
+  "display-name": {
+    "default": "Relationship Type Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/relationship-type-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/relationship-type.json"
+  }
+}

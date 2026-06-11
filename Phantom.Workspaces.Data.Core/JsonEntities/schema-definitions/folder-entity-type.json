@@ -1,0 +1,29 @@
+{
+  "entity-id": "b5d4a8bb-34ee-46ec-93c5-b49e8f59df8a",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json"
+    ],
+    [
+      "entity-types",
+      "folder"
+    ]
+  ],
+  "display-name": {
+    "default": "Folder Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/folder-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/folder.json"
+  }
+}

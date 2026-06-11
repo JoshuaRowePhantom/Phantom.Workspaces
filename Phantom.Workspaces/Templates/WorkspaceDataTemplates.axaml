@@ -353,7 +353,13 @@
                                                 SelectedItem="{Binding SelectedTab}">
                                         <TabControl.ItemTemplate>
                                             <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
-                                                <TextBlock Text="{Binding Title}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <TextBlock Text="{Binding Title}" />
+                                                    <Button Content="✕"
+                                                            Classes="workspace-tab-close-button"
+                                                            Command="{Binding $parent[TabControl].DataContext.CloseTabCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </StackPanel>
                                             </DataTemplate>
                                         </TabControl.ItemTemplate>
                                     </TabControl>

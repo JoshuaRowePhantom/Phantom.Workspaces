@@ -1,0 +1,29 @@
+{
+  "entity-id": "c7d8e9f0-a1b2-c3d4-e5f6-a7b8c9d0e1f2",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/git-worktree.json"
+    ],
+    [
+      "entity-types",
+      "git-worktree"
+    ]
+  ],
+  "display-name": {
+    "default": "Git Worktree Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/git-worktree-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/git-worktree.json"
+  }
+}

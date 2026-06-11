@@ -1,0 +1,24 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/agent-definition.json",
+  "allOf": [
+    {
+      "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": {
+        "const": "agent-definition"
+      }
+    },
+    "definition": {
+      "$ref": "https://phantom-workspaces/schemas/agent-definition.json"
+    }
+  },
+  "required": [
+    "entity-types",
+    "definition"
+  ]
+}

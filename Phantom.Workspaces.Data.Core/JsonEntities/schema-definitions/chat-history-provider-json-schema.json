@@ -1,0 +1,29 @@
+{
+  "entity-id": "6f9069ec-6511-4f65-9a46-96c052eaf6a8",
+  "entity-types": [
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/llm/chat-history-provider.json"
+    ],
+    [
+      "entity-types",
+      "chat-history-provider"
+    ]
+  ],
+  "display-name": {
+    "default": "Chat History Provider Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/chat-history-provider-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/llm/chat-history-provider.json"
+  }
+}

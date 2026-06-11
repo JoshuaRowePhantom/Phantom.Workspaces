@@ -1,0 +1,29 @@
+{
+  "entity-id": "76dcf3a1-7750-4029-b38c-e3de3a3a278f",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/user.json"
+    ],
+    [
+      "entity-types",
+      "user"
+    ]
+  ],
+  "display-name": {
+    "default": "User Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/user-entity-type.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/user.json"
+  }
+}
