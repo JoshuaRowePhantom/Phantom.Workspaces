@@ -83,6 +83,7 @@ public class ExampleAgentDefinitionsTests
         Assert.NotNull(promptAgent.Model.Options.Temperature);
         Assert.NotNull(promptAgent.Model.Options.TopP);
         Assert.Equal(2048, promptAgent.Model.Options.MaxOutputTokens);
+        Assert.Equal("15m", promptAgent.Model.Options.AdditionalProperties?["keep_alive"]?.ToString());
     }
 
     [Fact]
@@ -126,6 +127,26 @@ public class ExampleAgentDefinitionsTests
 
         var webRequestTool = Assert.Single(promptAgent.Tools!.OfType<CustomTool>().Where(t => t.Kind == "web_request"));
         Assert.Equal("web_request", webRequestTool.Kind);
+    }
+
+    [Fact]
+    public void LoadQwenLocalChatThinking_UsesKeepAlive()
+    {
+        var json = GetEmbeddedResourceContent("qwen-local-chat-thinking.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+
+        Assert.Equal("15m", promptAgent.Model?.Options?.AdditionalProperties?["keep_alive"]?.ToString());
+    }
+
+    [Fact]
+    public void LoadQwenLocalChatWithMongoDb_UsesKeepAlive()
+    {
+        var json = GetEmbeddedResourceContent("qwen-local-chat-with-mongodb.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+
+        Assert.Equal("15m", promptAgent.Model?.Options?.AdditionalProperties?["keep_alive"]?.ToString());
     }
 
     [Fact]

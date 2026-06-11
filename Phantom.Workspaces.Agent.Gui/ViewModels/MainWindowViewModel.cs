@@ -48,6 +48,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             LogChat = parseResult.LogChat,
             LogHttpRequests = parseResult.LogHttpRequests,
             LoggerFactory = parseResult.LogChat || parseResult.LogHttpRequests ? loggerFactory : null,
+            ToolsetFactory = ToolsetFactory.CreateDefaultToolsetFactory(),
         };
     }
 

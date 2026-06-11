@@ -29,6 +29,8 @@
   <ItemGroup>
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat.yaml" Link="qwen-local-chat.yaml" />
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat.json" Link="qwen-local-chat.json" />
+    <EmbeddedResource Include="..\docs\examples\qwen-local-chat-thinking.json" Link="qwen-local-chat-thinking.json" />
+    <EmbeddedResource Include="..\docs\examples\qwen-local-chat-with-mongodb.json" Link="qwen-local-chat-with-mongodb.json" />
     <EmbeddedResource Include="..\docs\examples\qwen-local-github-mcp.json" Link="qwen-local-github-mcp.json" />
     <EmbeddedResource Include="..\docs\examples\github-models-chat.json" Link="github-models-chat.json" />
   </ItemGroup>

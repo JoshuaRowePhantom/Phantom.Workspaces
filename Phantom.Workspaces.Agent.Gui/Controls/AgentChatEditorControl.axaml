@@ -87,6 +87,11 @@
                       ScrollViewer.AllowAutoHide="False"
                       SelectionChanged="OnEditorSelectionChanged"
                       Grid.Column="0">
+                <TreeView.Styles>
+                    <Style Selector="TreeViewItem">
+                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                    </Style>
+                </TreeView.Styles>
             </TreeView>
 
             <GridSplitter x:Name="SplitterHost"

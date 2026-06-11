@@ -277,6 +277,71 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task InitializeTools_DisabledToolIsExcludedFromFirstLlmRequest()
+    {
+        var client = new DeterministicTestChatClient();
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "web_search", "description": "Search docs" },
+                { "kind": "web_request", "description": "Fetch pages" }
+              ]
+            }
+            """,
+            client);
+
+        var requestTool = chat.Tools.Single(static tool => tool.Kind == "web_request");
+        await chat.SetToolEnabledAsync(requestTool.Id, enabled: false);
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var toolNames = client.LastRequestOptions?.Tools?
+            .Select(static tool => tool.Name)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray()
+            ?? [];
+
+        Assert.Equal(["web_search"], toolNames);
+    }
+
+    [Fact]
+    public async Task InitializeTools_UnmappedToolCreatesErrorNode()
+    {
+        await using var chat = CreateChatFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": [
+                { "kind": "not-a-real-tool", "description": "Broken tool" }
+              ]
+            }
+            """);
+
+        var tool = Assert.Single(chat.Tools);
+        Assert.Equal("not-a-real-tool", tool.Kind);
+        Assert.False(tool.IsEnabled);
+        Assert.Contains("No tool provider is mapped", tool.Status ?? string.Empty, StringComparison.Ordinal);
+        Assert.Empty(tool.Children);
+    }
+
+    [Fact]
     public async Task EnqueueUserMessage_DoesNotDuplicateCurrentUserMessageInRequestHistory()
     {
         var client = new DeterministicTestChatClient();
@@ -371,12 +436,12 @@ public sealed class AgentChatTests
         var underlyingToolsetFactory = new Mock<IToolsetFactory>();
         underlyingToolsetFactory
             .Setup(factory => factory.CreateToolsetAsync(It.IsAny<AgentSchema.Tool>(), It.IsAny<AgentServices>()))
-            .ReturnsAsync((IToolset?)null);
+            .ReturnsAsync((Microsoft.Agents.AI.AIContextProvider?)null);
         var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
             kind: "custom_kind",
             createToolsetAsync: static (_, _) =>
             {
-                return Task.FromResult<IToolset?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool()));
+                return Task.FromResult<Microsoft.Agents.AI.AIContextProvider?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool()));
             },
             underlyingInstance: underlyingToolsetFactory.Object);
         var services = new AgentServices

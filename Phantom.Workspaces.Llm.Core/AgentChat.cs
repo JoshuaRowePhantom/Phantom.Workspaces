@@ -42,6 +42,7 @@ public sealed class AgentChat : IAsyncDisposable
     private AgentPersistenceChatHistoryProvider? persistenceProvider;
     private ChatClientAgent? chatClientAgent;
     private ChatClientAgentOptions? chatOptions;
+    private IReadOnlyList<RuntimeContextProviderRegistration> runtimeContextProviderRegistrations = [];
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;
     private AgentChatHistoryService? historyService;
@@ -130,6 +131,16 @@ public sealed class AgentChat : IAsyncDisposable
            UseProvidedChatClientAsIs = this.request.ClientOverride is not null,
        };
        AgentFactory.ConfigureChatOptions(resolvedAgentDefinition, this.chatOptions.ChatOptions);
+       this.runtimeContextProviderRegistrations = await this.CreateRuntimeContextProviderRegistrationsAsync(
+           resolvedAgentDefinition,
+           this.request.AgentServices,
+           this.request.CancellationToken);
+       this.chatOptions.AIContextProviders = this.runtimeContextProviderRegistrations
+           .Where(registration => registration.Provider is not null)
+           .Select(registration => new ToolFilteringAIContextProvider(
+               registration.Provider!,
+               this.IsToolEnabledForRuntime))
+           .ToArray();
 
        this.chatClientAgent = new ChatClientAgent(resolvedClient, this.chatOptions);
        this.persistenceProvider.SetSessionSerializer(
@@ -623,7 +634,6 @@ public sealed class AgentChat : IAsyncDisposable
             return null;
         }
 
-        chatOptions.Tools = this.GetEnabledRuntimeTools();
         return new ChatClientAgentRunOptions
         {
             ChatOptions = chatOptions,
@@ -700,7 +710,6 @@ public sealed class AgentChat : IAsyncDisposable
         var agent = this.agentDefinition;
         var client = this.client;
         var chatOptions = this.chatOptions;
-        var services = this.request.AgentServices;
         var persistenceProvider = this.persistenceProvider;
 
         if (agent is null || client is null || chatOptions?.ChatOptions is null || persistenceProvider is null)
@@ -717,12 +726,19 @@ public sealed class AgentChat : IAsyncDisposable
         await this.toolMutationLock.WaitAsync(cancellationToken);
         try
         {
-            var runtime = await this.CreateRuntimeToolsAsync(
-                agentTools,
-                services,
-                cancellationToken);
+            var customToolTasks = this.runtimeContextProviderRegistrations.Select(registration => this.InitializeCustomToolRuntimeAsync(
+                registration.Tool,
+                registration.Provider,
+                registration.ErrorMessage,
+                cancellationToken));
+            var mcpToolTasks = agentTools.OfType<McpTool>().Select(tool => this.InitializeMcpRuntimeToolAsync(
+                tool,
+                this.request.AgentServices,
+                cancellationToken));
+            var results = await Task.WhenAll(customToolTasks.Concat(mcpToolTasks));
+            var roots = results.SelectMany(static result => result.Roots).ToList();
 
-            this.ReplaceToolNodes(runtime.Roots);
+            this.ReplaceToolNodes(roots);
             var summaryRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -746,39 +762,44 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
-    private async Task<RuntimeToolsInitializationResult> CreateRuntimeToolsAsync(
-        IList<Tool>? agentTools,
+    private async Task<IReadOnlyList<RuntimeContextProviderRegistration>> CreateRuntimeContextProviderRegistrationsAsync(
+        AgentDefinition agent,
         AgentServices? services,
         CancellationToken cancellationToken)
     {
-        if (agentTools is null || agentTools.Count == 0)
+        var agentTools = AgentFactory.ExtractTools(agent);
+        if (agentTools is not { Count: > 0 })
         {
-            return new RuntimeToolsInitializationResult([], []);
+            return [];
         }
 
-        var toolTasks = agentTools.Select(tool => this.InitializeRuntimeToolAsync(tool, services, cancellationToken)).ToArray();
-        var results = await Task.WhenAll(toolTasks);
-        var roots = results.SelectMany(static result => result.Roots).ToList();
-        var resolvedTools = results.SelectMany(static result => result.RuntimeTools).ToList();
-        return new RuntimeToolsInitializationResult(roots, resolvedTools);
-    }
-
-    private async Task<ToolInitializationResult> InitializeRuntimeToolAsync(
-        Tool tool,
-        AgentServices? services,
-        CancellationToken cancellationToken)
-    {
-        return tool switch
+        var customTools = agentTools.OfType<CustomTool>()
+            .Where(tool => !string.Equals(tool.Kind, "chat-history", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (customTools.Length == 0)
         {
-            McpTool mcpTool => await this.InitializeMcpRuntimeToolAsync(mcpTool, services, cancellationToken),
-            CustomTool customTool => await this.InitializeCustomToolsetRuntimeToolsAsync(customTool, services, cancellationToken),
-            _ => new ToolInitializationResult([], []),
-        };
+            return [];
+        }
+
+        var toolsetFactory = services?.ToolsetFactory ?? ToolsetFactory.CreateDefaultToolsetFactory();
+        var resolvedServices = services ?? new AgentServices();
+        var providerTasks = customTools.Select(async tool =>
+        {
+            var provider = await toolsetFactory.CreateToolsetAsync(tool, resolvedServices);
+            return new RuntimeContextProviderRegistration(
+                tool,
+                provider,
+                provider is null ? $"No tool provider is mapped for kind '{tool.Kind}'." : null);
+        }).ToArray();
+
+        var registrations = await Task.WhenAll(providerTasks);
+        return registrations;
     }
 
-    private async Task<ToolInitializationResult> InitializeCustomToolsetRuntimeToolsAsync(
+    private async Task<ToolInitializationResult> InitializeCustomToolRuntimeAsync(
         CustomTool tool,
-        AgentServices? services,
+        AIContextProvider? toolset,
+        string? errorMessage,
         CancellationToken cancellationToken)
     {
         var kind = tool.Kind;
@@ -787,43 +808,6 @@ public sealed class AgentChat : IAsyncDisposable
             return new ToolInitializationResult([], []);
         }
 
-        var toolsetFactory = services?.ToolsetFactory
-            ?? ToolsetFactory.CreateDefaultToolsetFactory();
-        var properties = BuildToolsetProperties(tool.Options);
-        var resolvedServices = services ?? new AgentServices();
-        var toolset = await toolsetFactory.CreateToolsetAsync(tool, resolvedServices);
-
-        if (toolset == null)
-        {
-            return new ToolInitializationResult([], []);
-        }
-
-        return await this.InitializeToolsetRuntimeToolsAsync(
-            tool,
-            kind,
-            toolset,
-            cancellationToken);
-    }
-
-    private static Dictionary<string, object> BuildToolsetProperties(
-        IDictionary<string, object>? options)
-    {
-        if (options is null || options.Count == 0)
-        {
-            return [];
-        }
-
-        return options.ToDictionary(
-            static entry => entry.Key,
-            static entry => entry.Value);
-    }
-
-    private async Task<ToolInitializationResult> InitializeToolsetRuntimeToolsAsync(
-        CustomTool tool,
-        string kind,
-        IToolset toolset,
-        CancellationToken cancellationToken)
-    {
         var displayName = kind;
         var summary = tool.Description ?? string.Empty;
         var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
@@ -834,13 +818,39 @@ public sealed class AgentChat : IAsyncDisposable
 
         try
         {
+            if (toolset is null)
+            {
+                var errorText = errorMessage ?? $"No tool provider is mapped for kind '{kind}'.";
+                var failedNode = new ToolStateNode(
+                    id: BuildCustomToolId(tool),
+                    name: displayName,
+                    description: summary,
+                    instructions: summary,
+                    kind: kind,
+                    runtimeTool: null,
+                    parent: null,
+                    isEnabled: false,
+                    status: errorText);
+
+                this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
+                {
+                    Role = AgentChatHistoryItem.DiagnosticChatRole,
+                    Contents = new AIContent[] { new ErrorContent(errorText) },
+                }]);
+                return new ToolInitializationResult([failedNode], []);
+            }
+
             if (toolset is IAsyncDisposable asyncDisposable)
             {
                 this.RegisterOwnedResource(asyncDisposable);
             }
 
-            var runtimeTools = await toolset.ListToolsAsync();
-            var singleRuntimeTool = runtimeTools.Length== 1 ? runtimeTools[0] : null;
+            var runtimeTools = await AIContextProviderToolReader.GetToolsAsync(
+                toolset,
+                this.GetSession().Agent,
+                this.GetSession().Session,
+                cancellationToken);
+            var singleRuntimeTool = runtimeTools.Length == 1 ? runtimeTools[0] : null;
             var shouldAttachSingleRuntimeToolToRoot =
                 singleRuntimeTool is not null
                 && string.Equals(singleRuntimeTool.Name, displayName, StringComparison.Ordinal);
@@ -914,21 +924,14 @@ public sealed class AgentChat : IAsyncDisposable
                 isEnabled: true,
                 status: null);
 
-            var transport = CreateMcpTransport(mcpTool, services);
-            var client = await McpClient.CreateAsync(
-                transport,
-                null,
-                services?.LoggerFactory,
-                cancellationToken);
-            this.RegisterOwnedResource(client);
+            var provider = new McpToolContextProvider(mcpTool, services?.LoggerFactory);
+            this.RegisterOwnedResource(provider);
 
-            var mcpTools = await client.ListToolsAsync(options: null, cancellationToken);
-            var allowed = mcpTool.AllowedTools;
-            if (allowed is { Count: > 0 })
-            {
-                var allowedSet = new HashSet<string>(allowed, StringComparer.OrdinalIgnoreCase);
-                mcpTools = [.. mcpTools.Where(t => allowedSet.Contains(t.Name))];
-            }
+            var mcpTools = await AIContextProviderToolReader.GetToolsAsync(
+                provider,
+                this.GetSession().Agent,
+                this.GetSession().Session,
+                cancellationToken);
 
             foreach (var mcpRuntimeTool in mcpTools)
             {
@@ -944,19 +947,19 @@ public sealed class AgentChat : IAsyncDisposable
                     status: null));
             }
 
-            if (mcpTools.Count == 0)
+            if (mcpTools.Length == 0)
             {
                 serverNode.Status = "Loaded no tools.";
             }
             else
             {
-                serverNode.Status = $"Loaded {mcpTools.Count} tool{(mcpTools.Count == 1 ? string.Empty : "s")}.";
+                serverNode.Status = $"Loaded {mcpTools.Length} tool{(mcpTools.Length == 1 ? string.Empty : "s")}.";
             }
 
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent($"Opened MCP server '{displayName}' ({mcpTools.Count} tools).") },
+                Contents = new AIContent[] { new TextContent($"Opened MCP server '{displayName}' ({mcpTools.Length} tools).") },
             }]);
             return new ToolInitializationResult([serverNode], mcpTools.Cast<AITool>().ToList());
         }
@@ -1229,6 +1232,22 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
+    private bool IsToolEnabledForRuntime(AITool tool)
+    {
+        if (string.IsNullOrWhiteSpace(tool.Name))
+        {
+            return false;
+        }
+
+        lock (this.toolsLock)
+        {
+            return this.toolIndex.Values.Any(node =>
+                node.IsEnabled
+                && node.RuntimeTool is not null
+                && string.Equals(node.RuntimeTool.Name, tool.Name, StringComparison.Ordinal));
+        }
+    }
+
     private static bool SetNodeEnabled(ToolStateNode node, bool enabled)
     {
         var changed = false;
@@ -1321,5 +1340,10 @@ public sealed class AgentChat : IAsyncDisposable
     private sealed record ToolInitializationResult(
         IReadOnlyList<ToolStateNode> Roots,
         IReadOnlyList<AITool> RuntimeTools);
+
+    private sealed record RuntimeContextProviderRegistration(
+        CustomTool Tool,
+        AIContextProvider? Provider,
+        string? ErrorMessage);
 
 }

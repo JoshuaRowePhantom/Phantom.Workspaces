@@ -20,7 +20,8 @@
       "topK": 40,
       "additionalProperties": {
         "thinking": false,
-        "num_ctx": 32768
+        "num_ctx": 32768,
+        "keep_alive": "15m"
       }
     }
   },

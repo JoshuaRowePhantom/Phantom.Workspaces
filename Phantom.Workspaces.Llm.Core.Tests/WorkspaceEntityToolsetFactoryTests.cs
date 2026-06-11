@@ -1,7 +1,8 @@
 using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data.Offline;
-using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Echo;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -12,12 +13,11 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     public async Task CreateToolsetAsync_WhenKindMatches_ReturnsWorkspaceEntityTools()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var factory = new WorkspaceEntityToolsetFactory(dataAccessLayer);
+        var factory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(dataAccessLayer);
 
         var toolset = await factory.CreateToolsetAsync(CreateCustomTool("workspace-entity"), new AgentServices());
 
-        Assert.NotNull(toolset);
-        var toolNames = (await toolset.ListToolsAsync())
+        var toolNames = (await GetToolsAsync(Assert.IsType<WorkspaceEntityContextProvider>(toolset)))
             .Select(static tool => tool.Name)
             .OrderBy(static name => name, StringComparer.Ordinal)
             .ToArray();
@@ -134,10 +134,8 @@ public sealed class WorkspaceEntityToolsetFactoryTests
         InMemoryDataAccessLayer dataAccessLayer,
         string toolName)
     {
-        var factory = new WorkspaceEntityToolsetFactory(dataAccessLayer);
-        var toolset = await factory.CreateToolsetAsync(CreateCustomTool("workspace-entity"), new AgentServices());
-        Assert.NotNull(toolset);
-        var tool = (await toolset.ListToolsAsync()).Single(tool => string.Equals(tool.Name, toolName, StringComparison.Ordinal));
+        var factory = new WorkspaceEntityContextProvider(dataAccessLayer);
+        var tool = (await GetToolsAsync(factory)).Single(tool => string.Equals(tool.Name, toolName, StringComparison.Ordinal));
         return Assert.IsAssignableFrom<AIFunction>(tool);
     }
 
@@ -163,5 +161,15 @@ public sealed class WorkspaceEntityToolsetFactoryTests
 
         var promptAgent = Assert.IsType<PromptAgent>(definition);
         return Assert.IsType<CustomTool>(Assert.Single(promptAgent.Tools!));
+    }
+
+    private static async Task<AITool[]> GetToolsAsync(WorkspaceEntityContextProvider provider)
+    {
+        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
+        {
+            UseProvidedChatClientAsIs = true,
+        });
+        var session = await agent.CreateSessionAsync(CancellationToken.None);
+        return await AIContextProviderToolReader.GetToolsAsync(provider, agent, session, CancellationToken.None);
     }
 }

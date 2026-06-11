@@ -1,29 +1,36 @@
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
-using Phantom.Workspaces.Llm.Interfaces;
 using System.Text;
 
 namespace Phantom.Workspaces.Llm;
 
-public sealed class FilesystemServiceToolset : IToolset, IAsyncDisposable
+public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsyncDisposable
 {
+    private readonly string stateKey = $"filesystem-service:{Guid.NewGuid():n}";
     private readonly ILoggerFactory? loggerFactory;
     private readonly string? editStoreConnectionJson;
     private readonly SemaphoreSlim initializeLock = new(1, 1);
     private McpClient? client;
 
-    public FilesystemServiceToolset(
+    public FilesystemServiceContextProvider(
         string? editStoreConnectionJson = null,
         ILoggerFactory? loggerFactory = null)
+        : base(null, null, null)
     {
         this.editStoreConnectionJson = editStoreConnectionJson;
         this.loggerFactory = loggerFactory;
     }
 
-    public async Task<AITool[]> ListToolsAsync()
+    public override IReadOnlyList<string> StateKeys => [this.stateKey];
+
+    protected override async ValueTask<AIContext> ProvideAIContextAsync(
+        InvokingContext context,
+        CancellationToken cancellationToken)
     {
-        await this.initializeLock.WaitAsync();
+        _ = context;
+        await this.initializeLock.WaitAsync(cancellationToken);
         try
         {
             if (this.client is null)
@@ -31,8 +38,11 @@ public sealed class FilesystemServiceToolset : IToolset, IAsyncDisposable
                 this.client = await CreateClientAsync(this.loggerFactory);
             }
 
-            var mcpTools = await this.client.ListToolsAsync(options: null, cancellationToken: CancellationToken.None);
-            return mcpTools.Cast<AITool>().ToArray();
+            var mcpTools = await this.client.ListToolsAsync(options: null, cancellationToken);
+            return new AIContext
+            {
+                Tools = mcpTools.Cast<AITool>().ToArray(),
+            };
         }
         finally
         {
@@ -78,7 +88,7 @@ public sealed class FilesystemServiceToolset : IToolset, IAsyncDisposable
     private static (string Command, IList<string> Arguments, string WorkingDirectory) ResolveCommand(
         string? editStoreConnectionJson)
     {
-        var assemblyPath = typeof(FilesystemServiceToolset).Assembly.Location;
+        var assemblyPath = typeof(FilesystemServiceContextProvider).Assembly.Location;
         if (string.IsNullOrWhiteSpace(assemblyPath))
         {
             throw new InvalidOperationException("Unable to resolve Phantom.Workspaces.Llm.Core assembly location.");

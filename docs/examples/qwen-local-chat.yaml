@@ -19,6 +19,8 @@ model:
     topK: 40
     additionalProperties:
       thinking: false
+      keep_alive: 15m
+      num_ctx: 32768
 
 instructions: |
   You are a helpful AI assistant powered by Qwen 3.6. 

@@ -37,6 +37,7 @@ A minimal chat agent that:
 - Uses the **Qwen 3.6 model**
 - Has **no thinking enabled** (thinking is disabled at the framework level)
 - Supports basic conversation with configurable temperature and output limits
+- Keeps the model loaded for **15 minutes** between requests
 - **No persistent history** (chat messages stored in memory only)
 
 **Prerequisites:**
@@ -58,6 +59,7 @@ A chat agent with persistent MongoDB history that:
 - Includes a **chat-history custom tool** configured for MongoDB
 - Automatically creates and manages a **Docker MongoDB container** on first use
 - Persists chat state and messages by **agent session id** through the persistence store
+- Keeps the model loaded for **15 minutes** between requests
 
 **Prerequisites:**
 - Ollama installed and running

@@ -1,6 +1,8 @@
 using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Moq;
+using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Text.Json;
 
@@ -15,7 +17,7 @@ public sealed class ToolsetFactoryTests
             new WebSearchTool(),
             new WebRequestTool());
 
-        var tools = await fixedToolset.ListToolsAsync();
+        var tools = await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(fixedToolset));
 
         Assert.Equal(2, tools.Length);
         Assert.Equal("web_search", tools[0].Name);
@@ -32,9 +34,9 @@ public sealed class ToolsetFactoryTests
             {
                 called = true;
                 Assert.Equal("custom_kind", tool.Kind);
-                return Task.FromResult<IToolset?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool()));
+                return Task.FromResult<AIContextProvider?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool()));
             },
-            underlyingInstance: CreateMockToolsetFactory((_, _) => Task.FromResult<IToolset?>(null)).Object);
+            underlyingInstance: CreateMockToolsetFactory((_, _) => Task.FromResult<AIContextProvider?>(null)).Object);
 
         var toolset = await factory.CreateToolsetAsync(
             CreateCustomTool("custom_kind"),
@@ -42,7 +44,7 @@ public sealed class ToolsetFactoryTests
 
         Assert.True(called);
         Assert.NotNull(toolset);
-        var tools = await toolset.ListToolsAsync();
+        var tools = await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(toolset));
         Assert.Single(tools);
         Assert.Equal("web_search", tools[0].Name);
     }
@@ -55,12 +57,12 @@ public sealed class ToolsetFactoryTests
         {
             underlyingCalled = true;
             Assert.Equal("other_kind", tool.Kind);
-            return Task.FromResult<IToolset?>(ToolsetFactory.CreateFixedToolset(new WebRequestTool()));
+            return Task.FromResult<AIContextProvider?>(ToolsetFactory.CreateFixedToolset(new WebRequestTool()));
         });
 
         var factory = ToolsetFactory.CreateNamedToolsetFactory(
             kind: "custom_kind",
-            createToolsetAsync: (_, _) => Task.FromResult<IToolset?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool())),
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(ToolsetFactory.CreateFixedToolset(new WebSearchTool())),
             underlyingInstance: underlying.Object);
 
         var toolset = await factory.CreateToolsetAsync(
@@ -69,7 +71,7 @@ public sealed class ToolsetFactoryTests
 
         Assert.True(underlyingCalled);
         Assert.NotNull(toolset);
-        var tools = await toolset.ListToolsAsync();
+        var tools = await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(toolset));
         Assert.Single(tools);
         Assert.Equal("web_request", tools[0].Name);
     }
@@ -81,7 +83,7 @@ public sealed class ToolsetFactoryTests
         var toolset = await factory.CreateToolsetAsync(CreateCustomTool("web_search"), new AgentServices());
 
         Assert.NotNull(toolset);
-        var tools = await toolset.ListToolsAsync();
+        var tools = await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(toolset));
         Assert.Single(tools);
         Assert.Equal("web_search", tools[0].Name);
     }
@@ -93,7 +95,7 @@ public sealed class ToolsetFactoryTests
         var toolset = await factory.CreateToolsetAsync(CreateCustomTool("web_request"), new AgentServices());
 
         Assert.NotNull(toolset);
-        var tools = await toolset.ListToolsAsync();
+        var tools = await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(toolset));
         Assert.Single(tools);
         Assert.Equal("web_request", tools[0].Name);
     }
@@ -105,7 +107,7 @@ public sealed class ToolsetFactoryTests
         var toolset = await factory.CreateToolsetAsync(CreateCustomTool("web"), new AgentServices());
 
         Assert.NotNull(toolset);
-        var names = (await toolset.ListToolsAsync())
+        var names = (await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(toolset)))
             .Select(static tool => tool.Name)
             .OrderBy(static name => name, StringComparer.Ordinal)
             .ToArray();
@@ -118,7 +120,7 @@ public sealed class ToolsetFactoryTests
         var factory = ToolsetFactory.CreateFilesystemToolsetFactory();
         var toolset = await factory.CreateToolsetAsync(CreateCustomTool("filesystem"), new AgentServices());
 
-        Assert.IsType<FilesystemServiceToolset>(toolset);
+        Assert.IsType<FilesystemServiceContextProvider>(toolset);
     }
 
     [Fact]
@@ -134,10 +136,10 @@ public sealed class ToolsetFactoryTests
     public async Task Combine_UsesFirstMatchingFactory()
     {
         var first = CreateMockToolsetFactory((tool, _) =>
-            Task.FromResult<IToolset?>(
+            Task.FromResult<AIContextProvider?>(
                 tool.Kind == "one" ? ToolsetFactory.CreateFixedToolset(new WebSearchTool()) : null));
         var second = CreateMockToolsetFactory((tool, _) =>
-            Task.FromResult<IToolset?>(
+            Task.FromResult<AIContextProvider?>(
                 tool.Kind == "two" ? ToolsetFactory.CreateFixedToolset(new WebRequestTool()) : null));
         var combined = ToolsetFactory.Combine(first.Object, second.Object);
 
@@ -148,8 +150,8 @@ public sealed class ToolsetFactoryTests
         Assert.NotNull(oneToolset);
         Assert.NotNull(twoToolset);
         Assert.Null(missingToolset);
-        Assert.Equal("web_search", (await oneToolset.ListToolsAsync())[0].Name);
-        Assert.Equal("web_request", (await twoToolset.ListToolsAsync())[0].Name);
+        Assert.Equal("web_search", (await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(oneToolset!)))[0].Name);
+        Assert.Equal("web_request", (await GetToolsAsync(Assert.IsType<FixedToolsContextProvider>(twoToolset!)))[0].Name);
     }
 
     private static Tool CreateCustomTool(string kind, object? connection = null)
@@ -180,11 +182,21 @@ public sealed class ToolsetFactoryTests
     }
 
     private static Mock<IToolsetFactory> CreateMockToolsetFactory(
-        Func<Tool, AgentServices, Task<IToolset?>> createToolsetAsync)
+        Func<Tool, AgentServices, Task<AIContextProvider?>> createToolsetAsync)
     {
         var mock = new Mock<IToolsetFactory>();
         mock.Setup(factory => factory.CreateToolsetAsync(It.IsAny<Tool>(), It.IsAny<AgentServices>()))
             .Returns((Tool tool, AgentServices services) => createToolsetAsync(tool, services));
         return mock;
+    }
+
+    private static async Task<AITool[]> GetToolsAsync(AIContextProvider provider)
+    {
+        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
+        {
+            UseProvidedChatClientAsIs = true,
+        });
+        var session = await agent.CreateSessionAsync(CancellationToken.None);
+        return await AIContextProviderToolReader.GetToolsAsync(provider, agent, session, CancellationToken.None);
     }
 }

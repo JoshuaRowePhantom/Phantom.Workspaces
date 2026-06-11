@@ -41,86 +41,69 @@ public sealed class FilesystemMcpToolService
         int? afterContext = null,
         int? context = null)
     {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return new SearchResult(success: false, matches: [], totalMatches: 0, error: "Path is required.");
+        }
+
         var effectiveBeforeContext = context ?? beforeContext ?? 0;
         var effectiveAfterContext = context ?? afterContext ?? 0;
 
-        var directory = Path.GetDirectoryName(path);
-        if (string.IsNullOrWhiteSpace(directory))
+        if (File.Exists(path))
         {
-            directory = Directory.GetCurrentDirectory();
+            return SearchFiles(
+                directory: Path.GetDirectoryName(path) ?? Directory.GetCurrentDirectory(),
+                filePattern: Path.GetFileName(path),
+                recursive: false,
+                specificFilePaths: [path],
+                pattern,
+                text,
+                listOnly,
+                effectiveBeforeContext,
+                effectiveAfterContext);
         }
 
+        if (Directory.Exists(path))
+        {
+            return SearchFiles(
+                directory: path,
+                filePattern: "*",
+                recursive: false,
+                specificFilePaths: null,
+                pattern,
+                text,
+                listOnly,
+                effectiveBeforeContext,
+                effectiveAfterContext);
+        }
+
+        if (!HasGlobWildcard(path))
+        {
+            return new SearchResult(success: false, matches: [], totalMatches: 0, error: $"Path not found: {path}");
+        }
+
+        var directory = ResolveGlobRootDirectory(path);
         if (!Directory.Exists(directory))
         {
             return new SearchResult(success: false, matches: [], totalMatches: 0, error: $"Directory not found: {directory}");
         }
 
         var filePattern = Path.GetFileName(path);
-        if (string.IsNullOrWhiteSpace(filePattern))
+        if (string.IsNullOrWhiteSpace(filePattern) || string.Equals(filePattern, "**", StringComparison.Ordinal))
         {
             filePattern = "*";
         }
 
-        var matchingFiles = Directory.EnumerateFiles(directory, filePattern, SearchOption.AllDirectories).ToList();
-        if (matchingFiles.Count == 0)
-        {
-            return new SearchResult(success: true, matches: [], totalMatches: 0);
-        }
-
-        var results = new List<SearchMatch>();
-        foreach (var filePath in matchingFiles)
-        {
-            if (listOnly)
-            {
-                results.Add(new SearchMatch(path: filePath, line: null, lines: null));
-                continue;
-            }
-
-            string[] fileLines;
-            try
-            {
-                fileLines = File.ReadAllLines(filePath);
-            }
-            catch
-            {
-                continue;
-            }
-
-            for (var index = 0; index < fileLines.Length; index++)
-            {
-                var currentLine = fileLines[index];
-                var isMatch = false;
-
-                if (!string.IsNullOrEmpty(text))
-                {
-                    isMatch = currentLine.Contains(text, StringComparison.Ordinal);
-                }
-                else if (!string.IsNullOrEmpty(pattern))
-                {
-                    isMatch = Regex.IsMatch(currentLine, pattern);
-                }
-
-                if (!isMatch)
-                {
-                    continue;
-                }
-
-                var contextStart = Math.Max(0, index - effectiveBeforeContext);
-                var contextEnd = Math.Min(fileLines.Length - 1, index + effectiveAfterContext);
-                var contextLines = new Dictionary<int, string>();
-                for (var contextIndex = contextStart; contextIndex <= contextEnd; contextIndex++)
-                {
-                    contextLines[contextIndex + 1] = fileLines[contextIndex];
-                }
-
-                results.Add(new SearchMatch(
-                    path: filePath,
-                    line: index + 1,
-                    lines: contextLines.Count == 0 ? null : contextLines));
-            }
-        }
-
-        return new SearchResult(success: true, matches: results, totalMatches: results.Count);
+        return SearchFiles(
+            directory,
+            filePattern,
+            recursive: path.Contains("**", StringComparison.Ordinal),
+            specificFilePaths: null,
+            pattern,
+            text,
+            listOnly,
+            effectiveBeforeContext,
+            effectiveAfterContext);
     }
 
     public FilesystemOperationResult MakeDirectory(string path)
@@ -189,6 +172,108 @@ public sealed class FilesystemMcpToolService
         }
 
         return new FilesystemOperationResult(success: false, error: $"Item not found: {sourcePath}");
+    }
+
+    private static SearchResult SearchFiles(
+        string directory,
+        string filePattern,
+        bool recursive,
+        IReadOnlyList<string>? specificFilePaths,
+        string? pattern,
+        string? text,
+        bool listOnly,
+        int effectiveBeforeContext,
+        int effectiveAfterContext)
+    {
+        var matchingFiles = specificFilePaths ?? Directory.EnumerateFiles(
+            directory,
+            filePattern,
+            recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly).ToList();
+
+        if (matchingFiles.Count == 0)
+        {
+            return new SearchResult(success: true, matches: [], totalMatches: 0);
+        }
+
+        var results = new List<SearchMatch>();
+        foreach (var filePath in matchingFiles)
+        {
+            if (listOnly)
+            {
+                results.Add(new SearchMatch(path: filePath, line: null, lines: null));
+                continue;
+            }
+
+            string[] fileLines;
+            try
+            {
+                fileLines = File.ReadAllLines(filePath);
+            }
+            catch
+            {
+                continue;
+            }
+
+            for (var index = 0; index < fileLines.Length; index++)
+            {
+                var currentLine = fileLines[index];
+                var isMatch = false;
+
+                if (!string.IsNullOrEmpty(text))
+                {
+                    isMatch = currentLine.Contains(text, StringComparison.Ordinal);
+                }
+                else if (!string.IsNullOrEmpty(pattern))
+                {
+                    isMatch = Regex.IsMatch(currentLine, pattern);
+                }
+
+                if (!isMatch)
+                {
+                    continue;
+                }
+
+                var contextStart = Math.Max(0, index - effectiveBeforeContext);
+                var contextEnd = Math.Min(fileLines.Length - 1, index + effectiveAfterContext);
+                var contextLines = new Dictionary<int, string>();
+                for (var contextIndex = contextStart; contextIndex <= contextEnd; contextIndex++)
+                {
+                    contextLines[contextIndex + 1] = fileLines[contextIndex];
+                }
+
+                results.Add(new SearchMatch(
+                    path: filePath,
+                    line: index + 1,
+                    lines: contextLines.Count == 0 ? null : contextLines));
+            }
+        }
+
+        return new SearchResult(success: true, matches: results, totalMatches: results.Count);
+    }
+
+    private static bool HasGlobWildcard(string path)
+        => path.Contains('*') || path.Contains('?');
+
+    private static string ResolveGlobRootDirectory(string path)
+    {
+        var wildcardIndex = path.IndexOfAny(['*', '?']);
+        if (wildcardIndex < 0)
+        {
+            return Path.GetDirectoryName(path) ?? Directory.GetCurrentDirectory();
+        }
+
+        var separatorIndex = path.LastIndexOfAny(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            wildcardIndex);
+        if (separatorIndex < 0)
+        {
+            return Directory.GetCurrentDirectory();
+        }
+
+        var rootDirectory = path[..separatorIndex];
+        return string.IsNullOrWhiteSpace(rootDirectory)
+            ? Directory.GetCurrentDirectory()
+            : rootDirectory;
     }
 
     public async Task<EditResult> EditAsync(

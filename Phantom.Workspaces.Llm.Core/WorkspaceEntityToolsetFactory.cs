@@ -1,68 +1,40 @@
-using System.Text.Json;
-using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.Llm.Interfaces;
+using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm;
 
-public sealed class WorkspaceEntityToolsetFactory : IToolsetFactory
+public sealed class WorkspaceEntityContextProvider : AIContextProvider
 {
-    private static readonly JsonSerializerOptions JsonSerializerOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
+    private readonly string stateKey = $"workspace-entity:{Guid.NewGuid():n}";
     private readonly IDataAccessLayer dataAccessLayer;
-    private readonly IToolsetFactory? underlyingToolsetFactory;
 
-    public WorkspaceEntityToolsetFactory(
-        IDataAccessLayer dataAccessLayer,
-        IToolsetFactory? underlyingToolsetFactory = null)
+    public WorkspaceEntityContextProvider(IDataAccessLayer dataAccessLayer)
+        : base(null, null, null)
     {
         this.dataAccessLayer = dataAccessLayer;
-        this.underlyingToolsetFactory = underlyingToolsetFactory;
     }
 
-    public Task<IToolset?> CreateToolsetAsync(
-        Tool tool,
-        AgentServices agentServices)
+    public override IReadOnlyList<string> StateKeys => [this.stateKey];
+
+    protected override ValueTask<AIContext> ProvideAIContextAsync(
+        InvokingContext context,
+        CancellationToken cancellationToken)
     {
-        _ = agentServices;
-
-        if (string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal))
+        _ = context;
+        _ = cancellationToken;
+        return ValueTask.FromResult(new AIContext
         {
-            return Task.FromResult<IToolset?>(new WorkspaceEntityToolset(this.dataAccessLayer));
-        }
-
-        if (this.underlyingToolsetFactory is not null)
-        {
-            return this.underlyingToolsetFactory.CreateToolsetAsync(tool, agentServices);
-        }
-
-        return Task.FromResult<IToolset?>(null);
-    }
-
-    private sealed class WorkspaceEntityToolset : IToolset
-    {
-        private readonly AITool[] tools;
-
-        public WorkspaceEntityToolset(IDataAccessLayer dataAccessLayer)
-        {
-            this.tools =
+            Tools =
             [
-                new WorkspaceEntityGetByIdTool(dataAccessLayer),
-                new WorkspaceEntityGetByNameTool(dataAccessLayer),
-                new WorkspaceEntityAddTool(dataAccessLayer),
-                new WorkspaceEntityReplaceTool(dataAccessLayer),
-                new WorkspaceEntityDeleteTool(dataAccessLayer),
-            ];
-        }
-
-        public Task<AITool[]> ListToolsAsync()
-        {
-            return Task.FromResult(this.tools);
-        }
+                new WorkspaceEntityGetByIdTool(this.dataAccessLayer),
+                new WorkspaceEntityGetByNameTool(this.dataAccessLayer),
+                new WorkspaceEntityAddTool(this.dataAccessLayer),
+                new WorkspaceEntityReplaceTool(this.dataAccessLayer),
+                new WorkspaceEntityDeleteTool(this.dataAccessLayer),
+            ],
+        });
     }
 
     private sealed class WorkspaceEntityGetByIdTool : AIFunction
@@ -599,7 +571,7 @@ public sealed class WorkspaceEntityToolsetFactory : IToolsetFactory
 
         try
         {
-            var serializedArgument = JsonSerializer.Serialize(argumentValue, JsonSerializerOptions);
+            var serializedArgument = JsonSerializer.Serialize(argumentValue);
             using var jsonDocument = JsonDocument.Parse(serializedArgument);
             value = jsonDocument.RootElement.Clone();
             return true;
@@ -629,6 +601,6 @@ public sealed class WorkspaceEntityToolsetFactory : IToolsetFactory
 
     private static string SerializeAsJson(object value)
     {
-        return JsonSerializer.Serialize(value, JsonSerializerOptions);
+        return JsonSerializer.Serialize(value);
     }
 }

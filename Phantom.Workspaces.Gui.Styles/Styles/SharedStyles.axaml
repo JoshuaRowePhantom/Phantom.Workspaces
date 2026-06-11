@@ -158,7 +158,6 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
     </Style>
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
-        <Setter Property="IsExpanded" Value="{Binding IsExpanded}" />
         <Setter Property="Template">
             <ControlTemplate>
                 <StackPanel Classes="entity-card-tree-item">

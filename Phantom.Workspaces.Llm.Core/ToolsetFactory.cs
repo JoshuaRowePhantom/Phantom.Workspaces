@@ -1,3 +1,4 @@
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
@@ -6,19 +7,18 @@ using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm;
 
-using CreateToolsetFunction = System.Func<AgentSchema.Tool, AgentServices, System.Threading.Tasks.Task<Phantom.Workspaces.Llm.Interfaces.IToolset?>>;
+using CreateToolsetFunction = System.Func<AgentSchema.Tool, AgentServices, System.Threading.Tasks.Task<Microsoft.Agents.AI.AIContextProvider?>>;
 
 public sealed class ToolsetFactory : IToolsetFactory
 {
     private readonly CreateToolsetFunction createToolset;
 
-    private ToolsetFactory(
-        CreateToolsetFunction createToolset)
+    private ToolsetFactory(CreateToolsetFunction createToolset)
     {
         this.createToolset = createToolset;
     }
 
-    public async Task<IToolset?> CreateToolsetAsync(
+    public async Task<AIContextProvider?> CreateToolsetAsync(
         AgentSchema.Tool tool,
         AgentServices agentServices)
     {
@@ -35,32 +35,19 @@ public sealed class ToolsetFactory : IToolsetFactory
         return new ToolsetFactory(
             async (tool, agentServices) =>
             {
-                if (string.Equals(tool.Kind, kind))
+                if (string.Equals(tool.Kind, kind, StringComparison.Ordinal))
                 {
                     return await createToolsetAsync(tool, agentServices);
                 }
+
                 return await resolvedUnderlyingInstance.CreateToolsetAsync(tool, agentServices);
             });
     }
 
-    private class FixedToolset : IToolset
-    {
-        private readonly AITool[] tools;
-
-        public FixedToolset(AITool[] tools)
-        {
-            this.tools = tools;
-        }
-        public Task<AITool[]> ListToolsAsync()
-        {
-            return Task.FromResult(this.tools);
-        }
-    }
-
-    public static IToolset CreateFixedToolset(
+    public static AIContextProvider CreateFixedToolset(
         params AITool[] tools)
     {
-        return new FixedToolset(tools);
+        return new FixedToolsContextProvider(tools);
     }
 
     public static IToolsetFactory CreateWebSearchToolsetFactory(
@@ -88,35 +75,46 @@ public sealed class ToolsetFactory : IToolsetFactory
         IDataAccessLayer dataAccessLayer,
         IToolsetFactory? underlyingToolsetFactory = null)
     {
-        return new WorkspaceEntityToolsetFactory(dataAccessLayer, underlyingToolsetFactory);
+        return CreateNamedToolsetFactory(
+            "workspace-entity",
+            (tool, agentServices) =>
+            {
+                _ = tool;
+                _ = agentServices;
+                return Task.FromResult<AIContextProvider?>(new WorkspaceEntityContextProvider(dataAccessLayer));
+            },
+            underlyingToolsetFactory);
     }
 
-    private static Task<IToolset?> CreateWebSearchToolsetAsync(
+    private static Task<AIContextProvider?> CreateWebSearchToolsetAsync(
         AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        return Task.FromResult<IToolset?>(CreateFixedToolset(
+        _ = tool;
+        return Task.FromResult<AIContextProvider?>(CreateFixedToolset(
             new WebSearchTool(logger: agentServices.LoggerFactory?.CreateLogger<WebSearchTool>())));
     }
 
-    private static Task<IToolset?> CreateWebRequestToolsetAsync(
+    private static Task<AIContextProvider?> CreateWebRequestToolsetAsync(
         AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        return Task.FromResult<IToolset?>(CreateFixedToolset(
+        _ = tool;
+        return Task.FromResult<AIContextProvider?>(CreateFixedToolset(
             new WebRequestTool(logger: agentServices.LoggerFactory?.CreateLogger<WebRequestTool>())));
     }
 
-    private static Task<IToolset?> CreateWebToolsetAsync(
+    private static Task<AIContextProvider?> CreateWebToolsetAsync(
         AgentSchema.Tool tool,
         AgentServices agentServices)
     {
-        return Task.FromResult<IToolset?>(CreateFixedToolset(
+        _ = tool;
+        return Task.FromResult<AIContextProvider?>(CreateFixedToolset(
             new WebSearchTool(logger: agentServices.LoggerFactory?.CreateLogger<WebSearchTool>()),
             new WebRequestTool(logger: agentServices.LoggerFactory?.CreateLogger<WebRequestTool>())));
     }
 
-    private static Task<IToolset?> CreateFilesystemToolsetAsync(
+    private static Task<AIContextProvider?> CreateFilesystemToolsetAsync(
         AgentSchema.Tool tool,
         AgentServices agentServices)
     {
@@ -127,10 +125,10 @@ public sealed class ToolsetFactory : IToolsetFactory
             _ => JsonSerializer.Serialize(connection),
         };
 
-        IToolset toolset = new FilesystemServiceToolset(
+        AIContextProvider toolset = new FilesystemServiceContextProvider(
             editStoreConnectionJson: connectionJson,
             loggerFactory: agentServices.LoggerFactory);
-        return Task.FromResult<IToolset?>(toolset);
+        return Task.FromResult<AIContextProvider?>(toolset);
     }
 
     public static IToolsetFactory Combine(params IToolsetFactory[] factories)
@@ -141,11 +139,12 @@ public sealed class ToolsetFactory : IToolsetFactory
                 foreach (var factory in factories)
                 {
                     var toolset = await factory.CreateToolsetAsync(tool, agentServices);
-                    if (toolset != null)
+                    if (toolset is not null)
                     {
                         return toolset;
                     }
                 }
+
                 return null;
             });
     }
@@ -160,6 +159,8 @@ public sealed class ToolsetFactory : IToolsetFactory
             CreateFilesystemToolsetFactory(resolvedUnderlyingToolsetFactory));
     }
 
+    public static IToolsetFactory CreateEmptyToolsetFactory() => EmptyToolsetFactory.Instance;
+
     private sealed class EmptyToolsetFactory : IToolsetFactory
     {
         public static readonly EmptyToolsetFactory Instance = new();
@@ -168,13 +169,13 @@ public sealed class ToolsetFactory : IToolsetFactory
         {
         }
 
-        public Task<IToolset?> CreateToolsetAsync(
+        public Task<AIContextProvider?> CreateToolsetAsync(
             AgentSchema.Tool tool,
             AgentServices agentServices)
         {
             _ = tool;
             _ = agentServices;
-            return Task.FromResult<IToolset?>(null);
+            return Task.FromResult<AIContextProvider?>(null);
         }
     }
 }

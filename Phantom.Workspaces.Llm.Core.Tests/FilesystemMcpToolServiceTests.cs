@@ -34,16 +34,31 @@ public sealed class FilesystemMcpToolServiceTests
     {
         using var sandbox = new FileSandbox();
         var first = sandbox.WriteFile("alpha\\one.txt", "a");
-        var second = sandbox.WriteFile("alpha\\two.txt", "b");
+        sandbox.WriteFile("alpha\\nested\\three.txt", "c");
         var service = CreateService();
 
-        var result = service.Search(Path.Combine(sandbox.RootPath, "alpha", "*.txt"), listOnly: true);
+        var result = service.Search(Path.Combine(sandbox.RootPath, "alpha"), listOnly: true);
+
+        Assert.True(result.success);
+        Assert.Equal(1, result.totalMatches);
+        Assert.Contains(result.matches, match => string.Equals(match.path, first, StringComparison.Ordinal));
+        Assert.All(result.matches, match => Assert.Null(match.line));
+    }
+
+    [Fact]
+    public void Search_ListOnly_RecursiveGlobWithDoubleStar_ReturnsNestedMatches()
+    {
+        using var sandbox = new FileSandbox();
+        var first = sandbox.WriteFile("alpha\\one.txt", "a");
+        var second = sandbox.WriteFile("alpha\\nested\\two.txt", "b");
+        var service = CreateService();
+
+        var result = service.Search(Path.Combine(sandbox.RootPath, "alpha", "**", "*.txt"), listOnly: true);
 
         Assert.True(result.success);
         Assert.Equal(2, result.totalMatches);
         Assert.Contains(result.matches, match => string.Equals(match.path, first, StringComparison.Ordinal));
         Assert.Contains(result.matches, match => string.Equals(match.path, second, StringComparison.Ordinal));
-        Assert.All(result.matches, match => Assert.Null(match.line));
     }
 
     [Fact]
