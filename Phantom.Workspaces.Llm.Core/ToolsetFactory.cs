@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Text.Json;
 
@@ -81,6 +82,13 @@ public sealed class ToolsetFactory : IToolsetFactory
     public static IToolsetFactory CreateFilesystemToolsetFactory(IToolsetFactory? underlyingToolsetFactory = null)
     {
         return CreateNamedToolsetFactory("filesystem", CreateFilesystemToolsetAsync, underlyingToolsetFactory);
+    }
+
+    public static IToolsetFactory CreateWorkspaceEntityToolsetFactory(
+        IDataAccessLayer dataAccessLayer,
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        return new WorkspaceEntityToolsetFactory(dataAccessLayer, underlyingToolsetFactory);
     }
 
     private static Task<IToolset?> CreateWebSearchToolsetAsync(

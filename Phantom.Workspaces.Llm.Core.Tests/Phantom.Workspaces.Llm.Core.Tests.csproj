@@ -18,6 +18,7 @@
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Offline\Phantom.Workspaces.Data.Offline.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Test.Mcp\Phantom.Workspaces.Llm.Test.Mcp.csproj" />
