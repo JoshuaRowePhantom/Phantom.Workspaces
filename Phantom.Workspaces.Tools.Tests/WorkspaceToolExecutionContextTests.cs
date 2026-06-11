@@ -43,8 +43,8 @@ public sealed class WorkspaceToolExecutionContextTests
               "entity-id": "33333333-3333-3333-3333-333333333333",
               "entity-types": ["user-computer-profile"],
               "names": [["computer-user-profiles", "computers", "hostname", "test-computer", "users", "username", "test-user"]],
-              "computer-reference": "computers/hostname/test-computer",
-              "user-reference": "users/username/test-user",
+              "computer-reference": ["computers", "hostname", "test-computer"],
+              "user-reference": ["users", "username", "test-user"],
               "home-directory": "C:\\Users\\test-user"
             }
             """,
