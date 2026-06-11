@@ -93,8 +93,32 @@ public static class StickyLayoutSelector
                 continue;
             }
 
-            result[pinned.Value.Key] = accumulated;
-            accumulated += pinned.Value.Size;
+            var pinPosition = accumulated;
+            AxisItem? nextBlockingItem = null;
+            foreach (var item in items)
+            {
+                if (item.Level > level || item.Position <= pinned.Value.Position)
+                {
+                    continue;
+                }
+
+                if (nextBlockingItem is null || item.Position < nextBlockingItem.Value.Position)
+                {
+                    nextBlockingItem = item;
+                }
+            }
+
+            if (nextBlockingItem is not null)
+            {
+                var pushedPinPosition = nextBlockingItem.Value.Position - pinned.Value.Size;
+                if (pushedPinPosition < pinPosition)
+                {
+                    pinPosition = pushedPinPosition;
+                }
+            }
+
+            result[pinned.Value.Key] = pinPosition;
+            accumulated = pinPosition + pinned.Value.Size;
         }
 
         return result;

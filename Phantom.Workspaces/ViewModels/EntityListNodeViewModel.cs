@@ -12,11 +12,14 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 {
     private bool isExpanded;
     private bool isEditMode;
+    private bool isJsonVisible;
     private IReadOnlyCollection<EntityFieldEditorViewModel>? editModeSnapshot;
+    private string? editModeRawJsonSnapshot;
     private readonly SubscribedEntityViewModel? entity;
     private readonly string displayName;
     private readonly string entityType;
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
+    private string rawJsonText;
 
     public EntityListNodeViewModel(
         SubscribedEntityViewModel entity,
@@ -28,6 +31,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.displayName = entity.DisplayName;
         this.entityType = entity.EntityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
+        this.rawJsonText = BuildRawJsonText(entity.Data);
         this.SetFieldEditorEditMode(false);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
@@ -43,6 +47,9 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.DiscardEditModeCommand = new RelayCommand(
             _ => this.DiscardEditMode(),
             _ => this.IsEditMode);
+        this.ToggleJsonViewCommand = new RelayCommand(
+            _ => this.IsJsonVisible = !this.IsJsonVisible,
+            _ => this.ShowJsonButton);
     }
 
     public EntityListNodeViewModel(
@@ -57,6 +64,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.displayName = displayName;
         this.entityType = entityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
+        this.rawJsonText = string.Empty;
         this.SetFieldEditorEditMode(false);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
@@ -72,6 +80,9 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.DiscardEditModeCommand = new RelayCommand(
             _ => this.DiscardEditMode(),
             _ => this.IsEditMode);
+        this.ToggleJsonViewCommand = new RelayCommand(
+            _ => this.IsJsonVisible = !this.IsJsonVisible,
+            _ => this.ShowJsonButton);
         this.isExpanded = isExpanded;
     }
 
@@ -92,6 +103,8 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     public RelayCommand SaveEditModeCommand { get; }
 
     public RelayCommand DiscardEditModeCommand { get; }
+
+    public RelayCommand ToggleJsonViewCommand { get; }
 
     public string DisplayName => this.entity?.DisplayName ?? this.displayName;
 
@@ -121,6 +134,35 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     public bool ShowEditIndicator => !this.IsEditMode;
 
     public bool ShowEditActions => this.IsEditMode;
+
+    public bool ShowJsonButton => !string.IsNullOrWhiteSpace(this.rawJsonText);
+
+    public bool IsRawJsonReadOnly => !this.IsEditMode;
+
+    public bool ShowRawJsonEditor => this.IsJsonVisible;
+
+    public bool IsJsonVisible
+    {
+        get => this.isJsonVisible;
+        set
+        {
+            if (!this.SetProperty(ref this.isJsonVisible, value))
+            {
+                return;
+            }
+
+            this.RaisePropertyChanged(nameof(this.ShowRawJsonEditor));
+            this.RaisePropertyChanged(nameof(this.JsonButtonText));
+        }
+    }
+
+    public string JsonButtonText => "{}";
+
+    public string RawJsonText
+    {
+        get => this.rawJsonText;
+        set => this.SetProperty(ref this.rawJsonText, value);
+    }
 
     public bool HasChildren => this.Children.Count > 0;
 
@@ -204,12 +246,14 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     private void EnterEditMode()
     {
         this.editModeSnapshot = this.fieldEditors.Select(static fieldEditor => fieldEditor.Clone()).ToArray();
+        this.editModeRawJsonSnapshot = this.rawJsonText;
         this.IsEditMode = true;
         this.ToggleEditModeCommand.RaiseCanExecuteChanged();
         this.SaveEditModeCommand.RaiseCanExecuteChanged();
         this.DiscardEditModeCommand.RaiseCanExecuteChanged();
         this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
         this.RaisePropertyChanged(nameof(this.ShowEditActions));
+        this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
     }
 
     private void SaveEditMode()
@@ -220,12 +264,14 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         }
 
         this.editModeSnapshot = null;
+        this.editModeRawJsonSnapshot = null;
         this.IsEditMode = false;
         this.ToggleEditModeCommand.RaiseCanExecuteChanged();
         this.SaveEditModeCommand.RaiseCanExecuteChanged();
         this.DiscardEditModeCommand.RaiseCanExecuteChanged();
         this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
         this.RaisePropertyChanged(nameof(this.ShowEditActions));
+        this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
     }
 
     private void DiscardEditMode()
@@ -239,14 +285,37 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         {
             this.SetFieldEditors(this.editModeSnapshot.Select(static fieldEditor => fieldEditor.Clone()).ToArray());
         }
+        if (this.editModeRawJsonSnapshot is not null)
+        {
+            this.RawJsonText = this.editModeRawJsonSnapshot;
+        }
 
         this.IsEditMode = false;
         this.editModeSnapshot = null;
+        this.editModeRawJsonSnapshot = null;
         this.ToggleEditModeCommand.RaiseCanExecuteChanged();
         this.SaveEditModeCommand.RaiseCanExecuteChanged();
         this.DiscardEditModeCommand.RaiseCanExecuteChanged();
         this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
         this.RaisePropertyChanged(nameof(this.ShowEditActions));
+        this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
+    }
+
+    private static string BuildRawJsonText(
+        JsonElement? data)
+    {
+        if (data is not JsonElement element)
+        {
+            return string.Empty;
+        }
+
+        using var parsedDocument = JsonDocument.Parse(element.GetRawText());
+        return JsonSerializer.Serialize(
+            parsedDocument.RootElement,
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+            });
     }
 
     public static bool TryGetPrimaryName(

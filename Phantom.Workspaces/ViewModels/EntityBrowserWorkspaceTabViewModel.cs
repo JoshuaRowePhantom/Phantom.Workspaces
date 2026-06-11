@@ -331,7 +331,8 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         JsonElement fieldValue,
         IReadOnlyList<string> fieldPath)
     {
-        var resolvedType = await this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue);
+        var resolvedType = await Task.Run(() => this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue));
+       
         switch (resolvedType.TypeName)
         {
             case "local-string":

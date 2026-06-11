@@ -64,6 +64,50 @@ public class StickyLayoutSelectorTests
     }
 
     [Fact]
+    public void ComputePins_TwoItemsSameLevel_ExistingPinStartsScrollingAwayWhenNextEntersSpace()
+    {
+        var result = StickyLayoutSelector.ComputePins(
+        [
+            V("a", 0, top: -10, height: 40),
+            V("b", 0, top: 30, height: 40),
+        ]);
+
+        var pin = Assert.Single(result);
+        Assert.Equal("a", pin.Key);
+        Assert.Equal(-10, pin.PinY);
+    }
+
+    [Fact]
+    public void ComputePins_TwoItemsSameLevel_NextItemTakesOverAtAnchor()
+    {
+        var result = StickyLayoutSelector.ComputePins(
+        [
+            V("a", 0, top: -40, height: 40),
+            V("b", 0, top: 0, height: 40),
+        ]);
+
+        var pin = Assert.Single(result);
+        Assert.Equal("b", pin.Key);
+        Assert.Equal(0, pin.PinY);
+    }
+
+    [Fact]
+    public void ComputePins_ParentEnteringPreviousChildRegion_PushesPinnedChildAway()
+    {
+        var result = StickyLayoutSelector.ComputePins(
+        [
+            V("parent1", 0, top: 0, height: 40),
+            V("child1", 1, top: 40, height: 32),
+            V("parent2", 0, top: 55, height: 40),
+        ]);
+
+        var parentPin = result.Single(p => p.Key.Equals("parent1"));
+        var childPin = result.Single(p => p.Key.Equals("child1"));
+        Assert.Equal(0, parentPin.PinY);
+        Assert.Equal(23, childPin.PinY);
+    }
+
+    [Fact]
     public void ComputePins_TwoLevels_AccumulatesCorrectly()
     {
         var result = StickyLayoutSelector.ComputePins(

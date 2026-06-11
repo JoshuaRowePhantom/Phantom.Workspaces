@@ -74,6 +74,22 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public bool ShowEditActions => this.Node.ShowEditActions;
 
+    public RelayCommand ToggleJsonViewCommand => this.Node.ToggleJsonViewCommand;
+
+    public bool ShowJsonButton => this.Node.ShowJsonButton;
+
+    public bool ShowRawJsonEditor => this.Node.ShowRawJsonEditor;
+
+    public bool IsRawJsonReadOnly => this.Node.IsRawJsonReadOnly;
+
+    public string JsonButtonText => this.Node.JsonButtonText;
+
+    public string RawJsonText
+    {
+        get => this.Node.RawJsonText;
+        set => this.Node.RawJsonText = value;
+    }
+
     public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
 
     public CornerRadius ContentCornerRadius => this.HasChildren
@@ -123,6 +139,26 @@ public sealed class EntityListItemViewModel : ViewModelBase
         else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowEditActions), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowEditActions));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowRawJsonEditor), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowRawJsonEditor));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowJsonButton), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsRawJsonReadOnly), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.RawJsonText), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.RawJsonText));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.JsonButtonText), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.JsonButtonText));
         }
     }
 }

@@ -17,6 +17,10 @@
                                 Classes="workspace-edit-indicator-button"
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}" />
+                        <Button Content="{Binding JsonButtonText}"
+                                Classes="workspace-edit-indicator-button"
+                                IsVisible="{Binding ShowJsonButton}"
+                                Command="{Binding ToggleJsonViewCommand}" />
                         <Button Content="💾"
                                 Classes="workspace-edit-action-button"
                                 IsVisible="{Binding ShowEditActions}"
@@ -28,6 +32,10 @@
                     </StackPanel>
                     <ItemsControl ItemsSource="{Binding FieldEditors}"
                                   Classes="workspace-field-editor-list" />
+                    <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
+                             IsVisible="{Binding ShowRawJsonEditor}"
+                             IsReadOnly="{Binding IsRawJsonReadOnly}"
+                             Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
                 </StackPanel>
             </Border>
             <Border IsVisible="{Binding HasChildren}"
@@ -56,6 +64,10 @@
                                 Classes="workspace-edit-indicator-button"
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}" />
+                        <Button Content="{Binding JsonButtonText}"
+                                Classes="workspace-edit-indicator-button"
+                                IsVisible="{Binding ShowJsonButton}"
+                                Command="{Binding ToggleJsonViewCommand}" />
                         <Button Content="💾"
                                 Classes="workspace-edit-action-button"
                                 IsVisible="{Binding ShowEditActions}"
@@ -67,6 +79,10 @@
                     </StackPanel>
                     <ItemsControl ItemsSource="{Binding FieldEditors}"
                                   Classes="workspace-field-editor-list" />
+                    <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
+                             IsVisible="{Binding ShowRawJsonEditor}"
+                             IsReadOnly="{Binding IsRawJsonReadOnly}"
+                             Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
                 </StackPanel>
             </Border>
             <Border IsVisible="{Binding HasChildren}"

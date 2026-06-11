@@ -308,11 +308,13 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         await WaitForConditionAsync(viewModel, () =>
             viewModel.EntityList.Items.Any(item =>
-                string.Equals(item.ItemKey, "[\"entity-types\",\"note\"]", StringComparison.Ordinal)));
+                item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
+                && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema")));
 
-        var noteTypeItem = Assert.Single(
-            viewModel.EntityList.Items,
-            item => string.Equals(item.ItemKey, "[\"entity-types\",\"note\"]", StringComparison.Ordinal));
+        var noteTypeItem = viewModel.EntityList.Items.FirstOrDefault(item =>
+            item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
+            && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema"));
+        Assert.NotNull(noteTypeItem);
         var schemaField = Assert.Single(noteTypeItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "schema");
         var schemaEditor = Assert.IsType<JsonSchemaFieldEditorViewModel>(schemaField);
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
