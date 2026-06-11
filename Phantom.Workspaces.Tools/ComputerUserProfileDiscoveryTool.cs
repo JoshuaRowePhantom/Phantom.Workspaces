@@ -14,12 +14,12 @@ public sealed class ComputerUserProfileDiscoveryTool(
         var userEntityName = new EntityName("users", "username", this.currentExecutionContextProvider.UserName);
         var computerUserProfileName = new EntityName(
             "computer-user-profiles",
-            computerEntityName.Components[0],
-            computerEntityName.Components[1],
-            computerEntityName.Components[2],
             userEntityName.Components[0],
             userEntityName.Components[1],
-            userEntityName.Components[2]);
+            userEntityName.Components[2],
+            computerEntityName.Components[0],
+            computerEntityName.Components[1],
+            computerEntityName.Components[2]);
 
         var entityData = new JsonObject
         {

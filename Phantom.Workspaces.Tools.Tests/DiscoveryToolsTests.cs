@@ -67,12 +67,12 @@ public sealed class DiscoveryToolsTests
             dataAccessLayer,
             new EntityName(
                 "computer-user-profiles",
-                "computers",
-                "hostname",
-                "test-computer",
                 "users",
                 "username",
-                "test-user"));
+                "test-user",
+                "computers",
+                "hostname",
+                "test-computer"));
         Assert.NotNull(discovered);
         var historyCountAfterFirstRun = await GetHistoryEntryCountAsync(dataAccessLayer, discovered.EntityId);
         await tool.ExecuteAsync(context);
@@ -113,7 +113,7 @@ public sealed class DiscoveryToolsTests
             {
               "entity-id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
               "entity-types": ["user-computer-profile"],
-              "names": [["computer-user-profiles", "computers", "hostname", "{{provider.ComputerName}}", "users", "username", "{{provider.UserName}}"]],
+              "names": [["computer-user-profiles", "users", "username", "{{provider.UserName}}", "computers", "hostname", "{{provider.ComputerName}}"]],
               "computer-reference": ["computers", "hostname", "{{provider.ComputerName}}"],
               "user-reference": ["users", "username", "{{provider.UserName}}"],
               "home-directory": "{{provider.HomeDirectoryPath.Replace("\\", "\\\\", StringComparison.Ordinal)}}"

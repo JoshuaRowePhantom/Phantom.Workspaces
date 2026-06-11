@@ -622,6 +622,76 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_Succeeds_WhenUserComputerProfileReferencesUseEntityNameArrays()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var profileEntityId = new EntityId("57c90b58-a6a2-4e87-84d4-88fd9cf37758");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add valid user computer profile entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        profileEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{profileEntityId}}",
+                              "entity-types": ["user-computer-profile"],
+                              "names": [
+                                ["computer-user-profiles", "users", "username", "sample-user", "computers", "hostname", "sample-computer"]
+                              ],
+                              "computer-reference": ["computers", "hostname", "sample-computer"],
+                              "user-reference": ["users", "username", "sample-user"]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var entityResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
+        Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenUserComputerProfileReferencesUseStrings()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var profileEntityId = new EntityId("bb6665e9-d7c8-4f71-9c94-1f1a52eb9f40");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add invalid user computer profile entity"),
+                new[]
+                {
+                    CreateEntityChange(
+                        profileEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{profileEntityId}}",
+                              "entity-types": ["user-computer-profile"],
+                              "names": [
+                                ["computer-user-profiles", "users", "username", "sample-user", "computers", "hostname", "sample-computer"]
+                              ],
+                              "computer-reference": "computers/hostname/sample-computer",
+                              "user-reference": "users/username/sample-user"
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Update_Succeeds_WhenUserEntityNamesStartWithUsersPrefix()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();

@@ -33,17 +33,52 @@
     "type": "object",
     "properties": {
       "computer-reference": {
-        "type": "string",
+        "type": "array",
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "const": "computers"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "items": {
+          "type": "string"
+        },
         "description": "Reference to the computer entity"
       },
       "user-reference": {
-        "type": "string",
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 4,
+        "prefixItems": [
+          {
+            "const": "users"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "items": {
+          "type": "string"
+        },
         "description": "Reference to the user entity"
       },
       "home-directory": {
         "type": "string",
         "description": "Home directory path for this user on this computer"
       }
-    }
+    },
+    "required": [
+      "computer-reference",
+      "user-reference"
+    ]
   }
 }
