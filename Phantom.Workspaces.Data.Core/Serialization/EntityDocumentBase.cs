@@ -29,7 +29,12 @@ public abstract record EntityDocumentBase
                 continue;
             }
 
-            canonicalNames.Add(JsonSerializer.Serialize(nameComponents));
+            var nameElement = JsonSerializer.SerializeToElement(nameComponents);
+            var entityNameDocument = CoreEntityNameDocument.Deserialize(nameElement);
+            if (entityNameDocument is not null)
+            {
+                canonicalNames.Add(entityNameDocument.ToCanonicalName());
+            }
         }
 
         return canonicalNames;

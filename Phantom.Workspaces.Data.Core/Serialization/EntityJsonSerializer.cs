@@ -1,20 +1,25 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Phantom.Workspaces.Data.Serialization;
 
 public static class EntityJsonSerializer
 {
-    public static bool TryDeserialize<TValue>(JsonElement element, out TValue? value)
+    public static TValue? Deserialize<TValue>(JsonElement element, JsonTypeInfo<TValue> jsonTypeInfo)
     {
         try
         {
-            value = JsonSerializer.Deserialize<TValue>(element.GetRawText());
-            return value is not null;
+            return element.Deserialize(jsonTypeInfo);
         }
         catch (JsonException)
         {
-            value = default;
-            return false;
+            return default;
         }
+    }
+
+    public static bool TryDeserialize<TValue>(JsonElement element, JsonTypeInfo<TValue> jsonTypeInfo, out TValue? value)
+    {
+        value = Deserialize(element, jsonTypeInfo);
+        return value is not null;
     }
 }

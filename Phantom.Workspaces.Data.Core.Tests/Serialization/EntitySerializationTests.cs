@@ -21,9 +21,8 @@ public sealed class EntitySerializationTests
             }
             """);
 
-        var parsed = SchemaEntityDocument.TryParse(document.RootElement, out var schemaEntityDocument);
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(document.RootElement);
 
-        Assert.True(parsed);
         Assert.NotNull(schemaEntityDocument);
         Assert.True(schemaEntityDocument.IsSchemaEntity());
         Assert.True(schemaEntityDocument.TryGetSchemaPayloadId(out var schemaPayloadId));
@@ -39,6 +38,10 @@ public sealed class EntitySerializationTests
         using var document = JsonDocument.Parse(
             """
             {
+              "title": {
+                "default": "Getting Started",
+                "fr-FR": "Commencer"
+              },
               "content": {
                 "default": {
                   "mime-type": "text/markdown",
@@ -56,32 +59,34 @@ public sealed class EntitySerializationTests
             }
             """);
 
-        var parsed = NoteEntityDocument.TryParse(document.RootElement, out var noteEntityDocument);
+        var noteEntityDocument = NoteEntityDocument.Deserialize(document.RootElement);
 
-        Assert.True(parsed);
         Assert.NotNull(noteEntityDocument);
         Assert.Equal("# Default", noteEntityDocument.GetPreferredMarkdownText());
+        Assert.Equal("Getting Started", noteEntityDocument.GetPreferredTitle());
+        Assert.Equal("Commencer", noteEntityDocument.GetPreferredTitle("fr-FR"));
     }
 
     [Fact]
-    public void NoteEntityDocument_GetPreferredMarkdownText_ReadsDirectAttachmentShape()
+    public void NoteEntityDocument_GetPreferredMarkdownText_UsesAnyAvailableLocaleWhenDefaultMissing()
     {
         using var document = JsonDocument.Parse(
             """
             {
               "content": {
-                "mime-type": "text/markdown",
-                "content": {
-                  "text": "# Direct"
+                "en-US": {
+                  "mime-type": "text/markdown",
+                  "content": {
+                    "text": "# English"
+                  }
                 }
               }
             }
             """);
 
-        var parsed = NoteEntityDocument.TryParse(document.RootElement, out var noteEntityDocument);
+        var noteEntityDocument = NoteEntityDocument.Deserialize(document.RootElement);
 
-        Assert.True(parsed);
         Assert.NotNull(noteEntityDocument);
-        Assert.Equal("# Direct", noteEntityDocument.GetPreferredMarkdownText());
+        Assert.Equal("# English", noteEntityDocument.GetPreferredMarkdownText());
     }
 }

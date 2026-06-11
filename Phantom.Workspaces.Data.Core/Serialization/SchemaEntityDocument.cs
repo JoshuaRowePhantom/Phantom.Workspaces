@@ -12,15 +12,14 @@ public sealed record SchemaEntityDocument
     [JsonPropertyName("$id")]
     public string? SchemaId { get; init; }
 
-    public static bool TryParse(JsonElement entityData, out SchemaEntityDocument? schemaEntityDocument)
+    public static SchemaEntityDocument? Deserialize(JsonElement entityData)
     {
         if (entityData.ValueKind != JsonValueKind.Object)
         {
-            schemaEntityDocument = null;
-            return false;
+            return null;
         }
 
-        return EntityJsonSerializer.TryDeserialize(entityData, out schemaEntityDocument);
+        return EntityJsonSerializer.Deserialize(entityData, EntitySerializationJsonContext.Default.SchemaEntityDocument);
     }
 
     public bool IsSchemaEntity()
@@ -35,7 +34,11 @@ public sealed record SchemaEntityDocument
         schemaPayloadId = string.Empty;
         if (this.SchemaPayload is JsonElement schemaPayloadElement
             && schemaPayloadElement.ValueKind == JsonValueKind.Object
-            && EntityJsonSerializer.TryDeserialize(schemaPayloadElement, out SchemaPayloadDocument? schemaPayloadDocument)
+            && EntityJsonSerializer.TryDeserialize(
+                schemaPayloadElement,
+                EntitySerializationJsonContext.Default.SchemaPayloadDocument,
+                out SchemaPayloadDocument? schemaPayloadDocument)
+            && schemaPayloadDocument is not null
             && !string.IsNullOrWhiteSpace(schemaPayloadDocument.SchemaId))
         {
             schemaPayloadId = schemaPayloadDocument.SchemaId;

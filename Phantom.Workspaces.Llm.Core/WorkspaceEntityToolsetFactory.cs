@@ -64,7 +64,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
     private static string? TryReadDefaultMarkdownText(JsonElement? entityData)
     {
         if (entityData is not JsonElement entityDataElement
-            || !NoteEntityDocument.TryParse(entityDataElement, out var noteEntityDocument))
+            || NoteEntityDocument.Deserialize(entityDataElement) is not NoteEntityDocument noteEntityDocument)
         {
             return null;
         }

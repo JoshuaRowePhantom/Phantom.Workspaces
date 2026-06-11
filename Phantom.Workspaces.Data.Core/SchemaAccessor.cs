@@ -193,24 +193,24 @@ public sealed class SchemaAccessor : ISchemaAccessor
     private static bool IsSchemaEntity(
         JsonElement entityObject)
     {
-        return SchemaEntityDocument.TryParse(entityObject, out var schemaEntityDocument)
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityObject);
+        return schemaEntityDocument is not null
             && schemaEntityDocument.IsSchemaEntity();
     }
 
     private static IReadOnlyCollection<string> GetEntityNames(
         JsonElement entityObject)
     {
-        return SchemaEntityDocument.TryParse(entityObject, out var schemaEntityDocument)
-            ? schemaEntityDocument.GetCanonicalNames()
-            : Array.Empty<string>();
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityObject);
+        return schemaEntityDocument?.GetCanonicalNames() ?? Array.Empty<string>();
     }
 
     private static HashSet<string> GetExplicitEntityTypeNames(
         JsonElement entityData)
     {
-        return SchemaEntityDocument.TryParse(entityData, out var schemaEntityDocument)
-            ? schemaEntityDocument.GetExplicitEntityTypeNames()
-            : new HashSet<string>(StringComparer.Ordinal);
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityData);
+        return schemaEntityDocument?.GetExplicitEntityTypeNames()
+               ?? new HashSet<string>(StringComparer.Ordinal);
     }
 
     private static IReadOnlyCollection<string> GetSchemaEntityNames(
@@ -243,7 +243,8 @@ public sealed class SchemaAccessor : ISchemaAccessor
         JsonElement schemaEntity,
         out string schemaId)
     {
-        if (!SchemaEntityDocument.TryParse(schemaEntity, out var schemaEntityDocument))
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(schemaEntity);
+        if (schemaEntityDocument is null)
         {
             schemaId = string.Empty;
             return false;
@@ -255,7 +256,8 @@ public sealed class SchemaAccessor : ISchemaAccessor
     public static string GetSchemaText(
         JsonElement schemaEntity)
     {
-        if (SchemaEntityDocument.TryParse(schemaEntity, out var schemaEntityDocument)
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(schemaEntity);
+        if (schemaEntityDocument is not null
             && schemaEntityDocument.SchemaPayload is JsonElement schemaPayload)
         {
             if (schemaPayload.ValueKind == JsonValueKind.String

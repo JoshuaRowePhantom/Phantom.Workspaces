@@ -524,24 +524,24 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     protected bool IsSchemaEntity(
         JsonElement entityObject)
     {
-        return SchemaEntityDocument.TryParse(entityObject, out var schemaEntityDocument)
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityObject);
+        return schemaEntityDocument is not null
             && schemaEntityDocument.IsSchemaEntity();
     }
 
     protected IReadOnlyCollection<string> GetEntityNames(
         JsonElement entityObject)
     {
-        return SchemaEntityDocument.TryParse(entityObject, out var schemaEntityDocument)
-            ? schemaEntityDocument.GetCanonicalNames()
-            : Array.Empty<string>();
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityObject);
+        return schemaEntityDocument?.GetCanonicalNames() ?? Array.Empty<string>();
     }
 
     protected HashSet<string> GetExplicitEntityTypeNames(
         JsonElement entityData)
     {
-        return SchemaEntityDocument.TryParse(entityData, out var schemaEntityDocument)
-            ? schemaEntityDocument.GetExplicitEntityTypeNames()
-            : new HashSet<string>(StringComparer.Ordinal);
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityData);
+        return schemaEntityDocument?.GetExplicitEntityTypeNames()
+               ?? new HashSet<string>(StringComparer.Ordinal);
     }
 
     protected HashSet<string> GetEntityTypeNames(
@@ -684,7 +684,8 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         JsonElement schemaEntity,
         out string schemaId)
     {
-        if (!SchemaEntityDocument.TryParse(schemaEntity, out var schemaEntityDocument))
+        var schemaEntityDocument = SchemaEntityDocument.Deserialize(schemaEntity);
+        if (schemaEntityDocument is null)
         {
             schemaId = string.Empty;
             return false;

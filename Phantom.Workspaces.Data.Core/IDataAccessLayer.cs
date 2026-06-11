@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Phantom.Workspaces.Data;
 
@@ -344,6 +345,7 @@ public readonly record struct EntityTypeAndName(
     EntityTypeNameSet TypeNames,
     EntityName EntityName);
 
+[JsonConverter(typeof(EntityNameJsonConverter))]
 public readonly struct EntityName : IEquatable<EntityName>
 {
     private readonly string[] components;

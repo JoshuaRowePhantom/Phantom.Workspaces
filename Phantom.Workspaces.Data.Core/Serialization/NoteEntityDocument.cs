@@ -7,45 +7,35 @@ public sealed record NoteEntityDocument
     : EntityDocumentBase
 {
     [JsonPropertyName("content")]
-    public JsonElement? Content { get; init; }
+    public Dictionary<string, MimeAttachmentDocument>? ContentByLocale { get; init; }
 
-    public static bool TryParse(JsonElement entityData, out NoteEntityDocument? noteEntityDocument)
+    [JsonPropertyName("title")]
+    public Dictionary<string, string>? TitleByLocale { get; init; }
+
+    public static NoteEntityDocument? Deserialize(JsonElement entityData)
     {
         if (entityData.ValueKind != JsonValueKind.Object)
         {
-            noteEntityDocument = null;
-            return false;
+            return null;
         }
 
-        return EntityJsonSerializer.TryDeserialize(entityData, out noteEntityDocument);
+        return EntityJsonSerializer.Deserialize(entityData, EntitySerializationJsonContext.Default.NoteEntityDocument);
     }
 
     public string? GetPreferredMarkdownText()
     {
-        if (this.Content is not JsonElement contentElement)
+        if (this.ContentByLocale is null)
         {
             return null;
         }
 
-        if (MimeAttachmentDocument.TryParse(contentElement, out var directAttachment)
-            && directAttachment.TryGetInlineMarkdownText(out var markdownText))
+        if (this.ContentByLocale.TryGetValue("default", out var defaultAttachment)
+            && defaultAttachment.TryGetInlineMarkdownText(out var markdownText))
         {
             return markdownText;
         }
 
-        if (!EntityJsonSerializer.TryDeserialize(contentElement, out Dictionary<string, MimeAttachmentDocument>? attachmentsByName)
-            || attachmentsByName is null)
-        {
-            return null;
-        }
-
-        if (attachmentsByName.TryGetValue("default", out var defaultAttachment)
-            && defaultAttachment.TryGetInlineMarkdownText(out markdownText))
-        {
-            return markdownText;
-        }
-
-        foreach (var attachment in attachmentsByName.Values)
+        foreach (var attachment in this.ContentByLocale.Values)
         {
             if (attachment.TryGetInlineMarkdownText(out markdownText))
             {
@@ -54,6 +44,26 @@ public sealed record NoteEntityDocument
         }
 
         return null;
+    }
+
+    public string? GetPreferredTitle(string? localeName = null)
+    {
+        if (this.TitleByLocale is null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(localeName)
+            && this.TitleByLocale.TryGetValue(localeName, out var localizedTitle)
+            && !string.IsNullOrWhiteSpace(localizedTitle))
+        {
+            return localizedTitle;
+        }
+
+        return this.TitleByLocale.TryGetValue("default", out var defaultTitle)
+            && !string.IsNullOrWhiteSpace(defaultTitle)
+            ? defaultTitle
+            : null;
     }
 }
 
@@ -65,11 +75,10 @@ public sealed record MimeAttachmentDocument
     [JsonPropertyName("content")]
     public InlineContentDocument? Content { get; init; }
 
-    public static bool TryParse(JsonElement attachmentElement, out MimeAttachmentDocument attachmentDocument)
-    {
-        attachmentDocument = default!;
-        return EntityJsonSerializer.TryDeserialize(attachmentElement, out attachmentDocument);
-    }
+    public static MimeAttachmentDocument? Deserialize(JsonElement attachmentElement)
+        => EntityJsonSerializer.Deserialize(
+            attachmentElement,
+            EntitySerializationJsonContext.Default.MimeAttachmentDocument);
 
     public bool TryGetInlineMarkdownText(out string markdownText)
     {

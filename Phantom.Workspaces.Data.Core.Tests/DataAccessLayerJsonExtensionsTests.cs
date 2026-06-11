@@ -286,4 +286,36 @@ public sealed class DataAccessLayerJsonExtensionsTests
         
         Assert.Empty(result);
     }
+
+    [Fact]
+    public void JsonSerializer_EntityName_SerializesAsArray()
+    {
+        var entityName = new EntityName("documentation", "getting-started");
+
+        var json = JsonSerializer.Serialize(entityName);
+
+        Assert.Equal("""["documentation","getting-started"]""", json);
+    }
+
+    [Fact]
+    public void JsonSerializer_EntityName_DeserializesFromArray()
+    {
+        var entityName = JsonSerializer.Deserialize<EntityName>("""["documentation","getting-started"]""");
+
+        Assert.Equal(new EntityName("documentation", "getting-started"), entityName);
+    }
+
+    [Fact]
+    public void JsonSerializer_EntityName_DeserializesEmptyArrayToRoot()
+    {
+        var entityName = JsonSerializer.Deserialize<EntityName>("[]");
+
+        Assert.Equal(EntityName.Root, entityName);
+    }
+
+    [Fact]
+    public void JsonSerializer_EntityName_DeserializationRejectsNonArray()
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<EntityName>("""{"components":["one"]}"""));
+    }
 }
