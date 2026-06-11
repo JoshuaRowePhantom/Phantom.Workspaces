@@ -29,7 +29,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var rewriteState = await this.BuildRewrittenChangesAsync(request, cancellationToken);
+        var rewriteState = await this.BuildRewrittenChangesAsync(request, cancellationToken).ConfigureAwait(false);
         if (rewriteState.Failures.Count > 0)
         {
             return new UpdateResult
@@ -44,7 +44,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 UpdateMetadata = request.UpdateMetadata,
                 Changes = rewriteState.Changes,
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<RewriteState> BuildRewrittenChangesAsync(
@@ -93,11 +93,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var currentSnapshotsById = await this.GetCurrentSnapshotsByIdAsync(
             changesByEntityId.Keys,
             includeRelationships: true,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         this.ApplyManagedReferenceRelationshipChanges(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
         this.ApplyRelationshipDeleteCascade(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
-        var folderDeleteFailures = await this.ValidateFolderDeletesAsync(changesByEntityId, currentSnapshotsById, cancellationToken);
+        var folderDeleteFailures = await this.ValidateFolderDeletesAsync(changesByEntityId, currentSnapshotsById, cancellationToken).ConfigureAwait(false);
         if (folderDeleteFailures.Count > 0)
         {
             return new RewriteState
@@ -107,8 +107,8 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             };
         }
 
-        order = await this.ApplyFolderPrefixEntityChangesAsync(changesByEntityId, orderedChangesByEntityId, order, cancellationToken);
-        await this.ApplyDuplicateRelationshipCoalescingAsync(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, cancellationToken);
+        order = await this.ApplyFolderPrefixEntityChangesAsync(changesByEntityId, orderedChangesByEntityId, order, cancellationToken).ConfigureAwait(false);
+        await this.ApplyDuplicateRelationshipCoalescingAsync(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, cancellationToken).ConfigureAwait(false);
         var requestSchemasByName = this.GetSchemasFromRequest(
             new UpdateRequest
             {
@@ -120,7 +120,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             changesByEntityId,
             requestSchemasByName,
             currentSnapshotsById,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         if (validationFailures.Count > 0)
         {
             return new RewriteState
@@ -164,7 +164,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             var participants = this.GetRelationshipParticipantEntityIds(relationshipChange.Change.Data!.Value);
             foreach (var participant in participants)
             {
-                var participantSnapshot = await this.EnsureEntitySnapshotWithRelationshipsAsync(participant, currentSnapshotsById, cancellationToken);
+                var participantSnapshot = await this.EnsureEntitySnapshotWithRelationshipsAsync(participant, currentSnapshotsById, cancellationToken).ConfigureAwait(false);
                 if (participantSnapshot is null)
                 {
                     continue;
@@ -233,7 +233,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var fetchedSnapshots = await this.GetCurrentSnapshotsByIdAsync(
             new[] { entityId },
             includeRelationships: true,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         if (!fetchedSnapshots.TryGetValue(entityId, out var fetchedSnapshot))
         {
             return null;
@@ -408,7 +408,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         int nextOrder,
         CancellationToken cancellationToken)
     {
-        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken);
+        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken).ConfigureAwait(false);
         var projectedEntitiesById = latestSnapshotsById.ToDictionary(
             static pair => pair.Key,
             static pair => (Data: pair.Value.Data, pair.Value.ConcurrencyTag));
@@ -516,7 +516,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             var references = await this.ExtractReferencesAsync(
                 sourceData,
                 requestSchemaEntitiesByName,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             referencesBySource[sourceEntityId] = references;
             foreach (var reference in references)
             {
@@ -538,7 +538,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var currentReferencedSnapshotsById = await this.GetCurrentSnapshotsByIdAsync(
             remainingReferencedIds,
             includeRelationships: false,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         var requestEntitiesByName = this.GetEntitiesByName(changesByEntityId.Values
             .Where(static change => change.Data is { ValueKind: JsonValueKind.Object })
             .Select(static change => change.Data!.Value));
@@ -548,7 +548,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var unresolvedReferencedNames = referencedEntityNames
             .Where(name => !requestEntitiesByName.ContainsKey(name) && !currentChangedEntitiesByName.ContainsKey(name))
             .ToArray();
-        var currentReferencedEntitiesByName = await this.GetCurrentEntitiesByNameAsync(unresolvedReferencedNames, cancellationToken);
+        var currentReferencedEntitiesByName = await this.GetCurrentEntitiesByNameAsync(unresolvedReferencedNames, cancellationToken).ConfigureAwait(false);
 
         var failures = new List<EntityUpdateResult>();
         foreach (var pair in referencesBySource)
@@ -639,7 +639,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return Array.Empty<EntityUpdateResult>();
         }
 
-        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken);
+        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken).ConfigureAwait(false);
         var projectedEntitiesById = latestSnapshotsById.ToDictionary(
             static pair => pair.Key,
             static pair => pair.Value.Data);
@@ -698,7 +698,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     {
         var latestById = new Dictionary<EntityId, QueryEntitySnapshot>();
 #pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
 #pragma warning restore CS0618
         foreach (var batch in exportResult.ChangeBatches)
         {
@@ -804,7 +804,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var references = new List<ReferenceConstraint>();
         references.AddRange(this.ExtractRelationshipParticipantReferences(entityData));
         references.AddRange(this.ExtractHeuristicEntityIdReferences(entityData));
-        references.AddRange(await this.ExtractSchemaTypedReferencesAsync(entityData, requestSchemaEntitiesByName, cancellationToken));
+        references.AddRange(await this.ExtractSchemaTypedReferencesAsync(entityData, requestSchemaEntitiesByName, cancellationToken).ConfigureAwait(false));
         return references
             .GroupBy(
                 static reference => (
@@ -901,7 +901,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
         CancellationToken cancellationToken)
     {
-        var applicableSchemas = await this.ResolveApplicableSchemasAsync(entityData, requestSchemaEntitiesByName, cancellationToken);
+        var applicableSchemas = await this.ResolveApplicableSchemasAsync(entityData, requestSchemaEntitiesByName, cancellationToken).ConfigureAwait(false);
         if (applicableSchemas.Count == 0)
         {
             return Array.Empty<ReferenceConstraint>();
@@ -927,7 +927,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 applicableSchema.SchemaReference,
                 requestSchemaEntitiesByName,
                 references,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
 
         return references;
@@ -946,7 +946,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             schema,
             schemaName,
             requestSchemaEntitiesByName,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         if (resolvedSchema is null)
         {
             return;
@@ -983,7 +983,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     schemaName,
                     requestSchemaEntitiesByName,
                     references,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -998,7 +998,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     schemaName,
                     requestSchemaEntitiesByName,
                     references,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -1023,7 +1023,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     schemaName,
                     requestSchemaEntitiesByName,
                     references,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -1143,7 +1143,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             var rootSchema = await this.ResolveSchemaAsync(
                 schemaName,
                 requestSchemaEntitiesByName,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             if (rootSchema is null)
             {
                 return null;
@@ -1173,7 +1173,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         var referencedSchema = await this.ResolveSchemaAsync(
             referencedSchemaName,
             requestSchemaEntitiesByName,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         if (referencedSchema is null)
         {
             return null;
@@ -1330,7 +1330,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
 #pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
 #pragma warning restore CS0618
         foreach (var batch in exportResult.ChangeBatches)
         {
@@ -1752,7 +1752,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 RelationshipsToReturn = includeRelationships ? Array.Empty<GetRelationshipRequest>() : null,
                 Timestamps = new Timestamp?[] { null },
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         return getResult.Batches
             .SelectMany(static batch => batch.Entities)

@@ -33,7 +33,7 @@ public sealed class MongoDbFilesystemEditStore : IFilesystemEditStore
             CreatedAt = DateTime.UtcNow,
         };
 
-        await this.edits.InsertOneAsync(document, cancellationToken: cancellationToken);
+        await this.edits.InsertOneAsync(document, cancellationToken: cancellationToken).ConfigureAwait(false);
         return document.Id.ToString();
     }
 
@@ -48,7 +48,7 @@ public sealed class MongoDbFilesystemEditStore : IFilesystemEditStore
 
         var document = await this.edits
             .Find(Builders<MongoDbFilesystemEditDocument>.Filter.Eq(item => item.Id, objectId))
-            .FirstOrDefaultAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
         if (document is null)
         {
             return null;

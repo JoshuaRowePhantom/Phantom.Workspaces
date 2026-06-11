@@ -167,9 +167,7 @@ public sealed class SchemaPopulatorTests
             && defaultContent.TryGetProperty("mime-type", out var mimeType)
             && mimeType.ValueKind == JsonValueKind.String
             && string.Equals(mimeType.GetString(), "text/markdown", StringComparison.Ordinal)
-            && defaultContent.TryGetProperty("url", out var url)
-            && url.ValueKind == JsonValueKind.String
-            && string.Equals(url.GetString(), "documentation/getting-started.md", StringComparison.Ordinal)
+            && !defaultContent.TryGetProperty("url", out _)
             && defaultContent.TryGetProperty("content", out var inlineContent)
             && inlineContent.ValueKind == JsonValueKind.Object
             && inlineContent.TryGetProperty("text", out var text)
@@ -210,15 +208,103 @@ public sealed class SchemaPopulatorTests
             && content.ValueKind == JsonValueKind.Object
             && content.TryGetProperty("default", out var defaultContent)
             && defaultContent.ValueKind == JsonValueKind.Object
-            && defaultContent.TryGetProperty("url", out var url)
-            && url.ValueKind == JsonValueKind.String
-            && string.Equals(url.GetString(), "documentation/core-schema.md", StringComparison.Ordinal)
+            && !defaultContent.TryGetProperty("url", out _)
             && defaultContent.TryGetProperty("content", out var inlineContent)
             && inlineContent.ValueKind == JsonValueKind.Object
             && inlineContent.TryGetProperty("text", out var text)
             && text.ValueKind == JsonValueKind.String
             && text.GetString()!.Contains("# Core schema", StringComparison.Ordinal),
             "schema documentation markdown attachment was not materialized into inline content");
+    }
+
+    [Fact]
+    public async Task Populate_MaterializesAllEmbeddedMarkdownAttachments_ToInlineContent()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var entityDocuments = exportResult.ChangeBatches
+            .SelectMany(static changeBatch => changeBatch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .ToArray();
+        var knownEmbeddedMarkdownUrls = typeof(SchemaPopulator)
+            .Assembly
+            .GetManifestResourceNames()
+            .Where(static resourceName =>
+                resourceName.StartsWith("Phantom.Workspaces.Data.JsonEntities.", StringComparison.Ordinal)
+                && resourceName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            .Select(static resourceName =>
+            {
+                const string prefix = "Phantom.Workspaces.Data.JsonEntities.";
+                var relativeName = resourceName[prefix.Length..];
+                var relativeWithoutExtension = relativeName[..^3];
+                return $"{relativeWithoutExtension.Replace('.', '/')}.md";
+            })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var missingInlineMarkdownPaths = new List<string>();
+        foreach (var entityDocument in entityDocuments)
+        {
+            CollectMissingInlineMarkdownPaths(entityDocument, "$", knownEmbeddedMarkdownUrls, missingInlineMarkdownPaths);
+        }
+
+        Assert.True(
+            missingInlineMarkdownPaths.Count == 0,
+            $"Markdown attachments missing inline content at: {string.Join(", ", missingInlineMarkdownPaths)}");
+    }
+
+    [Fact]
+    public async Task Populate_RemovesEmbeddedMarkdownUrl_WhenInlineContentIsMaterialized()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var azureDevOpsProjectSchemaEntity = exportResult.ChangeBatches
+            .SelectMany(static changeBatch => changeBatch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray().Select(static part => part.GetString()).SequenceEqual(
+                        ["json-schemas", "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-project.json"])));
+
+        Assert.True(
+            azureDevOpsProjectSchemaEntity.TryGetProperty("content", out var content)
+            && content.ValueKind == JsonValueKind.Object
+            && content.TryGetProperty("default", out var defaultContent)
+            && defaultContent.ValueKind == JsonValueKind.Object
+            && defaultContent.TryGetProperty("mime-type", out var mimeType)
+            && mimeType.ValueKind == JsonValueKind.String
+            && string.Equals(mimeType.GetString(), "text/markdown", StringComparison.Ordinal)
+            && !defaultContent.TryGetProperty("url", out _)
+            && defaultContent.TryGetProperty("content", out var inlineContent)
+            && inlineContent.ValueKind == JsonValueKind.Object
+            && inlineContent.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String
+            && text.GetString()!.Contains("# Azure DevOps Project Schema", StringComparison.Ordinal),
+            "schema documentation markdown URL should be removed after materializing inline markdown content");
     }
 
     [Fact]
@@ -470,6 +556,58 @@ public sealed class SchemaPopulatorTests
     {
         return new SchemaValidatingDataAccessLayer(
             new ReferentialIntegrityDataAccessLayer(underlyingDataAccessLayer));
+    }
+
+    private static void CollectMissingInlineMarkdownPaths(
+        JsonElement element,
+        string jsonPath,
+        ISet<string> knownEmbeddedMarkdownUrls,
+        ICollection<string> missingInlineMarkdownPaths)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("mime-type", out var mimeType)
+                && mimeType.ValueKind == JsonValueKind.String
+                && string.Equals(mimeType.GetString(), "text/markdown", StringComparison.Ordinal)
+                && element.TryGetProperty("url", out var url)
+                && url.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(url.GetString())
+                && url.GetString()!.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                && !url.GetString()!.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                && !url.GetString()!.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                && knownEmbeddedMarkdownUrls.Contains(url.GetString()!))
+            {
+                var hasInlineTextContent =
+                    element.TryGetProperty("content", out var content)
+                    && content.ValueKind == JsonValueKind.Object
+                    && content.TryGetProperty("text", out var text)
+                    && text.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(text.GetString());
+                if (!hasInlineTextContent)
+                {
+                    missingInlineMarkdownPaths.Add(jsonPath);
+                }
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                CollectMissingInlineMarkdownPaths(property.Value, $"{jsonPath}.{property.Name}", knownEmbeddedMarkdownUrls, missingInlineMarkdownPaths);
+            }
+
+            return;
+        }
+
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var arrayIndex = 0;
+        foreach (var item in element.EnumerateArray())
+        {
+            CollectMissingInlineMarkdownPaths(item, $"{jsonPath}[{arrayIndex}]", knownEmbeddedMarkdownUrls, missingInlineMarkdownPaths);
+            arrayIndex++;
+        }
     }
 
     private static bool IsFolderEntity(

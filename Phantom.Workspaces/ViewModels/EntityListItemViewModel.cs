@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using Avalonia;
 
@@ -19,6 +20,7 @@ public sealed class EntityListItemViewModel : ViewModelBase
         bool isExpanded = false)
     {
         this.Node = node;
+        this.Node.PropertyChanged += this.OnNodePropertyChanged;
         this.Order = order;
         this.Level = level;
         this.ItemKey = itemKey;
@@ -58,6 +60,20 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.Node.FieldEditors;
 
+    public bool IsEditMode => this.Node.IsEditMode;
+
+    public RelayCommand ToggleEditModeCommand => this.Node.ToggleEditModeCommand;
+
+    public RelayCommand SaveEditModeCommand => this.Node.SaveEditModeCommand;
+
+    public RelayCommand DiscardEditModeCommand => this.Node.DiscardEditModeCommand;
+
+    public string EditModeGlyph => this.Node.EditModeGlyph;
+
+    public bool ShowEditIndicator => this.Node.ShowEditIndicator;
+
+    public bool ShowEditActions => this.Node.ShowEditActions;
+
     public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
 
     public CornerRadius ContentCornerRadius => this.HasChildren
@@ -78,6 +94,35 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
             this.Node.IsExpanded = value;
             this.RaisePropertyChanged(nameof(this.ExpandArrow));
+        }
+    }
+
+    private void OnNodePropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.FieldEditors), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.FieldEditors));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsEditMode), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsEditMode));
+            this.RaisePropertyChanged(nameof(this.EditModeGlyph));
+            this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
+            this.RaisePropertyChanged(nameof(this.ShowEditActions));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.EditModeGlyph), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.EditModeGlyph));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowEditIndicator), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowEditActions), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowEditActions));
         }
     }
 }

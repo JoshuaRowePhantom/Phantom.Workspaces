@@ -46,7 +46,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         GetRequest request,
         CancellationToken cancellationToken = default)
     {
-        var result = await this.filesystemDataAccessLayer.GetAsync(request, cancellationToken);
+        var result = await this.filesystemDataAccessLayer.GetAsync(request, cancellationToken).ConfigureAwait(false);
         if (request.Entities.Count == 0)
         {
             return result;
@@ -171,7 +171,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
             var hasRemote = repository.Network.Remotes["origin"] is not null;
             this.ResetBeforeUpdate(repository, hasRemote);
 
-            var updateResult = await this.filesystemDataAccessLayer.UpdateAsync(request, cancellationToken);
+            var updateResult = await this.filesystemDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
             if (updateResult.EntityResults.Any(entityResult => entityResult.UpdateState == UpdateState.Failed))
             {
                 return updateResult;

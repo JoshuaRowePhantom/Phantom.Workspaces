@@ -68,13 +68,13 @@ public sealed class PerInvocationDataAccessLayer : IDataAccessLayer
         var dataAccessLayer = this.createDataAccessLayer();
         try
         {
-            return await execute(dataAccessLayer);
+            return await execute(dataAccessLayer).ConfigureAwait(false);
         }
         finally
         {
             if (dataAccessLayer is IAsyncDisposable asyncDisposable)
             {
-                await asyncDisposable.DisposeAsync();
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
             }
             else if (dataAccessLayer is IDisposable disposable)
             {

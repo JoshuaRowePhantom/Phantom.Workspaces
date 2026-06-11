@@ -13,8 +13,21 @@
                     <StackPanel Classes="workspace-entity-header-row">
                         <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
                         <TextBlock Text="{Binding EntityType}" Classes="muted" />
+                        <Button Content="{Binding EditModeGlyph}"
+                                Classes="workspace-edit-indicator-button"
+                                IsVisible="{Binding ShowEditIndicator}"
+                                Command="{Binding ToggleEditModeCommand}" />
+                        <Button Content="💾"
+                                Classes="workspace-edit-action-button"
+                                IsVisible="{Binding ShowEditActions}"
+                                Command="{Binding SaveEditModeCommand}" />
+                        <Button Content="✖"
+                                Classes="workspace-edit-action-button"
+                                IsVisible="{Binding ShowEditActions}"
+                                Command="{Binding DiscardEditModeCommand}" />
                     </StackPanel>
-                    <ItemsControl ItemsSource="{Binding FieldEditors}" />
+                    <ItemsControl ItemsSource="{Binding FieldEditors}"
+                                  Classes="workspace-field-editor-list" />
                 </StackPanel>
             </Border>
             <Border IsVisible="{Binding HasChildren}"
@@ -39,8 +52,21 @@
                     <StackPanel Classes="workspace-entity-header-row">
                         <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
                         <TextBlock Text="{Binding EntityType}" Classes="muted" />
+                        <Button Content="{Binding EditModeGlyph}"
+                                Classes="workspace-edit-indicator-button"
+                                IsVisible="{Binding ShowEditIndicator}"
+                                Command="{Binding ToggleEditModeCommand}" />
+                        <Button Content="💾"
+                                Classes="workspace-edit-action-button"
+                                IsVisible="{Binding ShowEditActions}"
+                                Command="{Binding SaveEditModeCommand}" />
+                        <Button Content="✖"
+                                Classes="workspace-edit-action-button"
+                                IsVisible="{Binding ShowEditActions}"
+                                Command="{Binding DiscardEditModeCommand}" />
                     </StackPanel>
-                    <ItemsControl ItemsSource="{Binding FieldEditors}" />
+                    <ItemsControl ItemsSource="{Binding FieldEditors}"
+                                  Classes="workspace-field-editor-list" />
                 </StackPanel>
             </Border>
             <Border IsVisible="{Binding HasChildren}"
@@ -74,41 +100,194 @@
               ColumnDefinitions="200,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding Value}"
+                       Classes="workspace-field-read-value"
+                       IsVisible="{Binding IsReadMode}" />
             <TextBox Grid.Column="1"
-                     Text="{Binding Value}"
+                     Text="{Binding Value, Mode=TwoWay}"
+                     IsVisible="{Binding IsEditMode}"
                      Classes="workspace-field-value" />
         </Grid>
     </DataTemplate>
 
     <DataTemplate DataType="vm:LocalStringFieldEditorViewModel">
-        <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
-            <ItemsControl ItemsSource="{Binding LocalizedValues}" Classes="workspace-field-items" />
-        </Expander>
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*,Auto"
+              RowDefinitions="Auto,Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding Value}"
+                       Classes="workspace-field-read-value"
+                       IsVisible="{Binding IsReadMode}" />
+            <TextBox Grid.Column="1"
+                     Text="{Binding Value, Mode=TwoWay}"
+                     IsVisible="{Binding IsEditMode}"
+                     Classes="workspace-field-value" />
+            <Button Grid.Column="2"
+                    Content="+"
+                    Classes="workspace-edit-action-button"
+                    IsVisible="{Binding ShowAddLocaleButton}"
+                    Command="{Binding AddLocaleCommand}" />
+            <Expander Grid.Row="1"
+                      Grid.Column="1"
+                      Grid.ColumnSpan="2"
+                      Header="Other locales"
+                      IsVisible="{Binding ShowOtherLocalesExpander}"
+                      Classes="workspace-field-expander">
+                <ItemsControl ItemsSource="{Binding OtherLocalizedValues}" Classes="workspace-field-items">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:LocalizedTextValueViewModel">
+                            <Grid Classes="workspace-field-row" ColumnDefinitions="120,*">
+                                <TextBox Text="{Binding Locale, Mode=TwoWay}" Classes="workspace-field-value" />
+                                <TextBox Grid.Column="1" Text="{Binding Value, Mode=TwoWay}" Classes="workspace-field-value" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Expander>
+        </Grid>
     </DataTemplate>
 
-    <DataTemplate DataType="vm:MimeAttachmentFieldEditorViewModel">
+    <DataTemplate DataType="vm:JsonSchemaFieldEditorViewModel">
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*"
+              RowDefinitions="Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <md:Markdown Grid.Column="1"
+                         Text="{Binding MarkdownText}"
+                         IsVisible="{Binding IsReadMode}"
+                         Classes="workspace-markdown-viewer workspace-json-schema-viewer" />
+            <TextBox Grid.Column="1"
+                     Text="{Binding JsonText, Mode=TwoWay}"
+                     IsVisible="{Binding IsEditMode}"
+                     Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:PlainMimeAttachmentFieldEditorViewModel">
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
             <StackPanel Classes="workspace-mime-content">
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="200,*">
                     <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
-                    <TextBox Grid.Column="1" Text="{Binding MimeType}" Classes="workspace-field-value" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding MimeType}"
+                               Classes="workspace-field-read-value"
+                               IsVisible="{Binding IsReadMode}" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding MimeType, Mode=TwoWay}"
+                             IsVisible="{Binding IsEditMode}"
+                             Classes="workspace-field-value" />
                 </Grid>
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="200,*">
                     <TextBlock Text="url" Classes="muted workspace-field-label" />
-                    <TextBox Grid.Column="1" Text="{Binding Url}" Classes="workspace-field-value" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Url}"
+                               Classes="workspace-field-read-value"
+                               IsVisible="{Binding IsReadMode}" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding Url, Mode=TwoWay}"
+                             IsVisible="{Binding IsEditMode}"
+                             Classes="workspace-field-value" />
                 </Grid>
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="200,*"
-                      IsVisible="{Binding IsMarkdown}">
+                      IsVisible="{Binding ShowPlainTextReadMode}">
+                    <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding TextContent}"
+                               Classes="workspace-field-read-value workspace-markdown-content" />
+                </Grid>
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*"
+                      IsVisible="{Binding ShowPlainTextEditMode}">
                     <TextBlock Text="content.text" Classes="muted workspace-field-label" />
                     <TextBox Grid.Column="1"
-                             Text="{Binding TextContent}"
+                             Text="{Binding TextContent, Mode=TwoWay}"
                              Classes="workspace-field-value workspace-markdown-content" />
                 </Grid>
             </StackPanel>
         </Expander>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:MarkdownMimeAttachmentFieldEditorViewModel">
+        <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
+            <StackPanel Classes="workspace-mime-content">
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*">
+                    <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding MimeType}"
+                               Classes="workspace-field-read-value"
+                               IsVisible="{Binding IsReadMode}" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding MimeType, Mode=TwoWay}"
+                             IsVisible="{Binding IsEditMode}"
+                             Classes="workspace-field-value" />
+                </Grid>
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*">
+                    <TextBlock Text="url" Classes="muted workspace-field-label" />
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Url}"
+                               Classes="workspace-field-read-value"
+                               IsVisible="{Binding IsReadMode}" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding Url, Mode=TwoWay}"
+                             IsVisible="{Binding IsEditMode}"
+                             Classes="workspace-field-value" />
+                </Grid>
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*"
+                      IsVisible="{Binding ShowMarkdownReadMode}">
+                    <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                    <md:Markdown Grid.Column="1"
+                                 Text="{Binding TextContent}"
+                                 Classes="workspace-markdown-viewer" />
+                </Grid>
+                <Grid Classes="workspace-field-row"
+                      ColumnDefinitions="200,*"
+                      IsVisible="{Binding ShowMarkdownEditMode}">
+                    <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                    <md:Markdown Grid.Column="1"
+                                 Text="{Binding TextContent, Mode=TwoWay}"
+                                 Classes="workspace-markdown-editor" />
+                </Grid>
+            </StackPanel>
+        </Expander>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:LocalizedMimeAttachmentFieldEditorViewModel">
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*,Auto"
+              RowDefinitions="Auto,Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <ContentControl Grid.Column="1" Content="{Binding ActiveEditor}" />
+            <Button Grid.Column="2"
+                    Content="+"
+                    Classes="workspace-edit-action-button"
+                    IsVisible="{Binding ShowAddLocaleButton}"
+                    Command="{Binding AddLocaleCommand}" />
+            <Expander Grid.Row="1"
+                      Grid.Column="1"
+                      Grid.ColumnSpan="2"
+                      Header="Other locales"
+                      IsVisible="{Binding ShowOtherLocalesExpander}"
+                      Classes="workspace-field-expander">
+                <ItemsControl ItemsSource="{Binding OtherLocalizedValues}" Classes="workspace-field-items">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:LocalizedMimeAttachmentValueViewModel">
+                            <StackPanel>
+                                <TextBox Text="{Binding Locale, Mode=TwoWay}" Classes="workspace-field-value" />
+                                <ContentControl Content="{Binding Editor}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Expander>
+        </Grid>
     </DataTemplate>
 
     <DataTemplate DataType="vm:ArrayFieldEditorViewModel">

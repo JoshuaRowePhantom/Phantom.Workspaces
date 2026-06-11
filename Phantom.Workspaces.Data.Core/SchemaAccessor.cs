@@ -40,7 +40,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
             return cachedSchema;
         }
 
-        await this.EnsureSchemasLoadedAsync(cancellationToken);
+        await this.EnsureSchemasLoadedAsync(cancellationToken).ConfigureAwait(false);
         foreach (var schemaName in GetSchemaEntityNames(schemaReference))
         {
             if (this.requestSchemasByName.TryGetValue(schemaName, out var requestSchema))
@@ -68,7 +68,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
             return this.schemaRegistry;
         }
 
-        await this.EnsureSchemasLoadedAsync(cancellationToken);
+        await this.EnsureSchemasLoadedAsync(cancellationToken).ConfigureAwait(false);
         var schemaRegistry = new SchemaRegistry();
         var requestSchemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var schemaEntity in this.requestSchemasByName.Values)
@@ -129,7 +129,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
         var schemasByName = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         var schemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
 #pragma warning disable CS0618
-        var exportResult = await this.dataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+        var exportResult = await this.dataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
 #pragma warning restore CS0618
 
         foreach (var entityData in exportResult.ChangeBatches

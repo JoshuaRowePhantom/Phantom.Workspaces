@@ -459,9 +459,23 @@
     <Style Selector="StackPanel.workspace-entity-header-row">
         <Setter Property="Orientation" Value="Horizontal" />
         <Setter Property="Spacing" Value="8" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="TextBlock.workspace-entity-title">
         <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.workspace-edit-indicator-button">
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="Padding" Value="4,0" />
+    </Style>
+    <Style Selector="Button.workspace-edit-action-button">
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="Padding" Value="4,0" />
+    </Style>
+    <Style Selector="ItemsControl.workspace-field-editor-list">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="StackPanel.workspace-template-browser-root">
         <Setter Property="Spacing" Value="6" />
@@ -470,14 +484,21 @@
         <Setter Property="Margin" Value="0,4,8,0" />
     </Style>
     <Style Selector="TextBox.workspace-field-value">
-        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.workspace-field-read-value">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Margin" Value="0,4,0,0" />
     </Style>
     <Style Selector="Expander.workspace-field-expander">
         <Setter Property="IsExpanded" Value="False" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="ItemsControl.workspace-field-items">
         <Setter Property="Margin" Value="8,4,0,0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="StackPanel.workspace-mime-content">
         <Setter Property="Margin" Value="8,4,0,0" />
@@ -486,6 +507,21 @@
     <Style Selector="TextBox.workspace-markdown-content">
         <Setter Property="AcceptsReturn" Value="True" />
         <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-viewer">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-editor">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="Control.workspace-json-schema-viewer">
+        <Setter Property="MinHeight" Value="180" />
+    </Style>
+    <Style Selector="TextBox.workspace-json-schema-editor">
+        <Setter Property="MinHeight" Value="180" />
+        <Setter Property="AcceptsReturn" Value="True" />
     </Style>
     <Style Selector="StackPanel.workspace-region-header-row">
         <Setter Property="Orientation" Value="Horizontal" />

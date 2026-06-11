@@ -36,7 +36,7 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
             .Where(static entityId => entityId is not null)
             .Select(static entityId => entityId!.Value)
             .ToHashSet();
-        var snapshotsById = await this.GetCurrentSnapshotsByIdAsync(idsToLoad, cancellationToken);
+        var snapshotsById = await this.GetCurrentSnapshotsByIdAsync(idsToLoad, cancellationToken).ConfigureAwait(false);
 
         var statesById = new Dictionary<EntityId, CoalescedEntityState>();
         var coalescedOrder = new List<EntityId>();
@@ -243,7 +243,7 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
                 UpdateMetadata = request.UpdateMetadata,
                 Changes = processedChanges,
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         if (noOpEntityResults.Count == 0)
         {
@@ -378,7 +378,7 @@ public class MergeProcessingDataAccessLayer : BaseUpdateProcessingDataAccessLaye
                 Entities = entityIds.Select(static id => new GetEntityRequest { EntityId = id }).ToArray(),
                 Timestamps = new Timestamp?[] { null },
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         return getResult.Batches
             .SelectMany(static batch => batch.Entities)

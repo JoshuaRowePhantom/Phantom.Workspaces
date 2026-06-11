@@ -33,11 +33,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     {
         var validationResults = new List<EntityUpdateResult>();
         var schemaAccessor = this.CreateSchemaAccessor(request);
-        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken);
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
 
         foreach (var change in request.Changes)
         {
-            var validationErrors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken);
+            var validationErrors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken).ConfigureAwait(false);
             if (validationErrors.Count == 0)
             {
                 continue;
@@ -63,7 +63,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             };
         }
 
-        return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
+        return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     protected virtual async Task<IReadOnlyCollection<UpdateError>> ValidateChangeAsync(
@@ -77,7 +77,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return Array.Empty<UpdateError>();
         }
 
-        var applicableSchemas = await this.ResolveApplicableSchemasAsync(data, schemaAccessor, cancellationToken);
+        var applicableSchemas = await this.ResolveApplicableSchemasAsync(data, schemaAccessor, cancellationToken).ConfigureAwait(false);
         if (applicableSchemas.Count == 0)
         {
             return Array.Empty<UpdateError>();
@@ -259,7 +259,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         var applicableSchemas = new List<ApplicableSchema>(schemaReferences.Length);
         foreach (var schemaReference in schemaReferences)
         {
-            var schemaEntity = await schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken);
+            var schemaEntity = await schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken).ConfigureAwait(false);
             applicableSchemas.Add(
                 new ApplicableSchema
                 {
@@ -419,7 +419,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             schemaReference,
             requestSchemasByName,
             new HashSet<string>(StringComparer.Ordinal),
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     protected async Task<JsonElement?> ResolveSchemaAsync(
@@ -461,7 +461,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                     ],
                     Timestamps = new Timestamp?[] { null },
                 },
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             foreach (var batch in getResult.Batches)
             {
@@ -476,7 +476,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
 #pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
+        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
 #pragma warning restore CS0618
         foreach (var entity in exportResult.ChangeBatches.SelectMany(static batch => batch.Entities))
         {

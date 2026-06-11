@@ -335,43 +335,65 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         switch (resolvedType.TypeName)
         {
             case "local-string":
+                if (fieldValue.ValueKind == JsonValueKind.String)
+                {
+                    return new LocalStringFieldEditorViewModel(fieldName, fieldValue.GetString() ?? string.Empty);
+                }
+
                 if (fieldValue.ValueKind == JsonValueKind.Object)
                 {
                     var localizedValues = fieldValue.EnumerateObject()
                         .Where(static property => property.Value.ValueKind == JsonValueKind.String)
-                        .Select(property => new StringFieldEditorViewModel(property.Name, property.Value.GetString() ?? string.Empty))
+                        .Select(property => new LocalizedTextValueViewModel(property.Name, property.Value.GetString() ?? string.Empty))
                         .ToArray();
-                    return new LocalStringFieldEditorViewModel(fieldName, localizedValues);
+                    if (localizedValues.Length > 0)
+                    {
+                        return new LocalStringFieldEditorViewModel(fieldName, localizedValues);
+                    }
                 }
 
-                return new LocalStringFieldEditorViewModel(
-                    fieldName,
-                    [new StringFieldEditorViewModel("default", fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() ?? string.Empty : string.Empty)]);
+                return new LocalStringFieldEditorViewModel(fieldName, fieldValue.ToString());
             case "mime-attachment":
                 if (fieldValue.ValueKind == JsonValueKind.Object)
                 {
-                    var mimeType = fieldValue.TryGetProperty("mime-type", out var mimeTypeElement)
+                    if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, resolvedType.DefaultMimeType, out var localizedMimeEditor))
+                    {
+                        return localizedMimeEditor;
+                    }
+
+                    var mimeAttachmentValue = fieldValue;
+                    if (!fieldValue.TryGetProperty("mime-type", out _)
+                        && fieldValue.TryGetProperty("default", out var defaultMimeAttachment)
+                        && defaultMimeAttachment.ValueKind == JsonValueKind.Object)
+                    {
+                        mimeAttachmentValue = defaultMimeAttachment;
+                    }
+
+                    var mimeType = mimeAttachmentValue.TryGetProperty("mime-type", out var mimeTypeElement)
                         && mimeTypeElement.ValueKind == JsonValueKind.String
                         ? mimeTypeElement.GetString()!
                         : resolvedType.DefaultMimeType ?? "application/octet-stream";
-                    var textContent = fieldValue.TryGetProperty("content", out var contentElement)
+                    var textContent = mimeAttachmentValue.TryGetProperty("content", out var contentElement)
                                       && contentElement.ValueKind == JsonValueKind.Object
                                       && contentElement.TryGetProperty("text", out var textElement)
                                       && textElement.ValueKind == JsonValueKind.String
                         ? textElement.GetString()
                         : null;
-                    var url = fieldValue.TryGetProperty("url", out var urlElement)
+                    var url = mimeAttachmentValue.TryGetProperty("url", out var urlElement)
                               && urlElement.ValueKind == JsonValueKind.String
                         ? urlElement.GetString()
                         : null;
-                    return new MimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+                    MimeAttachmentFieldEditorViewModel editor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
+                        ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
+                        : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+                    return new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, editor);
                 }
 
-                return new MimeAttachmentFieldEditorViewModel(
-                    fieldName,
-                    resolvedType.DefaultMimeType ?? "application/octet-stream",
-                    null,
-                    null);
+                var defaultMimeType = resolvedType.DefaultMimeType ?? "application/octet-stream";
+                MimeAttachmentFieldEditorViewModel defaultEditor = string.Equals(defaultMimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
+                    ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null)
+                    : new PlainMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null);
+                return new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, defaultEditor);
             case "array":
                 if (fieldValue.ValueKind != JsonValueKind.Array)
                 {
@@ -392,6 +414,16 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 if (fieldValue.ValueKind != JsonValueKind.Object)
                 {
                     return new ObjectFieldEditorViewModel(fieldName, Array.Empty<EntityFieldEditorViewModel>());
+                }
+
+                if (TryCreateJsonSchemaEditor(fieldName, fieldValue, out var jsonSchemaEditor))
+                {
+                    return jsonSchemaEditor;
+                }
+
+                if (TryCreateMimeAttachmentEditor(fieldName, fieldValue, resolvedType.DefaultMimeType, out var mimeAttachmentEditor))
+                {
+                    return mimeAttachmentEditor;
                 }
 
                 var childFieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
@@ -419,5 +451,148 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             default:
                 return new StringFieldEditorViewModel(fieldName, fieldValue.ToString());
         }
+    }
+
+    private static bool TryCreateLocalizedMimeAttachmentEditor(
+        string fieldName,
+        JsonElement fieldValue,
+        string? defaultMimeType,
+        out EntityFieldEditorViewModel editor)
+    {
+        editor = null!;
+        if (fieldValue.ValueKind != JsonValueKind.Object || fieldValue.TryGetProperty("mime-type", out _))
+        {
+            return false;
+        }
+
+        var localizedValues = new List<LocalizedMimeAttachmentValueViewModel>();
+        foreach (var property in fieldValue.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Object
+                || !TryCreateSingleMimeAttachmentEditor(fieldName, property.Value, defaultMimeType, out var localizedEditor))
+            {
+                localizedValues.Clear();
+                break;
+            }
+
+            localizedValues.Add(new LocalizedMimeAttachmentValueViewModel(property.Name, localizedEditor));
+        }
+
+        if (localizedValues.Count == 0)
+        {
+            return false;
+        }
+
+        editor = new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, localizedValues);
+        return true;
+    }
+
+    private static bool TryCreateSingleMimeAttachmentEditor(
+        string fieldName,
+        JsonElement fieldValue,
+        string? defaultMimeType,
+        out MimeAttachmentFieldEditorViewModel editor)
+    {
+        editor = null!;
+        if (fieldValue.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var hasMimeType = fieldValue.TryGetProperty("mime-type", out var mimeTypeElement)
+            && mimeTypeElement.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(mimeTypeElement.GetString());
+        if (!hasMimeType && string.IsNullOrWhiteSpace(defaultMimeType))
+        {
+            return false;
+        }
+
+        var mimeType = hasMimeType
+            ? mimeTypeElement.GetString()!
+            : defaultMimeType!;
+        var textContent = fieldValue.TryGetProperty("content", out var contentElement)
+                          && contentElement.ValueKind == JsonValueKind.Object
+                          && contentElement.TryGetProperty("text", out var textElement)
+                          && textElement.ValueKind == JsonValueKind.String
+            ? textElement.GetString()
+            : null;
+        var url = fieldValue.TryGetProperty("url", out var urlElement)
+                  && urlElement.ValueKind == JsonValueKind.String
+            ? urlElement.GetString()
+            : null;
+        editor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
+            ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
+            : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+        return true;
+    }
+
+    private static bool TryCreateMimeAttachmentEditor(
+        string fieldName,
+        JsonElement fieldValue,
+        string? defaultMimeType,
+        out EntityFieldEditorViewModel editor)
+    {
+        editor = null!;
+        if (fieldValue.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, defaultMimeType, out var localizedEditor))
+        {
+            editor = localizedEditor;
+            return true;
+        }
+
+        var mimeAttachmentValue = fieldValue;
+        if (!fieldValue.TryGetProperty("mime-type", out _)
+            && fieldValue.TryGetProperty("default", out var defaultMimeAttachment)
+            && defaultMimeAttachment.ValueKind == JsonValueKind.Object)
+        {
+            mimeAttachmentValue = defaultMimeAttachment;
+        }
+
+        var hasMimeType = mimeAttachmentValue.TryGetProperty("mime-type", out var mimeTypeElement)
+            && mimeTypeElement.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(mimeTypeElement.GetString());
+        if (!hasMimeType && string.IsNullOrWhiteSpace(defaultMimeType))
+        {
+            return false;
+        }
+
+        var mimeType = hasMimeType
+            ? mimeTypeElement.GetString()!
+            : defaultMimeType!;
+        var textContent = mimeAttachmentValue.TryGetProperty("content", out var contentElement)
+                          && contentElement.ValueKind == JsonValueKind.Object
+                          && contentElement.TryGetProperty("text", out var textElement)
+                          && textElement.ValueKind == JsonValueKind.String
+            ? textElement.GetString()
+            : null;
+        var url = mimeAttachmentValue.TryGetProperty("url", out var urlElement)
+                  && urlElement.ValueKind == JsonValueKind.String
+            ? urlElement.GetString()
+            : null;
+        MimeAttachmentFieldEditorViewModel mimeEditor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
+            ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
+            : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+        editor = new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, mimeEditor);
+        return true;
+    }
+
+    private static bool TryCreateJsonSchemaEditor(
+        string fieldName,
+        JsonElement fieldValue,
+        out EntityFieldEditorViewModel editor)
+    {
+        editor = null!;
+        if (!string.Equals(fieldName, "schema", StringComparison.Ordinal)
+            || (fieldValue.ValueKind != JsonValueKind.Object && fieldValue.ValueKind != JsonValueKind.Array))
+        {
+            return false;
+        }
+
+        editor = new JsonSchemaFieldEditorViewModel(fieldName, fieldValue.GetRawText());
+        return true;
     }
 }

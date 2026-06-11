@@ -20,7 +20,7 @@ public sealed class FieldTypeResolver
         JsonElement fieldValue,
         CancellationToken cancellationToken = default)
     {
-        var schemaNode = await this.ResolveFieldSchemaAsync(rootEntity, fieldPath, cancellationToken);
+        var schemaNode = await this.ResolveFieldSchemaAsync(rootEntity, fieldPath, cancellationToken).ConfigureAwait(false);
         if (schemaNode is null)
         {
             return new ResolvedFieldType
@@ -55,7 +55,7 @@ public sealed class FieldTypeResolver
             }
         }
 
-        var objectSchemas = await this.ResolveFieldSchemasAsync(rootEntity, objectPath, cancellationToken);
+        var objectSchemas = await this.ResolveFieldSchemasAsync(rootEntity, objectPath, cancellationToken).ConfigureAwait(false);
         foreach (var schemaObject in objectSchemas.Where(static schema => schema.ValueKind == JsonValueKind.Object))
         {
             this.CollectPropertyNames(schemaObject, fields);
@@ -72,7 +72,7 @@ public sealed class FieldTypeResolver
         var schemaReferences = this.GetSchemaReferencesForEntity(rootEntity);
         foreach (var schemaReference in schemaReferences)
         {
-            var schemaEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken);
+            var schemaEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken).ConfigureAwait(false);
             if (schemaEntity is null)
             {
                 continue;
@@ -90,7 +90,7 @@ public sealed class FieldTypeResolver
                 0,
                 currentSchemaId: GetSchemaId(schemaEntity.Value),
                 visitedReferences: new HashSet<string>(StringComparer.Ordinal),
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             if (resolved is not null)
             {
                 return resolved;
@@ -109,7 +109,7 @@ public sealed class FieldTypeResolver
         var schemaReferences = this.GetSchemaReferencesForEntity(rootEntity);
         foreach (var schemaReference in schemaReferences)
         {
-            var schemaEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken);
+            var schemaEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken).ConfigureAwait(false);
             if (schemaEntity is null)
             {
                 continue;
@@ -127,7 +127,7 @@ public sealed class FieldTypeResolver
                 0,
                 currentSchemaId: GetSchemaId(schemaEntity.Value),
                 visitedReferences: new HashSet<string>(StringComparer.Ordinal),
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             if (resolved is not null)
             {
                 resolvedSchemas.Add(resolved.Value);
@@ -159,7 +159,7 @@ public sealed class FieldTypeResolver
             schemaNode,
             currentSchemaId,
             visitedReferences,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         if (dereferencedNode is null)
         {
             return null;
@@ -177,7 +177,7 @@ public sealed class FieldTypeResolver
                 pathIndex + 1,
                 currentSchemaId,
                 visitedReferences,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             if (directResult is not null)
             {
                 return directResult;
@@ -193,7 +193,7 @@ public sealed class FieldTypeResolver
                 pathIndex + 1,
                 currentSchemaId,
                 visitedReferences,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
             if (additionalResult is not null)
             {
                 return additionalResult;
@@ -216,7 +216,7 @@ public sealed class FieldTypeResolver
                     pathIndex,
                     currentSchemaId,
                     visitedReferences,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
                 if (compositionResult is not null)
                 {
                     return compositionResult;
@@ -252,7 +252,7 @@ public sealed class FieldTypeResolver
             return null;
         }
 
-        var referencedEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken);
+        var referencedEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken).ConfigureAwait(false);
         if (referencedEntity is null)
         {
             return null;

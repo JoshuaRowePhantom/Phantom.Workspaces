@@ -4,9 +4,9 @@ using Json.Schema;
 
 namespace Phantom.Workspaces.Data.MongoDB;
 
- [JsonPolymorphic(TypeDiscriminatorPropertyName = "provider")]
- [JsonDerivedType(typeof(MongoDbContainerConnectionDefinition), "container")]
- [JsonDerivedType(typeof(MongoDbExternalConnectionDefinition), "external")]
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "provider")]
+[JsonDerivedType(typeof(MongoDbContainerConnectionDefinition), "container")]
+[JsonDerivedType(typeof(MongoDbExternalConnectionDefinition), "external")]
 public abstract class MongoDbConnectionDefinition
 {
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();

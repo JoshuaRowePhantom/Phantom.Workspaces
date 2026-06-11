@@ -21,7 +21,7 @@ public sealed class SchemaPopulator
     {
         var errors = new List<UpdateError>();
         var rawChanges = this.LoadEntityChanges(errors).ToArray();
-        var changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges);
+        var changes = await this.ApplyCurrentConcurrencyTagsAsync(rawChanges).ConfigureAwait(false);
 
         var updateResult = await this.dataAccessLayer.UpdateAsync(
             new UpdateRequest
@@ -34,7 +34,7 @@ public sealed class SchemaPopulator
                     },
                 },
                 Changes = changes,
-            });
+            }).ConfigureAwait(false);
 
         foreach (var entityResult in updateResult.EntityResults)
         {
@@ -62,7 +62,7 @@ public sealed class SchemaPopulator
             {
                 Entities = entityIds.Select(static entityId => new GetEntityRequest { EntityId = entityId }).ToArray(),
                 Timestamps = [null],
-            });
+            }).ConfigureAwait(false);
         var snapshotsById = getResult.Batches
             .SelectMany(static batch => batch.Entities)
             .ToDictionary(static snapshot => snapshot.EntityId, static snapshot => snapshot);
@@ -209,6 +209,12 @@ public sealed class SchemaPopulator
         writer.WriteStartObject();
         foreach (var property in element.EnumerateObject())
         {
+            if (shouldInjectMarkdownText
+                && string.Equals(property.Name, "url", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             writer.WritePropertyName(property.Name);
             this.WriteMaterializedElement(property.Value, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
         }

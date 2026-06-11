@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Text.Json;
 using Avalonia;
 using Phantom.Workspaces.Data;
@@ -10,10 +11,12 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class EntityListNodeViewModel : ViewModelBase
 {
     private bool isExpanded;
+    private bool isEditMode;
+    private IReadOnlyCollection<EntityFieldEditorViewModel>? editModeSnapshot;
     private readonly SubscribedEntityViewModel? entity;
     private readonly string displayName;
     private readonly string entityType;
-    private readonly IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
+    private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
 
     public EntityListNodeViewModel(
         SubscribedEntityViewModel entity,
@@ -25,11 +28,21 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.displayName = entity.DisplayName;
         this.entityType = entity.EntityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
+        this.SetFieldEditorEditMode(false);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(
             _ => this.IsExpanded = !this.IsExpanded,
             _ => this.HasChildren);
+        this.ToggleEditModeCommand = new RelayCommand(
+            _ => this.EnterEditMode(),
+            _ => !this.IsEditMode && this.FieldEditors.Count > 0);
+        this.SaveEditModeCommand = new RelayCommand(
+            _ => this.SaveEditMode(),
+            _ => this.IsEditMode);
+        this.DiscardEditModeCommand = new RelayCommand(
+            _ => this.DiscardEditMode(),
+            _ => this.IsEditMode);
     }
 
     public EntityListNodeViewModel(
@@ -44,11 +57,21 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.displayName = displayName;
         this.entityType = entityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
+        this.SetFieldEditorEditMode(false);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(
             _ => this.IsExpanded = !this.IsExpanded,
             _ => this.HasChildren);
+        this.ToggleEditModeCommand = new RelayCommand(
+            _ => this.EnterEditMode(),
+            _ => !this.IsEditMode && this.FieldEditors.Count > 0);
+        this.SaveEditModeCommand = new RelayCommand(
+            _ => this.SaveEditMode(),
+            _ => this.IsEditMode);
+        this.DiscardEditModeCommand = new RelayCommand(
+            _ => this.DiscardEditMode(),
+            _ => this.IsEditMode);
         this.isExpanded = isExpanded;
     }
 
@@ -64,6 +87,12 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public RelayCommand ToggleExpandCommand { get; }
 
+    public RelayCommand ToggleEditModeCommand { get; }
+
+    public RelayCommand SaveEditModeCommand { get; }
+
+    public RelayCommand DiscardEditModeCommand { get; }
+
     public string DisplayName => this.entity?.DisplayName ?? this.displayName;
 
     public string EntityType => this.entity?.EntityType ?? this.entityType;
@@ -71,6 +100,27 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.entity?.DisplayItems ?? Array.Empty<EntityDisplayItemViewModel>();
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.fieldEditors;
+
+    public bool IsEditMode
+    {
+        get => this.isEditMode;
+        set
+        {
+            if (!this.SetProperty(ref this.isEditMode, value))
+            {
+                return;
+            }
+
+            this.SetFieldEditorEditMode(value);
+            this.RaisePropertyChanged(nameof(this.EditModeGlyph));
+        }
+    }
+
+    public string EditModeGlyph => this.IsEditMode ? "👁" : "✎";
+
+    public bool ShowEditIndicator => !this.IsEditMode;
+
+    public bool ShowEditActions => this.IsEditMode;
 
     public bool HasChildren => this.Children.Count > 0;
 
@@ -131,6 +181,72 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         {
             this.VisibleChildren.Add(child);
         }
+    }
+
+    public void SetFieldEditors(
+        IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors)
+    {
+        this.fieldEditors = fieldEditors;
+        this.SetFieldEditorEditMode(this.IsEditMode);
+        this.RaisePropertyChanged(nameof(this.FieldEditors));
+        this.ToggleEditModeCommand.RaiseCanExecuteChanged();
+    }
+
+    private void SetFieldEditorEditMode(
+        bool isEditMode)
+    {
+        foreach (var fieldEditor in this.fieldEditors)
+        {
+            fieldEditor.SetEditMode(isEditMode);
+        }
+    }
+
+    private void EnterEditMode()
+    {
+        this.editModeSnapshot = this.fieldEditors.Select(static fieldEditor => fieldEditor.Clone()).ToArray();
+        this.IsEditMode = true;
+        this.ToggleEditModeCommand.RaiseCanExecuteChanged();
+        this.SaveEditModeCommand.RaiseCanExecuteChanged();
+        this.DiscardEditModeCommand.RaiseCanExecuteChanged();
+        this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
+        this.RaisePropertyChanged(nameof(this.ShowEditActions));
+    }
+
+    private void SaveEditMode()
+    {
+        if (!this.IsEditMode)
+        {
+            return;
+        }
+
+        this.editModeSnapshot = null;
+        this.IsEditMode = false;
+        this.ToggleEditModeCommand.RaiseCanExecuteChanged();
+        this.SaveEditModeCommand.RaiseCanExecuteChanged();
+        this.DiscardEditModeCommand.RaiseCanExecuteChanged();
+        this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
+        this.RaisePropertyChanged(nameof(this.ShowEditActions));
+    }
+
+    private void DiscardEditMode()
+    {
+        if (!this.IsEditMode)
+        {
+            return;
+        }
+
+        if (this.editModeSnapshot is not null)
+        {
+            this.SetFieldEditors(this.editModeSnapshot.Select(static fieldEditor => fieldEditor.Clone()).ToArray());
+        }
+
+        this.IsEditMode = false;
+        this.editModeSnapshot = null;
+        this.ToggleEditModeCommand.RaiseCanExecuteChanged();
+        this.SaveEditModeCommand.RaiseCanExecuteChanged();
+        this.DiscardEditModeCommand.RaiseCanExecuteChanged();
+        this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
+        this.RaisePropertyChanged(nameof(this.ShowEditActions));
     }
 
     public static bool TryGetPrimaryName(
