@@ -46,8 +46,7 @@ public sealed class SchemaPopulatorTests
             .GetAssembly(typeof(SchemaPopulator))!
             .GetManifestResourceNames()
             .Where(
-                resourceName => (resourceName.StartsWith("Phantom.Workspaces.Data.JsonSchemas.", StringComparison.Ordinal)
-                                 || resourceName.StartsWith("Phantom.Workspaces.Data.JsonEntities.", StringComparison.Ordinal))
+                resourceName => resourceName.StartsWith("Phantom.Workspaces.Data.JsonEntities.", StringComparison.Ordinal)
                                 && resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         Assert.NotEmpty(embeddedSchemaResources);
@@ -215,6 +214,45 @@ public sealed class SchemaPopulatorTests
             && text.ValueKind == JsonValueKind.String
             && text.GetString()!.Contains("# Core schema", StringComparison.Ordinal),
             "schema documentation markdown attachment was not materialized into inline content");
+    }
+
+    [Fact]
+    public async Task Populate_MaterializesSchemaReference_ToInlineSchemaObject()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(
+                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var coreSchemaEntity = exportResult.ChangeBatches
+            .SelectMany(static changeBatch => changeBatch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray().Select(static part => part.GetString()).SequenceEqual(
+                        ["json-schemas", "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json"])));
+
+        Assert.True(
+            coreSchemaEntity.TryGetProperty("schema", out var schema)
+            && schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("$id", out var schemaId)
+            && schemaId.ValueKind == JsonValueKind.String
+            && string.Equals(
+                schemaId.GetString(),
+                "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json",
+                StringComparison.Ordinal)
+            && !schema.TryGetProperty("$ref", out _));
     }
 
     [Fact]

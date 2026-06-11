@@ -1,0 +1,29 @@
+{
+  "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e001",
+  "entity-types": [
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json"
+    ],
+    [
+      "entity-types",
+      "core"
+    ]
+  ],
+  "display-name": {
+    "default": "Core Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/core-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "core.json"
+  }
+}

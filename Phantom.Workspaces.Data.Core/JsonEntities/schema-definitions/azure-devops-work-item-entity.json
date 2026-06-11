@@ -1,0 +1,29 @@
+{
+  "entity-id": "a7b8c9d0-e1f2-a3b4-c5d6-e7f8a9b0c1d2",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-work-item.json"
+    ],
+    [
+      "entity-types",
+      "azure-devops-work-item"
+    ]
+  ],
+  "display-name": {
+    "default": "Azure DevOps Work Item Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/azure-devops-work-item-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "azure-devops-work-item.json"
+  }
+}

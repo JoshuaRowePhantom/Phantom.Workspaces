@@ -1,82 +1,56 @@
 {
-  "entity-id": "739d0469-4ad8-4ae0-b2b5-3c3be996f264",
-  "entity-types": [
-    "entity-type",
-    "note"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type.json",
+  "allOf": [
+    {
+      "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json"
+    }
   ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type.json"
-    ],
-    [
-      "entity-types",
-      "entity-type"
-    ]
-  ],
-  "display-name": {
-    "default": "Entity Type Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/entity-type-schema.md"
+  "type": "object",
+  "properties": {
+    "names": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/schema-index-name"
+      },
+      "minItems": 1
     }
   },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type.json",
-    "allOf": [
-      {
-        "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "names": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/schema-index-name"
+  "required": [
+    "names"
+  ],
+  "$defs": {
+    "schema-index-name": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/entity-type-name"
         },
-        "minItems": 1
+        {
+          "$ref": "#/$defs/json-schema-name"
+        }
+      ]
+    },
+    "entity-type-name": {
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "const": "entity-types"
+        }
+      ],
+      "items": {
+        "type": "string"
       }
     },
-    "required": [
-      "names"
-    ],
-    "$defs": {
-      "schema-index-name": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/entity-type-name"
-          },
-          {
-            "$ref": "#/$defs/json-schema-name"
-          }
-        ]
-      },
-      "entity-type-name": {
-        "type": "array",
-        "minItems": 1,
-        "prefixItems": [
-          {
-            "const": "entity-types"
-          }
-        ],
-        "items": {
-          "type": "string"
+    "json-schema-name": {
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "const": "json-schemas"
         }
-      },
-      "json-schema-name": {
-        "type": "array",
-        "minItems": 1,
-        "prefixItems": [
-          {
-            "const": "json-schemas"
-          }
-        ],
-        "items": {
-          "type": "string"
-        }
+      ],
+      "items": {
+        "type": "string"
       }
     }
   }

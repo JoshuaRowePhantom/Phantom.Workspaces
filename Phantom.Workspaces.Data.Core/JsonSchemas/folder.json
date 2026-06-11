@@ -1,55 +1,29 @@
 {
-  "entity-id": "b5d4a8bb-34ee-46ec-93c5-b49e8f59df8a",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json"
-    ],
-    [
-      "entity-types",
-      "folder"
-    ]
-  ],
-  "display-name": {
-    "default": "Folder Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/folder-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json",
+  "type": "object",
+  "properties": {
+    "display-name": {
+      "$ref": "core.json#/$defs/local-string"
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "core.json#/$defs/entity-name"
+          },
+          {
+            "$comment": "Root folder uses an empty name path ([]).",
+            "type": "array",
+            "maxItems": 0
+          }
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 1
     }
   },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json",
-    "type": "object",
-    "properties": {
-      "display-name": {
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "names": {
-        "type": "array",
-        "items": {
-          "anyOf": [
-            {
-              "$ref": "core.json#/$defs/entity-name"
-            },
-            {
-              "$comment": "Root folder uses an empty name path ([]).",
-              "type": "array",
-              "maxItems": 0
-            }
-          ]
-        },
-        "minItems": 1,
-        "maxItems": 1
-      }
-    },
-    "required": [
-      "names"
-    ]
-  }
+  "required": [
+    "names"
+  ]
 }

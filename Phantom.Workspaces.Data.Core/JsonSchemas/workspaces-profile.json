@@ -1,63 +1,37 @@
 {
-  "entity-id": "f5e0dc5c-64d1-4f8d-8c5e-70fd9d4b5c0b",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/workspaces-profile.json"
-    ],
-    [
-      "entity-types",
-      "workspaces-profile"
-    ]
-  ],
-  "display-name": {
-    "default": "Workspaces Profile Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/workspaces-profile-schema.md"
-    }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspaces-profile.json",
-    "type": "object",
-    "properties": {
-      "entity-types": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        },
-        "contains": {
-          "const": "workspaces-profile"
-        }
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspaces-profile.json",
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
       },
-      "theme": {
-        "type": "string",
-        "enum": [
-          "dark",
-          "light"
-        ]
-      },
-      "initial-workspace": {
-        "$ref": "core.json#/$defs/entity-id"
-      },
-      "opened-workspaces": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-id"
-        },
-        "uniqueItems": true
+      "contains": {
+        "const": "workspaces-profile"
       }
     },
-    "required": [
-      "theme",
-      "initial-workspace",
-      "opened-workspaces"
-    ]
-  }
+    "theme": {
+      "type": "string",
+      "enum": [
+        "dark",
+        "light"
+      ]
+    },
+    "initial-workspace": {
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "opened-workspaces": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-id"
+      },
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "theme",
+    "initial-workspace",
+    "opened-workspaces"
+  ]
 }

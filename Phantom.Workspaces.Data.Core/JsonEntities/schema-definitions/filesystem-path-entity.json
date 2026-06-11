@@ -1,0 +1,29 @@
+{
+  "entity-id": "ca1d8de4-abe0-455c-8c6b-15a8aa459e70",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/filesystem-path.json"
+    ],
+    [
+      "entity-types",
+      "filesystem-path"
+    ]
+  ],
+  "display-name": {
+    "default": "Filesystem Path Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/filesystem-path-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "filesystem-path.json"
+  }
+}

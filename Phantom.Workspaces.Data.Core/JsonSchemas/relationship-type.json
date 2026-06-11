@@ -1,55 +1,28 @@
 {
-  "entity-id": "17ebacfb-8498-4cb7-b2d8-32c852f7db07",
-  "entity-types": [
-    "relationship-type",
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship-type.json"
-    ],
-    [
-      "entity-types",
-      "relationship-type"
-    ]
-  ],
-  "display-name": {
-    "default": "Relationship Type Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/relationship-type-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship-type.json",
+  "allOf": [
+    {
+      "$ref": "entity-type.json"
     }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship-type.json",
-    "allOf": [
-      {
-        "$ref": "entity-type.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "schema": {
-        "type": "object",
+  ],
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "object",
+      "properties": {
         "properties": {
+          "type": "object",
           "properties": {
-            "type": "object",
-            "properties": {
-              "participants": {
-                "type": "object",
+            "participants": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "object"
+                },
                 "properties": {
-                  "type": {
-                    "const": "object"
-                  },
-                  "properties": {
-                    "type": "object",
-                    "additionalProperties": {
-                      "$ref": "#/$defs/participant-property-schema"
-                    }
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/participant-property-schema"
                   }
                 }
               }
@@ -57,52 +30,52 @@
           }
         }
       }
+    }
+  },
+  "$defs": {
+    "participant-property-schema": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/singleton-participant-property-schema"
+        },
+        {
+          "$ref": "#/$defs/array-participant-property-schema"
+        }
+      ]
     },
-    "$defs": {
-      "participant-property-schema": {
-        "oneOf": [
-          {
-            "$ref": "#/$defs/singleton-participant-property-schema"
-          },
-          {
-            "$ref": "#/$defs/array-participant-property-schema"
-          }
-        ]
+    "singleton-participant-property-schema": {
+      "type": "object",
+      "properties": {
+        "x-entity-type": {
+          "$ref": "core.json#/$defs/entity-type-id"
+        }
       },
-      "singleton-participant-property-schema": {
-        "type": "object",
-        "properties": {
-          "x-entity-type": {
-            "$ref": "core.json#/$defs/entity-type-id"
-          }
+      "required": [
+        "x-entity-type"
+      ]
+    },
+    "array-participant-property-schema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "array"
         },
-        "required": [
-          "x-entity-type"
-        ]
-      },
-      "array-participant-property-schema": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "const": "array"
+        "items": {
+          "type": "object",
+          "properties": {
+            "x-entity-type": {
+              "$ref": "core.json#/$defs/entity-type-id"
+            }
           },
-          "items": {
-            "type": "object",
-            "properties": {
-              "x-entity-type": {
-                "$ref": "core.json#/$defs/entity-type-id"
-              }
-            },
-            "required": [
-              "x-entity-type"
-            ]
-          }
-        },
-        "required": [
-          "type",
-          "items"
-        ]
-      }
+          "required": [
+            "x-entity-type"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ]
     }
   }
 }

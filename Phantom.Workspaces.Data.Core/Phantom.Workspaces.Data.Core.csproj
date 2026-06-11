@@ -9,11 +9,13 @@
     <None Remove="JsonSchemas\*.json" />
     <None Remove="JsonEntities\**\*.json" />
     <None Remove="JsonEntities\**\*.md" />
+    <None Remove="..\Phantom.Workspaces.Llm.Core\JsonSchemas\*.json" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="JsonSchemas\*.json" />
     <EmbeddedResource Include="JsonEntities\**\*.json" />
     <EmbeddedResource Include="JsonEntities\**\*.md" />
+    <EmbeddedResource Include="..\Phantom.Workspaces.Llm.Core\JsonSchemas\*.json" Link="JsonSchemas\llm\%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="JsonPatch.Net" />

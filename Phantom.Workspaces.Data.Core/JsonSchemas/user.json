@@ -1,72 +1,46 @@
 {
-  "entity-id": "76dcf3a1-7750-4029-b38c-e3de3a3a278f",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/user.json"
-    ],
-    [
-      "entity-types",
-      "user"
-    ]
-  ],
-  "display-name": {
-    "default": "User Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/user-entity-type.md"
-    }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/user.json",
-    "type": "object",
-    "properties": {
-      "entity-types": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        },
-        "contains": {
-          "const": "user"
-        }
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/user.json",
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
       },
-      "names": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/user-name"
-        },
-        "minItems": 1
+      "contains": {
+        "const": "user"
       }
     },
-    "required": [
-      "entity-types",
-      "names"
-    ],
-    "$defs": {
-      "user-name": {
-        "type": "array",
-        "minItems": 3,
-        "maxItems": 4,
-        "prefixItems": [
-          {
-            "const": "users"
-          },
-          {
-            "type": "string"
-          },
-          {
-            "type": "string"
-          }
-        ],
-        "items": {
+    "names": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/user-name"
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "entity-types",
+    "names"
+  ],
+  "$defs": {
+    "user-name": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 4,
+      "prefixItems": [
+        {
+          "const": "users"
+        },
+        {
+          "type": "string"
+        },
+        {
           "type": "string"
         }
+      ],
+      "items": {
+        "type": "string"
       }
     }
   }

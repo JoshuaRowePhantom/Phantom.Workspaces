@@ -1,0 +1,29 @@
+{
+  "entity-id": "d1e2f3a4-b5c6-d7e8-f9a0-b1c2d3e4f5a6",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/user-computer-profile.json"
+    ],
+    [
+      "entity-types",
+      "user-computer-profile"
+    ]
+  ],
+  "display-name": {
+    "default": "User Computer Profile Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/user-computer-profile-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "user-computer-profile.json"
+  }
+}

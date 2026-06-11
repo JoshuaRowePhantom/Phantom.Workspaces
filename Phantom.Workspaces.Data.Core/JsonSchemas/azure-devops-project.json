@@ -1,44 +1,18 @@
 {
-  "entity-id": "d7e8f9a0-b1c2-d3e4-f5a6-b7c8d9e0f1a2",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-project.json"
-    ],
-    [
-      "entity-types",
-      "azure-devops-project"
-    ]
-  ],
-  "display-name": {
-    "default": "Azure DevOps Project Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/azure-devops-project-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-project.json",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    },
+    {
+      "$ref": "external.json"
     }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-project.json",
-    "allOf": [
-      {
-        "$ref": "entity.json"
-      },
-      {
-        "$ref": "external.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "project-id": {
-        "type": "string",
-        "description": "The Azure DevOps project ID (GUID)"
-      }
+  ],
+  "type": "object",
+  "properties": {
+    "project-id": {
+      "type": "string",
+      "description": "The Azure DevOps project ID (GUID)"
     }
   }
 }

@@ -1,84 +1,58 @@
 {
-  "entity-id": "14c6ce53-f19f-4745-ad4f-31fc9e80fb57",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/schedule.json"
-    ],
-    [
-      "entity-types",
-      "schedule"
-    ]
-  ],
-  "display-name": {
-    "default": "Schedule Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/schedule-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/schedule.json",
+  "allOf": [
+    {
+      "$ref": "entity.json"
     }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/schedule.json",
-    "allOf": [
-      {
-        "$ref": "entity.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "entity-types": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        },
-        "contains": {
-          "const": "schedule"
-        }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
       },
-      "repeat": {
-        "type": "object",
-        "properties": {
-          "frequency": {
-            "$ref": "core.json#/$defs/time",
-            "description": "Frequency between schedule runs."
-          },
-          "days-of-week": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "monday",
-                "tuesday",
-                "wednesday",
-                "thursday",
-                "friday",
-                "saturday",
-                "sunday"
-              ]
-            }
-          },
-          "start-at": {
-            "type": "array",
-            "items": {
-              "$ref": "core.json#/$defs/time"
-            }
-          }
-        },
-        "required": [
-          "frequency",
-          "start-at"
-        ],
-        "unevaluatedProperties": false
+      "contains": {
+        "const": "schedule"
       }
     },
-    "required": [
-      "repeat"
-    ]
-  }
+    "repeat": {
+      "type": "object",
+      "properties": {
+        "frequency": {
+          "$ref": "core.json#/$defs/time",
+          "description": "Frequency between schedule runs."
+        },
+        "days-of-week": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ]
+          }
+        },
+        "start-at": {
+          "type": "array",
+          "items": {
+            "$ref": "core.json#/$defs/time"
+          }
+        }
+      },
+      "required": [
+        "frequency",
+        "start-at"
+      ],
+      "unevaluatedProperties": false
+    }
+  },
+  "required": [
+    "repeat"
+  ]
 }

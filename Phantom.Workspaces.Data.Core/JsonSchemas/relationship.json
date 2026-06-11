@@ -1,89 +1,62 @@
 {
-  "entity-id": "bb4a6d1e-4f2c-4a52-8f1d-9a7c3f28ec11",
-  "entity-types": [
-    "relationship-type",
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json"
-    ],
-    [
-      "entity-types",
-      "relationship"
-    ]
-  ],
-  "display-name": {
-    "default": "Relationship Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/relationship-schema.md"
-    }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json",
-    "type": "object",
-    "properties": {
-      "entity-types": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        },
-        "contains": {
-          "const": "relationship"
-        }
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json",
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
       },
-      "participants": {
-        "type": "object",
-        "additionalProperties": {
-          "oneOf": [
-            {
-              "$ref": "core.json#/$defs/entity-id"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "core.json#/$defs/entity-id"
-              }
-            }
-          ]
-        }
+      "contains": {
+        "const": "relationship"
       }
     },
-    "required": [
-      "entity-types",
-      "participants"
-    ],
-    "allOf": [
-      {
-        "if": {
-          "properties": {
-            "entity-types": {
-              "contains": {
-                "const": "entity"
-              }
+    "participants": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "$ref": "core.json#/$defs/entity-id"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "core.json#/$defs/entity-id"
             }
           }
-        },
-        "then": {
-          "properties": {
-            "entity-types": {
-              "minItems": 3
-            }
-          }
-        },
-        "else": {
-          "properties": {
-            "entity-types": {
-              "minItems": 2
+        ]
+      }
+    }
+  },
+  "required": [
+    "entity-types",
+    "participants"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "entity-types": {
+            "contains": {
+              "const": "entity"
             }
           }
         }
+      },
+      "then": {
+        "properties": {
+          "entity-types": {
+            "minItems": 3
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "entity-types": {
+            "minItems": 2
+          }
+        }
       }
-    ]
-  }
+    }
+  ]
 }

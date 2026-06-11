@@ -1,135 +1,109 @@
 {
-  "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e001",
-  "entity-types": [
-    "json-schema",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json"
-    ],
-    [
-      "entity-types",
-      "core"
-    ]
-  ],
-  "display-name": {
-    "default": "Core Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/core-schema.md"
-    }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json",
-    "$defs": {
-      "entity-id": {
-        "type": "string",
-        "format": "uuid"
-      },
-      "entity-type-id": {
-        "$comment": "Either the entity type name or the entity type's entity id.",
-        "type": "string"
-      },
-      "x-entity-type": {
-        "anyOf": [
-          {
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json",
+  "$defs": {
+    "entity-id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "entity-type-id": {
+      "$comment": "Either the entity type name or the entity type's entity id.",
+      "type": "string"
+    },
+    "x-entity-type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/entity-type-id"
+        },
+        {
+          "type": "array",
+          "items": {
             "$ref": "#/$defs/entity-type-id"
-          },
-          {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/entity-type-id"
-            }
-          }
-        ]
-      },
-      "timestamp": {
-        "type": "object",
-        "properties": {
-          "datetime": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "change-id": {
-            "type": "string"
           }
         }
-      },
-      "time": {
-        "type": "string",
-        "format": "time"
-      },
-      "entity-name": {
-        "$comment": "An array of strings, used when the name consists of one or more parts that need to be kept separate (e.g. a pull request id in a specific repository).",
-        "type": "array",
-        "items": {
+      ]
+    },
+    "timestamp": {
+      "type": "object",
+      "properties": {
+        "datetime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "change-id": {
           "type": "string"
-        },
-        "minItems": 1
-      },
-      "entity-reference": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/entity-id"
-          },
-          {
-            "$ref": "#/$defs/entity-name"
-          }
-        ]
-      },
-      "local-string": {
-        "anyOf": [
-          {
-            "$comment": "A simple string, used when localization is not needed, interpreted as \"default\".",
-            "type": "string"
-          },
-          {
-            "$comment": "A localized string, where the keys are locale names (e.g. \"en-US\", \"fr-FR\") and the values are the localized strings for those locales. The \"default\" key is used as a fallback when a specific locale is not available.",
-            "type": "object",
-            "properties": {
-              "default": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": true
-          }
-        ]
-      },
-      "field-path": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "minItems": 1
-      },
-      "sort-field": {
-        "type": "object",
-        "properties": {
-          "field-path": {
-            "$ref": "#/$defs/field-path"
-          },
-          "sort-direction": {
-            "type": "string",
-            "enum": [
-              "ascending",
-              "descending"
-            ]
-          }
-        },
-        "required": [
-          "field-path",
-          "sort-direction"
-        ],
-        "unevaluatedProperties": false
-      },
-      "hosted-on-computer": {
-        "$comment": "Base type for entities that are hosted on or associated with a computer. Requires either 'computer' or 'computer-user-profile' in the names array.",
-        "type": "object"
+        }
       }
+    },
+    "time": {
+      "type": "string",
+      "format": "time"
+    },
+    "entity-name": {
+      "$comment": "An array of strings, used when the name consists of one or more parts that need to be kept separate (e.g. a pull request id in a specific repository).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "entity-reference": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/entity-id"
+        },
+        {
+          "$ref": "#/$defs/entity-name"
+        }
+      ]
+    },
+    "local-string": {
+      "anyOf": [
+        {
+          "$comment": "A simple string, used when localization is not needed, interpreted as \"default\".",
+          "type": "string"
+        },
+        {
+          "$comment": "A localized string, where the keys are locale names (e.g. \"en-US\", \"fr-FR\") and the values are the localized strings for those locales. The \"default\" key is used as a fallback when a specific locale is not available.",
+          "type": "object",
+          "properties": {
+            "default": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "field-path": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "sort-field": {
+      "type": "object",
+      "properties": {
+        "field-path": {
+          "$ref": "#/$defs/field-path"
+        },
+        "sort-direction": {
+          "type": "string",
+          "enum": [
+            "ascending",
+            "descending"
+          ]
+        }
+      },
+      "required": [
+        "field-path",
+        "sort-direction"
+      ],
+      "unevaluatedProperties": false
+    },
+    "hosted-on-computer": {
+      "$comment": "Base type for entities that are hosted on or associated with a computer. Requires either 'computer' or 'computer-user-profile' in the names array.",
+      "type": "object"
     }
   }
 }

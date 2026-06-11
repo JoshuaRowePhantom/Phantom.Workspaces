@@ -1,169 +1,143 @@
 {
-  "entity-id": "a6f07bf2-a690-43ef-bd31-e93e53b2f5c8",
-  "entity-types": [
-    "json-schema",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace.json"
-    ],
-    [
-      "entity-types",
-      "workspace"
-    ]
-  ],
-  "display-name": {
-    "default": "Workspace Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/workspace-schema.md"
-    }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace.json",
-    "type": "object",
-    "properties": {
-      "entity-id": {
-        "$ref": "core.json#/$defs/entity-id"
-      },
-      "entity-types": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        }
-      },
-      "names": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-name"
-        }
-      },
-      "display-name": {
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "title": {
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "regions": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/workspace-region"
-        }
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace.json",
+  "type": "object",
+  "properties": {
+    "entity-id": {
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
       }
     },
-    "required": [
-      "regions"
-    ],
-    "$defs": {
-      "workspace-region": {
-        "type": "object",
-        "properties": {
-          "region-id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "dock": {
-            "type": "string",
-            "enum": [
-              "center",
-              "left",
-              "right",
-              "top",
-              "bottom"
-            ]
-          },
-          "tabs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/workspace-tab"
-            }
-          },
-          "size": {
-            "type": "number",
-            "minimum": 0.1
-          }
-        },
-        "required": [
-          "region-id",
-          "title",
-          "dock",
-          "tabs",
-          "size"
-        ],
-        "unevaluatedProperties": false
-      },
-      "workspace-tab": {
-        "type": "object",
-        "properties": {
-          "tab-id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "content": {
-            "oneOf": [
-              {
-                "$ref": "#/$defs/workspace-entity-content"
-              },
-              {
-                "$ref": "#/$defs/workspace-browser-content"
-              }
-            ]
-          },
-          "dock": {
-            "type": "string",
-            "enum": [
-              "full",
-              "left",
-              "right",
-              "bottom"
-            ]
-          }
-        },
-        "required": [
-          "tab-id",
-          "title",
-          "kind",
-          "content",
-          "dock"
-        ],
-        "unevaluatedProperties": false
-      },
-      "workspace-entity-content": {
-        "type": "object",
-        "properties": {
-          "target-entity-name": {
-            "$ref": "core.json#/$defs/entity-reference"
-          }
-        },
-        "required": [
-          "target-entity-name"
-        ],
-        "unevaluatedProperties": false
-      },
-      "workspace-browser-content": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string",
-            "format": "uri"
-          }
-        },
-        "required": [
-          "url"
-        ],
-        "unevaluatedProperties": false
+    "names": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-name"
       }
+    },
+    "display-name": {
+      "$ref": "core.json#/$defs/local-string"
+    },
+    "title": {
+      "$ref": "core.json#/$defs/local-string"
+    },
+    "regions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workspace-region"
+      }
+    }
+  },
+  "required": [
+    "regions"
+  ],
+  "$defs": {
+    "workspace-region": {
+      "type": "object",
+      "properties": {
+        "region-id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "dock": {
+          "type": "string",
+          "enum": [
+            "center",
+            "left",
+            "right",
+            "top",
+            "bottom"
+          ]
+        },
+        "tabs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/workspace-tab"
+          }
+        },
+        "size": {
+          "type": "number",
+          "minimum": 0.1
+        }
+      },
+      "required": [
+        "region-id",
+        "title",
+        "dock",
+        "tabs",
+        "size"
+      ],
+      "unevaluatedProperties": false
+    },
+    "workspace-tab": {
+      "type": "object",
+      "properties": {
+        "tab-id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "content": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/workspace-entity-content"
+            },
+            {
+              "$ref": "#/$defs/workspace-browser-content"
+            }
+          ]
+        },
+        "dock": {
+          "type": "string",
+          "enum": [
+            "full",
+            "left",
+            "right",
+            "bottom"
+          ]
+        }
+      },
+      "required": [
+        "tab-id",
+        "title",
+        "kind",
+        "content",
+        "dock"
+      ],
+      "unevaluatedProperties": false
+    },
+    "workspace-entity-content": {
+      "type": "object",
+      "properties": {
+        "target-entity-name": {
+          "$ref": "core.json#/$defs/entity-reference"
+        }
+      },
+      "required": [
+        "target-entity-name"
+      ],
+      "unevaluatedProperties": false
+    },
+    "workspace-browser-content": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "unevaluatedProperties": false
     }
   }
 }

@@ -1,0 +1,29 @@
+{
+  "entity-id": "14c6ce53-f19f-4745-ad4f-31fc9e80fb57",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/schedule.json"
+    ],
+    [
+      "entity-types",
+      "schedule"
+    ]
+  ],
+  "display-name": {
+    "default": "Schedule Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/schedule-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "schedule.json"
+  }
+}

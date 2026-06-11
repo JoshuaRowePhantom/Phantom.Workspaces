@@ -1,201 +1,175 @@
 {
-  "entity-id": "b2f1ae45-c63a-4f28-a2e9-4feac269a5c2",
-  "entity-types": [
-    "json-schema",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/llm-trust-profile.json"
-    ],
-    [
-      "entity-types",
-      "llm-trust-profile"
-    ]
-  ],
-  "display-name": {
-    "default": "LLM Trust Profile Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/llm-trust-profile-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/llm-trust-profile.json",
+  "$comment": "Entity-semantic trust profile definition used for authoring and composition into runtime LLM trust profiles.",
+  "type": "object",
+  "properties": {
+    "entity-id": {
+      "$comment": "Stable id for the trust profile entity.",
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "entity-types": {
+      "$comment": "Must include llm-trust-profile.",
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "llm-trust-profile"
+      }
+    },
+    "names": {
+      "$comment": "Optional index names for lookup and references.",
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-name"
+      }
+    },
+    "display-name": {
+      "$comment": "Optional user-facing localized display name.",
+      "$ref": "core.json#/$defs/local-string"
+    },
+    "base-trust-profiles": {
+      "$comment": "Zero or more trust profile entities to inherit from.",
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-reference"
+      },
+      "uniqueItems": true
+    },
+    "hosting-workspaces-client-instances": {
+      "$comment": "Hosting Workspaces client instance ids. Use '.' for local client instance.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "mount-points": {
+      "$comment": "Container mount points granted by this profile.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trust-mount-point"
+      }
+    },
+    "network-access-policy": {
+      "$comment": "Container network mode policy.",
+      "type": "string",
+      "enum": [
+        "no-network",
+        "local-network",
+        "natted-network",
+        "host-network"
+      ]
+    },
+    "https-proxy-policy": {
+      "$comment": "HTTPS proxy policy applied to outbound HTTPS traffic.",
+      "$ref": "#/$defs/https-proxy-policy"
+    },
+    "allowed-mcp-tool-call-schemas": {
+      "$comment": "One or more MCP tool-call envelope schemas. Effective policy is composed with anyOf.",
+      "type": "array",
+      "items": {
+        "$ref": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "minItems": 1
     }
   },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/llm-trust-profile.json",
-    "$comment": "Entity-semantic trust profile definition used for authoring and composition into runtime LLM trust profiles.",
-    "type": "object",
-    "properties": {
-      "entity-id": {
-        "$comment": "Stable id for the trust profile entity.",
-        "$ref": "core.json#/$defs/entity-id"
-      },
-      "entity-types": {
-        "$comment": "Must include llm-trust-profile.",
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        },
-        "contains": {
-          "const": "llm-trust-profile"
-        }
-      },
-      "names": {
-        "$comment": "Optional index names for lookup and references.",
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-name"
-        }
-      },
-      "display-name": {
-        "$comment": "Optional user-facing localized display name.",
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "base-trust-profiles": {
-        "$comment": "Zero or more trust profile entities to inherit from.",
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-reference"
-        },
-        "uniqueItems": true
-      },
-      "hosting-workspaces-client-instances": {
-        "$comment": "Hosting Workspaces client instance ids. Use '.' for local client instance.",
-        "type": "array",
-        "items": {
+  "required": [
+    "hosting-workspaces-client-instances",
+    "mount-points",
+    "network-access-policy",
+    "https-proxy-policy",
+    "allowed-mcp-tool-call-schemas"
+  ],
+  "$defs": {
+    "trust-mount-point": {
+      "$comment": "A single mount declaration for the container runtime.",
+      "type": "object",
+      "properties": {
+        "source-path": {
+          "$comment": "Host source path (or source identifier for volume-like mounts).",
           "type": "string"
         },
-        "uniqueItems": true
-      },
-      "mount-points": {
-        "$comment": "Container mount points granted by this profile.",
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/trust-mount-point"
+        "target-path": {
+          "$comment": "Container target path where the mount is attached.",
+          "type": "string"
+        },
+        "access-mode": {
+          "$comment": "Read-only or read-write access mode.",
+          "type": "string",
+          "enum": [
+            "read-only",
+            "read-write"
+          ]
+        },
+        "type": {
+          "$comment": "Docker mount type.",
+          "type": "string",
+          "enum": [
+            "bind",
+            "volume",
+            "tmpfs"
+          ]
         }
       },
-      "network-access-policy": {
-        "$comment": "Container network mode policy.",
-        "type": "string",
-        "enum": [
-          "no-network",
-          "local-network",
-          "natted-network",
-          "host-network"
-        ]
-      },
-      "https-proxy-policy": {
-        "$comment": "HTTPS proxy policy applied to outbound HTTPS traffic.",
-        "$ref": "#/$defs/https-proxy-policy"
-      },
-      "allowed-mcp-tool-call-schemas": {
-        "$comment": "One or more MCP tool-call envelope schemas. Effective policy is composed with anyOf.",
-        "type": "array",
-        "items": {
-          "$ref": "https://json-schema.org/draft/2020-12/schema"
-        },
-        "minItems": 1
-      }
+      "required": [
+        "source-path",
+        "target-path",
+        "access-mode",
+        "type"
+      ],
+      "unevaluatedProperties": false
     },
-    "required": [
-      "hosting-workspaces-client-instances",
-      "mount-points",
-      "network-access-policy",
-      "https-proxy-policy",
-      "allowed-mcp-tool-call-schemas"
-    ],
-    "$defs": {
-      "trust-mount-point": {
-        "$comment": "A single mount declaration for the container runtime.",
-        "type": "object",
-        "properties": {
-          "source-path": {
-            "$comment": "Host source path (or source identifier for volume-like mounts).",
-            "type": "string"
-          },
-          "target-path": {
-            "$comment": "Container target path where the mount is attached.",
-            "type": "string"
-          },
-          "access-mode": {
-            "$comment": "Read-only or read-write access mode.",
-            "type": "string",
-            "enum": [
-              "read-only",
-              "read-write"
-            ]
-          },
-          "type": {
-            "$comment": "Docker mount type.",
-            "type": "string",
-            "enum": [
-              "bind",
-              "volume",
-              "tmpfs"
-            ]
-          }
+    "https-proxy-policy": {
+      "$comment": "Proxy configuration for HTTPS egress. proxy-url is required for required/optional modes.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$comment": "disabled: never use proxy, required: must proxy, optional: proxy if reachable.",
+          "type": "string",
+          "enum": [
+            "disabled",
+            "required",
+            "optional"
+          ]
         },
-        "required": [
-          "source-path",
-          "target-path",
-          "access-mode",
-          "type"
-        ],
-        "unevaluatedProperties": false
+        "proxy-url": {
+          "$comment": "HTTPS proxy endpoint URL.",
+          "type": "string",
+          "format": "uri"
+        },
+        "credentials-reference": {
+          "$comment": "Optional reference to credentials material used by the proxy.",
+          "$ref": "core.json#/$defs/entity-reference"
+        }
       },
-      "https-proxy-policy": {
-        "$comment": "Proxy configuration for HTTPS egress. proxy-url is required for required/optional modes.",
-        "type": "object",
-        "properties": {
-          "mode": {
-            "$comment": "disabled: never use proxy, required: must proxy, optional: proxy if reachable.",
-            "type": "string",
-            "enum": [
-              "disabled",
-              "required",
-              "optional"
-            ]
-          },
-          "proxy-url": {
-            "$comment": "HTTPS proxy endpoint URL.",
-            "type": "string",
-            "format": "uri"
-          },
-          "credentials-reference": {
-            "$comment": "Optional reference to credentials material used by the proxy.",
-            "$ref": "core.json#/$defs/entity-reference"
-          }
-        },
-        "required": [
-          "mode"
-        ],
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "mode": {
-                  "enum": [
-                    "required",
-                    "optional"
-                  ]
-                }
-              },
-              "required": [
-                "mode"
-              ]
+      "required": [
+        "mode"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "required",
+                  "optional"
+                ]
+              }
             },
-            "then": {
-              "required": [
-                "proxy-url"
-              ]
-            }
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "proxy-url"
+            ]
           }
-        ],
-        "unevaluatedProperties": false
-      }
-    },
-    "unevaluatedProperties": false
-  }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  },
+  "unevaluatedProperties": false
 }

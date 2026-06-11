@@ -87,12 +87,12 @@ public sealed class SchemaPopulator
     {
         var assembly = Assembly.GetExecutingAssembly();
         var markdownResourcesByPath = this.GetMarkdownResourcesByPath(assembly);
+        var jsonResourcesByPath = this.GetJsonResourcesByPath(assembly);
         var entityChanges = new List<EntityChange>();
 
         foreach (var resourceName in assembly.GetManifestResourceNames())
         {
-            if (!resourceName.StartsWith("Phantom.Workspaces.Data.JsonSchemas.", StringComparison.Ordinal)
-                && !resourceName.StartsWith("Phantom.Workspaces.Data.JsonEntities.", StringComparison.Ordinal)
+            if (!resourceName.StartsWith("Phantom.Workspaces.Data.JsonEntities.", StringComparison.Ordinal)
                 || !resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -129,11 +129,12 @@ public sealed class SchemaPopulator
 
             using (document)
             {
-                var entityElement = this.MaterializeMarkdownAttachments(
+                var entityElement = this.MaterializeEmbeddedAttachments(
                     document.RootElement,
                     resourceName,
                     assembly,
                     markdownResourcesByPath,
+                    jsonResourcesByPath,
                     errors);
                 var entityId = this.GetEntityId(entityElement);
                 entityChanges.Add(
@@ -149,16 +150,24 @@ public sealed class SchemaPopulator
         return entityChanges;
     }
 
-    private JsonElement MaterializeMarkdownAttachments(
+    private JsonElement MaterializeEmbeddedAttachments(
         JsonElement element,
         string sourceResourceName,
         Assembly assembly,
         IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        IReadOnlyDictionary<string, string> jsonResourcesByPath,
         ICollection<UpdateError> errors)
     {
         using var stream = new MemoryStream();
         using var writer = new Utf8JsonWriter(stream);
-        this.WriteMaterializedElement(element, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+        this.WriteMaterializedElement(
+            element,
+            sourceResourceName,
+            assembly,
+            markdownResourcesByPath,
+            jsonResourcesByPath,
+            errors,
+            writer);
         writer.Flush();
         using var document = JsonDocument.Parse(stream.ToArray());
         return document.RootElement.Clone();
@@ -169,19 +178,34 @@ public sealed class SchemaPopulator
         string sourceResourceName,
         Assembly assembly,
         IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        IReadOnlyDictionary<string, string> jsonResourcesByPath,
         ICollection<UpdateError> errors,
         Utf8JsonWriter writer)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-                this.WriteMaterializedObject(element, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+                this.WriteMaterializedObject(
+                    element,
+                    sourceResourceName,
+                    assembly,
+                    markdownResourcesByPath,
+                    jsonResourcesByPath,
+                    errors,
+                    writer);
                 return;
             case JsonValueKind.Array:
                 writer.WriteStartArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    this.WriteMaterializedElement(item, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+                    this.WriteMaterializedElement(
+                        item,
+                        sourceResourceName,
+                        assembly,
+                        markdownResourcesByPath,
+                        jsonResourcesByPath,
+                        errors,
+                        writer);
                 }
 
                 writer.WriteEndArray();
@@ -197,14 +221,19 @@ public sealed class SchemaPopulator
         string sourceResourceName,
         Assembly assembly,
         IReadOnlyDictionary<string, string> markdownResourcesByPath,
+        IReadOnlyDictionary<string, string> jsonResourcesByPath,
         ICollection<UpdateError> errors,
         Utf8JsonWriter writer)
     {
         var markdownText = string.Empty;
+        var schemaElement = default(JsonElement);
         var shouldInjectMarkdownText =
             this.TryReadMarkdownUrl(element, out var markdownUrl)
             && !this.HasInlineTextContent(element)
             && this.TryLoadEmbeddedMarkdownText(markdownUrl, sourceResourceName, assembly, markdownResourcesByPath, errors, out markdownText);
+        var shouldInjectSchemaFromRef =
+            this.TryReadSchemaResourceReference(element, out var schemaReference)
+            && this.TryLoadEmbeddedJsonElement(schemaReference, sourceResourceName, assembly, jsonResourcesByPath, out schemaElement);
 
         writer.WriteStartObject();
         foreach (var property in element.EnumerateObject())
@@ -215,8 +244,21 @@ public sealed class SchemaPopulator
                 continue;
             }
 
+            if (shouldInjectSchemaFromRef
+                && string.Equals(property.Name, "schema", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             writer.WritePropertyName(property.Name);
-            this.WriteMaterializedElement(property.Value, sourceResourceName, assembly, markdownResourcesByPath, errors, writer);
+            this.WriteMaterializedElement(
+                property.Value,
+                sourceResourceName,
+                assembly,
+                markdownResourcesByPath,
+                jsonResourcesByPath,
+                errors,
+                writer);
         }
 
         if (shouldInjectMarkdownText)
@@ -227,7 +269,31 @@ public sealed class SchemaPopulator
             writer.WriteEndObject();
         }
 
+        if (shouldInjectSchemaFromRef)
+        {
+            writer.WritePropertyName("schema");
+            schemaElement.WriteTo(writer);
+        }
+
         writer.WriteEndObject();
+    }
+
+    private bool TryReadSchemaResourceReference(
+        JsonElement element,
+        out string schemaReference)
+    {
+        schemaReference = string.Empty;
+        if (!element.TryGetProperty("schema", out var schema)
+            || schema.ValueKind != JsonValueKind.Object
+            || !schema.TryGetProperty("$ref", out var reference)
+            || reference.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(reference.GetString()))
+        {
+            return false;
+        }
+
+        schemaReference = reference.GetString()!;
+        return true;
     }
 
     private bool TryReadMarkdownUrl(
@@ -315,6 +381,123 @@ public sealed class SchemaPopulator
         }
 
         return markdownResourcesByPath;
+    }
+
+    private IReadOnlyDictionary<string, string> GetJsonResourcesByPath(
+        Assembly assembly)
+    {
+        const string jsonSchemasPrefix = "Phantom.Workspaces.Data.JsonSchemas.";
+        const string jsonEntitiesPrefix = "Phantom.Workspaces.Data.JsonEntities.";
+        var resourcesByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var resourceName in assembly.GetManifestResourceNames())
+        {
+            if (!resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (resourceName.StartsWith(jsonSchemasPrefix, StringComparison.Ordinal))
+            {
+                this.AddResourcePath(resourcesByPath, resourceName, "JsonSchemas/", jsonSchemasPrefix, includeRelativePath: true);
+                continue;
+            }
+
+            if (resourceName.StartsWith(jsonEntitiesPrefix, StringComparison.Ordinal))
+            {
+                this.AddResourcePath(resourcesByPath, resourceName, "JsonEntities/", jsonEntitiesPrefix, includeRelativePath: false);
+            }
+        }
+
+        return resourcesByPath;
+    }
+
+    private void AddResourcePath(
+        IDictionary<string, string> resourcesByPath,
+        string resourceName,
+        string prefix,
+        string resourcePrefix,
+        bool includeRelativePath)
+    {
+        var relativePath = this.GetResourceRelativePath(resourceName, resourcePrefix);
+        if (includeRelativePath)
+        {
+            resourcesByPath[relativePath] = resourceName;
+        }
+
+        resourcesByPath[$"{prefix}{relativePath}"] = resourceName;
+    }
+
+    private string GetResourceRelativePath(
+        string resourceName,
+        string resourcePrefix)
+    {
+        var relativeName = resourceName[resourcePrefix.Length..];
+        var relativeWithoutExtension = relativeName[..^5];
+        return $"{relativeWithoutExtension.Replace('.', '/')}.json";
+    }
+
+    private bool TryLoadEmbeddedJsonElement(
+        string jsonReference,
+        string sourceResourceName,
+        Assembly assembly,
+        IReadOnlyDictionary<string, string> jsonResourcesByPath,
+        out JsonElement jsonElement)
+    {
+        jsonElement = default;
+        var sourceDirectoryPath = this.GetResourceDirectoryPath(sourceResourceName);
+        var normalizedReference = jsonReference.Replace('\\', '/');
+        var candidatePaths = new List<string>
+        {
+            normalizedReference,
+        };
+        if (!string.IsNullOrWhiteSpace(sourceDirectoryPath))
+        {
+            candidatePaths.Add($"{sourceDirectoryPath}/{normalizedReference}");
+        }
+
+        foreach (var candidatePath in candidatePaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!jsonResourcesByPath.TryGetValue(candidatePath, out var resourceName))
+            {
+                continue;
+            }
+
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream is null)
+            {
+                continue;
+            }
+
+            using var document = JsonDocument.Parse(stream);
+            jsonElement = document.RootElement.Clone();
+            return true;
+        }
+
+        return false;
+    }
+
+    private string GetResourceDirectoryPath(
+        string sourceResourceName)
+    {
+        const string jsonSchemasPrefix = "Phantom.Workspaces.Data.JsonSchemas.";
+        const string jsonEntitiesPrefix = "Phantom.Workspaces.Data.JsonEntities.";
+        string? relativePath = null;
+        if (sourceResourceName.StartsWith(jsonSchemasPrefix, StringComparison.Ordinal))
+        {
+            relativePath = this.GetResourceRelativePath(sourceResourceName, jsonSchemasPrefix);
+        }
+        else if (sourceResourceName.StartsWith(jsonEntitiesPrefix, StringComparison.Ordinal))
+        {
+            relativePath = this.GetResourceRelativePath(sourceResourceName, jsonEntitiesPrefix);
+        }
+
+        if (relativePath is null)
+        {
+            return string.Empty;
+        }
+
+        var index = relativePath.LastIndexOf('/');
+        return index <= 0 ? string.Empty : relativePath[..index];
     }
 
     private EntityId? GetEntityId(

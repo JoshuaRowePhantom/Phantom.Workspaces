@@ -1,53 +1,27 @@
 {
-  "entity-id": "2e80c5d7-6a77-4b9b-8d55-6e9b2e44f1da",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json"
-    ],
-    [
-      "entity-types",
-      "reference"
-    ]
-  ],
-  "display-name": {
-    "default": "Reference Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/reference-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
     }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
-    "allOf": [
-      {
-        "$ref": "relationship.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "participants": {
-        "type": "object",
-        "properties": {
-          "source": {
-            "$ref": "core.json#/$defs/entity-id"
-          },
-          "target": {
-            "$ref": "core.json#/$defs/entity-id"
-          }
+  ],
+  "type": "object",
+  "properties": {
+    "participants": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "core.json#/$defs/entity-id"
         },
-        "required": [
-          "source",
-          "target"
-        ],
-        "additionalProperties": false
-      }
+        "target": {
+          "$ref": "core.json#/$defs/entity-id"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "additionalProperties": false
     }
   }
 }

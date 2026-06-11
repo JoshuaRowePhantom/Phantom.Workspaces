@@ -1,0 +1,29 @@
+{
+  "entity-id": "7be0f139-44fd-4b49-99f4-4cf14f8c9f4b",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json"
+    ],
+    [
+      "entity-types",
+      "view"
+    ]
+  ],
+  "display-name": {
+    "default": "View Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/view-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "view.json"
+  }
+}

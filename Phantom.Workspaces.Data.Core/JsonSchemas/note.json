@@ -1,42 +1,16 @@
 {
-  "entity-id": "fa8fa4db-e62d-4e7e-a8db-9ca67e698133",
-  "entity-types": [
-    "json-schema",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/note.json"
-    ],
-    [
-      "entity-types",
-      "note"
-    ]
-  ],
-  "display-name": {
-    "default": "Note Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/note-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/note.json",
+  "type": "object",
+  "properties": {
+    "title": {
+      "$ref": "core.json#/$defs/local-string"
+    },
+    "content": {
+      "$ref": "mime-attachment.json",
+      "x-default-mime-type": "text/markdown"
     }
   },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/note.json",
-    "type": "object",
-    "properties": {
-      "title": {
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "content": {
-        "$ref": "mime-attachment.json",
-        "x-default-mime-type": "text/markdown"
-      }
-    },
-    "required": [
-      "content"
-    ]
-  }
+  "required": [
+    "content"
+  ]
 }

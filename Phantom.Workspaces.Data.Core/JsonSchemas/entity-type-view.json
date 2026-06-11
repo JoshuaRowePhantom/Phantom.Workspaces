@@ -1,111 +1,85 @@
 {
-  "entity-id": "e6d55787-764a-4cb4-8862-1bb10bb21390",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type-view.json"
-    ],
-    [
-      "entity-types",
-      "entity-type-view"
-    ]
-  ],
-  "display-name": {
-    "default": "Entity Type View Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/entity-type-view-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type-view.json",
+  "allOf": [
+    {
+      "$ref": "entity.json"
     }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type-view.json",
-    "allOf": [
-      {
-        "$ref": "entity.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "base-entity-type-field-entity-id": {
-        "$ref": "core.json#/$defs/entity-id"
-      },
-      "fields": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/entity-field-view"
-        }
-      },
-      "sort-order": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/sort-field"
-        }
-      },
-      "traverse-relationships": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/relationship-traversal"
-        }
-      },
-      "traversed-entity-display-disposition": {
-        "type": "string",
-        "enum": [
-          "collapsed",
-          "expanded"
-        ]
-      },
-      "parent-hierarchy-relationships": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/relationship-traversal"
-        }
+  ],
+  "type": "object",
+  "properties": {
+    "base-entity-type-field-entity-id": {
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity-field-view"
       }
     },
-    "$defs": {
-      "entity-field-view": {
-        "type": "object",
-        "properties": {
-          "field-path": {
-            "$ref": "core.json#/$defs/field-path"
-          },
-          "display-format": {
+    "sort-order": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/sort-field"
+      }
+    },
+    "traverse-relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relationship-traversal"
+      }
+    },
+    "traversed-entity-display-disposition": {
+      "type": "string",
+      "enum": [
+        "collapsed",
+        "expanded"
+      ]
+    },
+    "parent-hierarchy-relationships": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relationship-traversal"
+      }
+    }
+  },
+  "$defs": {
+    "entity-field-view": {
+      "type": "object",
+      "properties": {
+        "field-path": {
+          "$ref": "core.json#/$defs/field-path"
+        },
+        "display-format": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field-path"
+      ],
+      "unevaluatedProperties": false
+    },
+    "relationship-traversal": {
+      "type": "object",
+      "properties": {
+        "relationship-type-ids": {
+          "type": "array",
+          "items": {
+            "$ref": "core.json#/$defs/entity-type-id",
+            "x-entity-type": "entity-type"
+          }
+        },
+        "relationship-role-names": {
+          "type": "array",
+          "items": {
             "type": "string"
           }
         },
-        "required": [
-          "field-path"
-        ],
-        "unevaluatedProperties": false
+        "max-depth": {
+          "type": "integer",
+          "minimum": 1
+        }
       },
-      "relationship-traversal": {
-        "type": "object",
-        "properties": {
-          "relationship-type-ids": {
-            "type": "array",
-            "items": {
-              "$ref": "core.json#/$defs/entity-type-id",
-              "x-entity-type": "entity-type"
-            }
-          },
-          "relationship-role-names": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "max-depth": {
-            "type": "integer",
-            "minimum": 1
-          }
-        },
-        "unevaluatedProperties": false
-      }
+      "unevaluatedProperties": false
     }
   }
 }

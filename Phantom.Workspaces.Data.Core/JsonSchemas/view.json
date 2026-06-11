@@ -1,114 +1,88 @@
 {
-  "entity-id": "7be0f139-44fd-4b49-99f4-4cf14f8c9f4b",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json"
-    ],
-    [
-      "entity-types",
-      "view"
-    ]
-  ],
-  "display-name": {
-    "default": "View Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/view-schema.md"
-    }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json",
-    "type": "object",
-    "properties": {
-      "title": {
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "sub-views": {
-        "type": "array",
-        "items": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/view-reference"
-            },
-            {
-              "$ref": "#/$defs/view-definition"
-            }
-          ]
-        }
-      }
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json",
+  "type": "object",
+  "properties": {
+    "title": {
+      "$ref": "core.json#/$defs/local-string"
     },
-    "required": [
-      "title",
-      "sub-views"
-    ],
-    "$defs": {
-      "view-reference": {
-        "type": "object",
-        "properties": {
-          "view-entity-id": {
-            "$ref": "core.json#/$defs/entity-reference",
-            "x-entity-type": "view"
+    "sub-views": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/view-reference"
           },
-          "disposition": {
-            "$ref": "#/$defs/view-disposition"
+          {
+            "$ref": "#/$defs/view-definition"
           }
-        },
-        "required": [
-          "view-entity-id",
-          "disposition"
-        ],
-        "unevaluatedProperties": false
-      },
-      "view-definition": {
-        "type": "object",
-        "properties": {
-          "disposition": {
-            "$ref": "#/$defs/view-disposition"
-          },
-          "query": {
-            "type": "object",
-            "properties": {
-              "clauses": {
-                "type": "array"
-              },
-              "timestamps": {
-                "type": "array"
-              }
-            },
-            "required": [
-              "clauses"
-            ],
-            "additionalProperties": true
-          },
-          "entity-type-views": {
-            "type": "array",
-            "items": {
-              "$ref": "entity-type-view.json",
-              "x-entity-type": "entity-type-view"
-            }
-          }
-        },
-        "required": [
-          "disposition",
-          "query"
-        ],
-        "unevaluatedProperties": false
-      },
-      "view-disposition": {
-        "type": "string",
-        "enum": [
-          "expanded",
-          "collapsed",
-          "new-window"
         ]
       }
+    }
+  },
+  "required": [
+    "title",
+    "sub-views"
+  ],
+  "$defs": {
+    "view-reference": {
+      "type": "object",
+      "properties": {
+        "view-entity-id": {
+          "$ref": "core.json#/$defs/entity-reference",
+          "x-entity-type": "view"
+        },
+        "disposition": {
+          "$ref": "#/$defs/view-disposition"
+        }
+      },
+      "required": [
+        "view-entity-id",
+        "disposition"
+      ],
+      "unevaluatedProperties": false
+    },
+    "view-definition": {
+      "type": "object",
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/view-disposition"
+        },
+        "query": {
+          "type": "object",
+          "properties": {
+            "clauses": {
+              "type": "array"
+            },
+            "timestamps": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "clauses"
+          ],
+          "additionalProperties": true
+        },
+        "entity-type-views": {
+          "type": "array",
+          "items": {
+            "$ref": "entity-type-view.json",
+            "x-entity-type": "entity-type-view"
+          }
+        }
+      },
+      "required": [
+        "disposition",
+        "query"
+      ],
+      "unevaluatedProperties": false
+    },
+    "view-disposition": {
+      "type": "string",
+      "enum": [
+        "expanded",
+        "collapsed",
+        "new-window"
+      ]
     }
   }
 }

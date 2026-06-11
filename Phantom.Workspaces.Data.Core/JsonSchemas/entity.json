@@ -1,123 +1,97 @@
 {
-  "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e002",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"
-    ],
-    [
-      "entity-types",
-      "entity"
-    ]
-  ],
-  "display-name": {
-    "default": "Entity Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/entity-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json",
+  "$comment": "The DAL composes this base schema with all applicable entity-type schemas and enforces unevaluatedProperties=false at the final composed-schema level.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "entity-id": {
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      }
+    },
+    "names": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "core.json#/$defs/entity-name"
+          },
+          {
+            "$comment": "Used only for the root folder name path ([]).",
+            "type": "array",
+            "maxItems": 0
+          }
+        ]
+      }
+    },
+    "display-name": {
+      "$ref": "core.json#/$defs/local-string"
+    },
+    "related-entity-ids": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-id"
+      }
+    },
+    "relationship-roles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json",
-    "$comment": "The DAL composes this base schema with all applicable entity-type schemas and enforces unevaluatedProperties=false at the final composed-schema level.",
-    "type": "object",
-    "properties": {
-      "$schema": {
-        "type": "string"
-      },
-      "entity-id": {
+  "patternProperties": {
+    "^.*entity-id$": {
+      "$ref": "core.json#/$defs/entity-id"
+    },
+    "^.*entity-ids$": {
+      "type": "array",
+      "items": {
         "$ref": "core.json#/$defs/entity-id"
-      },
-      "entity-types": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        }
-      },
-      "names": {
-        "type": "array",
-        "items": {
-          "anyOf": [
-            {
-              "$ref": "core.json#/$defs/entity-name"
-            },
-            {
-              "$comment": "Used only for the root folder name path ([]).",
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "An empty entity name path ([]) is valid only for the root folder and must be the only name.",
+      "if": {
+        "properties": {
+          "names": {
+            "contains": {
               "type": "array",
               "maxItems": 0
             }
-          ]
-        }
-      },
-      "display-name": {
-        "$ref": "core.json#/$defs/local-string"
-      },
-      "related-entity-ids": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-id"
-        }
-      },
-      "relationship-roles": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      }
-    },
-    "patternProperties": {
-      "^.*entity-id$": {
-        "$ref": "core.json#/$defs/entity-id"
-      },
-      "^.*entity-ids$": {
-        "type": "array",
-        "items": {
-          "$ref": "core.json#/$defs/entity-id"
-        }
-      }
-    },
-    "allOf": [
-      {
-        "$comment": "An empty entity name path ([]) is valid only for the root folder and must be the only name.",
-        "if": {
-          "properties": {
-            "names": {
-              "contains": {
-                "type": "array",
-                "maxItems": 0
-              }
-            }
-          },
-          "required": [
-            "names"
-          ]
+          }
         },
-        "then": {
-          "properties": {
-            "entity-types": {
-              "type": "array",
-              "contains": {
-                "const": "folder"
-              }
-            },
-            "names": {
-              "const": [
-                []
-              ]
+        "required": [
+          "names"
+        ]
+      },
+      "then": {
+        "properties": {
+          "entity-types": {
+            "type": "array",
+            "contains": {
+              "const": "folder"
             }
           },
-          "required": [
-            "entity-types",
-            "names"
-          ]
-        }
+          "names": {
+            "const": [
+              []
+            ]
+          }
+        },
+        "required": [
+          "entity-types",
+          "names"
+        ]
       }
-    ]
-  }
+    }
+  ]
 }

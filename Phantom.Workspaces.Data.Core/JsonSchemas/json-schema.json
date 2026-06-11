@@ -1,81 +1,55 @@
 {
-  "entity-id": "6c0f7b2c-8f5f-4f1f-bd68-8d73f1f1e004",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json"
-    ],
-    [
-      "entity-types",
-      "json-schema"
-    ]
-  ],
-  "display-name": {
-    "default": "JSON Schema Entity Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/json-schema-entity-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json",
+  "type": "object",
+  "properties": {
+    "names": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/schema-index-name"
+      },
+      "minItems": 1
+    },
+    "schema": {
+      "$ref": "https://json-schema.org/draft/2020-12/schema"
     }
   },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json",
-    "type": "object",
-    "properties": {
-      "names": {
-        "type": "array",
-        "items": {
-          "$ref": "#/$defs/schema-index-name"
+  "required": [
+    "names",
+    "schema"
+  ],
+  "$defs": {
+    "schema-index-name": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/entity-type-name"
         },
-        "minItems": 1
-      },
-      "schema": {
-        "$ref": "https://json-schema.org/draft/2020-12/schema"
+        {
+          "$ref": "#/$defs/json-schema-name"
+        }
+      ]
+    },
+    "entity-type-name": {
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "const": "entity-types"
+        }
+      ],
+      "items": {
+        "type": "string"
       }
     },
-    "required": [
-      "names",
-      "schema"
-    ],
-    "$defs": {
-      "schema-index-name": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/entity-type-name"
-          },
-          {
-            "$ref": "#/$defs/json-schema-name"
-          }
-        ]
-      },
-      "entity-type-name": {
-        "type": "array",
-        "minItems": 1,
-        "prefixItems": [
-          {
-            "const": "entity-types"
-          }
-        ],
-        "items": {
-          "type": "string"
+    "json-schema-name": {
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "const": "json-schemas"
         }
-      },
-      "json-schema-name": {
-        "type": "array",
-        "minItems": 1,
-        "prefixItems": [
-          {
-            "const": "json-schemas"
-          }
-        ],
-        "items": {
-          "type": "string"
-        }
+      ],
+      "items": {
+        "type": "string"
       }
     }
   }

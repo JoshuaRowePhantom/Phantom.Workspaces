@@ -1,52 +1,26 @@
 {
-  "entity-id": "f5a6b7c8-d9e0-f1a2-b3c4-d5e6f7a8b9ca",
-  "entity-types": [
-    "entity-type",
-    "note"
-  ],
-  "names": [
-    [
-      "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/core/task.json"
-    ],
-    [
-      "entity-types",
-      "task"
-    ]
-  ],
-  "display-name": {
-    "default": "Task Schema"
-  },
-  "content": {
-    "default": {
-      "mime-type": "text/markdown",
-      "url": "documentation/task-schema.md"
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/task.json",
+  "allOf": [
+    {
+      "$ref": "entity.json"
     }
-  },
-  "schema": {
-    "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/task.json",
-    "allOf": [
-      {
-        "$ref": "entity.json"
-      }
-    ],
-    "type": "object",
-    "properties": {
-      "status": {
-        "type": "string",
-        "enum": [
-          "pending",
-          "in-progress",
-          "completed",
-          "blocked",
-          "cancelled"
-        ],
-        "description": "Current status of the task"
-      },
-      "assigned-to": {
-        "type": "string",
-        "description": "Reference to the user this task is assigned to"
-      }
+  ],
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "in-progress",
+        "completed",
+        "blocked",
+        "cancelled"
+      ],
+      "description": "Current status of the task"
+    },
+    "assigned-to": {
+      "type": "string",
+      "description": "Reference to the user this task is assigned to"
     }
   }
 }

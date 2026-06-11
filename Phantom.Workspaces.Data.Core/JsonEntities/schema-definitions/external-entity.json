@@ -1,0 +1,29 @@
+{
+  "entity-id": "e3f4a5b6-c7d8-e9f0-a1b2-c3d4e5f6a7b8",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/external.json"
+    ],
+    [
+      "entity-types",
+      "external"
+    ]
+  ],
+  "display-name": {
+    "default": "External Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/external-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "external.json"
+  }
+}
