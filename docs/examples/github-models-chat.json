@@ -24,6 +24,9 @@
       "description": "Make HTTP requests to fetch web pages and resources"
     },
     {
+      "kind": "filesystem"
+    },
+    {
       "name": "github",
       "kind": "mcp",
       "description": "GitHub MCP server providing tools for repositories, issues, pull requests, code search, and workflows.",

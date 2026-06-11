@@ -45,7 +45,7 @@ public sealed class FilesystemMcpServerTools
     public ReadResult Read(string path, int? start = null, int? end = null)
         => this.service.Read(path, start, end);
 
-    [McpServerTool, Description("Search a file, directory, or glob. A plain directory path lists files in that directory only; use ** in the glob to search recursively.")]
+    [McpServerTool, Description("Search a file, directory, or glob.\nPath: file path, directory path, or glob.\npattern: regex applied per line.\ntext: plain-text match applied per line.\nlistOnly: list matching files only; defaults to true when neither pattern nor text is provided.\nbeforeContext/afterContext/context: include surrounding lines for text/regex matches.\nUse ** in the glob to search recursively; otherwise glob searches stay in the first matching directory only.")]
     public SearchResult Search(
         string path,
         string? pattern = null,

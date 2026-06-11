@@ -35,6 +35,19 @@ public sealed class FilesystemServiceToolsetTests
         Assert.NotEmpty(firstTools);
     }
 
+    [Fact]
+    public void BuildOpenedToolsMessage_ListsToolNames()
+    {
+        var message = McpClientToolListing.BuildOpenedToolsMessage(
+            "toolset",
+            "filesystem",
+            [new WebSearchTool(), new WebRequestTool()]);
+
+        Assert.Contains("Opened toolset 'filesystem'.", message);
+        Assert.Contains("- web_search", message);
+        Assert.Contains("- web_request", message);
+    }
+
     private static async Task<AITool[]> GetToolsAsync(FilesystemServiceContextProvider provider)
     {
         var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions

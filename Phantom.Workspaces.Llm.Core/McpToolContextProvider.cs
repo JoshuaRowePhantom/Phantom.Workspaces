@@ -37,7 +37,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
                 this.client = await McpClient.CreateAsync(transport, null, this.loggerFactory, cancellationToken);
             }
 
-            var mcpTools = await this.client.ListToolsAsync(options: null, cancellationToken);
+            var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
             if (this.tool.AllowedTools is { Count: > 0 })
             {
                 var allowedSet = new HashSet<string>(this.tool.AllowedTools, StringComparer.OrdinalIgnoreCase);

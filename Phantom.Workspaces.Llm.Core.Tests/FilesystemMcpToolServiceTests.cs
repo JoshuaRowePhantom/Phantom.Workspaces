@@ -37,7 +37,7 @@ public sealed class FilesystemMcpToolServiceTests
         sandbox.WriteFile("alpha\\nested\\three.txt", "c");
         var service = CreateService();
 
-        var result = service.Search(Path.Combine(sandbox.RootPath, "alpha"), listOnly: true);
+        var result = service.Search(Path.Combine(sandbox.RootPath, "alpha"));
 
         Assert.True(result.success);
         Assert.Equal(1, result.totalMatches);

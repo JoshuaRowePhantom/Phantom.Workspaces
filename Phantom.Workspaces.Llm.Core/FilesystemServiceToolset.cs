@@ -38,7 +38,7 @@ public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsync
                 this.client = await CreateClientAsync(this.loggerFactory);
             }
 
-            var mcpTools = await this.client.ListToolsAsync(options: null, cancellationToken);
+            var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
             return new AIContext
             {
                 Tools = mcpTools.Cast<AITool>().ToArray(),

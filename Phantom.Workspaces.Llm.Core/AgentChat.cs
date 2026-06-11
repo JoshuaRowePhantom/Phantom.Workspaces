@@ -888,7 +888,7 @@ public sealed class AgentChat : IAsyncDisposable
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent($"Opened toolset '{displayName}' ({runtimeTools.Length} tools).") },
+                Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("toolset", displayName, runtimeTools)) },
             }]);
             return new ToolInitializationResult([root], runtimeTools.ToList());
         }
@@ -959,7 +959,7 @@ public sealed class AgentChat : IAsyncDisposable
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent($"Opened MCP server '{displayName}' ({mcpTools.Length} tools).") },
+                Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("MCP server", displayName, mcpTools)) },
             }]);
             return new ToolInitializationResult([serverNode], mcpTools.Cast<AITool>().ToList());
         }
@@ -988,28 +988,6 @@ public sealed class AgentChat : IAsyncDisposable
         {
             this.CompleteRunningItem(runningItem, true);
         }
-    }
-
-    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
-    {
-        if (runtimeTools.Count == 0)
-        {
-            return "Agent ready. Loaded tools: (none).";
-        }
-
-        var toolNames = runtimeTools
-            .Select(tool => tool.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (toolNames.Length == 0)
-        {
-            return "Agent ready. Loaded tools: (unnamed tools).";
-        }
-
-        return $"Agent ready. Loaded tools:{Environment.NewLine}- {string.Join($"{Environment.NewLine}- ", toolNames)}";
     }
 
     private static IClientTransport CreateMcpTransport(
@@ -1196,6 +1174,9 @@ public sealed class AgentChat : IAsyncDisposable
 
     private static string BuildMcpChildToolId(string? serverName, string toolName)
         => $"{BuildMcpServerToolId(serverName)}:{toolName}";
+
+    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
+        => $"Agent ready. {McpClientToolListing.BuildLoadedToolsMessage(runtimeTools)}";
 
     private void ReplaceToolNodes(IReadOnlyList<ToolStateNode> roots)
     {

@@ -48,6 +48,7 @@ public sealed class FilesystemMcpToolService
 
         var effectiveBeforeContext = context ?? beforeContext ?? 0;
         var effectiveAfterContext = context ?? afterContext ?? 0;
+        var effectiveListOnly = listOnly || (string.IsNullOrWhiteSpace(pattern) && string.IsNullOrWhiteSpace(text));
 
         if (File.Exists(path))
         {
@@ -58,7 +59,7 @@ public sealed class FilesystemMcpToolService
                 specificFilePaths: [path],
                 pattern,
                 text,
-                listOnly,
+                effectiveListOnly,
                 effectiveBeforeContext,
                 effectiveAfterContext);
         }
@@ -72,7 +73,7 @@ public sealed class FilesystemMcpToolService
                 specificFilePaths: null,
                 pattern,
                 text,
-                listOnly,
+                effectiveListOnly,
                 effectiveBeforeContext,
                 effectiveAfterContext);
         }
@@ -101,7 +102,7 @@ public sealed class FilesystemMcpToolService
             specificFilePaths: null,
             pattern,
             text,
-            listOnly,
+            effectiveListOnly,
             effectiveBeforeContext,
             effectiveAfterContext);
     }
