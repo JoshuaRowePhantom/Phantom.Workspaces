@@ -8,6 +8,12 @@ public sealed record WorkspaceToolExecutionContext
 
     public required CancellationToken CancellationToken { get; init; }
 
+    public required EntitySnapshot CurrentComputerEntity { get; init; }
+
+    public required EntitySnapshot CurrentUserEntity { get; init; }
+
+    public required EntitySnapshot CurrentComputerUserProfileEntity { get; init; }
+
     public required EntitySnapshot ToolRelationship { get; init; }
 
     public required EntitySnapshot[] Participants { get; init; }
