@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Serialization;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm;
@@ -63,49 +64,12 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
     private static string? TryReadDefaultMarkdownText(JsonElement? entityData)
     {
         if (entityData is not JsonElement entityDataElement
-            || entityDataElement.ValueKind != JsonValueKind.Object
-            || !entityDataElement.TryGetProperty("content", out var contentElement)
-            || contentElement.ValueKind != JsonValueKind.Object)
+            || !NoteEntityDocument.TryParse(entityDataElement, out var noteEntityDocument))
         {
             return null;
         }
 
-        if (TryReadMarkdownTextFromAttachment(contentElement, out var markdownText))
-        {
-            return markdownText;
-        }
-
-        if (contentElement.TryGetProperty("default", out var defaultContentElement)
-            && TryReadMarkdownTextFromAttachment(defaultContentElement, out markdownText))
-        {
-            return markdownText;
-        }
-
-        foreach (var localeContentProperty in contentElement.EnumerateObject())
-        {
-            if (TryReadMarkdownTextFromAttachment(localeContentProperty.Value, out markdownText))
-            {
-                return markdownText;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool TryReadMarkdownTextFromAttachment(JsonElement attachmentElement, out string? markdownText)
-    {
-        markdownText = null;
-        if (attachmentElement.ValueKind != JsonValueKind.Object
-            || !attachmentElement.TryGetProperty("content", out var inlineContentElement)
-            || inlineContentElement.ValueKind != JsonValueKind.Object
-            || !inlineContentElement.TryGetProperty("text", out var textElement)
-            || textElement.ValueKind != JsonValueKind.String)
-        {
-            return false;
-        }
-
-        markdownText = textElement.GetString();
-        return !string.IsNullOrWhiteSpace(markdownText);
+        return noteEntityDocument.GetPreferredMarkdownText();
     }
 
     private sealed class WorkspaceEntityGetByIdTool : AIFunction

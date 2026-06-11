@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Json.Schema;
+using Phantom.Workspaces.Data.Serialization;
 
 namespace Phantom.Workspaces.Data;
 
@@ -192,56 +193,24 @@ public sealed class SchemaAccessor : ISchemaAccessor
     private static bool IsSchemaEntity(
         JsonElement entityObject)
     {
-        return entityObject.TryGetProperty("schema", out _)
-            || GetExplicitEntityTypeNames(entityObject).Contains("json-schema")
-            || entityObject.TryGetProperty("$id", out var idElement)
-            && idElement.ValueKind == JsonValueKind.String;
+        return SchemaEntityDocument.TryParse(entityObject, out var schemaEntityDocument)
+            && schemaEntityDocument.IsSchemaEntity();
     }
 
     private static IReadOnlyCollection<string> GetEntityNames(
         JsonElement entityObject)
     {
-        if (!entityObject.TryGetProperty("names", out var namesElement)
-            || namesElement.ValueKind != JsonValueKind.Array)
-        {
-            return Array.Empty<string>();
-        }
-
-        var names = new List<string>();
-        foreach (var nameElement in namesElement.EnumerateArray())
-        {
-            if (nameElement.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            var components = nameElement.EnumerateArray()
-                .Where(static item => item.ValueKind == JsonValueKind.String)
-                .Select(static item => item.GetString())
-                .Where(static value => !string.IsNullOrWhiteSpace(value))
-                .ToArray();
-            if (components.Length > 0)
-            {
-                names.Add(JsonSerializer.Serialize(components));
-            }
-        }
-
-        return names;
+        return SchemaEntityDocument.TryParse(entityObject, out var schemaEntityDocument)
+            ? schemaEntityDocument.GetCanonicalNames()
+            : Array.Empty<string>();
     }
 
     private static HashSet<string> GetExplicitEntityTypeNames(
         JsonElement entityData)
     {
-        if (!entityData.TryGetProperty("entity-types", out var typeNames)
-            || typeNames.ValueKind != JsonValueKind.Array)
-        {
-            return new HashSet<string>(StringComparer.Ordinal);
-        }
-
-        return typeNames.EnumerateArray()
-            .Where(static typeName => typeName.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(typeName.GetString()))
-            .Select(static typeName => typeName.GetString()!)
-            .ToHashSet(StringComparer.Ordinal);
+        return SchemaEntityDocument.TryParse(entityData, out var schemaEntityDocument)
+            ? schemaEntityDocument.GetExplicitEntityTypeNames()
+            : new HashSet<string>(StringComparer.Ordinal);
     }
 
     private static IReadOnlyCollection<string> GetSchemaEntityNames(
@@ -274,32 +243,20 @@ public sealed class SchemaAccessor : ISchemaAccessor
         JsonElement schemaEntity,
         out string schemaId)
     {
-        schemaId = string.Empty;
-        if (schemaEntity.TryGetProperty("schema", out var schemaPayload)
-            && schemaPayload.ValueKind == JsonValueKind.Object
-            && schemaPayload.TryGetProperty("$id", out var payloadId)
-            && payloadId.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(payloadId.GetString()))
+        if (!SchemaEntityDocument.TryParse(schemaEntity, out var schemaEntityDocument))
         {
-            schemaId = payloadId.GetString()!;
-            return true;
+            schemaId = string.Empty;
+            return false;
         }
 
-        if (schemaEntity.TryGetProperty("$id", out var idElement)
-            && idElement.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(idElement.GetString()))
-        {
-            schemaId = idElement.GetString()!;
-            return true;
-        }
-
-        return false;
+        return schemaEntityDocument.TryGetSchemaPayloadId(out schemaId);
     }
 
     public static string GetSchemaText(
         JsonElement schemaEntity)
     {
-        if (schemaEntity.TryGetProperty("schema", out var schemaPayload))
+        if (SchemaEntityDocument.TryParse(schemaEntity, out var schemaEntityDocument)
+            && schemaEntityDocument.SchemaPayload is JsonElement schemaPayload)
         {
             if (schemaPayload.ValueKind == JsonValueKind.String
                 && !string.IsNullOrWhiteSpace(schemaPayload.GetString()))
