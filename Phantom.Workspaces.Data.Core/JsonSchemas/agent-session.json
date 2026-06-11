@@ -1,0 +1,25 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-session.json",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": {
+        "const": "agent-session"
+      }
+    },
+    "agent-session-id": {
+      "type": "string",
+      "description": "Agent session identifier used by IAgentPersistenceStore."
+    }
+  },
+  "required": [
+    "entity-types",
+    "agent-session-id"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "entity-id": "883c942b-2f87-4c2d-abd2-02f031a8e263",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-session.json"
+    ],
+    [
+      "entity-types",
+      "agent-session"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Session Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-session-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/agent-session.json"
+  }
+}
