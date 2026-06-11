@@ -7,6 +7,9 @@ namespace Phantom.Workspaces.Llm;
 
 public sealed class WorkspaceEntityContextProvider : AIContextProvider
 {
+    private static readonly EntityName WorkspaceEntityToolInstructionsEntityName =
+        new("documentation", "entity-workspace-agent-tool-instructions");
+
     private readonly string stateKey = $"workspace-entity:{Guid.NewGuid():n}";
     private readonly IDataAccessLayer dataAccessLayer;
 
@@ -18,14 +21,15 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
 
     public override IReadOnlyList<string> StateKeys => [this.stateKey];
 
-    protected override ValueTask<AIContext> ProvideAIContextAsync(
+    protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context,
         CancellationToken cancellationToken)
     {
         _ = context;
-        _ = cancellationToken;
-        return ValueTask.FromResult(new AIContext
+        var instructions = await this.GetWorkspaceEntityToolInstructionsAsync(cancellationToken);
+        return new AIContext
         {
+            Instructions = instructions,
             Tools =
             [
                 new WorkspaceEntityGetByIdTool(this.dataAccessLayer),
@@ -34,7 +38,74 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
                 new WorkspaceEntityReplaceTool(this.dataAccessLayer),
                 new WorkspaceEntityDeleteTool(this.dataAccessLayer),
             ],
-        });
+        };
+    }
+
+    private async Task<string?> GetWorkspaceEntityToolInstructionsAsync(CancellationToken cancellationToken)
+    {
+        var getResult = await this.dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = WorkspaceEntityToolInstructionsEntityName,
+                    },
+                ],
+            },
+            cancellationToken);
+
+        var instructionsEntity = getResult.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
+        return TryReadDefaultMarkdownText(instructionsEntity?.Data);
+    }
+
+    private static string? TryReadDefaultMarkdownText(JsonElement? entityData)
+    {
+        if (entityData is not JsonElement entityDataElement
+            || entityDataElement.ValueKind != JsonValueKind.Object
+            || !entityDataElement.TryGetProperty("content", out var contentElement)
+            || contentElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (TryReadMarkdownTextFromAttachment(contentElement, out var markdownText))
+        {
+            return markdownText;
+        }
+
+        if (contentElement.TryGetProperty("default", out var defaultContentElement)
+            && TryReadMarkdownTextFromAttachment(defaultContentElement, out markdownText))
+        {
+            return markdownText;
+        }
+
+        foreach (var localeContentProperty in contentElement.EnumerateObject())
+        {
+            if (TryReadMarkdownTextFromAttachment(localeContentProperty.Value, out markdownText))
+            {
+                return markdownText;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryReadMarkdownTextFromAttachment(JsonElement attachmentElement, out string? markdownText)
+    {
+        markdownText = null;
+        if (attachmentElement.ValueKind != JsonValueKind.Object
+            || !attachmentElement.TryGetProperty("content", out var inlineContentElement)
+            || inlineContentElement.ValueKind != JsonValueKind.Object
+            || !inlineContentElement.TryGetProperty("text", out var textElement)
+            || textElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        markdownText = textElement.GetString();
+        return !string.IsNullOrWhiteSpace(markdownText);
     }
 
     private sealed class WorkspaceEntityGetByIdTool : AIFunction
@@ -172,7 +243,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
               "properties": {
                 "entity-id": {
                   "type": "string",
-                  "description": "Entity id as GUID."
+                  "description": "Optional entity id as GUID. If omitted, a new GUID is generated."
                 },
                 "data": {
                   "type": "object",
@@ -183,7 +254,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
                   "description": "Change comment."
                 }
               },
-              "required": [ "entity-id", "data" ],
+              "required": [ "data" ],
               "additionalProperties": false
             }
             """).RootElement.Clone();
@@ -206,11 +277,15 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
             AIFunctionArguments arguments,
             CancellationToken cancellationToken)
         {
-            if (!TryExtractEntityId(arguments, "entity-id", out var entityId))
+            var hasEntityIdArgument = arguments.TryGetValue("entity-id", out var entityIdArgument)
+                && entityIdArgument is not null;
+            var hasValidEntityId = TryExtractEntityId(arguments, "entity-id", out var parsedEntityId);
+            if (hasEntityIdArgument && !hasValidEntityId)
             {
                 return new TextContent("workspace_entity_add requires a valid 'entity-id' GUID.");
             }
 
+            var entityId = hasValidEntityId ? parsedEntityId : new EntityId();
             if (!TryExtractJsonElement(arguments, "data", out var dataElement))
             {
                 return new TextContent("workspace_entity_add requires 'data' as a JSON object.");
@@ -238,7 +313,11 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
                 },
                 cancellationToken);
 
-            return new TextContent(SerializeAsJson(ToSerializableUpdateResult(updateResult)));
+            return new TextContent(SerializeAsJson(new
+            {
+                entityId = entityId.Value,
+                update = ToSerializableUpdateResult(updateResult),
+            }));
         }
     }
 

@@ -1,0 +1,21 @@
+{
+  "entity-id": "739ff4c0-b7f8-4d2b-a8e9-cc6bb513f55f",
+  "entity-types": [
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "entity-workspace-agent-tool-instruction-details"
+    ]
+  ],
+  "display-name": {
+    "default": "Workspace Entity Tool Instruction Details"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "documentation/entity-workspace-agent-tool-instruction-details.md"
+    }
+  }
+}

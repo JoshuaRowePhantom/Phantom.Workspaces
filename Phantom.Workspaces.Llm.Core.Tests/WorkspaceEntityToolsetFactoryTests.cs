@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Llm.Echo;
 using System.Text.Json;
@@ -30,6 +31,27 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                 "workspace_entity_replace",
             ],
             toolNames);
+    }
+
+    [Fact]
+    public async Task ProvideAIContextAsync_LoadsInstructionsFromGlobalNote()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await StoreGlobalInstructionNoteAsync(
+            dataAccessLayer,
+            ["documentation", "entity-workspace-agent-tool-instructions"],
+            "Retrieve [\"documentation\", \"entity-workspace-agent-tool-instruction-details\"] first.");
+        var provider = new WorkspaceEntityContextProvider(dataAccessLayer);
+        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
+        {
+            UseProvidedChatClientAsIs = true,
+        });
+        var session = await agent.CreateSessionAsync(CancellationToken.None);
+
+        var context = await AIContextProviderToolReader.GetContextAsync(provider, agent, session, CancellationToken.None);
+
+        Assert.NotNull(context.Instructions);
+        Assert.Contains("entity-workspace-agent-tool-instruction-details", context.Instructions, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -90,6 +112,34 @@ public sealed class WorkspaceEntityToolsetFactoryTests
 
         var updateState = replaceJson.GetProperty("entityResults")[0].GetProperty("updateState").GetString();
         Assert.Equal("Updated", updateState);
+    }
+
+    [Fact]
+    public async Task AddTool_WithoutEntityId_GeneratesEntityIdAndReturnsIt()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var addTool = await GetToolAsync(dataAccessLayer, "workspace_entity_add");
+        var getByIdTool = await GetToolAsync(dataAccessLayer, "workspace_entity_get_by_id");
+
+        var addResult = await addTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["data"] = JsonDocument.Parse("""{ "entity-type-names": [ "sample" ], "entity-name": [ "samples", "generated" ], "value": "created" }""").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+        var addJson = ReadJsonFromTextContent(addResult);
+        var generatedEntityId = addJson.GetProperty("entityId").GetGuid();
+        var updateState = addJson.GetProperty("update").GetProperty("entityResults")[0].GetProperty("updateState").GetString();
+        Assert.Equal("Added", updateState);
+
+        var getResult = await getByIdTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity-id"] = generatedEntityId.ToString("D"),
+            }),
+            CancellationToken.None);
+        var getJson = ReadJsonFromTextContent(getResult);
+        Assert.Equal(generatedEntityId, getJson.GetProperty("entity").GetProperty("entityId").GetGuid());
     }
 
     [Fact]
@@ -171,5 +221,53 @@ public sealed class WorkspaceEntityToolsetFactoryTests
         });
         var session = await agent.CreateSessionAsync(CancellationToken.None);
         return await AIContextProviderToolReader.GetToolsAsync(provider, agent, session, CancellationToken.None);
+    }
+
+    private static async Task StoreGlobalInstructionNoteAsync(
+        IDataAccessLayer dataAccessLayer,
+        string[] entityName,
+        string markdownText)
+    {
+        using var jsonDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{Guid.NewGuid():D}}",
+              "entity-types": ["note"],
+              "names": [{{JsonSerializer.Serialize(entityName)}}],
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": {
+                    "text": {{JsonSerializer.Serialize(markdownText)}}
+                  }
+                }
+              }
+            }
+            """);
+        var entityData = jsonDocument.RootElement.Clone();
+
+        var updateResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Seed global workspace entity instruction note.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId(entityData.GetProperty("entity-id").GetString()!),
+                        Data = entityData,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.DoesNotContain(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
     }
 }
