@@ -226,6 +226,31 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     [Fact]
+    public async Task Populate_GetByTypeName_WithoutEntityName_ReturnsMatchingTypes()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var entityId = new EntityId("bc8633d9-8d46-4c18-b310-d2e71e4a24f2");
+        var viewEntityId = new EntityId("ad2fcf4e-9501-4638-82cc-a75e6f194d76");
+        await this.CreateNamedEntityAsync(dataAccessLayer, entityId, new EntityName("typed-lookup", "entity"));
+        await this.CreateViewEntityAsync(dataAccessLayer, viewEntityId, new EntityName("typed-lookup", "view"));
+
+        var result = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityTypeNames = new EntityTypeNameSet(["view"]),
+                },
+                null));
+
+        var returnedEntityIds = Assert.Single(result.Batches).Entities
+            .Select(static entity => entity.EntityId)
+            .ToArray();
+        Assert.Contains(viewEntityId, returnedEntityIds);
+        Assert.DoesNotContain(entityId, returnedEntityIds);
+    }
+
+    [Fact]
     public async Task Populate_GetByName_EnumerateChildren_EntityTypesPrefix_ReturnsEntityTypeChildren()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();

@@ -12,5 +12,26 @@
   "title": {
     "default": "Sessions"
   },
-  "sub-views": []
+  "sub-views": [
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-type-names": [
+            "agent-definition"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-type-names": [
+            "agent-session"
+          ]
+        }
+      ]
+    }
+  ]
 }

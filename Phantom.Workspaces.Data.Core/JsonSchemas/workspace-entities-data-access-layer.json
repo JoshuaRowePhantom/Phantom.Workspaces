@@ -1,0 +1,114 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json",
+  "$defs": {
+    "get-request": {
+      "type": "object",
+      "properties": {
+        "get-entity": {
+          "$ref": "#/$defs/get-entity"
+        },
+        "relationships-to-return": {
+          "$ref": "#/$defs/relationships-to-return"
+        },
+        "timestamps": {
+          "$ref": "#/$defs/timestamps"
+        }
+      },
+      "required": [
+        "get-entity"
+      ],
+      "unevaluatedProperties": false
+    },
+    "get-entity": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/get-entity-request"
+      }
+    },
+    "get-entity-request": {
+      "type": "object",
+      "properties": {
+        "entity-id": {
+          "$ref": "core.json#/$defs/entity-id"
+        },
+        "entity-name": {
+          "$ref": "core.json#/$defs/entity-name"
+        },
+        "enumerate-children": {
+          "type": "string",
+          "enum": [
+            "self",
+            "children",
+            "all-children"
+          ]
+        },
+        "entity-type-names": {
+          "type": "array",
+          "items": {
+            "$ref": "core.json#/$defs/entity-type-id"
+          }
+        },
+        "relationships-to-return": {
+          "$ref": "#/$defs/relationships-to-return"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "entity-id"
+          ]
+        },
+        {
+          "required": [
+            "entity-name"
+          ]
+        },
+        {
+          "required": [
+            "entity-type-names"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "relationships-to-return": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/get-relationship-request"
+      }
+    },
+    "get-relationship-request": {
+      "type": "object",
+      "properties": {
+        "relationship-type-names": {
+          "type": "array",
+          "items": {
+            "$ref": "core.json#/$defs/entity-type-id"
+          }
+        },
+        "relationship-role-names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "timestamps": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "core.json#/$defs/timestamp"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    }
+  },
+  "$ref": "#/$defs/get-request"
+}

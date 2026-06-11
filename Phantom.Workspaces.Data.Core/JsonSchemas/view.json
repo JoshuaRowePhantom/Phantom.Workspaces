@@ -47,20 +47,14 @@
         "disposition": {
           "$ref": "#/$defs/view-disposition"
         },
-        "query": {
-          "type": "object",
-          "properties": {
-            "clauses": {
-              "type": "array"
-            },
-            "timestamps": {
-              "type": "array"
-            }
-          },
-          "required": [
-            "clauses"
-          ],
-          "additionalProperties": true
+        "get-entity": {
+          "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/get-entity"
+        },
+        "relationships-to-return": {
+          "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/relationships-to-return"
+        },
+        "timestamps": {
+          "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/timestamps"
         },
         "entity-type-views": {
           "type": "array",
@@ -72,7 +66,7 @@
       },
       "required": [
         "disposition",
-        "query"
+        "get-entity"
       ],
       "unevaluatedProperties": false
     },

@@ -110,39 +110,55 @@ public sealed record UpdateError
 
 public sealed record GetRequest
 {
+    [JsonPropertyName("get-entity")]
     public required IReadOnlyCollection<GetEntityRequest> Entities { get; init; }
 
     // null means do not return relationships, empty means return all, non-empty means return matching relationships.
+    [JsonPropertyName("relationships-to-return")]
     public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
 
+    [JsonPropertyName("timestamps")]
     public IReadOnlyCollection<Timestamp?>? Timestamps { get; init; }
 }
 
 public sealed record GetEntityRequest
 {
+    [JsonPropertyName("entity-id")]
     public EntityId? EntityId { get; init; }
 
+    [JsonPropertyName("entity-name")]
     public EntityName? EntityName { get; init; }
 
+    [JsonPropertyName("enumerate-children")]
     public EnumerateChildrenAction EnumerateChildren { get; init; } = EnumerateChildrenAction.EnumerateSelf;
 
+    [JsonPropertyName("entity-type-names")]
     public EntityTypeNameSet? EntityTypeNames { get; init; }
 
     // null means inherit request-level value; empty means return all; non-empty means return matching relationships.
+    [JsonPropertyName("relationships-to-return")]
     public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<EnumerateChildrenAction>))]
 public enum EnumerateChildrenAction
 {
+    [JsonStringEnumMemberName("self")]
     EnumerateSelf = 0,
+
+    [JsonStringEnumMemberName("children")]
     EnumerateChildren = 1,
+
+    [JsonStringEnumMemberName("all-children")]
     EnumerateAllChildren = 2,
 }
 
 public sealed record GetRelationshipRequest
 {
+    [JsonPropertyName("relationship-type-names")]
     public RelationshipTypeNameSet? RelationshipTypeNames { get; init; }
 
+    [JsonPropertyName("relationship-role-names")]
     public RoleNameSet? RelationshipRoleNames { get; init; }
 }
 

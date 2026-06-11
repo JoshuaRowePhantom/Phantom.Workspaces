@@ -51,6 +51,31 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentDefinitionEntities()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var sessionsView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Sessions", StringComparison.Ordinal));
+        viewModel.SelectedTopLevelView = sessionsView;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        Assert.Contains(
+            sessionsView.Entities,
+            static entity => string.Equals(entity.EntityType, "agent-definition", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            sessionsView.Entities,
+            static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void MainWindow_ConstructsWithoutTemplateCastErrors()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());

@@ -29,6 +29,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
+    private readonly List<SubscribedGet> selectedViewSubViewSubscriptions = [];
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -143,6 +144,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Gets the initialized broker for view-layer data access.
+    /// </summary>
+    /// <remarks>
+    /// View code should not access the repository/DAL directly. Always use broker subscriptions so
+    /// view content remains live-updating as entities change.
+    /// </remarks>
     private EntityBroker EntityBroker => this.entityBroker
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
@@ -398,6 +406,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private async Task ApplySelectedViewAsync()
     {
         var selectedView = this.selectedTopLevelView ?? EmptyView;
+        this.selectedViewSubViewSubscriptions.Clear();
         selectedView.Entities.Clear();
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
@@ -418,29 +427,111 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        selectedView.Entities.Add(new ViewEntityViewModel(selectedViewEntity, indentLevel: 0, isParentContext: true));
         if (selectedViewEntity.Snapshot.Data is not JsonElement selectedViewData)
         {
             this.StickyParentContextText = selectedView.Title;
             return;
         }
 
+        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(selectedViewData);
+        if (associatedNoteEntity is not null)
+        {
+            selectedView.Entities.Add(new ViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
+        }
+
+        await this.LoadSubViewEntitiesAsync(selectedViewData);
+
         if (selectedViewData.TryGetProperty("sub-views", out var subViews)
             && subViews.ValueKind == JsonValueKind.Array)
         {
             foreach (var subView in subViews.EnumerateArray())
             {
-                if (!this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
-                    || subViewEntity is null)
+                if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
+                    && subViewEntity is not null)
+                {
+                    selectedView.Entities.Add(new ViewEntityViewModel(subViewEntity, indentLevel: 0));
+                    continue;
+                }
+
+                if (!TryReadSubViewGetRequest(subView, out var getRequest))
                 {
                     continue;
                 }
 
-                selectedView.Entities.Add(new ViewEntityViewModel(subViewEntity, indentLevel: 1));
+                var getEntities = await this.LoadGetSubViewEntitiesAsync(getRequest);
+                foreach (var getEntity in getEntities)
+                {
+                    selectedView.Entities.Add(new ViewEntityViewModel(getEntity, indentLevel: 0));
+                }
             }
         }
 
         this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
+    }
+
+    private async Task LoadSubViewEntitiesAsync(
+        JsonElement viewData)
+    {
+        if (!viewData.TryGetProperty("sub-views", out var subViews)
+            || subViews.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var requests = new List<GetEntityRequest>();
+        foreach (var subView in subViews.EnumerateArray())
+        {
+            if (TryReadEntityRequest(subView, "view-entity-id", out var request))
+            {
+                requests.Add(request);
+            }
+        }
+
+        if (requests.Count == 0)
+        {
+            return;
+        }
+
+        await this.EntityBroker!.GetEntitiesAsync(requests);
+    }
+
+    private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadGetSubViewEntitiesAsync(
+        GetRequest getRequest)
+    {
+        var subscribedGet = await this.EntityBroker.SubscribeGetAsync(getRequest);
+        this.selectedViewSubViewSubscriptions.Add(subscribedGet);
+
+        if (subscribedGet.Results.Count == 0)
+        {
+            return Array.Empty<SubscribedEntityViewModel>();
+        }
+
+        return subscribedGet.Results.ToArray();
+    }
+
+    private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
+        JsonElement selectedViewData)
+    {
+        if (!TryReadPrimaryEntityName(selectedViewData, out var selectedViewName))
+        {
+            return null;
+        }
+
+        var noteSubscription = await this.EntityBroker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = selectedViewName,
+                        EntityTypeNames = new EntityTypeNameSet(["note"]),
+                    },
+                ],
+                Timestamps = [null],
+            });
+        this.selectedViewSubViewSubscriptions.Add(noteSubscription);
+        return noteSubscription.Results.FirstOrDefault();
     }
 
     private async Task OnActivateEntityAsync(
@@ -929,6 +1020,28 @@ public sealed class MainWindowViewModel : ViewModelBase
         return property.TryReadEntityName();
     }
 
+    private static bool TryReadPrimaryEntityName(
+        JsonElement element,
+        out EntityName entityName)
+    {
+        entityName = default;
+        if (!element.TryGetProperty("names", out var namesElement)
+            || namesElement.ValueKind != JsonValueKind.Array
+            || namesElement.GetArrayLength() == 0)
+        {
+            return false;
+        }
+
+        var firstName = namesElement[0].TryReadEntityName();
+        if (firstName is null)
+        {
+            return false;
+        }
+
+        entityName = firstName.Value;
+        return true;
+    }
+
     private static string GetWorkspaceRequestDisplayText(
         GetEntityRequest request)
     {
@@ -959,6 +1072,240 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         return "unknown";
+    }
+
+    private static bool TryReadSubViewGetRequest(
+        JsonElement subView,
+        out GetRequest getRequest)
+    {
+        getRequest = null!;
+        if (!subView.TryGetProperty("get-entity", out var getEntitiesElement)
+            || getEntitiesElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var getEntities = new List<GetEntityRequest>();
+        foreach (var getEntityElement in getEntitiesElement.EnumerateArray())
+        {
+            if (TryReadGetEntityRequest(getEntityElement, out var getEntityRequest))
+            {
+                getEntities.Add(getEntityRequest);
+            }
+        }
+
+        if (getEntities.Count == 0)
+        {
+            return false;
+        }
+
+        getRequest = new GetRequest
+        {
+            Entities = getEntities,
+            RelationshipsToReturn = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
+                ? relationshipsToReturn
+                : null,
+            Timestamps = TryReadTimestamps(subView, "timestamps", out var timestamps)
+                ? timestamps
+                : [null],
+        };
+        return true;
+    }
+
+    private static bool TryReadGetEntityRequest(
+        JsonElement getEntityElement,
+        out GetEntityRequest getEntityRequest)
+    {
+        getEntityRequest = null!;
+        if (getEntityElement.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        EntityId? entityId = null;
+        if (getEntityElement.TryGetProperty("entity-id", out var entityIdElement)
+            && entityIdElement.ValueKind == JsonValueKind.String
+            && Guid.TryParse(entityIdElement.GetString(), out var parsedEntityId))
+        {
+            entityId = new EntityId(parsedEntityId);
+        }
+
+        EntityName? entityName = null;
+        if (getEntityElement.TryGetProperty("entity-name", out var entityNameElement))
+        {
+            entityName = entityNameElement.TryReadEntityName();
+        }
+
+        EntityTypeNameSet? entityTypeNameSet = null;
+        if (TryReadStringArray(getEntityElement, "entity-type-names", out var entityTypeNames))
+        {
+            entityTypeNameSet = new EntityTypeNameSet(entityTypeNames!);
+        }
+
+        if (entityId is null && entityName is null && entityTypeNameSet is null)
+        {
+            return false;
+        }
+
+        var enumerateChildren = EnumerateChildrenAction.EnumerateSelf;
+        if (getEntityElement.TryGetProperty("enumerate-children", out var enumerateChildrenElement)
+            && enumerateChildrenElement.ValueKind == JsonValueKind.String
+            && !TryReadEnumerateChildrenAction(enumerateChildrenElement.GetString(), out enumerateChildren))
+        {
+            return false;
+        }
+
+        getEntityRequest = new GetEntityRequest
+        {
+            EntityId = entityId,
+            EntityName = entityName,
+            EnumerateChildren = enumerateChildren,
+            EntityTypeNames = entityTypeNameSet,
+            RelationshipsToReturn = TryReadGetRelationshipRequests(getEntityElement, "relationships-to-return", out var relationshipsToReturn)
+                ? relationshipsToReturn
+                : null,
+        };
+        return true;
+    }
+
+    private static bool TryReadGetRelationshipRequests(
+        JsonElement parentElement,
+        string propertyName,
+        out IReadOnlyCollection<GetRelationshipRequest> getRelationshipRequests)
+    {
+        getRelationshipRequests = Array.Empty<GetRelationshipRequest>();
+        if (!parentElement.TryGetProperty(propertyName, out var relationshipsElement)
+            || relationshipsElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var parsed = new List<GetRelationshipRequest>();
+        foreach (var relationshipElement in relationshipsElement.EnumerateArray())
+        {
+            if (relationshipElement.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            RelationshipTypeNameSet? relationshipTypeNames = null;
+            if (TryReadStringArray(relationshipElement, "relationship-type-names", out var relationshipTypeNameValues))
+            {
+                relationshipTypeNames = new RelationshipTypeNameSet(relationshipTypeNameValues!);
+            }
+
+            RoleNameSet? relationshipRoleNames = null;
+            if (TryReadStringArray(relationshipElement, "relationship-role-names", out var relationshipRoleNameValues))
+            {
+                relationshipRoleNames = new RoleNameSet(relationshipRoleNameValues!);
+            }
+
+            parsed.Add(
+                new GetRelationshipRequest
+                {
+                    RelationshipTypeNames = relationshipTypeNames,
+                    RelationshipRoleNames = relationshipRoleNames,
+                });
+        }
+
+        getRelationshipRequests = parsed;
+        return true;
+    }
+
+    private static bool TryReadStringArray(
+        JsonElement parentElement,
+        string propertyName,
+        out string[]? values)
+    {
+        values = null;
+        if (!parentElement.TryGetProperty(propertyName, out var arrayElement)
+            || arrayElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var parsedValues = arrayElement.EnumerateArray()
+            .Where(static item => item.ValueKind == JsonValueKind.String)
+            .Select(static item => item.GetString())
+            .Where(static item => !string.IsNullOrWhiteSpace(item))
+            .ToArray();
+        if (parsedValues.Length == 0)
+        {
+            return false;
+        }
+
+        values = parsedValues!;
+        return true;
+    }
+
+    private static bool TryReadEnumerateChildrenAction(
+        string? value,
+        out EnumerateChildrenAction enumerateChildrenAction)
+    {
+        enumerateChildrenAction = EnumerateChildrenAction.EnumerateSelf;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        if (value.Equals("self", StringComparison.Ordinal))
+        {
+            enumerateChildrenAction = EnumerateChildrenAction.EnumerateSelf;
+            return true;
+        }
+
+        if (value.Equals("children", StringComparison.Ordinal))
+        {
+            enumerateChildrenAction = EnumerateChildrenAction.EnumerateChildren;
+            return true;
+        }
+
+        if (value.Equals("all-children", StringComparison.Ordinal))
+        {
+            enumerateChildrenAction = EnumerateChildrenAction.EnumerateAllChildren;
+            return true;
+        }
+
+        return Enum.TryParse(value, ignoreCase: true, out enumerateChildrenAction);
+    }
+
+    private static bool TryReadTimestamps(
+        JsonElement parentElement,
+        string propertyName,
+        out IReadOnlyCollection<Timestamp?> timestamps)
+    {
+        timestamps = Array.Empty<Timestamp?>();
+        if (!parentElement.TryGetProperty(propertyName, out var timestampsElement)
+            || timestampsElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var parsedTimestamps = new List<Timestamp?>();
+        foreach (var timestampElement in timestampsElement.EnumerateArray())
+        {
+            if (timestampElement.ValueKind == JsonValueKind.Null)
+            {
+                parsedTimestamps.Add(null);
+                continue;
+            }
+
+            if (timestampElement.ValueKind != JsonValueKind.Object
+                || !timestampElement.TryGetProperty("datetime", out var dateTimeElement)
+                || dateTimeElement.ValueKind != JsonValueKind.String
+                || !DateTimeOffset.TryParse(dateTimeElement.GetString(), out var dateTimeOffset)
+                || !timestampElement.TryGetProperty("change-id", out var changeIdElement)
+                || changeIdElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(changeIdElement.GetString()))
+            {
+                continue;
+            }
+
+            parsedTimestamps.Add(new Timestamp(dateTimeOffset, changeIdElement.GetString()!));
+        }
+
+        timestamps = parsedTimestamps;
+        return true;
     }
 
     private static bool TryReadEntityRequest(

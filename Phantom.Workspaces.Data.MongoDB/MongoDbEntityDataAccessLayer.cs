@@ -487,13 +487,28 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             return byId is null ? [] : [byId];
         }
 
+        var requestedTypes = request.EntityTypeNames?.Values;
         if (request.EntityName is null)
         {
-            return [];
+            return allDocuments.Where(
+                document =>
+                {
+                    var version = document.Versions.LastOrDefault();
+                    if (version is null || version.DataJson is null)
+                    {
+                        return false;
+                    }
+
+                    if (requestedTypes is not null && requestedTypes.Length > 0)
+                    {
+                        return version.TypeNames.Intersect(requestedTypes, StringComparer.Ordinal).Any();
+                    }
+
+                    return true;
+                }).ToArray();
         }
 
         var requestedName = request.EntityName.Value.Components;
-        var requestedTypes = request.EntityTypeNames?.Values;
 
         return allDocuments.Where(document =>
         {

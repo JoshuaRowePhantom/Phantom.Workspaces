@@ -236,11 +236,13 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         await WaitForConditionAsync(viewModel, () =>
             viewModel.EntityList.Items.Any(item =>
-                string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal)));
+                string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
+                || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal)));
 
         var noteItem = Assert.Single(
             viewModel.EntityList.Items,
-            item => string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal));
+            item => string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
+                || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);

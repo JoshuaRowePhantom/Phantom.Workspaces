@@ -12,7 +12,12 @@ Defines view entities that drive query-backed navigation surfaces.
   "title": { "default": "View title" },
   "sub-views": [
     { "view-entity-id": ["views", "other"], "disposition": "expanded" },
-    { "disposition": "collapsed", "query": { "clauses": [] } }
+    {
+      "disposition": "collapsed",
+      "get-entity": [
+        { "entity-type-names": ["agent-session"] }
+      ]
+    }
   ]
 }
 ```
@@ -22,3 +27,5 @@ Defines view entities that drive query-backed navigation surfaces.
 - `title` and `sub-views` are required.
 - `sub-views` can mix reference-style and inline definitions.
 - Inline definitions can include `entity-type-views` references to shape rendering.
+- Inline data selection uses `get-entity` requests in the workspace DAL request shape.
+- `get-entity` items support `entity-id`, `entity-name`, `enumerate-children`, `entity-type-names`, and `relationships-to-return`.

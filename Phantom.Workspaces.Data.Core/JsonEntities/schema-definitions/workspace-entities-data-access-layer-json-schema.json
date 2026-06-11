@@ -1,0 +1,29 @@
+{
+  "entity-id": "317581a1-72e4-45b7-b4e1-c9de3aa8c67d",
+  "entity-types": [
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json"
+    ],
+    [
+      "entity-types",
+      "workspace-entities-data-access-layer"
+    ]
+  ],
+  "display-name": {
+    "default": "Workspace Entities Data Access Layer Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/workspace-entities-data-access-layer-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/workspace-entities-data-access-layer.json"
+  }
+}
