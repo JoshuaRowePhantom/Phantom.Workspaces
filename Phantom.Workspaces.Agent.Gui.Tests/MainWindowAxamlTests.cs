@@ -244,7 +244,7 @@ public sealed class MainWindowAxamlTests
             outputControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "<TextBox x:Name=\"SelectableOutputText\"",
+            "<SelectableTextBlock x:Name=\"SelectableOutputText\"",
             outputControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -265,6 +265,22 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
         Assert.Contains(
             "OutputMode=\"SelectableTextBox\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"Provider\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"Model\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"API type\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"Connection type\"",
             editorControlContent,
             StringComparison.Ordinal);
     }

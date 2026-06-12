@@ -35,8 +35,41 @@ public sealed class AgentChatDetailsViewModelTests
         Assert.True(details.IsReasoningVisible);
     }
 
-    private static AgentDefinition CreateAgentDefinition()
+    [AvaloniaFact]
+    public async Task ModelMetadata_ExposesProviderModelAndConnectionTypeWithoutSecrets()
+    {
+        var chat = await CreateChatAsync(
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo",
+                "connection": {
+                  "kind": "key",
+                  "endpoint": "https://example.invalid",
+                  "apiKey": "do-not-show-this"
+                }
+              },
+              "tools": []
+            }
+            """);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        var details = new AgentChatDetailsViewModel(viewModel);
+
+        Assert.Equal("echo", details.ModelProvider);
+        Assert.Equal("test", details.ModelId);
+        Assert.Equal("Echo", details.ModelApiType);
+        Assert.Equal("API key", details.ModelConnectionType);
+        Assert.DoesNotContain("do-not-show-this", details.ModelConnectionType, StringComparison.Ordinal);
+    }
+
+    private static AgentDefinition CreateAgentDefinition(string? definitionJson = null)
         => AgentDefinitionLoader.LoadAgentFromJson(
+            definitionJson ??
             """
             {
               "kind": "prompt",
@@ -50,11 +83,13 @@ public sealed class AgentChatDetailsViewModelTests
             }
             """);
 
-    private static Task<AgentChat> CreateChatAsync(AgentServices? agentServices = null)
+    private static Task<AgentChat> CreateChatAsync(
+        string? definitionJson = null,
+        AgentServices? agentServices = null)
         => AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
             {
-                AgentDefinition = CreateAgentDefinition(),
+                AgentDefinition = CreateAgentDefinition(definitionJson),
                 AgentServices = agentServices,
             });
 }

@@ -1,11 +1,16 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Interactivity;
 using Avalonia;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
@@ -17,11 +22,17 @@ public partial class AgentChatOutputControl : UserControl
             AgentChatOutputMode.FlowDocument);
 
     private bool hasAppliedInitialOutputScroll;
+    private bool hasAppliedInitialSelectableOutputScroll;
+    private bool selectableOutputPinnedToBottom = true;
+    private Span? selectableOutputRootSpan;
+    private readonly List<INotifyCollectionChanged> subscribedInlineCollections = [];
 
     public AgentChatOutputControl()
     {
         this.InitializeComponent();
         this.Loaded += this.OnLoaded;
+        this.Unloaded += this.OnUnloaded;
+        this.SelectableOutputScrollViewer.ScrollChanged += this.OnSelectableOutputScrollChanged;
         this.ApplyOutputModeVisibility();
     }
 
@@ -39,11 +50,24 @@ public partial class AgentChatOutputControl : UserControl
         {
             this.ApplyOutputModeVisibility();
         }
+
+        if (change.Property == DataContextProperty)
+        {
+            this.AttachSelectableInlineRootSpan();
+        }
     }
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
+        this.AttachSelectableInlineRootSpan();
         this.ApplyOutputModeVisibility();
+        if (this.OutputMode == AgentChatOutputMode.SelectableTextBox
+            && !this.hasAppliedInitialSelectableOutputScroll)
+        {
+            this.hasAppliedInitialSelectableOutputScroll = true;
+            this.ScheduleSelectableOutputScrollToBottom();
+        }
+
         if (this.OutputMode != AgentChatOutputMode.FlowDocument)
         {
             return;
@@ -76,12 +100,17 @@ public partial class AgentChatOutputControl : UserControl
                 TaskScheduler.FromCurrentSynchronizationContext());
             }
         };
-            
+             
+    }
+
+    private void OnUnloaded(object? sender, RoutedEventArgs e)
+    {
+        this.ResetInlineCollectionSubscriptions();
     }
 
     private void ScrollHistoryToBottom()
     {
-        var viewer = this.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        var viewer = this.HistoryDocument.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
         if (viewer is null)
         {
             return;
@@ -91,10 +120,129 @@ public partial class AgentChatOutputControl : UserControl
         viewer.Offset = new Avalonia.Vector(viewer.Offset.X, maxVerticalOffset);
     }
 
+    private void OnSelectableOutputTextChanged()
+    {
+        if (this.OutputMode != AgentChatOutputMode.SelectableTextBox)
+        {
+            return;
+        }
+
+        if (!this.selectableOutputPinnedToBottom)
+        {
+            return;
+        }
+
+        this.ScheduleSelectableOutputScrollToBottom();
+    }
+
+    private void OnSelectableOutputScrollChanged(
+        object? sender,
+        ScrollChangedEventArgs e)
+    {
+        var maxVerticalOffset = Math.Max(
+            0,
+            this.SelectableOutputScrollViewer.Extent.Height - this.SelectableOutputScrollViewer.Viewport.Height);
+        this.selectableOutputPinnedToBottom = maxVerticalOffset <= 0
+            || this.SelectableOutputScrollViewer.Offset.Y >= maxVerticalOffset - 1;
+    }
+
+    private void ScheduleSelectableOutputScrollToBottom()
+    {
+        Dispatcher.UIThread.Post(
+            this.ScrollSelectableOutputToBottom,
+            DispatcherPriority.Background);
+    }
+
+    private void ScrollSelectableOutputToBottom()
+    {
+        var maxVerticalOffset = Math.Max(
+            0,
+            this.SelectableOutputScrollViewer.Extent.Height - this.SelectableOutputScrollViewer.Viewport.Height);
+        this.SelectableOutputScrollViewer.Offset = new Avalonia.Vector(
+            this.SelectableOutputScrollViewer.Offset.X,
+            maxVerticalOffset);
+    }
+
     private void ApplyOutputModeVisibility()
     {
         var isFlowDocument = this.OutputMode == AgentChatOutputMode.FlowDocument;
         this.HistoryDocument.IsVisible = isFlowDocument;
-        this.SelectableOutputText.IsVisible = !isFlowDocument;
+        this.SelectableOutputContainer.IsVisible = !isFlowDocument;
+
+        if (!isFlowDocument)
+        {
+            this.ScheduleSelectableOutputScrollToBottom();
+        }
+    }
+
+    private void AttachSelectableInlineRootSpan()
+    {
+        var selectableOutputText = this.SelectableOutputText;
+        if (selectableOutputText is null)
+        {
+            return;
+        }
+
+        if (this.DataContext is not AgentViewModel agentViewModel)
+        {
+            selectableOutputText.Inlines.Clear();
+            this.selectableOutputRootSpan = null;
+            this.ResetInlineCollectionSubscriptions();
+            return;
+        }
+
+        var rootSpan = agentViewModel.OutputSelectableRootSpan;
+        if (ReferenceEquals(this.selectableOutputRootSpan, rootSpan))
+        {
+            return;
+        }
+
+        selectableOutputText.Inlines.Clear();
+        selectableOutputText.Inlines.Add(rootSpan);
+        this.selectableOutputRootSpan = rootSpan;
+        this.ResetInlineCollectionSubscriptions();
+        this.AttachInlineCollectionSubscriptionsRecursive(rootSpan.Inlines);
+    }
+
+    private void ResetInlineCollectionSubscriptions()
+    {
+        foreach (var collection in this.subscribedInlineCollections)
+        {
+            collection.CollectionChanged -= this.OnSelectableInlineCollectionChanged;
+        }
+
+        this.subscribedInlineCollections.Clear();
+    }
+
+    private void AttachInlineCollectionSubscriptionsRecursive(InlineCollection inlines)
+    {
+        if (inlines is not INotifyCollectionChanged notifications)
+        {
+            return;
+        }
+
+        if (!this.subscribedInlineCollections.Contains(notifications))
+        {
+            notifications.CollectionChanged += this.OnSelectableInlineCollectionChanged;
+            this.subscribedInlineCollections.Add(notifications);
+        }
+
+        foreach (var inline in inlines)
+        {
+            if (inline is Span span)
+            {
+                this.AttachInlineCollectionSubscriptionsRecursive(span.Inlines);
+            }
+        }
+    }
+
+    private void OnSelectableInlineCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (this.selectableOutputRootSpan is not null)
+        {
+            this.AttachInlineCollectionSubscriptionsRecursive(this.selectableOutputRootSpan.Inlines);
+        }
+
+        this.OnSelectableOutputTextChanged();
     }
 }

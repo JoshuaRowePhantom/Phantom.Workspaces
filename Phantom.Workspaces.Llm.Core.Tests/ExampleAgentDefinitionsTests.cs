@@ -161,7 +161,7 @@ public class ExampleAgentDefinitionsTests
         var promptAgent = Assert.IsType<PromptAgent>(agent);
         Assert.Equal("github-models-chat", promptAgent.Name);
         Assert.Equal("gpt-4.1-mini", promptAgent.Model?.Id);
-        Assert.Equal("github", promptAgent.Model?.Provider);
+        Assert.Equal("github-models", promptAgent.Model?.Provider);
     }
 
     [Fact]

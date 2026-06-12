@@ -22,6 +22,14 @@ public sealed class AgentChatDetailsViewModel : ViewModelBase
         private set => this.SetProperty(ref this.agentSessionId, value);
     }
 
+    public string ModelProvider => this.Agent.ModelProvider;
+
+    public string ModelId => this.Agent.ModelId;
+
+    public string ModelApiType => this.Agent.ModelApiType;
+
+    public string ModelConnectionType => this.Agent.ModelConnectionType;
+
     public bool IsReasoningVisible
     {
         get => this.Agent.IsReasoningVisible;

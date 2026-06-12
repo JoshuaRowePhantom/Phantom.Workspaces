@@ -217,6 +217,8 @@ public sealed class AgentChat : IAsyncDisposable
 
     public string AgentSessionId => this.agentSessionId;
 
+    public AgentDefinition? AgentDefinition => this.agentDefinition;
+
     public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
 
     public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()

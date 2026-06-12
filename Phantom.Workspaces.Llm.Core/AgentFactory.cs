@@ -190,12 +190,12 @@ public static class AgentFactory
         return provider switch
         {
             "echo" => (new EchoChatClient(), "Echo Chat Client"),
-            "github" => CreateGitHubModelsClient(model),
+            "github-models" => CreateGitHubModelsClient(model),
             "ollama" => CreateOllamaClient(model, services),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github, ollama, openai, azure"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, ollama, openai, azure"),
         };
     }
 

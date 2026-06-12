@@ -48,6 +48,34 @@
                              TextWrapping="Wrap"
                              Classes="agent-detail-value copyable-text"/>
                 </StackPanel>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Provider"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding ModelProvider}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Model"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding ModelId}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="API type"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding ModelApiType}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Connection type"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding ModelConnectionType}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
                 <CheckBox Content="Show reasoning text"
                           IsChecked="{Binding IsReasoningVisible}"/>
             </StackPanel>

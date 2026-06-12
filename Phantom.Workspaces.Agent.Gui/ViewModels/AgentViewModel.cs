@@ -1,3 +1,5 @@
+using AgentSchema;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using Avalonia.Threading;
@@ -19,9 +21,13 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
     private Section outputHistoryRootSection = new();
     private Section outputRunningRootSection = new();
+    private readonly Span outputSelectableRootSpan = new();
+    private readonly Span outputSelectableHistoryRootSpan = new();
+    private readonly Span outputSelectableRunningRootSpan = new();
     private ChatHistoryDocumentModel? historyDocumentModel;
     private RunningChatItemsDocumentModel? runningDocumentModel;
     private AgentChatTextOutputModel? textOutputModel;
+    private SelectableTextBlockChatOutputModel? selectableTextBlockOutputModel;
     private bool isReasoningVisible;
     private string agentSessionId;
     private string outputText = string.Empty;
@@ -51,11 +57,18 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.agentChat.InputQueueManager);
         this.EditorItems = [];
         this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
+        this.outputSelectableRootSpan.Inlines.Add(this.outputSelectableHistoryRootSpan);
+        this.outputSelectableRootSpan.Inlines.Add(this.outputSelectableRunningRootSpan);
         this.AttachOutputDocumentModels();
         this.AttachOutputTextModel();
+        this.AttachSelectableOutputModel();
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         agentChat.ToolsChanged += this.OnToolsChanged;
+        if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
+        {
+            runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
+        }
         this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
     }
 
@@ -75,6 +88,20 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
+    public string ModelProvider => this.ResolveAgentModel()?.Provider ?? string.Empty;
+
+    public string ModelId => this.ResolveAgentModel()?.Id ?? string.Empty;
+
+    public string ModelApiType => this.ResolveAgentModel()?.ApiType ?? string.Empty;
+
+    public string ModelConnectionType => this.ResolveAgentModel()?.Connection switch
+    {
+        null => "(none)",
+        ApiKeyConnection => "API key",
+        AnonymousConnection => "Anonymous",
+        var connection => connection.GetType().Name,
+    };
+
     public AgentChat AgentChat => this.agentChat;
 
     public ICommand InterruptCommand { get; }
@@ -93,6 +120,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
 
+    public bool IsChatRunning => this.RunningItems.Count > 0;
+
     public FlowDocument OutputDocument { get; private set; }
 
     public string OutputText
@@ -100,6 +129,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         get => this.outputText;
         private set => this.SetProperty(ref this.outputText, value);
     }
+
+    public Span OutputSelectableRootSpan => this.outputSelectableRootSpan;
 
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
     {
@@ -145,6 +176,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.historyDocumentModel?.Refresh();
         this.runningDocumentModel?.Refresh();
         this.textOutputModel?.Refresh();
+        this.selectableTextBlockOutputModel?.Refresh();
     }
 
     private void OnAgentSessionIdChanged(object? sender, string sessionId)
@@ -247,10 +279,15 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.historyDocumentModel?.Dispose();
         this.runningDocumentModel?.Dispose();
         this.textOutputModel?.Dispose();
+        this.selectableTextBlockOutputModel?.Dispose();
 
         this.InputQueue.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
+        if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
+        {
+            runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
+        }
         await this.agentChat.DisposeAsync();
     }
 
@@ -270,4 +307,28 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             () => this.IsReasoningVisible,
             text => this.OutputText = text);
     }
+
+    private void AttachSelectableOutputModel()
+    {
+        this.selectableTextBlockOutputModel = new SelectableTextBlockChatOutputModel(
+            this.History,
+            this.RunningItems,
+            this.outputSelectableHistoryRootSpan,
+            this.outputSelectableRunningRootSpan,
+            () => this.IsReasoningVisible);
+    }
+
+    private Model? ResolveAgentModel()
+    {
+        var agentDefinition = this.agentChat.AgentDefinition;
+        if (agentDefinition is null)
+        {
+            return null;
+        }
+
+        return AgentFactory.GetModel(agentDefinition);
+    }
+
+    private void OnRunningItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        => this.RaisePropertyChanged(nameof(this.IsChatRunning));
 }

@@ -43,7 +43,7 @@
           "type": "string",
           "enum": [
             "echo",
-            "github",
+            "github-models",
             "ollama",
             "openai",
             "azure"

@@ -5,7 +5,7 @@
   "description": "A chat agent using GitHub Models via the OpenAI-compatible inference API with persistent chat history stored in MongoDB",
   "model": {
     "id": "gpt-4.1-mini",
-    "provider": "github",
+    "provider": "github-models",
     "apiType": "OpenAI",
     "connection": {
       "kind": "key",

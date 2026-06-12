@@ -5,6 +5,10 @@
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel"
              Classes="agent-chat-output-root">
+    <UserControl.Styles>
+        <StyleInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/ChatDocumentStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/ChatSelectableTextBoxStyles.axaml" />
+    </UserControl.Styles>
     <UserControl.KeyBindings>
         <KeyBinding Gesture="Cancel" Command="{Binding InterruptCommand}" />
         <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
@@ -16,13 +20,20 @@
                                  Document="{Binding OutputDocument}"
                                  Foreground="{DynamicResource Theme.Class.normal.Foreground}"
                                   ShowPageBounds="False" />
-        <TextBox x:Name="SelectableOutputText"
-                 Text="{Binding OutputText}"
-                 IsReadOnly="True"
-                 TextWrapping="Wrap"
-                 AcceptsReturn="True"
-                 ScrollViewer.VerticalScrollBarVisibility="Auto"
-                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                 Classes="agent-chat-output-text copyable-text" />
+        <Grid x:Name="SelectableOutputContainer" RowDefinitions="*,Auto">
+            <ScrollViewer x:Name="SelectableOutputScrollViewer"
+                          Grid.Row="0"
+                          Classes="agent-chat-output-scrollviewer"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <SelectableTextBlock x:Name="SelectableOutputText"
+                                    Classes="agent-chat-output-text copyable-text" />
+            </ScrollViewer>
+            <ProgressBar x:Name="SelectableOutputProgressBar"
+                         Grid.Row="1"
+                         IsIndeterminate="True"
+                         IsVisible="{Binding IsChatRunning}"
+                         Classes="agent-chat-running-progress" />
+        </Grid>
     </Grid>
 </UserControl>

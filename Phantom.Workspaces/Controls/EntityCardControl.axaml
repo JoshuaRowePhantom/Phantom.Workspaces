@@ -16,7 +16,8 @@
                     <StackPanel Grid.Column="1"
                                 Classes="workspace-entity-actions-row">
                         <Button Content="{Binding EditModeGlyph}"
-                                Classes="workspace-edit-indicator-button"
+                                ToolTip.Tip="Toggle edit mode"
+                                Classes="workspace-entity-shortcut-button"
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}" />
                         <ItemsControl IsVisible="{Binding HasShortcuts}"

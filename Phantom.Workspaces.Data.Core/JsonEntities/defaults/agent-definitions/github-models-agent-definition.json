@@ -20,7 +20,7 @@
     "description": "Default GitHub Models agent for workspace entity operations.",
     "model": {
       "id": "gpt-4.1-mini",
-      "provider": "github",
+      "provider": "github-models",
       "apiType": "OpenAI",
       "connection": {
         "kind": "key",

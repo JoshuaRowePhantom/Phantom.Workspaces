@@ -120,7 +120,7 @@ public class AgentFactoryTests
               "name": "github-agent",
               "model": {
                 "id": "gpt-4.1-mini",
-                "provider": "github",
+                "provider": "github-models",
                 "apiType": "OpenAI",
                 "connection": {
                   "kind": "key",
@@ -303,7 +303,7 @@ public class AgentFactoryTests
                   "name": "github-models-agent",
                   "model": {
                     "id": "gpt-4.1-mini",
-                    "provider": "github",
+                    "provider": "github-models",
                     "apiType": "OpenAI",
                     "connection": {
                       "kind": "key",
@@ -340,7 +340,7 @@ public class AgentFactoryTests
                   "name": "github-models-agent",
                   "model": {
                     "id": "gpt-4.1-mini",
-                    "provider": "github",
+                    "provider": "github-models",
                     "apiType": "OpenAI",
                     "connection": {
                       "kind": "key",
@@ -398,7 +398,7 @@ public class AgentFactoryTests
                   "name": "github-models-agent",
                   "model": {
                     "id": "gpt-4.1-mini",
-                    "provider": "github",
+                    "provider": "github-models",
                     "apiType": "OpenAI",
                     "connection": {
                       "kind": "key",
