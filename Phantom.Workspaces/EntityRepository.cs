@@ -13,20 +13,22 @@ namespace Phantom.Workspaces;
 
 public sealed class EntityRepository
 {
-    private readonly IDataAccessLayer underlyingDataAccessLayer;
+    private readonly IDataAccessLayer coreDataAccessLayer;
 
     private EntityRepository(
         RepositorySource repositorySource,
-        IDataAccessLayer underlyingDataAccessLayer)
+        IDataAccessLayer coreDataAccessLayer,
+        WorkspaceEntitySession workspaceEntitySession)
     {
         this.RepositorySource = repositorySource;
-        this.underlyingDataAccessLayer = underlyingDataAccessLayer;
-        this.DataAccessLayer = new MergeProcessingDataAccessLayer(
-            new ReferentialIntegrityDataAccessLayer(
-                new SchemaValidatingDataAccessLayer(this.underlyingDataAccessLayer)));
+        this.coreDataAccessLayer = coreDataAccessLayer;
+        this.WorkspaceEntitySession = workspaceEntitySession;
+        this.DataAccessLayer = new WorkspaceEntitySessionDataAccessLayer(this.coreDataAccessLayer, this.WorkspaceEntitySession);
     }
 
     public RepositorySource RepositorySource { get; }
+
+    public WorkspaceEntitySession WorkspaceEntitySession { get; }
 
     public IDataAccessLayer DataAccessLayer { get; }
 
@@ -40,8 +42,12 @@ public sealed class EntityRepository
         RepositorySource repositorySource)
     {
         var underlyingDataAccessLayer = CreateUnderlyingDataAccessLayer(repositorySource);
-        var repository = new EntityRepository(repositorySource, underlyingDataAccessLayer);
-        await repository.EnsureSeedDataIfNeededAsync();
+        var coreDataAccessLayer = new MergeProcessingDataAccessLayer(
+            new ReferentialIntegrityDataAccessLayer(
+                new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
+        await EnsureSeedDataIfNeededAsync(coreDataAccessLayer);
+        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer);
+        var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
     }
 
@@ -128,9 +134,10 @@ public sealed class EntityRepository
         return new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.MongoDbRootCollectionName);
     }
 
-    private async Task EnsureSeedDataIfNeededAsync()
+    private static async Task EnsureSeedDataIfNeededAsync(
+        IDataAccessLayer dataAccessLayer)
     {
-        var errors = await new SchemaPopulator(this.DataAccessLayer).Populate();
+        var errors = await new SchemaPopulator(dataAccessLayer).Populate();
         if (errors.Count == 0)
         {
             return;

@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/folder.json"
-  }
+  },
+  "default-name-prefixes": []
 }

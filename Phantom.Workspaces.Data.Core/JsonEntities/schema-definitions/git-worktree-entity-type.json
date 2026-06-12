@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/git-worktree.json"
-  }
+  },
+  "default-name-prefixes": []
 }

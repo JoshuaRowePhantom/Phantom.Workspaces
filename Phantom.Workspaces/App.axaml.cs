@@ -26,10 +26,27 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            var loadingViewModel = new LoadingWindowViewModel();
+            var loadingWindow = new LoadingWindow(loadingViewModel);
+            desktop.MainWindow = loadingWindow;
+
+            base.OnFrameworkInitializationCompleted();
+
+            loadingViewModel.StatusText = "Reading startup configuration.";
             var repositorySource = RepositorySource.Parse(Program.StartupArguments);
+
+            loadingViewModel.StatusText = "Initializing main workspace view model.";
             var viewModel = new MainWindowViewModel(repositorySource);
-            desktop.MainWindow = new MainWindow(viewModel);
+
+            loadingViewModel.StatusText = "Loading repository data and profile.";
             await viewModel.InitializeAsync();
+
+            loadingViewModel.StatusText = "Opening main window.";
+            var mainWindow = new MainWindow(viewModel);
+            desktop.MainWindow = mainWindow;
+            mainWindow.Show();
+            loadingWindow.Close();
+            return;
         }
 
         base.OnFrameworkInitializationCompleted();

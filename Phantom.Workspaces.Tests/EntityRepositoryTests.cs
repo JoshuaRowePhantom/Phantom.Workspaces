@@ -63,6 +63,17 @@ public sealed class EntityRepositoryTests
         Assert.Contains("Version 2", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
     }
 
+    [AvaloniaFact]
+    public async Task CreateAsync_InitializesWorkspaceEntitySessionDiscoveryEntities()
+    {
+        var repository = await EntityRepository.CreateAsync(new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+        var snapshots = await repository.ExportEntitySnapshotsAsync();
+
+        Assert.Contains(repository.WorkspaceEntitySession.UserEntityId, snapshots.Keys);
+        Assert.Contains(repository.WorkspaceEntitySession.ComputerEntityId, snapshots.Keys);
+        Assert.Contains(repository.WorkspaceEntitySession.UserComputerProfileEntityId, snapshots.Keys);
+    }
+
     private static async Task<ConcurrencyTag?> UpsertEntityAsync(
         EntityRepository repository,
         EntityId entityId,

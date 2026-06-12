@@ -82,10 +82,21 @@
                                                 <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
                                                 <TextBlock Text="{Binding EntityType}" Classes="muted" />
                                             </StackPanel>
-                                            <Button Grid.Column="1"
-                                                    Content="Open"
-                                                    Command="{Binding $parent[Window].DataContext.ActivateEntityCommand}"
-                                                    CommandParameter="{Binding}" />
+                                            <ItemsControl Grid.Column="1" ItemsSource="{Binding Shortcuts}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Horizontal" Spacing="6" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:EntityShortcutViewModel">
+                                                        <Button Content="{Binding Shortcut.Label}"
+                                                                IsEnabled="{Binding IsEnabled}"
+                                                                Command="{Binding $parent[Window].DataContext.ActivateShortcutCommand}"
+                                                                CommandParameter="{Binding}" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                         </Grid>
 
                                         <ItemsControl ItemsSource="{Binding DisplayItems}">

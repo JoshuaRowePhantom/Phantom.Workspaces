@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/interest.json"
-  }
+  },
+  "default-name-prefixes": []
 }

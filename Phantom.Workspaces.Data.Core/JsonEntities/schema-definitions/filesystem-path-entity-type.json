@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/filesystem-path.json"
-  }
+  },
+  "default-name-prefixes": []
 }

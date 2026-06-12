@@ -47,6 +47,12 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
     public string EntityType => EntityPresentation.GetEntityType(this.snapshot);
 
+    public bool IsEntityType(
+        string entityType)
+    {
+        return EntityPresentation.IsEntityType(this.snapshot, entityType);
+    }
+
     public Timestamp ModifiedTime => this.snapshot.ModifiedTime;
 
     public ConcurrencyTag? ConcurrencyTag => this.snapshot.ConcurrencyTag;

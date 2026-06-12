@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/entity-type-view.json"
-  }
+  },
+  "default-name-prefixes": []
 }

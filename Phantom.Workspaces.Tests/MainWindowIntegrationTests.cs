@@ -23,7 +23,10 @@ public sealed class MainWindowIntegrationTests
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
-        Assert.IsType<MergeProcessingDataAccessLayer>(repository.DataAccessLayer);
+        Assert.IsType<WorkspaceEntitySessionDataAccessLayer>(repository.DataAccessLayer);
+        Assert.NotEqual(default, repository.WorkspaceEntitySession.UserEntityId);
+        Assert.NotEqual(default, repository.WorkspaceEntitySession.ComputerEntityId);
+        Assert.NotEqual(default, repository.WorkspaceEntitySession.UserComputerProfileEntityId);
         Assert.NotEmpty(snapshots);
     }
 
@@ -129,9 +132,119 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(workspacePane.SelectedRegion);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentDefinitionShortcutHandler_LocalEchoDefinition_CreatesAgentSessionTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("f95a86dc-f71f-43f8-abf5-31c6444f7a4e"),
+            """
+            {
+              "entity-id": "f95a86dc-f71f-43f8-abf5-31c6444f7a4e",
+              "entity-types": ["agent-definition"],
+              "names": [["tests", "agent-definitions", "local-echo"]],
+              "display-name": { "default": "Local Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "local-echo",
+                "model": {
+                  "id": "echo",
+                  "provider": "echo",
+                  "apiType": "Echo"
+                },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+
+        var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
+
+        Assert.True(handled);
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        Assert.NotNull(selectedTab.Agent);
+        Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
+        var names = ReadEntityNames(selectedTab.Entity!.Data);
+        Assert.Contains(names, static name => name.Components.Length >= 5
+            && string.Equals(name.Components[0], "users", StringComparison.Ordinal)
+            && string.Equals(name.Components[3], "agent-sessions", StringComparison.Ordinal));
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new RepositorySource(RepositorySourceType.Unknown, "(none)");
+    }
+
+    private static EntityBroker GetEntityBroker(
+        MainWindowViewModel viewModel)
+    {
+        var entityBrokerProperty = typeof(MainWindowViewModel).GetProperty(
+            "EntityBroker",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(entityBrokerProperty);
+        return Assert.IsType<EntityBroker>(entityBrokerProperty!.GetValue(viewModel));
+    }
+
+    private static async Task<SubscribedEntityViewModel> UpsertEntityAndLoadAsync(
+        EntityBroker entityBroker,
+        EntityId entityId,
+        string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var updateResult = await entityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Add test agent definition.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entityId,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            });
+        var entityResult = Assert.Single(updateResult.EntityResults, entityResult => entityResult.RequestedEntityId == entityId);
+        Assert.NotEqual(UpdateState.Failed, entityResult.UpdateState);
+        return Assert.Single(await entityBroker.GetEntitiesAsync([entityId]));
+    }
+
+    private static IReadOnlyCollection<EntityName> ReadEntityNames(
+        JsonElement? entityData)
+    {
+        if (entityData is not JsonElement dataElement
+            || !dataElement.TryGetProperty("names", out var namesElement)
+            || namesElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var names = new List<EntityName>();
+        foreach (var nameElement in namesElement.EnumerateArray())
+        {
+            var entityName = nameElement.TryReadEntityName();
+            if (entityName is not null)
+            {
+                names.Add(entityName.Value);
+            }
+        }
+
+        return names;
     }
 
 }

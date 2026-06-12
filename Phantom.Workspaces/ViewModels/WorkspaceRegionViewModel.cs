@@ -1,4 +1,6 @@
+using System;
 using System.Collections.ObjectModel;
+using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -43,6 +45,7 @@ public sealed class WorkspaceRegionViewModel : ViewModelBase
             : this.Tabs.IndexOf(this.SelectedTab);
         var closingIndex = this.Tabs.IndexOf(tab);
         this.Tabs.Remove(tab);
+        _ = DisposeTabAsync(tab);
 
         if (this.Tabs.Count == 0)
         {
@@ -70,6 +73,20 @@ public sealed class WorkspaceRegionViewModel : ViewModelBase
         if (selectedIndex > closingIndex && selectedIndex - 1 >= 0 && selectedIndex - 1 < this.Tabs.Count)
         {
             this.SelectedTab = this.Tabs[selectedIndex - 1];
+        }
+    }
+
+    private static async Task DisposeTabAsync(
+        WorkspaceTabViewModel tab)
+    {
+        switch (tab)
+        {
+            case IAsyncDisposable asyncDisposable:
+                await asyncDisposable.DisposeAsync();
+                break;
+            case IDisposable disposable:
+                disposable.Dispose();
+                break;
         }
     }
 }

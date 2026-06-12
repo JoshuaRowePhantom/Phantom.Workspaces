@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/entity.json"
-  }
+  },
+  "default-name-prefixes": []
 }

@@ -26,5 +26,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/tool-relationship.json"
-  }
+  },
+  "default-name-prefixes": []
 }

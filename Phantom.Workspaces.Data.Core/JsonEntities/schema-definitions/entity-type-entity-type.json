@@ -25,5 +25,10 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/entity-type.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "entity-types"
+    ]
+  ]
 }

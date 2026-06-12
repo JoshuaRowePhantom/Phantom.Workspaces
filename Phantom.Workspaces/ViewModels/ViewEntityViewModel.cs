@@ -11,6 +11,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public ViewEntityViewModel(
         SubscribedEntityViewModel entity,
+        MainWindowViewModel mainWindowViewModel,
+        ShortcutManager shortcutManager,
         int indentLevel,
         bool isParentContext = false)
     {
@@ -18,6 +20,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.Badges = new BadgesViewModel(entity.Badges);
         this.IndentLevel = indentLevel;
         this.IsParentContext = isParentContext;
+        EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.RefreshCollections();
     }
@@ -37,6 +40,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
     public BadgesViewModel Badges { get; }
 
     public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
+
+    public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
 
     public Thickness IndentMargin => new(this.IndentLevel * 20, 0, 0, 0);
 

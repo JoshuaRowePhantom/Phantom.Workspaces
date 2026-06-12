@@ -25,5 +25,10 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/json-schema.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "json-schemas"
+    ]
+  ]
 }

@@ -17,6 +17,12 @@
   "display-name": {
     "default": "Agent Session Schema"
   },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "agent-sessions"
+    ]
+  ],
   "content": {
     "default": {
       "mime-type": "text/markdown",

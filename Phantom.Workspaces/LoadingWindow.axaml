@@ -1,0 +1,27 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        x:Class="Phantom.Workspaces.LoadingWindow"
+        x:DataType="vm:LoadingWindowViewModel"
+        Width="420"
+        Height="180"
+        MinWidth="360"
+        MinHeight="160"
+        CanResize="False"
+        SystemDecorations="BorderOnly"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False"
+        Title="Starting Phantom.Workspaces">
+    <Grid RowDefinitions="Auto,Auto,*"
+          Margin="24">
+        <TextBlock Classes="heading"
+                   Text="Starting Phantom.Workspaces..." />
+        <ProgressBar Grid.Row="1"
+                     Margin="0,14,0,0"
+                     IsIndeterminate="True" />
+        <TextBlock Grid.Row="2"
+                   Margin="0,14,0,0"
+                   Text="{Binding StatusText}"
+                   TextWrapping="Wrap" />
+    </Grid>
+</Window>

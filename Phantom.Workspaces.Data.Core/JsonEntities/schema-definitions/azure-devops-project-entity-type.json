@@ -25,5 +25,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/azure-devops-project.json"
-  }
+  },
+  "default-name-prefixes": []
 }

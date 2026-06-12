@@ -25,5 +25,11 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/user-computer-profile.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "computers"
+    ]
+  ]
 }

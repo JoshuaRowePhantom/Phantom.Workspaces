@@ -25,5 +25,10 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/user.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}"
+    ]
+  ]
 }

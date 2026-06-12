@@ -25,5 +25,11 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/view.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "views"
+    ]
+  ]
 }

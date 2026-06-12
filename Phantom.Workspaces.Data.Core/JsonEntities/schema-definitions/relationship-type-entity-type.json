@@ -26,5 +26,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/relationship-type.json"
-  }
+  },
+  "default-name-prefixes": []
 }

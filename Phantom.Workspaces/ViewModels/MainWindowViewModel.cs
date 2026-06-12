@@ -30,6 +30,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
     private readonly List<SubscribedGet> selectedViewSubViewSubscriptions = [];
+    private readonly ShortcutManager shortcutManager = new();
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -51,10 +52,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         };
 
         this.selectedWorkspacePane = this.WorkspacePanes[0];
-        this.ActivateEntityCommand = new RelayCommand(async _ => await this.OnActivateEntityAsync(_));
+        this.ActivateShortcutCommand = new RelayCommand(async _ => await this.OnActivateShortcutAsync(_), this.CanActivateShortcut);
         this.SetDebuggingCommand = new RelayCommand(async parameter => await this.SetDebuggingAsync(ReadDebuggingParameter(parameter)));
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(openAgentSessionShortcutHandler);
+        this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
 
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
@@ -66,7 +72,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public ObservableCollection<WorkspacePaneViewModel> WorkspacePanes { get; }
 
-    public RelayCommand ActivateEntityCommand { get; }
+    public RelayCommand ActivateShortcutCommand { get; }
 
     public RelayCommand SetDebuggingCommand { get; }
 
@@ -151,7 +157,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// View code should not access the repository/DAL directly. Always use broker subscriptions so
     /// view content remains live-updating as entities change.
     /// </remarks>
-    private EntityBroker EntityBroker => this.entityBroker
+    internal EntityBroker EntityBroker => this.entityBroker
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
     public async Task InitializeAsync()
@@ -436,7 +442,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(selectedViewData);
         if (associatedNoteEntity is not null)
         {
-            selectedView.Entities.Add(new ViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
+            selectedView.Entities.Add(this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
         }
 
         await this.LoadSubViewEntitiesAsync(selectedViewData);
@@ -449,7 +455,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    selectedView.Entities.Add(new ViewEntityViewModel(subViewEntity, indentLevel: 0));
+                    selectedView.Entities.Add(this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0));
                     continue;
                 }
 
@@ -461,7 +467,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 var getEntities = await this.LoadGetSubViewEntitiesAsync(getRequest);
                 foreach (var getEntity in getEntities)
                 {
-                    selectedView.Entities.Add(new ViewEntityViewModel(getEntity, indentLevel: 0));
+                    selectedView.Entities.Add(this.CreateViewEntityViewModel(getEntity, indentLevel: 0));
                 }
             }
         }
@@ -534,31 +540,40 @@ public sealed class MainWindowViewModel : ViewModelBase
         return noteSubscription.Results.FirstOrDefault();
     }
 
-    private async Task OnActivateEntityAsync(
+    private bool CanActivateShortcut(
         object? parameter)
     {
-        if (parameter is not ViewEntityViewModel entityView)
+        return parameter is EntityShortcutViewModel entityShortcut
+            && entityShortcut.IsEnabled;
+    }
+
+    private async Task OnActivateShortcutAsync(
+        object? parameter)
+    {
+        if (parameter is not EntityShortcutViewModel entityShortcut)
         {
             return;
         }
 
-        var entity = entityView.Entity;
-
-        if (string.Equals(entity.EntityType, "workspace", StringComparison.Ordinal))
+        entityShortcut.IsEnabled = false;
+        this.ActivateShortcutCommand.RaiseCanExecuteChanged();
+        try
         {
-            await this.OpenWorkspaceAsync(
-                new GetEntityRequest
-                {
-                    EntityId = entity.EntityId,
-                });
-            return;
+            await entityShortcut.HandleAsync(this);
         }
+        finally
+        {
+            entityShortcut.IsEnabled = true;
+            this.ActivateShortcutCommand.RaiseCanExecuteChanged();
+        }
+    }
 
-        await this.OpenEntityTabAsync(
-            new GetEntityRequest
-            {
-                EntityId = entity.EntityId,
-            });
+    private ViewEntityViewModel CreateViewEntityViewModel(
+        SubscribedEntityViewModel entity,
+        int indentLevel,
+        bool isParentContext = false)
+    {
+        return new ViewEntityViewModel(entity, this, this.shortcutManager, indentLevel, isParentContext);
     }
 
     private async void OnRefreshTick(
@@ -581,7 +596,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _ = this.ApplySelectedViewAsync();
     }
 
-    private async Task OpenWorkspaceAsync(
+    internal async Task OpenWorkspaceAsync(
         GetEntityRequest workspaceRequest)
     {
         var loadingWorkspacePane = this.GetOrCreateLoadingWorkspacePane(workspaceRequest);
@@ -658,7 +673,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         return loadingPane;
     }
 
-    private async Task OpenEntityTabAsync(
+    internal async Task OpenEntityTabAsync(
         GetEntityRequest entityRequest)
     {
         var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest]);
@@ -668,24 +683,48 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        this.AddOrSelectWorkspaceTab(
+            new EntityWorkspaceTabViewModel
+            {
+                Id = subscribedEntity.EntityId.ToString(),
+                Title = subscribedEntity.DisplayName,
+                Entity = subscribedEntity,
+            });
+    }
+
+    internal void AddOrSelectWorkspaceTab(
+        WorkspaceTabViewModel tab)
+    {
         var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
         var existingTab = selectedRegion.Tabs.FirstOrDefault(
-            tab => string.Equals(tab.Id, subscribedEntity.EntityId.ToString(), StringComparison.Ordinal));
-        if (existingTab is not null)
+            existingWorkspaceTab => string.Equals(existingWorkspaceTab.Id, tab.Id, StringComparison.Ordinal));
+        if (existingTab is null)
         {
-            selectedRegion.SelectedTab = existingTab;
+            selectedRegion.Tabs.Add(tab);
+            selectedRegion.SelectedTab = tab;
             return;
         }
 
-        WorkspaceTabViewModel tab = new EntityWorkspaceTabViewModel
+        if (!ReferenceEquals(existingTab, tab))
         {
-            Id = subscribedEntity.EntityId.ToString(),
-            Title = subscribedEntity.DisplayName,
-            Entity = subscribedEntity,
-        };
+            DisposeWorkspaceTab(tab);
+        }
 
-        selectedRegion.Tabs.Add(tab);
-        selectedRegion.SelectedTab = tab;
+        selectedRegion.SelectedTab = existingTab;
+    }
+
+    private static void DisposeWorkspaceTab(
+        WorkspaceTabViewModel workspaceTab)
+    {
+        switch (workspaceTab)
+        {
+            case IAsyncDisposable asyncDisposable:
+                _ = asyncDisposable.DisposeAsync();
+                break;
+            case IDisposable disposable:
+                disposable.Dispose();
+                break;
+        }
     }
 
     private async Task OpenEntityBrowserTabAsync()

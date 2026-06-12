@@ -25,5 +25,11 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/workspaces-profile.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "profiles"
+    ]
+  ]
 }

@@ -5,6 +5,8 @@ namespace Phantom.Workspaces.Llm;
 
 public static class AgentPersistenceStoreFactory
 {
+    public static IAgentPersistenceStore CreateInMemory() => new InMemoryAgentPersistenceStore();
+
     public static ValueTask<IAgentPersistenceStore> CreateAsync(
         ChatHistoryProviderDefinition definition,
         CancellationToken cancellationToken = default)

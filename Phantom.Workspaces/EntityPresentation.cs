@@ -24,6 +24,13 @@ public static class EntityPresentation
         return snapshot.EntityId.ToString();
     }
 
+    /// <summary>
+    /// Gets the primary entity type for display purposes.
+    /// </summary>
+    /// <remarks>
+    /// Do not use this for entity-type membership checks because an entity can have multiple types.
+    /// Use <see cref="IsEntityType"/> when checking whether a specific type is present.
+    /// </remarks>
     public static string GetEntityType(
         EntitySnapshot snapshot)
     {
@@ -42,6 +49,34 @@ public static class EntityPresentation
         }
 
         return "entity";
+    }
+
+    public static bool IsEntityType(
+        EntitySnapshot snapshot,
+        string entityType)
+    {
+        if (string.IsNullOrWhiteSpace(entityType))
+        {
+            return false;
+        }
+
+        if (snapshot.Data is not JsonElement data
+            || !data.TryGetProperty("entity-types", out var types)
+            || types.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var type in types.EnumerateArray())
+        {
+            if (type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), entityType, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static IReadOnlyCollection<EntityDisplayItemViewModel> GetDisplayItems(

@@ -25,5 +25,10 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/computer.json"
-  }
+  },
+  "default-name-prefixes": [
+    [
+      "computers"
+    ]
+  ]
 }
