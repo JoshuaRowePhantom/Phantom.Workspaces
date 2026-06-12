@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using Avalonia;
@@ -13,9 +14,13 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     private bool isExpanded;
     private bool isEditMode;
     private bool isJsonVisible;
+    private static readonly RelayCommand DisabledDeleteCommand = new(
+        _ => { },
+        _ => false);
     private IReadOnlyCollection<EntityFieldEditorViewModel>? editModeSnapshot;
     private string? editModeRawJsonSnapshot;
     private readonly SubscribedEntityViewModel? entity;
+    private readonly string cardViewName;
     private readonly string displayName;
     private readonly string entityType;
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
@@ -25,14 +30,17 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         SubscribedEntityViewModel entity,
         IReadOnlyList<string> nameComponents,
         string sortKey,
-        IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null)
+        IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
+        string? cardViewName = null)
     {
         this.entity = entity;
+        this.cardViewName = cardViewName ?? EntityCardViewResolver.RawViewName;
         this.displayName = entity.DisplayName;
         this.entityType = entity.EntityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
         this.rawJsonText = BuildRawJsonText(entity.Data);
         this.SetFieldEditorEditMode(false);
+        entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
         this.ToggleExpandCommand = new RelayCommand(
@@ -47,9 +55,8 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.DiscardEditModeCommand = new RelayCommand(
             _ => this.DiscardEditMode(),
             _ => this.IsEditMode);
-        this.ToggleJsonViewCommand = new RelayCommand(
-            _ => this.IsJsonVisible = !this.IsJsonVisible,
-            _ => this.ShowJsonButton);
+        this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
+        this.DeleteEntityCommand = entity.DeleteEntityCommand;
     }
 
     public EntityListNodeViewModel(
@@ -58,11 +65,13 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         IReadOnlyList<string> nameComponents,
         string sortKey,
         IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
-        bool isExpanded = false)
+        bool isExpanded = false,
+        string? cardViewName = null)
     {
         this.entity = null;
         this.displayName = displayName;
         this.entityType = entityType;
+        this.cardViewName = cardViewName ?? EntityCardViewResolver.RawViewName;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
         this.rawJsonText = string.Empty;
         this.SetFieldEditorEditMode(false);
@@ -83,6 +92,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.ToggleJsonViewCommand = new RelayCommand(
             _ => this.IsJsonVisible = !this.IsJsonVisible,
             _ => this.ShowJsonButton);
+        this.DeleteEntityCommand = DisabledDeleteCommand;
         this.isExpanded = isExpanded;
     }
 
@@ -106,9 +116,13 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public RelayCommand ToggleJsonViewCommand { get; }
 
+    public RelayCommand DeleteEntityCommand { get; }
+
     public string DisplayName => this.entity?.DisplayName ?? this.displayName;
 
     public string EntityType => this.entity?.EntityType ?? this.entityType;
+
+    public string CardViewName => this.cardViewName;
 
     public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.entity?.DisplayItems ?? Array.Empty<EntityDisplayItemViewModel>();
 
@@ -135,7 +149,9 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public bool ShowEditActions => this.IsEditMode;
 
-    public bool ShowJsonButton => !string.IsNullOrWhiteSpace(this.rawJsonText);
+    public bool ShowJsonButton => this.entity?.CanToggleRawJson ?? !string.IsNullOrWhiteSpace(this.rawJsonText);
+
+    public bool ShowDeleteButton => this.entity?.CanDeleteEntity ?? false;
 
     public bool IsRawJsonReadOnly => !this.IsEditMode;
 
@@ -143,9 +159,19 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public bool IsJsonVisible
     {
-        get => this.isJsonVisible;
+        get => this.entity?.IsRawJsonVisible ?? this.isJsonVisible;
         set
         {
+            if (this.entity is not null)
+            {
+                if (value != this.entity.IsRawJsonVisible)
+                {
+                    this.entity.ToggleRawJsonVisibility();
+                }
+
+                return;
+            }
+
             if (!this.SetProperty(ref this.isJsonVisible, value))
             {
                 return;
@@ -339,5 +365,24 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
         entityName = parsedName.Value;
         return true;
+    }
+
+    private void OnEntityPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.IsRawJsonVisible), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsJsonVisible));
+            this.RaisePropertyChanged(nameof(this.ShowRawJsonEditor));
+            this.RaisePropertyChanged(nameof(this.JsonButtonText));
+            return;
+        }
+
+        if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.CanToggleRawJson), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+            return;
+        }
     }
 }

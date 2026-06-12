@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -69,7 +70,33 @@ public sealed class WorkspacePaneViewModelTests
         Assert.Same(thirdTab, region.SelectedTab);
     }
 
-    private static SubscribedEntityViewModel CreateWorkspaceEntity()
+    [AvaloniaFact]
+    public async Task EntityWorkspaceTabViewModel_UsesEntityCardNodeWithDeleteCommand()
+    {
+        var deleteInvocations = 0;
+        var tab = new EntityWorkspaceTabViewModel
+        {
+            Id = "entity-tab",
+            Title = "Entity Tab",
+            Entity = CreateWorkspaceEntity(
+                _ =>
+                {
+                    deleteInvocations++;
+                    return Task.CompletedTask;
+                }),
+        };
+
+        var cardNode = Assert.IsType<EntityListNodeViewModel>(tab.EntityCardNode);
+        Assert.True(cardNode.ShowDeleteButton);
+        Assert.Equal(EntityCardViewResolver.RawViewName, cardNode.CardViewName);
+        cardNode.DeleteEntityCommand.Execute(null);
+        await Task.Yield();
+
+        Assert.Equal(1, deleteInvocations);
+    }
+
+    private static SubscribedEntityViewModel CreateWorkspaceEntity(
+        Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {
         using var document = JsonDocument.Parse(
             """
@@ -87,6 +114,7 @@ public sealed class WorkspacePaneViewModelTests
                 ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
                 Data = document.RootElement.Clone(),
                 Relationships = Array.Empty<EntitySnapshot>(),
-            });
+            },
+            deleteEntityAsync);
     }
 }

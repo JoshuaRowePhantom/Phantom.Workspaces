@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -8,13 +10,23 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class SubscribedEntityViewModel : ViewModelBase
 {
     private EntitySnapshot snapshot;
+    private bool isRawJsonVisible;
+    private readonly Func<SubscribedEntityViewModel, Task>? deleteEntityAsync;
     private readonly List<EntityDisplayItemViewModel> displayItems = [];
 
     public SubscribedEntityViewModel(
-        EntitySnapshot snapshot)
+        EntitySnapshot snapshot,
+        Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {
         this.snapshot = snapshot;
+        this.deleteEntityAsync = deleteEntityAsync;
         this.displayItems.AddRange(EntityPresentation.GetDisplayItems(snapshot));
+        this.DeleteEntityCommand = new RelayCommand(
+            async _ => await this.DeleteEntityAsync(),
+            _ => this.CanDeleteEntity);
+        this.ToggleRawJsonVisibilityCommand = new RelayCommand(
+            _ => this.ToggleRawJsonVisibility(),
+            _ => this.CanToggleRawJson);
     }
 
     public BadgesModel Badges { get; } = new();
@@ -36,10 +48,12 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(this.ModifiedTime));
             this.RaisePropertyChanged(nameof(this.ConcurrencyTag));
             this.RaisePropertyChanged(nameof(this.Data));
+            this.RaisePropertyChanged(nameof(this.CanToggleRawJson));
             this.RaisePropertyChanged(nameof(this.Relationships));
             this.displayItems.Clear();
             this.displayItems.AddRange(EntityPresentation.GetDisplayItems(value));
             this.RaisePropertyChanged(nameof(this.DisplayItems));
+            this.ToggleRawJsonVisibilityCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -63,9 +77,43 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
     public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
+    public RelayCommand DeleteEntityCommand { get; }
+
+    public RelayCommand ToggleRawJsonVisibilityCommand { get; }
+
+    public bool CanDeleteEntity => this.deleteEntityAsync is not null;
+
+    public bool CanToggleRawJson => this.Data is JsonElement;
+
+    public bool IsRawJsonVisible
+    {
+        get => this.isRawJsonVisible;
+        private set => this.SetProperty(ref this.isRawJsonVisible, value);
+    }
+
     internal void UpdateSnapshot(
         EntitySnapshot snapshot)
     {
         this.Snapshot = snapshot;
+    }
+
+    public async Task DeleteEntityAsync()
+    {
+        if (this.deleteEntityAsync is null)
+        {
+            return;
+        }
+
+        await this.deleteEntityAsync(this);
+    }
+
+    public void ToggleRawJsonVisibility()
+    {
+        if (!this.CanToggleRawJson)
+        {
+            return;
+        }
+
+        this.IsRawJsonVisible = !this.IsRawJsonVisible;
     }
 }

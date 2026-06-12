@@ -1,5 +1,7 @@
+using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Text.Json;
 using Avalonia;
 
@@ -8,6 +10,7 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class ViewEntityViewModel : ViewModelBase
 {
     private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
+    private readonly EntityListNodeViewModel entityCardNode;
 
     public ViewEntityViewModel(
         SubscribedEntityViewModel entity,
@@ -20,6 +23,11 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.Badges = new BadgesViewModel(entity.Badges);
         this.IndentLevel = indentLevel;
         this.IsParentContext = isParentContext;
+        this.entityCardNode = new EntityListNodeViewModel(
+            entity,
+            ResolveNameComponents(entity),
+            entity.EntityId.ToString(),
+            cardViewName: EntityCardViewResolver.RawViewName);
         EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.RefreshCollections();
@@ -42,6 +50,10 @@ public sealed class ViewEntityViewModel : ViewModelBase
     public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
     public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
+
+    public EntityListNodeViewModel EntityCardNode => this.entityCardNode;
+
+    public bool HasShortcuts => this.Shortcuts.Count > 0;
 
     public Thickness IndentMargin => new(this.IndentLevel * 20, 0, 0, 0);
 
@@ -72,5 +84,19 @@ public sealed class ViewEntityViewModel : ViewModelBase
         {
             this.displayItems.Add(displayItem);
         }
+
+        this.RaisePropertyChanged(nameof(this.HasShortcuts));
+    }
+
+    private static IReadOnlyList<string> ResolveNameComponents(
+        SubscribedEntityViewModel entity)
+    {
+        if (entity.Data is JsonElement entityData
+            && EntityListNodeViewModel.TryGetPrimaryName(entityData, out var entityName))
+        {
+            return entityName.Components;
+        }
+
+        return [entity.EntityId.ToString()];
     }
 }

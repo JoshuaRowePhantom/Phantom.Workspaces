@@ -11,6 +11,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 {
+    private readonly EntityCardViewResolver entityCardViewResolver = new();
     private readonly EntityBroker entityBroker;
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;
@@ -93,7 +94,8 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     entity,
                     nameComponents,
                     sortKey,
-                    await this.BuildFieldEditorsAsync(entity));
+                    await this.BuildFieldEditorsAsync(entity),
+                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
                 children.Add(sortKey, node);
             }
         }
@@ -128,7 +130,11 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         var order = 0;
         if (this.TryFindEntityForPath(rootEntities, Array.Empty<string>(), out var rootEntity))
         {
-            var rootNode = new EntityListNodeViewModel(rootEntity, Array.Empty<string>(), "[]");
+            var rootNode = new EntityListNodeViewModel(
+                rootEntity,
+                Array.Empty<string>(),
+                "[]",
+                cardViewName: this.entityCardViewResolver.ResolveViewName(rootEntity, EntityCardViewResolver.RawViewName));
             rootNode.SetChildren(rootChildren);
             this.AddItemsDepthFirst(
                 rootNode,

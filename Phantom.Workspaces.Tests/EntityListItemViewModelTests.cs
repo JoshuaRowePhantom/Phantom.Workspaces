@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -81,8 +82,44 @@ public sealed class EntityListItemViewModelTests
         Assert.True(item.ShowRawJsonEditor);
     }
 
+    [AvaloniaFact]
+    public async Task DeleteButton_InvokesDeleteCommand()
+    {
+        var deleteInvocations = 0;
+        var node = new EntityListNodeViewModel(
+            CreateEntity(
+                """
+                {
+                  "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  "entity-types": ["note"],
+                  "names": [["documentation","sample"]],
+                  "display-name": { "default": "Sample" }
+                }
+                """,
+                _ =>
+                {
+                    deleteInvocations++;
+                    return Task.CompletedTask;
+                }),
+            nameComponents: ["documentation", "sample"],
+            sortKey: "[\"documentation\",\"sample\"]");
+        var item = new EntityListItemViewModel(
+            node,
+            order: 0,
+            level: 0,
+            itemKey: "[\"documentation\",\"sample\"]");
+
+        Assert.True(item.ShowDeleteButton);
+        Assert.True(item.DeleteEntityCommand.CanExecute(null));
+        item.DeleteEntityCommand.Execute(null);
+        await Task.Yield();
+
+        Assert.Equal(1, deleteInvocations);
+    }
+
     private static SubscribedEntityViewModel CreateEntity(
-        string json)
+        string json,
+        Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {
         using var document = JsonDocument.Parse(json);
         return new SubscribedEntityViewModel(
@@ -93,6 +130,7 @@ public sealed class EntityListItemViewModelTests
                 ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
                 Data = document.RootElement.Clone(),
                 Relationships = Array.Empty<EntitySnapshot>(),
-            });
+            },
+            deleteEntityAsync);
     }
 }

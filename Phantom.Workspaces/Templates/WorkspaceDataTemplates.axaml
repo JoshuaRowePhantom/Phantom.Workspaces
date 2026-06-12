@@ -3,109 +3,26 @@
                xmlns:vm="using:Phantom.Workspaces.ViewModels"
                xmlns:templates="using:Phantom.Workspaces.Templates"
                xmlns:agentControls="using:Phantom.Workspaces.Agent.Gui.Controls"
+               xmlns:entityControls="using:Phantom.Workspaces.Controls"
                xmlns:md="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.Markdown"
                xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
         <StackPanel Classes="workspace-entity-node-root">
-            <Border Classes="entity-card"
-                    CornerRadius="{Binding ContentCornerRadius}">
-                <StackPanel Classes="workspace-entity-card-content">
-                    <StackPanel Classes="workspace-entity-header-row">
-                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
-                        <TextBlock Text="{Binding EntityType}" Classes="muted" />
-                        <Button Content="{Binding EditModeGlyph}"
-                                Classes="workspace-edit-indicator-button"
-                                IsVisible="{Binding ShowEditIndicator}"
-                                Command="{Binding ToggleEditModeCommand}" />
-                        <Button Content="{Binding JsonButtonText}"
-                                Classes="workspace-edit-indicator-button"
-                                IsVisible="{Binding ShowJsonButton}"
-                                Command="{Binding ToggleJsonViewCommand}" />
-                        <Button Content="💾"
-                                Classes="workspace-edit-action-button"
-                                IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding SaveEditModeCommand}" />
-                        <Button Content="✖"
-                                Classes="workspace-edit-action-button"
-                                IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding DiscardEditModeCommand}" />
-                    </StackPanel>
-                    <ItemsControl ItemsSource="{Binding FieldEditors}"
-                                  Classes="workspace-field-editor-list" />
-                    <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
-                             IsVisible="{Binding ShowRawJsonEditor}"
-                             IsReadOnly="{Binding IsRawJsonReadOnly}"
-                             Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
-                </StackPanel>
-            </Border>
-            <Border IsVisible="{Binding HasChildren}"
-                    Classes="entity-card-expand-section"
-                    CornerRadius="{Binding ExpandSectionCornerRadius}">
-                <Button Classes="entity-card-expand-button"
-                        Content="{Binding ExpandArrow}"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Command="{Binding ToggleExpandCommand}" />
-            </Border>
+            <entityControls:EntityCardControl />
             <ItemsControl ItemsSource="{Binding VisibleChildren}" Classes="workspace-visible-children" />
         </StackPanel>
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityListItemViewModel">
         <StackPanel Margin="{Binding IndentMargin}" Classes="workspace-entity-node-root"
-                    controls:StickyItem.Row="{Binding StickyRow}">
-            <Border Classes="entity-card"
-                    CornerRadius="{Binding ContentCornerRadius}">
-                <StackPanel Classes="workspace-entity-card-content">
-                    <StackPanel Classes="workspace-entity-header-row">
-                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
-                        <TextBlock Text="{Binding EntityType}" Classes="muted" />
-                        <Button Content="{Binding EditModeGlyph}"
-                                Classes="workspace-edit-indicator-button"
-                                IsVisible="{Binding ShowEditIndicator}"
-                                Command="{Binding ToggleEditModeCommand}" />
-                        <Button Content="{Binding JsonButtonText}"
-                                Classes="workspace-edit-indicator-button"
-                                IsVisible="{Binding ShowJsonButton}"
-                                Command="{Binding ToggleJsonViewCommand}" />
-                        <Button Content="💾"
-                                Classes="workspace-edit-action-button"
-                                IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding SaveEditModeCommand}" />
-                        <Button Content="✖"
-                                Classes="workspace-edit-action-button"
-                                IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding DiscardEditModeCommand}" />
-                    </StackPanel>
-                    <ItemsControl ItemsSource="{Binding FieldEditors}"
-                                  Classes="workspace-field-editor-list" />
-                    <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
-                             IsVisible="{Binding ShowRawJsonEditor}"
-                             IsReadOnly="{Binding IsRawJsonReadOnly}"
-                             Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
-                </StackPanel>
-            </Border>
-            <Border IsVisible="{Binding HasChildren}"
-                    Classes="entity-card-expand-section"
-                    CornerRadius="{Binding ExpandSectionCornerRadius}">
-                <Button Classes="entity-card-expand-button"
-                        Content="{Binding ExpandArrow}"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Command="{Binding ToggleExpandCommand}" />
-            </Border>
+                   controls:StickyItem.Row="{Binding StickyRow}">
+            <entityControls:EntityCardControl />
         </StackPanel>
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityWorkspaceTabViewModel">
-        <Border Classes="entity-card">
-            <StackPanel Classes="workspace-template-browser-root">
-                <TextBlock Text="{Binding Entity.DisplayName}" Classes="heading" />
-                <TextBlock Text="{Binding Entity.EntityType}" Classes="muted" />
-                <ItemsControl ItemsSource="{Binding Entity.DisplayItems}" />
-            </StackPanel>
-        </Border>
+        <ContentControl Content="{Binding EntityCardNode}" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">

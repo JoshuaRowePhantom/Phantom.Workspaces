@@ -336,7 +336,7 @@ public sealed class EntityBroker
             return entity;
         }
 
-        var newEntity = new SubscribedEntityViewModel(snapshot);
+        var newEntity = new SubscribedEntityViewModel(snapshot, this.DeleteSubscribedEntityAsync);
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(newEntity);
         return newEntity;
     }
@@ -357,10 +357,36 @@ public sealed class EntityBroker
             return existing;
         }
 
-        var created = new SubscribedEntityViewModel(snapshot);
+        var created = new SubscribedEntityViewModel(snapshot, this.DeleteSubscribedEntityAsync);
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(created);
         changedEntityIds?.Add(snapshot.EntityId);
         return created;
+    }
+
+    private async Task DeleteSubscribedEntityAsync(
+        SubscribedEntityViewModel entity)
+    {
+        await this.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = $"Delete entity {entity.DisplayName} from entity card action.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entity.EntityId,
+                        ConcurrencyTag = entity.Snapshot.ConcurrencyTag,
+                        Data = null,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
     }
 
     private List<SubscribedEntityViewModel> GetLiveSubscribedEntities()

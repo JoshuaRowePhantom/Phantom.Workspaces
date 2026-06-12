@@ -61,6 +61,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new ToggleJsonEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
 
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
@@ -573,7 +575,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         int indentLevel,
         bool isParentContext = false)
     {
-        return new ViewEntityViewModel(entity, this, this.shortcutManager, indentLevel, isParentContext);
+        return new ViewEntityViewModel(
+            entity,
+            this,
+            this.shortcutManager,
+            indentLevel,
+            isParentContext);
     }
 
     private async void OnRefreshTick(

@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:CompileBindings="False"
+             x:Class="Phantom.Workspaces.Controls.EntityCardControl">
+    <StackPanel Classes="workspace-entity-node-root">
+        <Border Classes="entity-card"
+                CornerRadius="{Binding ContentCornerRadius}">
+            <StackPanel Classes="workspace-entity-card-content">
+                <StackPanel Classes="workspace-entity-header-row">
+                    <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
+                    <TextBlock Text="{Binding EntityType}" Classes="muted" />
+                    <Button Content="{Binding EditModeGlyph}"
+                            Classes="workspace-edit-indicator-button"
+                            IsVisible="{Binding ShowEditIndicator}"
+                            Command="{Binding ToggleEditModeCommand}" />
+                    <Button Content="{Binding JsonButtonText}"
+                            Classes="workspace-edit-indicator-button"
+                            IsVisible="{Binding ShowJsonButton}"
+                            Command="{Binding ToggleJsonViewCommand}" />
+                    <Button Content="💾"
+                            Classes="workspace-edit-action-button"
+                            IsVisible="{Binding ShowEditActions}"
+                            Command="{Binding SaveEditModeCommand}" />
+                    <Button Content="✖"
+                            Classes="workspace-edit-action-button"
+                            IsVisible="{Binding ShowEditActions}"
+                            Command="{Binding DiscardEditModeCommand}" />
+                    <Button Content="🗑"
+                            Classes="workspace-edit-action-button"
+                            IsVisible="{Binding ShowDeleteButton}"
+                            Command="{Binding DeleteEntityCommand}" />
+                </StackPanel>
+                <ItemsControl ItemsSource="{Binding FieldEditors}"
+                              Classes="workspace-field-editor-list" />
+                <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
+                         IsVisible="{Binding ShowRawJsonEditor}"
+                         IsReadOnly="{Binding IsRawJsonReadOnly}"
+                         Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
+            </StackPanel>
+        </Border>
+        <Border IsVisible="{Binding HasChildren}"
+                Classes="entity-card-expand-section"
+                CornerRadius="{Binding ExpandSectionCornerRadius}">
+            <Button Classes="entity-card-expand-button"
+                    Content="{Binding ExpandArrow}"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    Command="{Binding ToggleExpandCommand}" />
+        </Border>
+    </StackPanel>
+</UserControl>

@@ -12,7 +12,9 @@ public sealed class Shortcut : IEquatable<Shortcut>
         this.Label = label;
     }
 
-    public static Shortcut Open { get; } = new("Open", "Open");
+    public static Shortcut Open { get; } = new("Open", "↗");
+    public static Shortcut Json { get; } = new("Json", "{}");
+    public static Shortcut Delete { get; } = new("Delete", "🗑");
 
     public string Name { get; }
 
