@@ -35,6 +35,26 @@ Define the implementation work required to support a new `github-copilot` model 
    - Add/refresh example agent definitions for `github-copilot`.
    - Document configuration requirements and expected auth flow.
 
+## New classes
+
+1. `GitHubCopilotProviderClientFactory`
+   - Creates the provider-specific chat client using Microsoft Agent Framework integration points.
+2. `GitHubCopilotConnectionOptions`
+   - Typed configuration model for copilot provider connection/auth settings.
+3. `GitHubCopilotModelOptionsMapper`
+   - Maps `AgentDefinition.Model.Options` into runtime options for the copilot client path.
+
+## Key integration points
+
+1. `AgentFactory.CreateChatClient`
+   - Add explicit `github-copilot` provider dispatch.
+2. `AgentDefinition` schema validation (`AgentDefinition.json`)
+   - Add accepted provider value and related configuration constraints.
+3. `AgentFactory.ConfigureChatOptions`
+   - Apply provider-specific option translation for `github-copilot`.
+4. Example definitions and loader tests
+   - Add sample agent documents and ensure parser/tests cover the new provider.
+
 ## Test tasks
 
 1. Add factory parsing/dispatch tests for `github-copilot`.

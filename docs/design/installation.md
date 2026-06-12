@@ -16,6 +16,16 @@ Describe user-facing installation/configuration behavior and implementation expe
 4. Wizard can also enable remote hosting mode for the current instance.
 5. After completion, persist config and continue startup.
 
+### Local MongoDB container install flow
+
+For MongoDB-container mode, Workspaces runs a PowerShell installer flow with logged output:
+
+1. Launch installer script in an elevated prompt when required.
+2. Install Docker Desktop if missing (for example via `winget`) and verify Docker daemon availability.
+3. Create/start required MongoDB container and data directory mapping.
+4. Persist resulting runtime values into `WorkspacesConfiguration`.
+5. Save installer log output for diagnostics.
+
 ## Configuration model
 
 Config is JSON-backed and stored in default user profile location unless an explicit config path is provided.
@@ -55,6 +65,36 @@ Settings pages edit the same underlying persisted configuration model.
    - no sensitive values in repository files,
    - use environment variables or local secure storage.
 
+## New classes
+
+1. `WorkspacesConfiguration`
+   - Root persisted JSON configuration model for install/runtime settings.
+2. `InstallationWizardViewModel`
+   - Orchestrates first-run setup steps and validation.
+3. `RepositoryConnectionSettingsViewModel`
+   - Edits data repository mode and endpoint/connection settings.
+4. `RemoteAccessSettingsViewModel`
+   - Controls web hosting and dev tunnel runtime options.
+5. `SettingsDialogViewModel`
+   - Hosts category navigation and binds category viewmodels.
+6. `ConfigurationPersistenceService`
+   - Reads/writes configuration file and handles migration/defaults.
+7. `MongoDbContainerInstallService`
+   - Invokes elevated PowerShell installation script and captures installer log paths/results.
+
+## Key integration points
+
+1. App startup bootstrap
+   - Loads `WorkspacesConfiguration`; opens installation wizard when missing/invalid.
+2. DAL composition
+   - Repository mode selects offline DAL or web client DAL implementation.
+3. Remote hosting
+   - Remote access settings start/stop `Phantom.Workspaces.Web.Server` and dev tunnel services.
+4. Settings persistence
+   - Any settings update flows through `ConfigurationPersistenceService` and triggers live service reconfiguration.
+5. Mongo installer script integration
+   - Workspaces invokes `scripts/install-mongodb-container.ps1`, relaunching elevated when needed, and surfaces script output/log path in setup UI.
+
 ## Dev tunnel user experience
 
 1. Private tunnel is default.
@@ -72,3 +112,4 @@ Settings pages edit the same underlying persisted configuration model.
 2. Add settings round-trip tests for configuration persistence and reload behavior.
 3. Add tests verifying remote hosting enablement starts/stops web server components correctly.
 4. Add tests ensuring sensitive values are not written to tracked configuration artifacts.
+5. Add installer integration tests for elevated-script invocation contract and log-path/result handling.

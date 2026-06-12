@@ -17,6 +17,30 @@ Define the architecture for `IDataAccessLayer` over web transport, with validati
    - Referential integrity checks.
    - Shared merge/security behavior.
 
+## New classes
+
+1. `WebClientDataAccessLayer`
+   - HTTP-backed `IDataAccessLayer` implementation in `Phantom.Workspaces.Data.Web.Client`.
+2. `WebDataAccessRequestSerializer` / `WebDataAccessResponseSerializer`
+   - Canonical request/response serialization layer for DAL DTOs.
+3. `WebDataAccessController` (or equivalent endpoint surface)
+   - Server endpoint handler that maps HTTP payloads to DAL requests.
+4. `WebServerDataAccessPipelineFactory`
+   - Composes server-side DAL stack with schema + referential integrity enforcement.
+5. `WebDataAccessErrorMapper`
+   - Converts DAL exceptions/results to stable web error payloads.
+
+## Key integration points
+
+1. `Phantom.Workspaces.Web.Server` host startup
+   - Registers web DAL endpoints and authenticated request pipeline.
+2. `Phantom.Workspaces.Data.Core` validation layers
+   - Reused in server DAL composition; no duplicate client-side validation wrappers in web mode.
+3. GUI/settings connection mode switch
+   - Chooses `WebClientDataAccessLayer` when repository mode is remote web/dev tunnel.
+4. Authentication context propagation
+   - Request identity propagated into DAL authorization checks on server execution path.
+
 ## Contract requirements
 
 1. Web DAL behavior must match offline DAL semantics for request/response contracts.
