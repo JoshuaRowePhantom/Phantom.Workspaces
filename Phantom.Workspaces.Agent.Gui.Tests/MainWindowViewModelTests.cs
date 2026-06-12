@@ -1,6 +1,5 @@
 using AgentSchema;
 using Avalonia.Headless.XUnit;
-using Avalonia.Input;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
@@ -80,7 +79,7 @@ public sealed class MainWindowViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task HandleKey_CtrlT_TogglesReasoningVisibility()
+    public async Task ToggleReasoningVisibilityCommand_UpdatesAgentState()
     {
         var parseResult = new AgentDefinitionParseResult(
             CreateAgentDefinition(),
@@ -91,10 +90,29 @@ public sealed class MainWindowViewModelTests
             UnmatchedArguments: []);
 
         var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
-        var handled = MainWindow.HandleKey(viewModel, Key.T, KeyModifiers.Control);
+        viewModel.Agent.ToggleReasoningVisibilityCommand.Execute(null);
 
-        Assert.True(handled);
         Assert.True(viewModel.Agent.IsReasoningVisible);
+        await viewModel.DisposeAsync();
+    }
+
+    [AvaloniaFact]
+    public async Task RequestOpenLogWindowCommand_RaisesOpenLogWindowRequested()
+    {
+        var parseResult = new AgentDefinitionParseResult(
+            CreateAgentDefinition(),
+            AgentSchemaPath: null,
+            AgentSessionId: null,
+            LogChat: false,
+            LogHttpRequests: false,
+            UnmatchedArguments: []);
+
+        var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
+        var wasInvoked = false;
+        viewModel.Agent.OpenLogWindowRequested += (_, _) => wasInvoked = true;
+        viewModel.Agent.RequestOpenLogWindowCommand.Execute(null);
+
+        Assert.True(wasInvoked);
         await viewModel.DisposeAsync();
     }
 

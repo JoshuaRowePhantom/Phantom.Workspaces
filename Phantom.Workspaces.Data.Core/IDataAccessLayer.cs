@@ -51,30 +51,38 @@ public interface IDataAccessLayer
 
 public sealed record UpdateRequest
 {
+    [JsonPropertyName("update-metadata")]
     public required UpdateMetadata UpdateMetadata { get; init; }
 
+    [JsonPropertyName("changes")]
     public required IReadOnlyCollection<EntityChange> Changes { get; init; }
 }
 
 public sealed record Markdown
 {
+    [JsonPropertyName("text")]
     public required string Text { get; init; }
 }
 
 public sealed record UpdateMetadata
 {
+    [JsonPropertyName("comment")]
     public required Markdown Comment { get; init; }
 }
 
 public sealed record EntityChange
 {
+    [JsonPropertyName("entity-id")]
     public EntityId? EntityId { get; init; }
 
+    [JsonPropertyName("concurrency-tag")]
     public ConcurrencyTag? ConcurrencyTag { get; init; }
 
     // null to remove the entity.
+    [JsonPropertyName("data")]
     public JsonElement? Data { get; init; }
 
+    [JsonPropertyName("entity-change-mode")]
     public required EntityChangeMode EntityChangeMode { get; init; }
 }
 
@@ -113,6 +121,9 @@ public sealed record GetRequest
     [JsonPropertyName("get-entity")]
     public required IReadOnlyCollection<GetEntityRequest> Entities { get; init; }
 
+    [JsonPropertyName("properties")]
+    public IReadOnlyCollection<string>? Properties { get; init; }
+
     // null means do not return relationships, empty means return all, non-empty means return matching relationships.
     [JsonPropertyName("relationships-to-return")]
     public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
@@ -134,6 +145,9 @@ public sealed record GetEntityRequest
 
     [JsonPropertyName("entity-type-names")]
     public EntityTypeNameSet? EntityTypeNames { get; init; }
+
+    [JsonPropertyName("properties")]
+    public IReadOnlyCollection<string>? Properties { get; init; }
 
     // null means inherit request-level value; empty means return all; non-empty means return matching relationships.
     [JsonPropertyName("relationships-to-return")]
@@ -584,9 +598,13 @@ public enum FieldComparisonOperator
 
 public readonly record struct QueryResultLimit(int Value);
 
+[JsonConverter(typeof(JsonStringEnumConverter<EntityChangeMode>))]
 public enum EntityChangeMode
 {
+    [JsonStringEnumMemberName("replace")]
     Replace = 0,
+
+    [JsonStringEnumMemberName("json-patch")]
     JsonPatch = 1,
 }
 

@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
+  "description": "Schema for reference relationship entities that connect entities through typed references.",
   "allOf": [
     {
       "$ref": "relationship.json"

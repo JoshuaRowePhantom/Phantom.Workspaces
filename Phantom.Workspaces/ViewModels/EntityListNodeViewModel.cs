@@ -118,6 +118,16 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public RelayCommand DeleteEntityCommand { get; }
 
+    public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
+
+    public RelayCommand? ActivateShortcutCommand { get; private set; }
+
+    public bool HasShortcuts => this.Shortcuts.Count > 0;
+
+    public bool IsDeleted => this.entity?.Deleted ?? false;
+
+    public bool IsInteractive => !this.IsDeleted;
+
     public string DisplayName => this.entity?.DisplayName ?? this.displayName;
 
     public string EntityType => this.entity?.EntityType ?? this.entityType;
@@ -149,9 +159,11 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public bool ShowEditActions => this.IsEditMode;
 
-    public bool ShowJsonButton => this.entity?.CanToggleRawJson ?? !string.IsNullOrWhiteSpace(this.rawJsonText);
+    public bool ShowJsonButton => (this.entity?.CanToggleRawJson ?? !string.IsNullOrWhiteSpace(this.rawJsonText))
+        && !this.HasShortcuts;
 
-    public bool ShowDeleteButton => this.entity?.CanDeleteEntity ?? false;
+    public bool ShowDeleteButton => (this.entity?.CanDeleteEntity ?? false)
+        && !this.HasShortcuts;
 
     public bool IsRawJsonReadOnly => !this.IsEditMode;
 
@@ -258,6 +270,23 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.SetFieldEditorEditMode(this.IsEditMode);
         this.RaisePropertyChanged(nameof(this.FieldEditors));
         this.ToggleEditModeCommand.RaiseCanExecuteChanged();
+    }
+
+    public void SetShortcuts(
+        IReadOnlyCollection<EntityShortcutViewModel> shortcuts,
+        RelayCommand activateShortcutCommand)
+    {
+        this.ActivateShortcutCommand = activateShortcutCommand;
+        this.Shortcuts.Clear();
+        foreach (var shortcut in shortcuts)
+        {
+            this.Shortcuts.Add(shortcut);
+        }
+
+        this.RaisePropertyChanged(nameof(this.HasShortcuts));
+        this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
+        this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+        this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
     }
 
     private void SetFieldEditorEditMode(
@@ -383,6 +412,18 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.ShowJsonButton));
             return;
+        }
+
+        if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.CanDeleteEntity), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+            return;
+        }
+
+        if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Deleted), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsDeleted));
+            this.RaisePropertyChanged(nameof(this.IsInteractive));
         }
     }
 }

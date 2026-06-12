@@ -239,6 +239,34 @@ public sealed class MainWindowAxamlTests
             "x:CompileBindings=\"False\"",
             outputControlContent,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "<FlowDocumentScrollViewer",
+            outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<TextBox x:Name=\"SelectableOutputText\"",
+            outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Gesture=\"Cancel\" Command=\"{Binding InterruptCommand}\"",
+            outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Gesture=\"Pause\" Command=\"{Binding InputQueue.ToggleHoldAllQueuesCommand}\"",
+            outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Gesture=\"Shift+Pause\" Command=\"{Binding InputQueue.HoldAllQueuesCommand}\"",
+            outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Gesture=\"Ctrl+Shift+Pause\" Command=\"{Binding InputQueue.UnholdAllQueuesCommand}\"",
+            outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OutputMode=\"SelectableTextBox\"",
+            editorControlContent,
+            StringComparison.Ordinal);
     }
 
     private static string ReadMainWindowAxaml()

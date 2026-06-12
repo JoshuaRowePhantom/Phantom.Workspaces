@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AgentSchema;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 
@@ -55,7 +56,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         }
 
         var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
+        var loggerFactory = new ObservableLoggerFactory();
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
         var agentChat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
             {
@@ -69,7 +71,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             Id = entityViewModel.EntityId.ToString(),
             Title = entityViewModel.DisplayName,
             Entity = entityViewModel,
-            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, entityViewModel.DisplayName),
+            LoggerFactory = loggerFactory,
+            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, entityViewModel.DisplayName, loggerFactory),
         };
         mainWindowViewModel.AddOrSelectWorkspaceTab(workspaceTab);
         return true;

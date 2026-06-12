@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship-type.json",
+  "description": "Schema for relationship type entities that define roles and validation for relationship instances.",
   "allOf": [
     {
       "$ref": "entity-type.json"

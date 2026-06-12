@@ -93,6 +93,32 @@ public sealed class ShortcutManagerTests
     }
 
     [AvaloniaFact]
+    public void ViewEntityViewModel_EntityCardNode_UsesShortcutButtonsWhenAvailable()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(
+            new TestShortcutHandler(
+                shouldApply: true,
+                handleResult: true,
+                supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Json.Name, Shortcut.Delete.Name]));
+        var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entity = CreateEntity("entity", _ => Task.CompletedTask);
+
+        var viewEntity = new ViewEntityViewModel(
+            entity,
+            mainWindowViewModel,
+            shortcutManager,
+            indentLevel: 0);
+
+        var cardNode = viewEntity.EntityCardNode;
+        Assert.True(cardNode.HasShortcuts);
+        Assert.Equal(3, cardNode.Shortcuts.Count);
+        Assert.NotNull(cardNode.ActivateShortcutCommand);
+        Assert.False(cardNode.ShowJsonButton);
+        Assert.False(cardNode.ShowDeleteButton);
+    }
+
+    [AvaloniaFact]
     public async Task EntityShortcutViewModel_HandleAsync_UsesShortcutManager()
     {
         var handler = new TestShortcutHandler(shouldApply: true, handleResult: true);

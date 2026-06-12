@@ -2,34 +2,55 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:CompileBindings="False"
              x:Class="Phantom.Workspaces.Controls.EntityCardControl">
-    <StackPanel Classes="workspace-entity-node-root">
+    <StackPanel Classes="workspace-entity-node-root"
+                Classes.workspace-entity-deleted="{Binding IsDeleted}"
+                IsEnabled="{Binding IsInteractive}">
         <Border Classes="entity-card"
                 CornerRadius="{Binding ContentCornerRadius}">
             <StackPanel Classes="workspace-entity-card-content">
-                <StackPanel Classes="workspace-entity-header-row">
-                    <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
-                    <TextBlock Text="{Binding EntityType}" Classes="muted" />
-                    <Button Content="{Binding EditModeGlyph}"
-                            Classes="workspace-edit-indicator-button"
-                            IsVisible="{Binding ShowEditIndicator}"
-                            Command="{Binding ToggleEditModeCommand}" />
-                    <Button Content="{Binding JsonButtonText}"
-                            Classes="workspace-edit-indicator-button"
-                            IsVisible="{Binding ShowJsonButton}"
-                            Command="{Binding ToggleJsonViewCommand}" />
-                    <Button Content="💾"
-                            Classes="workspace-edit-action-button"
-                            IsVisible="{Binding ShowEditActions}"
-                            Command="{Binding SaveEditModeCommand}" />
-                    <Button Content="✖"
-                            Classes="workspace-edit-action-button"
-                            IsVisible="{Binding ShowEditActions}"
-                            Command="{Binding DiscardEditModeCommand}" />
-                    <Button Content="🗑"
-                            Classes="workspace-edit-action-button"
-                            IsVisible="{Binding ShowDeleteButton}"
-                            Command="{Binding DeleteEntityCommand}" />
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel Classes="workspace-entity-header-row">
+                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
+                        <TextBlock Text="{Binding EntityType}" Classes="muted" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1"
+                                Classes="workspace-entity-actions-row">
+                        <Button Content="{Binding EditModeGlyph}"
+                                Classes="workspace-edit-indicator-button"
+                                IsVisible="{Binding ShowEditIndicator}"
+                                Command="{Binding ToggleEditModeCommand}" />
+                        <ItemsControl IsVisible="{Binding HasShortcuts}"
+                                      ItemsSource="{Binding Shortcuts}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding Shortcut.Label}"
+                                            ToolTip.Tip="{Binding Shortcut.HoverText}"
+                                            IsEnabled="{Binding IsEnabled}"
+                                            Classes="workspace-entity-shortcut-button"
+                                            Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"
+                                            CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button Content="{Binding JsonButtonText}"
+                                Classes="workspace-edit-indicator-button"
+                                IsVisible="{Binding ShowJsonButton}"
+                                Command="{Binding ToggleJsonViewCommand}" />
+                        <Button Content="💾"
+                                Classes="workspace-edit-action-button"
+                                IsVisible="{Binding ShowEditActions}"
+                                Command="{Binding SaveEditModeCommand}" />
+                        <Button Content="✖"
+                                Classes="workspace-edit-action-button"
+                                IsVisible="{Binding ShowEditActions}"
+                                Command="{Binding DiscardEditModeCommand}" />
+                    </StackPanel>
+                </Grid>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list" />
                 <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"

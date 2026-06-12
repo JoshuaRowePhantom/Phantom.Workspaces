@@ -1,8 +1,11 @@
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Globalization;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -12,16 +15,29 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class AgentSessionShortcutContext
 {
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
+    private readonly Func<DateTimeOffset> currentTimeProvider;
     private Task<IAgentPersistenceStore>? agentPersistenceStoreTask;
 
+    public AgentSessionShortcutContext(
+        Func<DateTimeOffset>? currentTimeProvider = null)
+    {
+        this.currentTimeProvider = currentTimeProvider
+            ?? (() => DateTimeOffset.UtcNow);
+    }
+
     public async Task<AgentServices> CreateAgentServicesAsync(
-        MainWindowViewModel mainWindowViewModel)
+        MainWindowViewModel mainWindowViewModel,
+        ObservableLoggerFactory? loggerFactory = null)
     {
         var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
+        var workspaceEntityToolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
+            mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer,
+            ToolsetFactory.CreateDefaultToolsetFactory());
         return new AgentServices
         {
             AgentPersistenceStoreOverride = agentPersistenceStore,
-            ToolsetFactory = ToolsetFactory.CreateDefaultToolsetFactory(),
+            LoggerFactory = loggerFactory,
+            ToolsetFactory = workspaceEntityToolsetFactory,
         };
     }
 
@@ -31,11 +47,14 @@ public sealed class AgentSessionShortcutContext
         string agentSessionId)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
+        var sessionObjectSimpleName = CreateSessionObjectSimpleName(
+            agentSessionId,
+            this.currentTimeProvider());
         var agentSessionNames = await WorkspaceEntityNameFactory.CreateEntityNames(
             mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer,
             workspaceEntitySession,
             new EntityTypeName("agent-session"),
-            agentSessionId);
+            sessionObjectSimpleName);
         var agentSessionEntityData = CreateAgentSessionEntityData(
             agentDefinitionEntity.EntityId,
             agentDefinitionEntity.DisplayName,
@@ -133,5 +152,13 @@ public sealed class AgentSessionShortcutContext
             }
             """);
         return agentSessionDocument.RootElement.Clone();
+    }
+
+    private static string CreateSessionObjectSimpleName(
+        string agentSessionId,
+        DateTimeOffset currentTime)
+    {
+        var timestampComponent = currentTime.ToString("yyyy-MM-dd-HH-mm-ss", CultureInfo.InvariantCulture);
+        return $"session-{timestampComponent}-{agentSessionId}";
     }
 }

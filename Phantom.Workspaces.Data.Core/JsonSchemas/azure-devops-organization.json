@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-organization.json",
+  "description": "Schema for Azure DevOps organization entities and their connection metadata.",
   "allOf": [
     {
       "$ref": "entity.json"

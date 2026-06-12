@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/filesystem-path.json",
+  "description": "Schema for filesystem path entities that map workspace concepts to local or remote paths.",
   "allOf": [
     {
       "$ref": "entity.json"

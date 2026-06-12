@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json",
+  "description": "Base schema for all entities. This schema composes with declared entity type schemas.",
   "$comment": "The DAL composes this base schema with all applicable entity-type schemas and enforces unevaluatedProperties=false at the final composed-schema level.",
   "type": "object",
   "properties": {

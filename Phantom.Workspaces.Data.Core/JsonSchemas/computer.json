@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/computer.json",
+  "description": "Schema for computer entities representing machine identity and related host metadata.",
   "allOf": [
     {
       "$ref": "entity.json"

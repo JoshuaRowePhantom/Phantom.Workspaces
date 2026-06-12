@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/tool-relationship.json",
+  "description": "Schema for tool relationship entities linking tools, capabilities, and related workspace entities.",
   "allOf": [
     {
       "$ref": "relationship.json"

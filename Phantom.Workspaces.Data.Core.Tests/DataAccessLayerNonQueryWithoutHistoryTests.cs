@@ -66,6 +66,27 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     }
 
     [Fact]
+    public async Task Populate_GetById_WithPropertiesFilter_IsProcessed()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var createResult = await this.CreateEntityAsync(dataAccessLayer, new EntityName("properties", "filter"));
+        AssertSuccessfulResult(createResult, UpdateState.Added);
+
+        var result = await dataAccessLayer.GetAsync(
+            CreateGetRequest(
+                new GetEntityRequest
+                {
+                    EntityId = SampleEntityId,
+                    Properties = ["display-name"],
+                },
+                null,
+                properties: ["display-name"]));
+
+        var entity = Assert.Single(Assert.Single(result.Batches).Entities);
+        Assert.Equal(SampleEntityId, entity.EntityId);
+    }
+
+    [Fact]
     public async Task Populate_GetByName_EnumerateSelf_ReturnsOnlySelf()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -647,25 +668,29 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
     private static GetRequest CreateGetRequest(
         IReadOnlyCollection<GetEntityRequest> entities,
         IReadOnlyCollection<GetRelationshipRequest>? relationshipsToReturn,
-        IReadOnlyCollection<Timestamp?>? timestamps)
+        IReadOnlyCollection<Timestamp?>? timestamps,
+        IReadOnlyCollection<string>? properties = null)
     {
         return new GetRequest
         {
             Entities = entities,
             RelationshipsToReturn = relationshipsToReturn,
             Timestamps = timestamps,
+            Properties = properties,
         };
     }
 
     private static GetRequest CreateGetRequest(
         GetEntityRequest entity,
-        Timestamp? timestamp)
+        Timestamp? timestamp,
+        IReadOnlyCollection<string>? properties = null)
     {
         return new GetRequest
         {
             Entities = new[] { entity },
             RelationshipsToReturn = null,
             Timestamps = new Timestamp?[] { timestamp },
+            Properties = properties,
         };
     }
 

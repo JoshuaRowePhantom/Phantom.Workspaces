@@ -133,16 +133,23 @@ public sealed class EntityBroker
         {
             foreach (var entityResult in updateResult.EntityResults)
             {
-                if (entityResult.CurrentEntity is not EntitySnapshot currentEntity)
+                var entityId = entityResult.RequestedEntityId;
+                if (!this.subscribedEntitiesById.TryGetValue(entityId, out var weakRef)
+                    || !weakRef.TryGetTarget(out var entity))
                 {
                     continue;
                 }
 
-                if (this.subscribedEntitiesById.TryGetValue(currentEntity.EntityId, out var weakRef)
-                    && weakRef.TryGetTarget(out var entity))
+                if (entityResult.CurrentEntity is EntitySnapshot currentEntity)
                 {
                     entity.UpdateSnapshot(currentEntity);
                     changedEntityIds.Add(currentEntity.EntityId);
+                }
+
+                if (entityResult.UpdateState == UpdateState.Removed)
+                {
+                    entity.MarkDeleted();
+                    changedEntityIds.Add(entityId);
                 }
             }
         }

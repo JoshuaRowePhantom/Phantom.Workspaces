@@ -11,6 +11,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 {
     private readonly AgentChat agentChat;
+    private readonly ObservableLoggerFactory loggerFactory;
     private readonly AgentChatConversationDetailViewModel conversationDetail;
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
@@ -20,13 +21,16 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private Section outputRunningRootSection = new();
     private ChatHistoryDocumentModel? historyDocumentModel;
     private RunningChatItemsDocumentModel? runningDocumentModel;
+    private AgentChatTextOutputModel? textOutputModel;
     private bool isReasoningVisible;
     private string agentSessionId;
+    private string outputText = string.Empty;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName)
+    public AgentViewModel(AgentChat agentChat, string displayName, ObservableLoggerFactory loggerFactory)
     {
         this.agentChat = agentChat;
+        this.loggerFactory = loggerFactory;
         this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
@@ -39,6 +43,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             "Sub-agents",
             "Sub-agent model coming later.");
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
+        this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
+        this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
         this.InputQueue = new InputQueueViewModel(
             this.agentChat,
             this.agentChat.DefaultInputQueue,
@@ -46,6 +52,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.EditorItems = [];
         this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
         this.AttachOutputDocumentModels();
+        this.AttachOutputTextModel();
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         agentChat.ToolsChanged += this.OnToolsChanged;
@@ -53,6 +60,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     }
 
     public string DisplayName { get; }
+
+    public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
     public string AgentSessionId
     {
@@ -70,6 +79,10 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public ICommand InterruptCommand { get; }
 
+    public ICommand ToggleReasoningVisibilityCommand { get; }
+
+    public ICommand RequestOpenLogWindowCommand { get; }
+
     public InputQueueViewModel InputQueue { get; }
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
@@ -81,6 +94,12 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
 
     public FlowDocument OutputDocument { get; private set; }
+
+    public string OutputText
+    {
+        get => this.outputText;
+        private set => this.SetProperty(ref this.outputText, value);
+    }
 
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
     {
@@ -111,6 +130,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
 
+    public event EventHandler? OpenLogWindowRequested;
+
+    private void RequestOpenLogWindow()
+        => this.OpenLogWindowRequested?.Invoke(this, EventArgs.Empty);
+
     public void SetReasoningVisibility(bool visible)
     {
         if (!this.SetProperty(ref this.isReasoningVisible, visible))
@@ -120,6 +144,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
         this.historyDocumentModel?.Refresh();
         this.runningDocumentModel?.Refresh();
+        this.textOutputModel?.Refresh();
     }
 
     private void OnAgentSessionIdChanged(object? sender, string sessionId)
@@ -221,6 +246,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         this.historyDocumentModel?.Dispose();
         this.runningDocumentModel?.Dispose();
+        this.textOutputModel?.Dispose();
 
         this.InputQueue.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
@@ -234,5 +260,14 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.OutputDocument.Blocks.Add(this.outputRunningRootSection);
         this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
         this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
+    }
+
+    private void AttachOutputTextModel()
+    {
+        this.textOutputModel = new AgentChatTextOutputModel(
+            this.History,
+            this.RunningItems,
+            () => this.IsReasoningVisible,
+            text => this.OutputText = text);
     }
 }

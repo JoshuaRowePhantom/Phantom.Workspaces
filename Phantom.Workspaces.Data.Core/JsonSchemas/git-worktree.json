@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git-worktree.json",
+  "description": "Schema for git worktree entities describing checked-out working trees and linkage to repositories.",
   "allOf": [
     {
       "$ref": "entity.json"

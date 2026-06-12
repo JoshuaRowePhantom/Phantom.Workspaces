@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json",
+  "description": "Shared schema primitives and reusable definitions used across workspace entity schemas.",
   "$defs": {
     "entity-id": {
       "type": "string",

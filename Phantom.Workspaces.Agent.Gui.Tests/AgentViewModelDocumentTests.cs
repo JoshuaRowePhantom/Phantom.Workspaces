@@ -3,6 +3,7 @@ using AgentSchema;
 using Avalonia.Headless.XUnit;
 using Avalonia.Controls.Documents;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
@@ -14,7 +15,8 @@ public sealed class AgentViewModelDocumentTests
     public async Task LiveCollections_RenderHistoryAndRunningItemsInOrder()
     {
         await using var chat = await CreateChatAsync();
-        await using var viewModel = new AgentViewModel(chat, "test-agent");
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
         chat.EnqueueUserMessage("hello");
         await WaitForConditionAsync(chat.History, () => viewModel.History.Count >= 2, "history to populate");
@@ -52,11 +54,39 @@ public sealed class AgentViewModelDocumentTests
     public async Task AgentSessionIdChanged_UpdatesTheViewModel()
     {
         await using var chat = await CreateChatAsync();
-        await using var viewModel = new AgentViewModel(chat, "test-agent");
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
         chat.SetAgentSessionId("new-session-id");
 
         Assert.Equal("new-session-id", viewModel.AgentSessionId);
+    }
+
+    [AvaloniaFact]
+    public async Task LiveCollections_UpdateSelectableOutputText()
+    {
+        await using var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        chat.EnqueueUserMessage("hello text model");
+        await WaitForConditionAsync(chat.History, () => viewModel.History.Count >= 2, "history to populate");
+
+        Assert.Contains("hello text model", viewModel.OutputText, StringComparison.Ordinal);
+        var runningItem = chat.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("in progress")],
+        });
+        await WaitForConditionAsync(chat.RunningItems, () => viewModel.RunningItems.Count == 1, "running item to appear");
+
+        Assert.Contains("assistant (running)", viewModel.OutputText, StringComparison.Ordinal);
+        Assert.Contains("in progress", viewModel.OutputText, StringComparison.Ordinal);
+
+        chat.CompleteRunningItem(runningItem, writeToHistory: false);
+        await WaitForConditionAsync(chat.RunningItems, () => viewModel.RunningItems.Count == 0, "running item to clear");
+
+        Assert.DoesNotContain("assistant (running)", viewModel.OutputText, StringComparison.Ordinal);
     }
 
     private static async Task WaitForConditionAsync(

@@ -5,8 +5,24 @@
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel"
              Classes="agent-chat-output-root">
-    <FlowDocumentScrollViewer x:Name="HistoryDocument"
-                              Document="{Binding OutputDocument}"
-                              Foreground="{DynamicResource Theme.Class.normal.Foreground}"
-                              ShowPageBounds="False" />
+    <UserControl.KeyBindings>
+        <KeyBinding Gesture="Cancel" Command="{Binding InterruptCommand}" />
+        <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
+    </UserControl.KeyBindings>
+    <Grid>
+        <FlowDocumentScrollViewer x:Name="HistoryDocument"
+                                 Document="{Binding OutputDocument}"
+                                 Foreground="{DynamicResource Theme.Class.normal.Foreground}"
+                                  ShowPageBounds="False" />
+        <TextBox x:Name="SelectableOutputText"
+                 Text="{Binding OutputText}"
+                 IsReadOnly="True"
+                 TextWrapping="Wrap"
+                 AcceptsReturn="True"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                 Classes="agent-chat-output-text copyable-text" />
+    </Grid>
 </UserControl>

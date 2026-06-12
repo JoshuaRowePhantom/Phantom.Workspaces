@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspaces-profile.json",
+  "description": "Schema for workspaces profile entities that store workspace UI preferences and startup state.",
   "type": "object",
   "properties": {
     "entity-types": {

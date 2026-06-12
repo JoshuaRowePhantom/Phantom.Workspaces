@@ -78,6 +78,20 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public bool ShowJsonButton => this.Node.ShowJsonButton;
 
+    public bool ShowDeleteButton => this.Node.ShowDeleteButton;
+
+    public RelayCommand DeleteEntityCommand => this.Node.DeleteEntityCommand;
+
+    public IReadOnlyCollection<EntityShortcutViewModel> Shortcuts => this.Node.Shortcuts;
+
+    public bool HasShortcuts => this.Node.HasShortcuts;
+
+    public RelayCommand? ActivateShortcutCommand => this.Node.ActivateShortcutCommand;
+
+    public bool IsDeleted => this.Node.IsDeleted;
+
+    public bool IsInteractive => this.Node.IsInteractive;
+
     public bool ShowRawJsonEditor => this.Node.ShowRawJsonEditor;
 
     public bool IsRawJsonReadOnly => this.Node.IsRawJsonReadOnly;
@@ -147,6 +161,26 @@ public sealed class EntityListItemViewModel : ViewModelBase
         else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowJsonButton), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowDeleteButton), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.HasShortcuts), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.HasShortcuts));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsDeleted), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsDeleted));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsInteractive), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsInteractive));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ActivateShortcutCommand), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
         }
         else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsRawJsonReadOnly), StringComparison.Ordinal))
         {

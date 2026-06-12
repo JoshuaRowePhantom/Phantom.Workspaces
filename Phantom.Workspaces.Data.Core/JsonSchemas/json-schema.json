@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json",
+  "description": "Schema for json-schema entities that store schema definitions referenced by entity types.",
   "type": "object",
   "properties": {
     "names": {

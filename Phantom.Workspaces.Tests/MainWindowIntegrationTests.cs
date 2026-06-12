@@ -1,5 +1,6 @@
 using Avalonia.Media;
 using Avalonia.Headless.XUnit;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -28,6 +29,36 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEqual(default, repository.WorkspaceEntitySession.ComputerEntityId);
         Assert.NotEqual(default, repository.WorkspaceEntitySession.UserComputerProfileEntityId);
         Assert.NotEmpty(snapshots);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InMemoryRepository_SeedsGithubModelsAgentDefinition()
+    {
+        var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
+        var snapshots = await repository.ExportEntitySnapshotsAsync();
+        var githubModelsSnapshot = Assert.Single(
+            snapshots,
+            snapshot => ReadEntityNames(snapshot.Value.Data).Any(
+                static entityName => entityName.Components.Length == 3
+                    && string.Equals(entityName.Components[0], "defaults", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "agent-definitions", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[2], "github-models", StringComparison.Ordinal)));
+        Assert.Equal("GitHub Models Workspace Assistant", ReadDefaultDisplayName(githubModelsSnapshot.Value.Data));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InMemoryRepository_SeedsWorkspacesAgentDefinitionDisplayName()
+    {
+        var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
+        var snapshots = await repository.ExportEntitySnapshotsAsync();
+        var workspacesSnapshot = Assert.Single(
+            snapshots,
+            snapshot => ReadEntityNames(snapshot.Value.Data).Any(
+                static entityName => entityName.Components.Length == 3
+                    && string.Equals(entityName.Components[0], "defaults", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "agent-definitions", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[2], "workspaces", StringComparison.Ordinal)));
+        Assert.Equal("Workspaces Assistant", ReadDefaultDisplayName(workspacesSnapshot.Value.Data));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -135,6 +166,7 @@ public sealed class MainWindowIntegrationTests
     [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_LocalEchoDefinition_CreatesAgentSessionTab()
     {
+        var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
@@ -161,7 +193,7 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
@@ -173,9 +205,68 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(selectedTab.Agent);
         Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
         var names = ReadEntityNames(selectedTab.Entity!.Data);
+        var createdAgentSessionId = selectedTab.Entity.Data is JsonElement selectedEntityData
+            && selectedEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
+                ? agentSessionIdElement.GetString()
+                : null;
+        Assert.False(string.IsNullOrWhiteSpace(createdAgentSessionId));
+        var expectedSessionNamePrefix = $"session-{fixedCurrentTime:yyyy-MM-dd-HH-mm-ss}-";
         Assert.Contains(names, static name => name.Components.Length >= 5
             && string.Equals(name.Components[0], "users", StringComparison.Ordinal)
             && string.Equals(name.Components[3], "agent-sessions", StringComparison.Ordinal));
+        Assert.Contains(
+            names,
+            name => name.Components.Length >= 5
+                && string.Equals(name.Components[0], "users", StringComparison.Ordinal)
+                && string.Equals(name.Components[3], "agent-sessions", StringComparison.Ordinal)
+                && name.Components[^1].StartsWith(expectedSessionNamePrefix, StringComparison.Ordinal)
+                && name.Components[^1].EndsWith(createdAgentSessionId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("b6731cc0-fb8a-4f8e-9f89-3f33a5db1b8a"),
+            """
+            {
+              "entity-id": "b6731cc0-fb8a-4f8e-9f89-3f33a5db1b8a",
+              "entity-types": ["agent-definition"],
+              "names": [["tests", "agent-definitions", "workspace-entity-tool"]],
+              "display-name": { "default": "Workspace Entity Tool Agent" },
+              "definition": {
+                "kind": "prompt",
+                "name": "workspace-entity-tool",
+                "model": {
+                  "id": "echo",
+                  "provider": "echo",
+                  "apiType": "Echo"
+                },
+                "tools": [
+                  {
+                    "kind": "workspace-entity",
+                    "description": "Read and modify workspace entities."
+                  }
+                ]
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+
+        var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
+
+        Assert.True(handled);
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        Assert.Contains(selectedTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
@@ -245,6 +336,20 @@ public sealed class MainWindowIntegrationTests
         }
 
         return names;
+    }
+
+    private static string? ReadDefaultDisplayName(
+        JsonElement? entityData)
+    {
+        if (entityData is not JsonElement dataElement
+            || !dataElement.TryGetProperty("display-name", out var displayNameElement)
+            || displayNameElement.ValueKind != JsonValueKind.Object
+            || !displayNameElement.TryGetProperty("default", out var defaultValueElement))
+        {
+            return null;
+        }
+
+        return defaultValueElement.GetString();
     }
 
 }

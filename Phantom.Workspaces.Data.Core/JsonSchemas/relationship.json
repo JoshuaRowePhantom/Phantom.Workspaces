@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship.json",
+  "description": "Schema for relationship entities that connect participant entities through typed roles.",
   "type": "object",
   "properties": {
     "entity-types": {

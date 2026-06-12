@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/view.json",
+  "description": "Schema for view entities that define query-driven workspace navigation and presentation.",
   "type": "object",
   "properties": {
     "title": {

@@ -1,4 +1,5 @@
 using AgentSchema;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
@@ -10,7 +11,8 @@ public sealed class AgentChatDetailsViewModelTests
     public async Task IsReasoningVisible_Setter_UpdatesAgentState()
     {
         var chat = await CreateChatAsync();
-        await using var viewModel = new AgentViewModel(chat, "test-agent");
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
         var details = new AgentChatDetailsViewModel(viewModel);
 
         Assert.False(viewModel.IsReasoningVisible);
@@ -24,7 +26,8 @@ public sealed class AgentChatDetailsViewModelTests
     public async Task IsReasoningVisible_ReflectsAgentToggle()
     {
         var chat = await CreateChatAsync();
-        await using var viewModel = new AgentViewModel(chat, "test-agent");
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
         var details = new AgentChatDetailsViewModel(viewModel);
 
         viewModel.ToggleReasoningVisibility();

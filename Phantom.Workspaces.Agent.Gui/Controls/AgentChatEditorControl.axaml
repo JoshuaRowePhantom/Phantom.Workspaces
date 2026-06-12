@@ -5,6 +5,13 @@
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatEditorControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel">
+    <UserControl.KeyBindings>
+        <KeyBinding Gesture="Ctrl+T"
+                   Command="{Binding ToggleReasoningVisibilityCommand}" />
+        <KeyBinding Gesture="Ctrl+L"
+                   Command="{Binding RequestOpenLogWindowCommand}" />
+    </UserControl.KeyBindings>
+
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -18,7 +25,8 @@
             <DockPanel>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"/>
-                <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
+                <controls:AgentChatOutputControl DataContext="{Binding Agent}"
+                                                OutputMode="SelectableTextBox"/>
             </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:AgentChatDetailsViewModel">

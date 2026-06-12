@@ -1,86 +1,135 @@
 # Workspace Entity Tool Instruction Details
 
-## Get one entity by id
+## Tool summary
 
-1. Call `workspace_entity_get_by_id` with `entity-id`.
-2. Read `entity` from the JSON result.
-3. Save `entity.concurrencyTag` for updates or deletes.
+1. `workspaces_entity_get` reads entities. Input is a full `get-request` object.
+2. `workspaces_entity_update` adds/replaces/deletes entities. Input is a full `update-request` object.
+3. `workspaces_entity_generate_guid` creates a GUID for explicit `entity-id` assignment.
 
-## Get one entity by name
+## High-level entity model
 
-1. Call `workspace_entity_get_by_name` with `entity-name` as an ordered string array.
-2. Read `entity` from the JSON result.
-3. Save `entity.concurrencyTag` for updates or deletes.
+1. Entities are JSON objects.
+2. The `entity-types` property on an entity declares which entity types that entity is.
+3. Each declared entity type corresponds to a schema definition.
+4. Effective validation is schema composition:
+   - the base `entity` schema always applies,
+   - each declared entity type schema is composed into the validator,
+   - unknown or unevaluated properties are rejected by the composed schema rules.
+5. Schema validation is enforced by the data access layer during updates.
+6. Entity type definitions are stored as entities under `["entity-types", "<type-name>"]`.
 
-## Add a new entity
+## `workspaces_entity_get` shape and semantics
 
-1. Generate a new GUID for `entity-id`.
-2. Build the full entity JSON object in `data`.
-3. Call `workspace_entity_add` with `entity-id`, `data`, and `comment`.
-4. Confirm `entityResults[0].updateState` is `Added`.
+`workspaces_entity_get` accepts:
 
-## Update an existing entity
+```json
+{
+  "get-entity": [
+    {
+      "entity-id": "optional-guid",
+      "entity-name": ["optional", "name", "components"],
+      "entity-type-names": ["optional-type-filter"],
+      "relationships-to-return": [
+        {
+          "relationship-type-names": ["optional-relationship-type-filter"],
+          "relationship-role-names": ["optional-role-filter"]
+        }
+      ],
+      "properties": ["optional", "json.path", "filters"]
+    }
+  ],
+  "relationships-to-return": [],
+  "timestamps": [null],
+  "properties": ["optional", "json.path", "filters"]
+}
+```
 
-1. Read the current entity first with `workspace_entity_get_by_id` or `workspace_entity_get_by_name`.
-2. Copy the current `entity.concurrencyTag`.
-3. Build the full replacement object in `data`.
-4. Call `workspace_entity_replace` with `entity-id`, `concurrency-tag`, `data`, and `comment`.
-5. Confirm `entityResults[0].updateState` is `Updated`.
+Pass arrays and objects as raw JSON values. Do not JSON-encode them into strings (for example, do not send `"get-entity": "[{...}]"`).
 
-## Delete an entity
+Property filtering behavior:
 
-1. Read the current entity first with `workspace_entity_get_by_id` or `workspace_entity_get_by_name`.
-2. Copy the current `entity.concurrencyTag`.
-3. Call `workspace_entity_delete` with `entity-id`, `concurrency-tag`, and `comment`.
-4. Confirm `entityResults[0].updateState` is `Removed`.
+1. `properties` at request level applies to all returned entities.
+2. If request-level `properties` is omitted and exactly one entity query is present, that query's `properties` is used.
+3. A property path like `"content.default.content.text"` returns only that nested branch in `data`.
+4. Unknown paths are ignored.
+5. Use `properties` only when filtering many entities, or when you only need a small set of short content properties.
+6. For single entity-type reads, prefer omitting `properties` and reading the full entity.
 
-## Search for an entity
+## `workspaces_entity_update` shape and semantics
 
-1. Build candidate entity names.
-2. Call `workspace_entity_get_by_name` for each candidate `entity-name`.
-3. Keep entities where the returned `entity` is not null.
+Use one tool for add, replace, and delete. Pass:
 
-## Get schema definitions for entity types
+```json
+{
+  "update-metadata": {
+    "comment": {
+      "text": "why this change is happening"
+    }
+  },
+  "changes": [
+    {
+      "entity-id": "optional-guid",
+      "concurrency-tag": "required for safe replace/delete",
+      "entity-change-mode": "replace",
+      "data": { "full entity JSON for add/replace, or null for delete" }
+    }
+  ]
+}
+```
 
-1. For entity type `<type-name>`, call `workspace_entity_get_by_name` with `entity-name` = `["entity-types", "<type-name>"]`.
-2. Read `entity.data.schema`.
+Update behaviors:
 
-## Get documentation for entity types
+1. Add: `data` has entity JSON and `entity-id` may be omitted to auto-generate.
+2. Replace: send full replacement `data` and current `concurrency-tag`.
+3. Delete: set `data` to `null` and send current `concurrency-tag`.
 
-1. For entity type `<type-name>`, call `workspace_entity_get_by_name` with `entity-name` = `["entity-types", "<type-name>"]`.
-2. Read markdown text from `entity.data.content.default.content.text`.
+## GUID generation rule
 
-## Get all entity types
+Do not call `workspaces_entity_generate_guid` for normal single-entity adds.
 
-Use the following built-in entity type names:
+Only call `workspaces_entity_generate_guid` when you must pre-assign IDs (for example, creating multiple related entities in one update where they must reference each other).
 
-- `azure-devops-organization`
-- `azure-devops-project`
-- `azure-devops-work-item`
-- `computer`
-- `core`
-- `entity`
-- `entity-type`
-- `entity-type-view`
-- `external`
-- `filesystem-path`
-- `folder`
-- `git`
-- `git-worktree`
-- `interest`
-- `json-schema`
-- `llm-trust-profile`
-- `mime-attachment`
-- `note`
-- `reference`
-- `related`
-- `relationship`
-- `relationship-type`
-- `schedule`
-- `task`
-- `tool-relationship`
-- `user`
-- `user-computer-profile`
-- `view`
-- `workspace`
-- `workspaces-profile`
+## Exact query: get one entity type explicitly
+
+To get one entity type named `<type-name>`, call `workspaces_entity_get` with:
+
+```json
+{
+  "get-entity": [
+    {
+      "entity-name": ["entity-types", "<type-name>"]
+    }
+  ]
+}
+```
+
+## Exact query: get schema for one entity type
+
+To get only the schema for one entity type named `<type-name>`, call `workspaces_entity_get` with:
+
+```json
+{
+  "get-entity": [
+    {
+      "entity-name": ["entity-types", "<type-name>"]
+    }
+  ]
+}
+```
+
+Then read `entity.data.schema` from the returned entity.
+
+## Exact query: list all entity types and their names
+
+Use this `workspaces_entity_get` request to list each entity type with its display name and entity names:
+
+```json
+{
+  "get-entity": [
+    {
+      "entity-type-names": ["entity-type"]
+    }
+  ],
+  "properties": ["display-name", "names"]
+}
+```

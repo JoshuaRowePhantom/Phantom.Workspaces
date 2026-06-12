@@ -1,4 +1,5 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git.json",
+  "description": "Schema for git repository entities and repository-level metadata used by workspace tooling.",
   "type": "object"
 }

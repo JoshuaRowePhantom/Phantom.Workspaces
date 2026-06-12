@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace.json",
+  "description": "Schema for workspace entities that represent top-level workspace containers and metadata.",
   "type": "object",
   "properties": {
     "entity-id": {

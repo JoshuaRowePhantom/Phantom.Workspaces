@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/external.json",
+  "description": "Schema for external reference entities that point to resources outside the workspace data store.",
   "allOf": [
     {
       "$ref": "entity.json"

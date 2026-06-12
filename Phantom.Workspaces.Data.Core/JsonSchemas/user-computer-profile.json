@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/user-computer-profile.json",
+  "description": "Schema for user-computer profile entities that store per-user machine preferences and mappings.",
   "allOf": [
     {
       "$ref": "entity.json"

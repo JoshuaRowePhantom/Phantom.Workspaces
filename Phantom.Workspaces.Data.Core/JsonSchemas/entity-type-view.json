@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type-view.json",
+  "description": "Schema for entity type view entities that define presentation and navigation defaults by entity type.",
   "allOf": [
     {
       "$ref": "entity.json"

@@ -11,10 +11,58 @@ public partial class AgentChatEditorControl : UserControl
     private static readonly GridLength ExpandedSplitterWidth = new(24);
     private static readonly GridLength CollapsedWidth = new(0);
     private GridLength expandedTreeWidth = DefaultExpandedTreeWidth;
+    private AgentViewModel? subscribedViewModel;
+    private LogWindow? logWindow;
 
     public AgentChatEditorControl()
     {
         this.InitializeComponent();
+        this.DataContextChanged += this.OnDataContextChanged;
+    }
+
+    private void OpenLogWindow()
+    {
+        if (this.DataContext is not AgentViewModel viewModel)
+        {
+            return;
+        }
+
+        if (this.logWindow is not null)
+        {
+            this.logWindow.Activate();
+            return;
+        }
+
+        this.logWindow = new LogWindow(viewModel.LoggerFactory);
+        this.logWindow.Closed += (_, _) => this.logWindow = null;
+
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (owner is not null)
+        {
+            this.logWindow.Show(owner);
+            return;
+        }
+
+        this.logWindow.Show();
+    }
+
+    private void OnDataContextChanged(object? sender, System.EventArgs e)
+    {
+        if (this.subscribedViewModel is not null)
+        {
+            this.subscribedViewModel.OpenLogWindowRequested -= this.OnOpenLogWindowRequested;
+        }
+
+        this.subscribedViewModel = this.DataContext as AgentViewModel;
+        if (this.subscribedViewModel is not null)
+        {
+            this.subscribedViewModel.OpenLogWindowRequested += this.OnOpenLogWindowRequested;
+        }
+    }
+
+    private void OnOpenLogWindowRequested(object? sender, System.EventArgs e)
+    {
+        this.OpenLogWindow();
     }
 
     private void OnEditorSelectionChanged(object? sender, SelectionChangedEventArgs e)

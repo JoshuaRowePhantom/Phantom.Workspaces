@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity-type.json",
+  "description": "Schema for entity type entities, including composed schema references and metadata for each type.",
   "allOf": [
     {
       "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/json-schema.json"

@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/task.json",
+  "description": "Schema for task entities that capture actionable work items and task metadata.",
   "allOf": [
     {
       "$ref": "entity.json"

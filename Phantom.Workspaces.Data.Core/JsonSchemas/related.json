@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/related.json",
+  "description": "Schema for related relationship entities that represent general-purpose relatedness links.",
   "type": "object",
   "properties": {
     "participants": {

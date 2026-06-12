@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-session.json",
+  "description": "Schema for agent session entities that track conversational state and runtime context.",
   "allOf": [
     {
       "$ref": "entity.json"

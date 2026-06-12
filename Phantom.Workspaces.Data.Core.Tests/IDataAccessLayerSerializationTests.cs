@@ -17,6 +17,7 @@ public sealed class IDataAccessLayerSerializationTests
             EntityName = new EntityName("views", "sessions"),
             EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
             EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+            Properties = ["display-name", "content.default.content.text"],
             RelationshipsToReturn =
             [
                 new GetRelationshipRequest
@@ -32,6 +33,7 @@ public sealed class IDataAccessLayerSerializationTests
         Assert.True(jsonObject.ContainsKey("entity-name"));
         Assert.True(jsonObject.ContainsKey("enumerate-children"));
         Assert.True(jsonObject.ContainsKey("entity-type-names"));
+        Assert.True(jsonObject.ContainsKey("properties"));
         Assert.True(jsonObject.ContainsKey("relationships-to-return"));
         Assert.Equal("children", jsonObject["enumerate-children"]!.GetValue<string>());
         Assert.False(jsonObject.ContainsKey("EntityId"));
@@ -57,14 +59,50 @@ public sealed class IDataAccessLayerSerializationTests
                     RelationshipRoleNames = new RoleNameSet(["parent"]),
                 },
             ],
+            Properties = ["display-name"],
             Timestamps = [null],
         };
 
         var jsonObject = JsonSerializer.SerializeToNode(getRequest)!.AsObject();
         Assert.True(jsonObject.ContainsKey("get-entity"));
         Assert.True(jsonObject.ContainsKey("relationships-to-return"));
+        Assert.True(jsonObject.ContainsKey("properties"));
         Assert.True(jsonObject.ContainsKey("timestamps"));
         Assert.False(jsonObject.ContainsKey("entities"));
+    }
+
+    [Fact]
+    public void Serialize_UpdateRequest_UsesKebabCasePropertiesAndEnumValues()
+    {
+        var updateRequest = new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown
+                {
+                    Text = "Serialization test",
+                },
+            },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId("22222222-2222-2222-2222-222222222222"),
+                    ConcurrencyTag = new ConcurrencyTag("etag-1"),
+                    Data = JsonDocument.Parse("""{ "entity-types": ["note"] }""").RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        };
+
+        var jsonObject = JsonSerializer.SerializeToNode(updateRequest)!.AsObject();
+        Assert.True(jsonObject.ContainsKey("update-metadata"));
+        Assert.True(jsonObject.ContainsKey("changes"));
+        var entityChangeObject = jsonObject["changes"]!.AsArray()[0]!.AsObject();
+        Assert.True(entityChangeObject.ContainsKey("entity-id"));
+        Assert.True(entityChangeObject.ContainsKey("concurrency-tag"));
+        Assert.True(entityChangeObject.ContainsKey("entity-change-mode"));
+        Assert.Equal("replace", entityChangeObject["entity-change-mode"]!.GetValue<string>());
     }
 
     [Fact]
@@ -88,8 +126,10 @@ public sealed class IDataAccessLayerSerializationTests
                 new GetEntityRequest
                 {
                     EntityName = new EntityName("views", "sessions"),
+                    Properties = ["display-name"],
                 },
             ],
+            Properties = ["display-name"],
             Timestamps = [null],
         };
 

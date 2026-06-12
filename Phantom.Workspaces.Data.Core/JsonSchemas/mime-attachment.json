@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/mime-attachment.json",
+  "description": "Schema for MIME attachment entities that store typed binary or text content payloads.",
   "anyOf": [
     {
       "$ref": "#/$defs/mime-attachment-value"

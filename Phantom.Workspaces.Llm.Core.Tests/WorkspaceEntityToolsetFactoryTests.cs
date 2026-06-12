@@ -24,11 +24,9 @@ public sealed class WorkspaceEntityToolsetFactoryTests
             .ToArray();
         Assert.Equal(
             [
-                "workspace_entity_add",
-                "workspace_entity_delete",
-                "workspace_entity_get_by_id",
-                "workspace_entity_get_by_name",
-                "workspace_entity_replace",
+                "workspaces_entity_generate_guid",
+                "workspaces_entity_get",
+                "workspaces_entity_update",
             ],
             toolNames);
     }
@@ -40,7 +38,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
         await StoreGlobalInstructionNoteAsync(
             dataAccessLayer,
             ["documentation", "entity-workspace-agent-tool-instructions"],
-            "Retrieve [\"documentation\", \"entity-workspace-agent-tool-instruction-details\"] first.");
+            "Use workspaces_entity_get and workspaces_entity_update.");
         var provider = new WorkspaceEntityContextProvider(dataAccessLayer);
         var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
         {
@@ -51,126 +49,151 @@ public sealed class WorkspaceEntityToolsetFactoryTests
         var context = await AIContextProviderToolReader.GetContextAsync(provider, agent, session, CancellationToken.None);
 
         Assert.NotNull(context.Instructions);
-        Assert.Contains("entity-workspace-agent-tool-instruction-details", context.Instructions, StringComparison.Ordinal);
+        Assert.Contains("workspaces_entity_get", context.Instructions, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task ReplaceTool_WithoutConcurrencyTag_ReturnsValidationError()
+    public async Task WorkspacesEntityGet_WithPropertiesFilter_ReturnsRequestedFields()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var tool = await GetToolAsync(dataAccessLayer, "workspace_entity_replace");
+        var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
+        var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
+        var entityId = Guid.NewGuid();
 
-        var entityId = Guid.NewGuid().ToString();
-        var result = await tool.InvokeAsync(
+        await updateTool.InvokeAsync(
             new AIFunctionArguments(new Dictionary<string, object?>
             {
-                ["entity-id"] = entityId,
-                ["data"] = JsonDocument.Parse("""{ "kind": "test" }""").RootElement.Clone(),
+                ["update-metadata"] = JsonDocument.Parse("""{ "comment": { "text": "Seed entity" } }""").RootElement.Clone(),
+                ["changes"] = JsonDocument.Parse(
+                    $$"""
+                    [
+                      {
+                        "entity-id": "{{entityId:D}}",
+                        "entity-change-mode": "replace",
+                        "data": {
+                          "entity-types": ["sample"],
+                          "names": [["samples", "one"]],
+                          "display-name": "Sample Entity",
+                          "content": {
+                            "default": {
+                              "content": {
+                                "text": "hello"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                    """).RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var result = await getTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["get-entity"] = JsonDocument.Parse($$"""[{"entity-id":"{{entityId:D}}"}]""").RootElement.Clone(),
+                ["properties"] = JsonDocument.Parse("""["display-name","content.default.content.text"]""").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+        var resultJson = ReadJsonFromTextContent(result);
+        var data = resultJson
+            .GetProperty("batches")[0]
+            .GetProperty("entities")[0]
+            .GetProperty("data");
+        Assert.True(data.TryGetProperty("display-name", out _));
+        Assert.True(data.GetProperty("content").GetProperty("default").GetProperty("content").TryGetProperty("text", out _));
+        Assert.False(data.TryGetProperty("names", out _));
+    }
+
+    [Fact]
+    public async Task WorkspacesEntityUpdate_ReplaceAndDelete_WithConcurrencyTag_Succeeds()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
+        var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
+        var entityId = Guid.NewGuid();
+
+        var addResult = await updateTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["update-metadata"] = JsonDocument.Parse("""{ "comment": { "text": "Add entity" } }""").RootElement.Clone(),
+                ["changes"] = JsonDocument.Parse(
+                    $$"""
+                    [
+                      {
+                        "entity-id": "{{entityId:D}}",
+                        "entity-change-mode": "replace",
+                        "data": {
+                          "entity-types": ["sample"],
+                          "names": [["samples", "delete-me"]],
+                          "value": "before"
+                        }
+                      }
+                    ]
+                    """).RootElement.Clone(),
+            }),
+            CancellationToken.None);
+        var addJson = ReadJsonFromTextContent(addResult);
+        Assert.Equal("Added", addJson.GetProperty("entityResults")[0].GetProperty("updateState").GetString());
+
+        var getResult = await getTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["get-entity"] = JsonDocument.Parse($$"""[{"entity-id":"{{entityId:D}}"}]""").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+        var getJson = ReadJsonFromTextContent(getResult);
+        var concurrencyTag = getJson.GetProperty("batches")[0].GetProperty("entities")[0].GetProperty("concurrencyTag").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(concurrencyTag));
+
+        var deleteResult = await updateTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["update-metadata"] = JsonDocument.Parse("""{ "comment": { "text": "Delete entity" } }""").RootElement.Clone(),
+                ["changes"] = JsonDocument.Parse(
+                    $$"""
+                    [
+                      {
+                        "entity-id": "{{entityId:D}}",
+                        "concurrency-tag": "{{concurrencyTag}}",
+                        "entity-change-mode": "replace",
+                        "data": null
+                      }
+                    ]
+                    """).RootElement.Clone(),
+            }),
+            CancellationToken.None);
+        var deleteJson = ReadJsonFromTextContent(deleteResult);
+        Assert.Equal("Removed", deleteJson.GetProperty("entityResults")[0].GetProperty("updateState").GetString());
+    }
+
+    [Fact]
+    public async Task WorkspacesEntityGenerateGuid_ReturnsGuid()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var generateGuidTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_generate_guid");
+
+        var result = await generateGuidTool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>()), CancellationToken.None);
+        var json = ReadJsonFromTextContent(result);
+        Assert.True(Guid.TryParse(json.GetProperty("entityId").GetString(), out _));
+    }
+
+    [Fact]
+    public async Task WorkspacesEntityGet_WithJsonEncodedStringPayload_ReturnsValidationError()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
+
+        var result = await getTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["get-entity"] = """[{"entity-name":["documentation","entity-workspace-agent-tool-instruction-details"]}]""",
+                ["properties"] = """["content.default.content.text"]""",
             }),
             CancellationToken.None);
 
         var textContent = Assert.IsType<TextContent>(result);
-        Assert.Contains("concurrency-tag", textContent.Text, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task AddAndReplace_WithCurrentConcurrencyTag_UpdatesEntity()
-    {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var addTool = await GetToolAsync(dataAccessLayer, "workspace_entity_add");
-        var getByIdTool = await GetToolAsync(dataAccessLayer, "workspace_entity_get_by_id");
-        var replaceTool = await GetToolAsync(dataAccessLayer, "workspace_entity_replace");
-
-        var entityId = Guid.NewGuid().ToString();
-        await addTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["entity-id"] = entityId,
-                ["data"] = JsonDocument.Parse("""{ "entity-type-names": [ "sample" ], "entity-name": [ "samples", "one" ], "value": "before" }""").RootElement.Clone(),
-            }),
-            CancellationToken.None);
-
-        var getResult = await getByIdTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["entity-id"] = entityId,
-            }),
-            CancellationToken.None);
-        var getJson = ReadJsonFromTextContent(getResult);
-        var concurrencyTag = getJson.GetProperty("entity").GetProperty("concurrencyTag").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(concurrencyTag));
-
-        var replaceResult = await replaceTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["entity-id"] = entityId,
-                ["concurrency-tag"] = concurrencyTag,
-                ["data"] = JsonDocument.Parse("""{ "entity-type-names": [ "sample" ], "entity-name": [ "samples", "one" ], "value": "after" }""").RootElement.Clone(),
-            }),
-            CancellationToken.None);
-        var replaceJson = ReadJsonFromTextContent(replaceResult);
-
-        var updateState = replaceJson.GetProperty("entityResults")[0].GetProperty("updateState").GetString();
-        Assert.Equal("Updated", updateState);
-    }
-
-    [Fact]
-    public async Task AddTool_WithoutEntityId_GeneratesEntityIdAndReturnsIt()
-    {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var addTool = await GetToolAsync(dataAccessLayer, "workspace_entity_add");
-        var getByIdTool = await GetToolAsync(dataAccessLayer, "workspace_entity_get_by_id");
-
-        var addResult = await addTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["data"] = JsonDocument.Parse("""{ "entity-type-names": [ "sample" ], "entity-name": [ "samples", "generated" ], "value": "created" }""").RootElement.Clone(),
-            }),
-            CancellationToken.None);
-        var addJson = ReadJsonFromTextContent(addResult);
-        var generatedEntityId = addJson.GetProperty("entityId").GetGuid();
-        var updateState = addJson.GetProperty("update").GetProperty("entityResults")[0].GetProperty("updateState").GetString();
-        Assert.Equal("Added", updateState);
-
-        var getResult = await getByIdTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["entity-id"] = generatedEntityId.ToString("D"),
-            }),
-            CancellationToken.None);
-        var getJson = ReadJsonFromTextContent(getResult);
-        Assert.Equal(generatedEntityId, getJson.GetProperty("entity").GetProperty("entityId").GetGuid());
-    }
-
-    [Fact]
-    public async Task ReplaceTool_WithWrongConcurrencyTag_ReturnsNotMatched()
-    {
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var addTool = await GetToolAsync(dataAccessLayer, "workspace_entity_add");
-        var replaceTool = await GetToolAsync(dataAccessLayer, "workspace_entity_replace");
-
-        var entityId = Guid.NewGuid().ToString();
-        await addTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["entity-id"] = entityId,
-                ["data"] = JsonDocument.Parse("""{ "entity-type-names": [ "sample" ], "entity-name": [ "samples", "one" ], "value": "before" }""").RootElement.Clone(),
-            }),
-            CancellationToken.None);
-
-        var replaceResult = await replaceTool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?>
-            {
-                ["entity-id"] = entityId,
-                ["concurrency-tag"] = "wrong-concurrency-tag",
-                ["data"] = JsonDocument.Parse("""{ "entity-type-names": [ "sample" ], "entity-name": [ "samples", "one" ], "value": "after" }""").RootElement.Clone(),
-            }),
-            CancellationToken.None);
-        var replaceJson = ReadJsonFromTextContent(replaceResult);
-        var entityResult = replaceJson.GetProperty("entityResults")[0];
-
-        Assert.Equal("Failed", entityResult.GetProperty("updateState").GetString());
-        Assert.Equal("NotMatched", entityResult.GetProperty("concurrencyMatchState").GetString());
+        Assert.Contains("requires a valid GetRequest payload", textContent.Text, StringComparison.Ordinal);
     }
 
     private static JsonElement ReadJsonFromTextContent(object? result)

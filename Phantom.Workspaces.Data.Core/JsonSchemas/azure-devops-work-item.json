@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-work-item.json",
+  "description": "Schema for Azure DevOps work item entities and synchronized work tracking fields.",
   "allOf": [
     {
       "$ref": "entity.json"

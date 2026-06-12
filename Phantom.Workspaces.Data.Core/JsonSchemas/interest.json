@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/interest.json",
+  "description": "Schema for interest relationship entities that encode automated relationship behaviors.",
   "type": "object",
   "properties": {
     "entity-types": {

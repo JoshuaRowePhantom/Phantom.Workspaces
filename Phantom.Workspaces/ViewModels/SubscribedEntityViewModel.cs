@@ -11,6 +11,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 {
     private EntitySnapshot snapshot;
     private bool isRawJsonVisible;
+    private bool deleted;
     private readonly Func<SubscribedEntityViewModel, Task>? deleteEntityAsync;
     private readonly List<EntityDisplayItemViewModel> displayItems = [];
 
@@ -19,6 +20,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
         Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {
         this.snapshot = snapshot;
+        this.deleted = snapshot.Data is null;
         this.deleteEntityAsync = deleteEntityAsync;
         this.displayItems.AddRange(EntityPresentation.GetDisplayItems(snapshot));
         this.DeleteEntityCommand = new RelayCommand(
@@ -50,10 +52,12 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(this.Data));
             this.RaisePropertyChanged(nameof(this.CanToggleRawJson));
             this.RaisePropertyChanged(nameof(this.Relationships));
+            this.Deleted = value.Data is null;
             this.displayItems.Clear();
             this.displayItems.AddRange(EntityPresentation.GetDisplayItems(value));
             this.RaisePropertyChanged(nameof(this.DisplayItems));
             this.ToggleRawJsonVisibilityCommand.RaiseCanExecuteChanged();
+            this.DeleteEntityCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -81,9 +85,31 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
     public RelayCommand ToggleRawJsonVisibilityCommand { get; }
 
-    public bool CanDeleteEntity => this.deleteEntityAsync is not null;
+    public bool CanDeleteEntity => this.deleteEntityAsync is not null && !this.Deleted;
 
-    public bool CanToggleRawJson => this.Data is JsonElement;
+    public bool CanToggleRawJson => !this.Deleted && this.Data is JsonElement;
+
+    public bool Deleted
+    {
+        get => this.deleted;
+        private set
+        {
+            if (!this.SetProperty(ref this.deleted, value))
+            {
+                return;
+            }
+
+            if (value)
+            {
+                this.IsRawJsonVisible = false;
+            }
+
+            this.RaisePropertyChanged(nameof(this.CanDeleteEntity));
+            this.RaisePropertyChanged(nameof(this.CanToggleRawJson));
+            this.ToggleRawJsonVisibilityCommand.RaiseCanExecuteChanged();
+            this.DeleteEntityCommand.RaiseCanExecuteChanged();
+        }
+    }
 
     public bool IsRawJsonVisible
     {
@@ -95,6 +121,11 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
         EntitySnapshot snapshot)
     {
         this.Snapshot = snapshot;
+    }
+
+    internal void MarkDeleted()
+    {
+        this.Deleted = true;
     }
 
     public async Task DeleteEntityAsync()

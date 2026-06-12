@@ -7,7 +7,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private MainWindowViewModel(AgentChat chat, AgentDefinitionParseResult parseResult, ObservableLoggerFactory loggerFactory)
     {
         this.LoggerFactory = loggerFactory;
-        this.Agent = CreateAgentViewModel(parseResult, chat);
+        this.Agent = CreateAgentViewModel(parseResult, chat, loggerFactory);
     }
 
     public static Task<MainWindowViewModel> CreateAsync(AgentDefinitionParseResult parseResult)
@@ -54,7 +54,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private static AgentViewModel CreateAgentViewModel(
         AgentDefinitionParseResult parseResult,
-        AgentChat chat)
+        AgentChat chat,
+        ObservableLoggerFactory loggerFactory)
     {
         var displayName = chat.DisplayName;
         if (!string.IsNullOrEmpty(parseResult.AgentSchemaPath))
@@ -62,6 +63,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             displayName = $"{displayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        return new AgentViewModel(chat, displayName);
+        return new AgentViewModel(chat, displayName, loggerFactory);
     }
 }

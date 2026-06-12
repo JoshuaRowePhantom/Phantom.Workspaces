@@ -186,6 +186,8 @@ public sealed class EntityBrokerTests
 
         var entityResult = Assert.Single(updateResult.EntityResults);
         Assert.Equal(UpdateState.Removed, entityResult.UpdateState);
+        Assert.True(entity.Deleted);
+        Assert.False(entity.CanDeleteEntity);
         Assert.Null(entity.Data);
         Assert.Contains(entityId, changedEntityIds);
     }

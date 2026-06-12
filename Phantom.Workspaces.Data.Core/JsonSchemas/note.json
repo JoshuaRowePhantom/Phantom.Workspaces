@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/note.json",
+  "description": "Schema for note entities containing human-readable documentation and markdown content.",
   "type": "object",
   "properties": {
     "title": {

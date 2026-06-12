@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/llm-trust-profile.json",
+  "description": "Schema for LLM trust profile entities that control model trust and policy behavior.",
   "$comment": "Entity-semantic trust profile definition used for authoring and composition into runtime LLM trust profiles.",
   "type": "object",
   "properties": {

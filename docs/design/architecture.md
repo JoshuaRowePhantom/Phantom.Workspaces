@@ -28,13 +28,13 @@ The system separates UI, agent execution, data access, and external integrations
 3. **Client data access layer**
    - Multi-assembly design:
      - `Phantom.Workspaces.Data.Core`
-       - merging, security, and shared DAL behaviors
+       - merging, security, and shared data access layer behaviors
      - `Phantom.Workspaces.Data.Offline`
-       - `InMemory`, filesystem, and git-backed DALs
+       - `InMemory`, filesystem, and git-backed data access layers
      - `Phantom.Workspaces.Data.Web.Client`
-       - web client DAL
+       - web client data access layer
      - `Phantom.Workspaces.Data.Web.Server`
-       - web server DAL/API surface as a class library
+       - web server data access layer/API surface as a class library
      - `Phantom.Workspaces.Web.Server`
        - web server host and web GUI hosting entrypoint
    - The web server is expected to be hosted alongside or within the web version of the GUI.
@@ -54,7 +54,7 @@ The system separates UI, agent execution, data access, and external integrations
    - authenticate the calling user identity, and
    - authorize the requested operation against resource-level access rules.
 3. Data access implementations (`InMemory`, `Web`) must enforce a consistent authorization contract so behavior is uniform regardless of backend.
-4. Planned DAL backends include:
+4. Planned data access layer backends include:
    - `InMemory`
    - `Web`
    - filesystem-based storage
@@ -62,7 +62,7 @@ The system separates UI, agent execution, data access, and external integrations
 
 ## Data Access Layer Contract
 
-1. DAL operations are designed around complex request/response objects rather than many individual parameters.
+1. Data access layer operations are designed around complex request/response objects rather than many individual parameters.
 2. When the API surface changes, request/response shapes should evolve by adding struct/class members where possible instead of widening method signatures.
 3. GUI-facing data access paths must be fully asynchronous end-to-end; synchronous blocking data access is disallowed to prevent UI freezes.
 4. `Update`:
@@ -128,16 +128,16 @@ The system separates UI, agent execution, data access, and external integrations
    - accepts a set of entity-id/timestamp pairs,
    - returns only entities with changes later than the provided timestamp.
 12. `Update` must succeed or fail as a single transaction.
-13. The merge/update facility is implemented in a DAL that performs `Get` / merge / `Update` behavior on top of a sub-DAL.
-14. Filesystem DAL does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
-15. Git DAL and other timestamp-aware DALs support the timestamp parameter for `Get` / `Query`.
+13. The merge/update facility is implemented in a data access layer that performs `Get` / merge / `Update` behavior on top of a sub-data access layer.
+14. Filesystem data access layer does not support timestamped `Get` / `Query` history semantics and ignores the timestamp parameter.
+15. Git data access layer and other timestamp-aware data access layers support the timestamp parameter for `Get` / `Query`.
 
 ## Filesystem and Git Data Access
 
-1. The filesystem DAL stores each entity in a file named for its GUID.
+1. The filesystem data access layer stores each entity in a file named for its GUID.
 2. To reduce filesystem lookup cost, entity files are sharded into three directory levels using the first three bytes of the GUID.
 3. The filename still contains the full GUID.
-4. The git-based DAL is layered on top of the filesystem DAL.
+4. The git-based data access layer is layered on top of the filesystem data access layer.
 5. Git-backed updates use atomic git reset / edit / push cycles to apply changes to a central repository.
 
 ## Entity-Centric Data Model
@@ -158,7 +158,7 @@ The system separates UI, agent execution, data access, and external integrations
    - entities are organized through relationships and structure, not strict parent/child trees.
 7. Schema enforcement model:
    - each entity type defines/owns its schema,
-   - schema validation is performed at entry time by a DAL schema-enforcement layer,
+   - schema validation is performed at entry time by a data access layer schema-enforcement layer,
    - individual storage implementations do not each re-implement schema enforcement.
 8. Schema composition model:
    - `entity.json` defines the entity-type for all entities,
@@ -184,11 +184,11 @@ The system separates UI, agent execution, data access, and external integrations
    - a relationship generally references a set of participating entities,
    - participants are assigned into roles defined by the relationship type.
 13. Referential integrity:
-   - the DAL includes special logic to enforce referential integrity for relationships and their participants.
+   - the data access layer includes special logic to enforce referential integrity for relationships and their participants.
    - relationship entities are automatically removed when any participant is removed.
    - object-property entity-id references are validated so referenced entities exist.
    - schema-driven entity-id references may constrain allowed target types via `x-entity-type`.
-   - synthetic `reference` relationships are managed by the DAL and duplicate relationships are coalesced.
+   - synthetic `reference` relationships are managed by the data access layer and duplicate relationships are coalesced.
 14. Interest relationships:
    - define a special class of relationships called **interests**,
    - include an **interest relationship type**,

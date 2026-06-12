@@ -20,6 +20,14 @@ public sealed class Shortcut : IEquatable<Shortcut>
 
     public string Label { get; }
 
+    public string HoverText => this.Name switch
+    {
+        "Open" => "Open entity",
+        "Json" => "Toggle raw JSON view",
+        "Delete" => "Delete entity",
+        _ => this.Name,
+    };
+
     public static bool operator ==(
         Shortcut? left,
         Shortcut? right)

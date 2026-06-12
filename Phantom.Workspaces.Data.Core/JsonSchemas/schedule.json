@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/schedule.json",
+  "description": "Schema for schedule entities that model planned timing, recurrence, and scheduling metadata.",
   "allOf": [
     {
       "$ref": "entity.json"

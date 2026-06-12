@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json",
+  "description": "Schema for folder entities used to organize named groups of related entities.",
   "type": "object",
   "properties": {
     "display-name": {

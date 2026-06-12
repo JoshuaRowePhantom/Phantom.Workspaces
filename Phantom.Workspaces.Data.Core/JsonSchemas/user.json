@@ -1,5 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/user.json",
+  "description": "Schema for user entities representing identity, naming, and user-specific metadata.",
   "type": "object",
   "properties": {
     "entity-types": {
