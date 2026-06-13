@@ -1,0 +1,37 @@
+{
+  "kind": "prompt",
+  "name": "github-copilot-chat",
+  "displayName": "GitHub Copilot Chat",
+  "description": "A chat agent using GitHub Copilot provider integration.",
+  "model": {
+    "id": "gpt-4.1-mini",
+    "provider": "github-copilot",
+    "apiType": "OpenAI",
+    "connection": {
+      "kind": "key",
+      "apiKey": "${GITHUB_TOKEN}"
+    },
+    "options": {
+      "temperature": 0.2,
+      "maxOutputTokens": 2048
+    }
+  },
+  "instructions": "You are a helpful assistant. Keep answers concise and practical.",
+  "tools": [
+    {
+      "kind": "web_request",
+      "description": "Make HTTP requests to fetch web pages and resources"
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": [
+      "github-copilot",
+      "chat"
+    ],
+    "prerequisites": [
+      "Set GITHUB_TOKEN in your environment."
+    ]
+  }
+}

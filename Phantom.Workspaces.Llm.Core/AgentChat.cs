@@ -121,6 +121,11 @@ public sealed class AgentChat : IAsyncDisposable
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.Item2;
 
+       if (resolvedClient is IAsyncDisposable asyncDisposableClient)
+       {
+           this.RegisterOwnedResource(asyncDisposableClient);
+       }
+
        this.persistenceProvider = new AgentPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore);
        this.chatHistoryProvider = new AgentFrameworkChatHistoryProvider(this.persistenceProvider);
        this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider);

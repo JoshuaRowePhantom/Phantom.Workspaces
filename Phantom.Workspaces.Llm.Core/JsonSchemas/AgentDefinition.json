@@ -44,6 +44,7 @@
           "enum": [
             "echo",
             "github-models",
+            "github-copilot",
             "ollama",
             "openai",
             "azure"

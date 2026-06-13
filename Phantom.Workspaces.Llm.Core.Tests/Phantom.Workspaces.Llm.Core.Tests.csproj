@@ -33,5 +33,6 @@
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat-with-mongodb.json" Link="qwen-local-chat-with-mongodb.json" />
     <EmbeddedResource Include="..\docs\examples\qwen-local-github-mcp.json" Link="qwen-local-github-mcp.json" />
     <EmbeddedResource Include="..\docs\examples\github-models-chat.json" Link="github-models-chat.json" />
+    <EmbeddedResource Include="..\docs\examples\github-copilot-chat.json" Link="github-copilot-chat.json" />
   </ItemGroup>
 </Project>

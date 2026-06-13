@@ -377,6 +377,7 @@ public class AgentFactoryTests
                 Path.Combine(tempDir, "gh.cmd"),
                 $"@echo off{Environment.NewLine}echo {ghToken}{Environment.NewLine}exit /b 0{Environment.NewLine}");
         }
+
         else
         {
             var ghPath = Path.Combine(tempDir, "gh");
@@ -420,6 +421,67 @@ public class AgentFactoryTests
             Environment.SetEnvironmentVariable("PATH", originalPath);
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void CreateChatClient_GitHubCopilotProvider_ReturnsCopilotSdkClient()
+    {
+        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
+        try
+        {
+            var agent = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "github-copilot-agent",
+                  "model": {
+                    "id": "gpt-4.1-mini",
+                    "provider": "github-copilot",
+                    "apiType": "OpenAI",
+                    "connection": {
+                      "kind": "key",
+                      "apiKey": "${GITHUB_TOKEN}"
+                    }
+                  },
+                  "tools": []
+                }
+                """);
+
+            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+
+            Assert.NotNull(client);
+            Assert.IsType<CopilotSdkChatClient>(client);
+            Assert.Equal("GitHub Copilot (gpt-4.1-mini)", displayName);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
+        }
+    }
+
+    [Fact]
+    public void CreateChatClient_GitHubCopilotProvider_WithoutConnection_UsesLoggedInUser()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-copilot-agent",
+              "model": {
+                "id": "gpt-5",
+                "provider": "github-copilot",
+                "apiType": "OpenAI"
+              },
+              "tools": []
+            }
+            """);
+
+        var (client, displayName) = AgentFactory.CreateChatClient(agent);
+
+        Assert.NotNull(client);
+        Assert.IsType<CopilotSdkChatClient>(client);
+        Assert.Equal("GitHub Copilot (gpt-5)", displayName);
     }
 
     [Fact]

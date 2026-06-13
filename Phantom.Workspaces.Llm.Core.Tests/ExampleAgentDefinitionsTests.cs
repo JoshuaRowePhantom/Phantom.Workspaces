@@ -181,6 +181,21 @@ public class ExampleAgentDefinitionsTests
     }
 
     [Fact]
+    public void LoadGithubCopilotChat_ValidatesSuccessfully()
+    {
+        var json = GetEmbeddedResourceContent("github-copilot-chat.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        Assert.NotNull(agent);
+        Assert.Equal("prompt", agent.Kind);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        Assert.Equal("github-copilot-chat", promptAgent.Name);
+        Assert.Equal("gpt-4.1-mini", promptAgent.Model?.Id);
+        Assert.Equal("github-copilot", promptAgent.Model?.Provider);
+    }
+
+    [Fact]
     public void LoadAgentFromJson_InvalidAgainstSupportedSchema_Throws()
     {
         const string invalidJson = """

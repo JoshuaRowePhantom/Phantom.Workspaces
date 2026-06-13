@@ -191,11 +191,12 @@ public static class AgentFactory
         {
             "echo" => (new EchoChatClient(), "Echo Chat Client"),
             "github-models" => CreateGitHubModelsClient(model),
+            "github-copilot" => CreateGitHubCopilotClient(model, services),
             "ollama" => CreateOllamaClient(model, services),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, ollama, openai, azure"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, ollama, openai, azure"),
         };
     }
 
@@ -370,6 +371,34 @@ public static class AgentFactory
                 $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
                 ex);
         }
+    }
+
+    private static (IChatClient client, string displayName) CreateGitHubCopilotClient(
+        Model model,
+        AgentServices? services)
+    {
+        var modelId = model.Id
+            ?? throw new InvalidOperationException("GitHub Copilot provider requires a model id.");
+
+        // The GitHub Copilot SDK authenticates either with an explicit GitHub token or with
+        // the logged-in Copilot user. A token is optional: when the connection provides one
+        // (typically via a ${GITHUB_TOKEN} reference) it is used, otherwise the SDK falls back
+        // to the logged-in user.
+        string? gitHubToken = model.Connection switch
+        {
+            ApiKeyConnection apiKeyConnection when !string.IsNullOrWhiteSpace(apiKeyConnection.ApiKey)
+                => ResolveApiKey(apiKeyConnection.ApiKey, "github-copilot"),
+            _ => null,
+        };
+
+        var displayName = $"GitHub Copilot ({modelId})";
+        var client = new CopilotSdkChatClient(
+            modelId,
+            displayName,
+            gitHubToken,
+            services?.LoggerFactory);
+
+        return (client, displayName);
     }
 
     private static void ValidateServices(AgentServices? services)
