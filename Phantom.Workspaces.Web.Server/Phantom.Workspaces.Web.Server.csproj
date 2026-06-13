@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Server\Phantom.Workspaces.Data.Web.Server.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
   </ItemGroup>
 
 </Project>

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.Trust;
 
@@ -122,18 +123,5 @@ public sealed class WebRemoteChatClient : IChatClient
         {
             this.httpClient.Dispose();
         }
-    }
-
-    /// <summary>Request payload sent to the remote agent host.</summary>
-    public sealed record RemoteAgentRequest
-    {
-        /// <summary>The agent definition JSON to execute remotely.</summary>
-        public required string AgentDefinitionJson { get; init; }
-
-        /// <summary>Optional remote agent session id.</summary>
-        public string? AgentSessionId { get; init; }
-
-        /// <summary>The conversation messages for this turn.</summary>
-        public required IReadOnlyList<ChatMessage> Messages { get; init; }
     }
 }
