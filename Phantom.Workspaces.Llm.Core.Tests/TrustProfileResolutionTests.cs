@@ -44,6 +44,33 @@ public sealed class TrustProfileResolutionTests
     }
 
     [Fact]
+    public void Read_UnknownNetworkPolicy_Throws()
+    {
+        var entity = JsonDocument.Parse(
+            """
+            { "network-access-policy": "teleport-network" }
+            """).RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
+    [Fact]
+    public void Read_MissingOptionalFields_UsesRestrictiveDefaults()
+    {
+        var entity = JsonDocument.Parse("{ }").RootElement;
+
+        var parsed = TrustProfileEntityReader.Read(entity);
+
+        Assert.Null(parsed.Name);
+        Assert.Empty(parsed.BaseTrustProfileNames);
+        Assert.Empty(parsed.Definition.HostingWorkspacesClientInstances);
+        Assert.Equal(TrustNetworkAccessPolicy.NoNetwork, parsed.Definition.NetworkAccessPolicy);
+        Assert.Equal(TrustHttpsProxyMode.Disabled, parsed.Definition.HttpsProxyPolicy.Mode);
+        Assert.Empty(parsed.Definition.MountPoints);
+        Assert.Empty(parsed.Definition.AllowedMcpToolCallSchemas);
+    }
+
+    [Fact]
     public async Task Resolve_ComposesBaseRestrictively()
     {
         var entitiesByName = new Dictionary<string, TrustProfileEntity>(StringComparer.Ordinal)

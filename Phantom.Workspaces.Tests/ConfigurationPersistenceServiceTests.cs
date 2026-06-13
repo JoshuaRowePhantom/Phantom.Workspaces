@@ -144,6 +144,32 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal("https://workspaces.example/", repositorySource.RawValue);
     }
 
+    [AvaloniaFact]
+    public void ToRepositorySource_RemoteMongo_Throws()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.RemoteMongo,
+                MongoConnectionStringSource = "MONGO_CONNECTION",
+            },
+        };
+
+        Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
+    }
+
+    [AvaloniaFact]
+    public void ToRepositorySource_WebWithoutEndpoint_Throws()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile { Mode = DataAccessMode.Web },
+        };
+
+        Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
+    }
+
     private static string CreateTempConfigPath()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{System.Guid.NewGuid():N}");

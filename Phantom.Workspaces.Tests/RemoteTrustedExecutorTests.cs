@@ -72,6 +72,25 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Equal("remote-hello", response.Text);
     }
 
+    [AvaloniaFact]
+    public async Task WebRemoteChatClient_NonSuccessStatus_Throws()
+    {
+        var handler = new FakeHttpMessageHandler((_, _) =>
+            new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent("boom"),
+            });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
+        using var chatClient = new WebRemoteChatClient(
+            "https://remote.example/",
+            "{\"kind\":\"prompt\",\"name\":\"a\"}",
+            httpClient: httpClient);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await chatClient.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+        Assert.Contains("500", exception.Message, StringComparison.Ordinal);
+    }
+
     private sealed class FakeHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> responder;
