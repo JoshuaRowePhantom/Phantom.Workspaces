@@ -65,6 +65,28 @@ Settings pages edit the same underlying persisted configuration model.
    - no sensitive values in repository files,
    - use environment variables or local secure storage.
 
+## Implementation status
+
+Implemented so far (`Phantom.Workspaces/Configuration/`):
+
+1. `WorkspacesConfiguration` — root persisted JSON model with `DataAccess`
+   (`DataAccessConnectionProfile`), `RemoteHosting` (`RemoteHostingSettings`), `DevTunnel`
+   (`DevTunnelConfiguration`), and `Visual` (`VisualSettings`) sections. Includes
+   `ToRepositorySource()` to project the data-access profile onto the existing
+   `RepositorySource` (MongoDB container and web/dev-tunnel modes).
+2. `ConfigurationPersistenceService` — async load/save with defaults, default user-profile
+   path (`%APPDATA%/Phantom.Workspaces/config.json`), camelCase + string-enum JSON, and
+   directory creation on save.
+
+Secret-safety is structural: the model stores only secret *sources* (for example
+`DevTunnelTokenSource`, `AccessTokenSource`, `MongoConnectionStringSource` — environment
+variable names), never raw token or connection-string values, so no tracked configuration
+artifact can contain a raw secret.
+
+Not yet implemented: the Avalonia setup wizard / settings dialog view models, live service
+reconfiguration, and the elevated Mongo installer service wrapper (the installer script
+`scripts/install-mongodb-container.ps1` exists).
+
 ## New classes
 
 1. `WorkspacesConfiguration`
@@ -108,8 +130,8 @@ Settings pages edit the same underlying persisted configuration model.
 
 ## Test tasks
 
-1. Add setup wizard tests for each repository mode path (local mongo, remote mongo, web endpoint, dev tunnel endpoint).
-2. Add settings round-trip tests for configuration persistence and reload behavior.
-3. Add tests verifying remote hosting enablement starts/stops web server components correctly.
-4. Add tests ensuring sensitive values are not written to tracked configuration artifacts.
-5. Add installer integration tests for elevated-script invocation contract and log-path/result handling.
+1. Add setup wizard tests for each repository mode path (local mongo, remote mongo, web endpoint, dev tunnel endpoint). (Future — wizard not yet implemented)
+2. Add settings round-trip tests for configuration persistence and reload behavior. ✅ `ConfigurationPersistenceServiceTests` (save/load round-trip, defaults).
+3. Add tests verifying remote hosting enablement starts/stops web server components correctly. (Future)
+4. Add tests ensuring sensitive values are not written to tracked configuration artifacts. ✅ `ConfigurationPersistenceServiceTests.SaveAsync_DoesNotPersistRawSecrets`.
+5. Add installer integration tests for elevated-script invocation contract and log-path/result handling. (Future)
