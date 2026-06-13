@@ -42,9 +42,31 @@ Implemented (`Phantom.Workspaces.Llm.Core/Trust/`):
 
 Covered by `TrustProfileComposerTests`.
 
-Pending: `TrustProfileEntityReader` (parse `llm-trust-profile` entity JSON),
-`ITrustProfileProvider` resolution + base flattening, and the `ITrustedExecutor` local/remote
-executors with computer-set enforcement.
+3. Resolution (`TrustProfileEntityReader.cs`, `ITrustProfileProvider.cs`,
+   `DictionaryTrustProfileProvider.cs`): parses persisted `llm-trust-profile` entity JSON into
+   a `TrustProfileEntity`, and resolves a profile by name — flattening transitive bases
+   (depth-first, cycle-detected) and composing them restrictively. Covered by
+   `TrustProfileResolutionTests`.
+4. Execution seam (`ITrustedExecutor.cs`, `TrustedExecutorSelector.cs`,
+   `LocalTrustedExecutor.cs`, `TrustToolCallAuthorizer.cs`): the layered execution interface.
+   - `ITrustedExecutor` is implemented at the right layers — `LocalTrustedExecutor` in
+     **Llm.Core** for local execution (containers, processes, and tool permissions), and
+     `RemoteTrustedExecutor` in **Phantom.Workspaces** for cross-machine remoting.
+   - `TrustedExecutorSelector` enforces the profile's computer set and selects the executor
+     whose `CanExecute` matches the target client instance.
+   - `TrustToolCallAuthorizer` validates MCP tool-call envelopes (`{ toolName, input }`)
+     against the composed `anyOf` schema; an empty policy denies all tool calls.
+   Covered by `TrustedExecutorTests` and `RemoteTrustedExecutorTests`.
+5. Remoting transport (`Phantom.Workspaces/Trust/WebRemoteChatClient.cs`,
+   `RemoteTrustedExecutor.cs`): `RemoteTrustedExecutor` builds a thin local agent shell whose
+   `IChatClient` (`WebRemoteChatClient`) relays the conversation to a remote host's
+   `POST /agent/respond` endpoint (with optional `X-Tunnel-Authorization`). The remote host
+   performs the trusted execution via its own `LocalTrustedExecutor`.
+
+Pending: the server-side `POST /agent/respond` endpoint on `Phantom.Workspaces.Web.Server`
+(constructs the agent via `LocalTrustedExecutor` under the supplied profile and returns the
+response), and wiring `ITrustProfileProvider` resolution into `AgentChat`/`AgentFactory`
+construction.
 
 ## Entity vs runtime forms
 

@@ -141,6 +141,13 @@ public static class TrustProfileComposer
             }
         }
 
+        if (anyOf.Count == 0)
+        {
+            // No allowed tool-call schemas: deny everything. "not": {} rejects all instances
+            // because the empty schema matches everything.
+            return new JsonObject { ["not"] = new JsonObject() };
+        }
+
         return new JsonObject
         {
             ["type"] = "object",
