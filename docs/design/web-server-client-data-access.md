@@ -30,6 +30,41 @@ Define the architecture for `IDataAccessLayer` over web transport, with validati
 5. `WebDataAccessErrorMapper`
    - Converts DAL exceptions/results to stable web error payloads.
 
+## Implemented classes
+
+The initial implementation favors a thin, direct surface over the speculative class list
+above:
+
+1. `WebClientDataAccessLayer` (`Phantom.Workspaces.Data.Web.Client`)
+   - HTTP-backed `IDataAccessLayer`. Posts JSON DTOs to `/data/*` endpoints and deserializes
+     results. Supports an optional dev tunnel access token via the `X-Tunnel-Authorization`
+     header. Owns its `HttpClient` unless one is injected (testability).
+2. `WebDataAccessEndpointRouteBuilderExtensions.MapWebDataAccessEndpoints`
+   (`Phantom.Workspaces.Data.Web.Server`)
+   - Maps `POST /data/update`, `/data/get`, `/data/query`, `/data/get-history`,
+     `/data/export`, and `/data/get-changed-entities` to the registered `IDataAccessLayer`.
+3. `WebServerDataAccessLayerFactory.CreateDefaultAsync`
+   (`Phantom.Workspaces.Data.Web.Server`)
+   - Composes the server-side validated stack:
+     `MergeProcessingDataAccessLayer` -> `ReferentialIntegrityDataAccessLayer` ->
+     `SchemaValidatingDataAccessLayer` -> `InMemoryDataAccessLayer`, then runs
+     `SchemaPopulator` to seed schemas. This mirrors the desktop `EntityRepository`
+     composition.
+4. `Phantom.Workspaces.Web.Server/Program.cs`
+   - Registers the server DAL singleton and calls `MapWebDataAccessEndpoints`.
+
+JSON request/response (de)serialization uses `System.Net.Http.Json` directly rather than a
+dedicated serializer class; an explicit error-mapper class was not required because failed
+responses surface status code and body in the thrown `InvalidOperationException`. These can
+be promoted to dedicated classes if/when error-contract requirements grow.
+
+## Speculative / future classes
+
+1. `WebDataAccessRequestSerializer` / `WebDataAccessResponseSerializer`
+   - Only if canonical serialization needs to diverge from `System.Net.Http.Json`.
+2. `WebDataAccessErrorMapper`
+   - Only if a stable structured error payload contract is introduced.
+
 ## Key integration points
 
 1. `Phantom.Workspaces.Web.Server` host startup
@@ -76,7 +111,17 @@ Define the architecture for `IDataAccessLayer` over web transport, with validati
 
 ## Test tasks
 
-1. Add parity tests for `Get`, `Query`, `Update`, and other supported DAL calls (offline vs web).
-2. Add tests that verify schema validation failures are produced server-side with stable error payloads.
-3. Add tests that verify referential integrity failures are enforced server-side in web mode.
-4. Add tests that ensure web client DAL composition does not add local validation wrappers.
+1. Add parity tests for `Get`, `Query`, `Update`, and other supported DAL calls (offline vs web). (Future)
+2. Add tests that verify schema validation failures are produced server-side with stable error payloads. (Future)
+3. Add tests that verify referential integrity failures are enforced server-side in web mode. (Future)
+4. Add tests that ensure web client DAL composition does not add local validation wrappers. (Covered by `EntityRepository` web-mode path; web client constructs no validation wrappers.) ✅
+
+## Implemented test coverage
+
+1. `WebClientDataAccessLayerTests` — client posts to the expected `/data/*` routes and
+   deserializes responses (using an injected `HttpClient`). ✅
+2. `WebServerDataAccessLayerFactoryTests`:
+   - `CreateDefaultAsync_ComposesServerValidationPipeline` verifies the Merge ->
+     Referential -> Schema -> InMemory composition. ✅
+   - `MapWebDataAccessEndpoints_MapsAllExpectedRoutes` verifies all six `/data/*` routes
+     are mapped. ✅

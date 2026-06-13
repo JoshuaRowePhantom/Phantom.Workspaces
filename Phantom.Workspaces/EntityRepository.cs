@@ -8,6 +8,7 @@ using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.MongoDB;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Data.Web.Client;
 
 namespace Phantom.Workspaces;
 
@@ -42,10 +43,16 @@ public sealed class EntityRepository
         RepositorySource repositorySource)
     {
         var underlyingDataAccessLayer = CreateUnderlyingDataAccessLayer(repositorySource);
-        var coreDataAccessLayer = new MergeProcessingDataAccessLayer(
-            new ReferentialIntegrityDataAccessLayer(
-                new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
-        await EnsureSeedDataIfNeededAsync(coreDataAccessLayer);
+        var coreDataAccessLayer = repositorySource.SourceType == RepositorySourceType.Web
+            ? underlyingDataAccessLayer
+            : new MergeProcessingDataAccessLayer(
+                new ReferentialIntegrityDataAccessLayer(
+                    new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
+        if (repositorySource.SourceType != RepositorySourceType.Web)
+        {
+            await EnsureSeedDataIfNeededAsync(coreDataAccessLayer);
+        }
+
         var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
@@ -96,10 +103,21 @@ public sealed class EntityRepository
     {
         return repositorySource.SourceType switch
         {
+            RepositorySourceType.Web => CreateWebDataAccessLayer(repositorySource),
             RepositorySourceType.LocalGit => new GitDataAccessLayer(repositorySource.RawValue),
             RepositorySourceType.MongoDb => CreateMongoDbDataAccessLayer(repositorySource),
             _ => new InMemoryDataAccessLayer(),
         };
+    }
+
+    private static IDataAccessLayer CreateWebDataAccessLayer(RepositorySource repositorySource)
+    {
+        if (string.IsNullOrWhiteSpace(repositorySource.RawValue))
+        {
+            throw new InvalidOperationException("Web repository source requires an endpoint URL.");
+        }
+
+        return new WebClientDataAccessLayer(repositorySource.RawValue);
     }
 
     private static IDataAccessLayer CreateMongoDbDataAccessLayer(
