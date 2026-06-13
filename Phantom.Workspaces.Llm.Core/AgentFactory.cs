@@ -212,10 +212,14 @@ public static class AgentFactory
         var services = createAgentChatRequest.AgentServices;
         ValidateServices(services);
 
+        var requestedAgentDefinition = createAgentChatRequest.AgentDefinition;
+
+        await EnforceTrustProfileAsync(
+            requestedAgentDefinition,
+            createAgentChatRequest.TrustProfileProvider).ConfigureAwait(false);
+
         IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
             ?? new InMemoryAgentPersistenceStore();
-
-        var requestedAgentDefinition = createAgentChatRequest.AgentDefinition;
 
         // Try to extract chat-history tool from agent definition (skipped if override is provided)
         if (services?.AgentPersistenceStoreOverride is null
@@ -407,6 +411,26 @@ public static class AgentFactory
         {
             throw new InvalidOperationException(
                 "AgentServices.LoggerFactory is required when AgentServices.LogChat or AgentServices.LogHttpRequests is enabled.");
+        }
+    }
+
+    private static async Task EnforceTrustProfileAsync(
+        AgentDefinition? agentDefinition,
+        Phantom.Workspaces.Llm.Trust.ITrustProfileProvider? trustProfileProvider)
+    {
+        if (agentDefinition is null || trustProfileProvider is null)
+        {
+            return;
+        }
+
+        var trustProfile = await Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
+            .ResolveAsync(agentDefinition, trustProfileProvider)
+            .ConfigureAwait(false);
+
+        if (trustProfile is not null && !trustProfile.AllowsLocalExecution())
+        {
+            throw new InvalidOperationException(
+                "The agent's trust profile does not permit local execution on this client instance.");
         }
     }
 

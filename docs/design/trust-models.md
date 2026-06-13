@@ -63,12 +63,18 @@ Covered by `TrustProfileComposerTests`.
    `POST /agent/respond` endpoint (with optional `X-Tunnel-Authorization`). The remote host
    performs the trusted execution via its own `LocalTrustedExecutor`.
 
-Pending: wiring `ITrustProfileProvider` resolution into `AgentChat`/`AgentFactory` construction.
+Pending: installation setup-wizard / settings view models.
 
 The server-side `POST /agent/respond` endpoint is implemented on
 `Phantom.Workspaces.Web.Server` (`AgentRespondHandler` + `AgentEndpointRouteBuilderExtensions`):
 it parses the agent definition, runs a turn via `AgentFactory`, and returns the
 `ChatResponse`. Covered by `AgentRespondHandlerTests`.
+
+Trust-profile resolution is wired into agent construction (`AgentTrustProfileResolver`,
+`CreateAgentChatRequest.TrustProfileProvider`): an agent definition references a profile via
+`Metadata["trust-profile"]`; `AgentFactory.CreateAgentChatAsync` resolves it and refuses
+construction when the profile does not permit local execution (`"."`). Covered by
+`AgentTrustProfileWiringTests`.
 
 ## Entity vs runtime forms
 
