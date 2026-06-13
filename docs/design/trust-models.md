@@ -26,6 +26,26 @@ enforced across local and remote execution. It builds on two existing pieces:
 - The runtime trust-profile types and Docker materialization described in
   `docs/design/llm-session.md`.
 
+## Implementation status
+
+Implemented (`Phantom.Workspaces.Llm.Core/Trust/`):
+
+1. Runtime model (`TrustProfile.cs`): `TrustProfile` (composed), `TrustProfileDefinition`
+   (entity-level), and value types `TrustMountPoint`, `TrustHttpsProxyPolicy`, and the
+   `TrustNetworkAccessPolicy` / `TrustMountAccessMode` / `TrustMountType` /
+   `TrustHttpsProxyMode` enums. `TrustProfile.AllowsClientInstance` /
+   `AllowsLocalExecution` express the computer-set check.
+2. Restrictive composition (`TrustProfileComposer.cs`): client instances intersect, network
+   access takes the most restrictive policy, mount points intersect (read-only narrowing),
+   HTTPS proxy takes the strongest requirement, and MCP tool-call schemas compose into one
+   `anyOf` envelope. Order-independent.
+
+Covered by `TrustProfileComposerTests`.
+
+Pending: `TrustProfileEntityReader` (parse `llm-trust-profile` entity JSON),
+`ITrustProfileProvider` resolution + base flattening, and the `ITrustedExecutor` local/remote
+executors with computer-set enforcement.
+
 ## Entity vs runtime forms
 
 Trust profiles follow the same entity / runtime split used elsewhere in the codebase:
