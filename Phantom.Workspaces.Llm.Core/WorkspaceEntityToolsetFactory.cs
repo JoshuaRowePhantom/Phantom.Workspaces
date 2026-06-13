@@ -448,7 +448,10 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
         {
             EntityId = TryParseEntityId(changeElement, "entity-id"),
             ConcurrencyTag = TryParseConcurrencyTag(changeElement, "concurrency-tag"),
-            Data = changeElement.TryGetProperty("data", out var dataElement) ? dataElement.Clone() : null,
+            Data = changeElement.TryGetProperty("data", out var dataElement)
+                && dataElement.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
+                ? dataElement.Clone()
+                : null,
             EntityChangeMode = entityChangeMode,
         };
 
