@@ -22,6 +22,11 @@
           "minimum": 1,
           "maximum": 65535
         },
+        "image-name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional container image override. Defaults to the Atlas Local image (mongodb/mongodb-atlas-local), which supports $search/$vectorSearch. Set to a community mongo image to opt out."
+        },
         "database-name": {
           "type": "string",
           "minLength": 1
