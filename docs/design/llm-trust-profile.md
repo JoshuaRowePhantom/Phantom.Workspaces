@@ -7,6 +7,9 @@
 - `name`
 - `base-trust-profiles`
 
+Base profiles are inherited either **restrictively** (narrowing) or **permissively** (widening)
+per each `base-trust-profiles` entry's `inheritance-mode`; see `docs/design/trust-models.md`.
+
 ## Entity type definition location
 
 The entity type JSON definition is implemented in code at:

@@ -30,10 +30,10 @@
       "$ref": "core.json#/$defs/local-string"
     },
     "base-trust-profiles": {
-      "$comment": "Zero or more trust profile entities to inherit from.",
+      "$comment": "Zero or more base trust profiles to inherit from. Each entry is either a bare reference (inherited restrictively) or an object specifying the reference and its inheritance mode.",
       "type": "array",
       "items": {
-        "$ref": "core.json#/$defs/entity-reference"
+        "$ref": "#/$defs/base-trust-profile"
       },
       "uniqueItems": true
     },
@@ -83,6 +83,37 @@
     "allowed-mcp-tool-call-schemas"
   ],
   "$defs": {
+    "base-trust-profile": {
+      "$comment": "A base trust profile reference. A bare entity reference inherits restrictively; an object can specify the inheritance mode.",
+      "oneOf": [
+        {
+          "$comment": "Bare reference; inherited restrictively.",
+          "$ref": "core.json#/$defs/entity-reference"
+        },
+        {
+          "$comment": "Reference with an explicit inheritance mode.",
+          "type": "object",
+          "properties": {
+            "profile": {
+              "$comment": "The base trust profile to inherit from.",
+              "$ref": "core.json#/$defs/entity-reference"
+            },
+            "inheritance-mode": {
+              "$comment": "restrictive narrows the inheriting profile (intersection); permissive widens it (union). Defaults to restrictive.",
+              "type": "string",
+              "enum": [
+                "restrictive",
+                "permissive"
+              ]
+            }
+          },
+          "required": [
+            "profile"
+          ],
+          "unevaluatedProperties": false
+        }
+      ]
+    },
     "trust-mount-point": {
       "$comment": "A single mount declaration for the container runtime.",
       "type": "object",

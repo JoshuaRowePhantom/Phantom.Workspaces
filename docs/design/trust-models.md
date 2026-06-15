@@ -13,8 +13,15 @@ A trust profile defines:
 
 A trust profile can inherit other trust profiles, so that one profile can set tool
 permissions, another can set OS permissions, and another can restrict the computer set.
-**All inheritance is restrictive**: composing profiles can only narrow the effective policy,
-never widen it.
+Each base is inherited in one of two **modes**:
+
+- **Restrictive** (default): composing the base can only narrow the effective policy
+  (intersection / most-restrictive).
+- **Permissive**: composing the base widens the effective policy (union / most-permissive),
+  granting additional capabilities.
+
+A profile can mix modes across its bases — for example, restrictively inheriting a
+computer-set restriction while permissively inheriting an extra network grant.
 
 This document describes the trust *model* — how trust profiles are authored, composed, and
 enforced across local and remote execution. It builds on two existing pieces:
@@ -35,18 +42,20 @@ Implemented (`Phantom.Workspaces.Llm.Core/Trust/`):
    `TrustNetworkAccessPolicy` / `TrustMountAccessMode` / `TrustMountType` /
    `TrustHttpsProxyMode` enums. `TrustProfile.AllowsClientInstance` /
    `AllowsLocalExecution` express the computer-set check.
-2. Restrictive composition (`TrustProfileComposer.cs`): client instances intersect, network
-   access takes the most restrictive policy, mount points intersect (read-only narrowing),
-   HTTPS proxy takes the strongest requirement, and MCP tool-call schemas compose into one
-   `anyOf` envelope. Order-independent.
+2. Composition (`TrustProfileComposer.cs`): `Merge(primary, other, mode)` supports both
+   `Restrictive` (intersect client instances, most-restrictive network, intersect mounts with
+   read-only narrowing, strongest proxy) and `Permissive` (union client instances, most-permissive
+   network, union mounts with read-write widening, weakest proxy). MCP tool-call schemas always
+   compose into one additive `anyOf` envelope; `Finalize` produces the runtime `TrustProfile`.
+   `Compose(list)` keeps restrictive behavior. Order-independent (each merge is commutative).
 
 Covered by `TrustProfileComposerTests`.
 
 3. Resolution (`TrustProfileEntityReader.cs`, `ITrustProfileProvider.cs`,
    `DictionaryTrustProfileProvider.cs`): parses persisted `llm-trust-profile` entity JSON into
-   a `TrustProfileEntity`, and resolves a profile by name — flattening transitive bases
-   (depth-first, cycle-detected) and composing them restrictively. Covered by
-   `TrustProfileResolutionTests`.
+   a `TrustProfileEntity` whose `Bases` carry a `TrustProfileBaseReference` (name + mode), and
+   resolves a profile by name — recursively composing each base into the deriving profile per its
+   mode (cycle-detected). Covered by `TrustProfileResolutionTests`.
 4. Execution seam (`ITrustedExecutor.cs`, `TrustedExecutorSelector.cs`,
    `LocalTrustedExecutor.cs`, `TrustToolCallAuthorizer.cs`): the layered execution interface.
    - `ITrustedExecutor` is implemented at the right layers — `LocalTrustedExecutor` in
@@ -88,7 +97,9 @@ Trust profiles follow the same entity / runtime split used elsewhere in the code
 
 The persisted entity schema fields are:
 
-- `base-trust-profiles` — zero or more trust-profile entity references to inherit from.
+- `base-trust-profiles` — zero or more base profiles to inherit from. Each entry is either a
+  bare reference (inherited restrictively) or an object `{ "profile": <ref>,
+  "inheritance-mode": "restrictive" | "permissive" }`.
 - `hosting-workspaces-client-instances` — the client instances (computers) this profile may
   run on; `"."` denotes the local client instance.
 - `mount-points` — container mount declarations (bind / volume / tmpfs, read-only / read-write).
@@ -106,13 +117,21 @@ Trust profiles are entities and can be referenced from an agent definition by na
 "trust-profile": { "$ref": { "entity-name": ["trust-profiles", "my-trust-profile"] } }
 ```
 
-Or inline by value, optionally inheriting a base profile:
+Or inline by value, inheriting bases with explicit modes (a bare reference defaults to
+restrictive):
 
 ```json
 "trust-profile": {
   "hosting-workspaces-client-instances": ["."],
   "base-trust-profiles": [
-    { "$ref": { "entity-name": ["trust-profiles", "base-trust-profile"] } }
+    {
+      "profile": { "$ref": { "entity-name": ["trust-profiles", "base-os-policy"] } },
+      "inheritance-mode": "restrictive"
+    },
+    {
+      "profile": { "$ref": { "entity-name": ["trust-profiles", "extra-network-grant"] } },
+      "inheritance-mode": "permissive"
+    }
   ]
 }
 ```
@@ -122,18 +141,28 @@ Entity references are always entity-name arrays (for example
 
 ## Composition rules
 
-1. A profile may inherit from zero or more base profiles (`base-trust-profiles`).
+1. A profile may inherit from zero or more base profiles (`base-trust-profiles`), each with an
+   inheritance mode (`restrictive` by default, or `permissive`).
 2. Effective `hosting-workspaces-client-instances`, `mount-points`, `network-access-policy`,
    `https-proxy-policy`, and MCP tool-call schema are produced by deterministic merge rules.
-3. Composition is **restrictive**:
-   - The effective computer set is the **intersection** of all inherited and local sets.
-   - Mount points narrow (a base read-write mount may be restricted to read-only by a derived
-     profile; new broad grants are not introduced by inheritance).
-   - Network access composes down to the most restrictive policy.
-   - `allowed-mcp-tool-call-schemas` are composed with `anyOf` at runtime to validate the
-     tool-call envelope.
-4. Cycles in `base-trust-profiles` inheritance are invalid.
-5. The runtime/composed form strips `names` and `base-trust-profiles`.
+3. **Restrictive** inheritance narrows:
+   - Computer set: **intersection** of the profile and the base.
+   - Mount points: intersection by `(source, target, type)`, with access narrowed to read-only
+     when either grants read-only.
+   - Network access: most restrictive policy.
+   - HTTPS proxy: strongest requirement (`required` > `optional` > `disabled`).
+4. **Permissive** inheritance widens:
+   - Computer set: **union** of the profile and the base.
+   - Mount points: union by `(source, target, type)`, with access widened to read-write when
+     either grants read-write.
+   - Network access: most permissive policy.
+   - HTTPS proxy: weakest requirement (`disabled` < `optional` < `required`).
+5. `allowed-mcp-tool-call-schemas` are always composed additively (their `anyOf` union) in both
+   modes, then used at runtime to validate the tool-call envelope.
+6. Each merge operation is commutative, so the order of bases does not affect the result; mixing
+   modes across bases applies each base's mode in turn.
+7. Cycles in `base-trust-profiles` inheritance are invalid.
+8. The runtime/composed form strips `names` and `base-trust-profiles`.
 
 ## Resolution
 
@@ -194,7 +223,7 @@ assertions are never trusted for identity or access rights.
 2. `EntityTrustProfileProvider : ITrustProfileProvider`
    - Default provider backed by the entity `IDataAccessLayer`.
 3. `TrustProfileComposer`
-   - Applies the restrictive merge rules over a profile and its resolved bases.
+   - Applies restrictive or permissive merge rules over a profile and its resolved bases.
 4. `ITrustedExecutor`
    - Creates `AIAgent` / `AIContextProvider` instances for a given agent definition + trust
      profile, locally or over the web transport.
@@ -221,13 +250,15 @@ assertions are never trusted for identity or access rights.
 ## Test tasks
 
 1. Composition tests
-   - Inheritance intersects the computer set restrictively.
-   - Mount points / network policy / proxy policy narrow (never widen) under inheritance.
-   - `allowed-mcp-tool-call-schemas` compose with `anyOf`.
-   - Inheritance cycles are rejected.
+   - Restrictive inheritance intersects the computer set and narrows network/mounts/proxy. ✅
+   - Permissive inheritance unions the computer set and widens network/mounts/proxy. ✅
+   - Mixed-mode bases apply each base's mode. ✅
+   - `allowed-mcp-tool-call-schemas` compose with `anyOf`. ✅
+   - Inheritance cycles are rejected. ✅
 2. Resolution tests
    - `ITrustProfileProvider` resolves `$ref` profiles and inline profiles.
-   - Missing referenced profiles surface a clear error at the resolution layer.
+   - The reader parses per-base `inheritance-mode` (object form and bare-string default). ✅
+   - Missing referenced profiles surface a clear error at the resolution layer. ✅
 3. Executor selection tests
    - Local client instance (`"."`) selects `LocalTrustedExecutor`.
    - Non-local instance selects `RemoteTrustedExecutor` using the matching
@@ -241,7 +272,6 @@ assertions are never trusted for identity or access rights.
 
 ## Non-goals
 
-1. Widening permissions through inheritance (composition is restrictive only).
-2. Trusting client-side identity or access assertions.
-3. Per-file-extension deny rules inside a mounted path (express denies by mounting narrower
+1. Trusting client-side identity or access assertions.
+2. Per-file-extension deny rules inside a mounted path (express denies by mounting narrower
    allow scopes instead; see `docs/design/llm-session.md`).

@@ -12,7 +12,10 @@ The runtime/composed trust profile strips user semantics (`name`, `base-trust-pr
   "entity-types": ["llm-trust-profile", "..."],
   "names": [["trust-profiles", "default"]],
   "display-name": { "default": "Default Trust Profile" },
-  "base-trust-profiles": ["<entity-id-or-name>", "..."],
+  "base-trust-profiles": [
+    { "profile": "<entity-id-or-name>", "inheritance-mode": "restrictive" },
+    "<entity-id-or-name>"
+  ],
   "hosting-workspaces-client-instances": [".", "remote-client"],
   "mount-points": [
     {
@@ -41,5 +44,9 @@ The runtime/composed trust profile strips user semantics (`name`, `base-trust-pr
 ## Notes
 
 - `hosting-workspaces-client-instances` supports `"."` for the local hosting client instance.
+- `base-trust-profiles` entries are either a bare reference (inherited **restrictively**) or an
+  object `{ "profile": <ref>, "inheritance-mode": "restrictive" | "permissive" }`. Restrictive
+  inheritance narrows (intersection / most-restrictive); permissive inheritance widens (union /
+  most-permissive). See `docs/design/trust-models.md`.
 - `allowed-mcp-tool-call-schemas` are composed with `anyOf` when building effective policy.
 - Command execution is modeled as MCP tool usage and controlled through the allowed MCP tool-call schemas.
