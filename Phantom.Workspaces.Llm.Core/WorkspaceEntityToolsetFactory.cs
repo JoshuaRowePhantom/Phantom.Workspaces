@@ -73,12 +73,8 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
 
     private sealed class WorkspacesEntityGetTool : AIFunction
     {
-        private static readonly JsonElement InputSchema = JsonDocument.Parse(
-            """
-            {
-              "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/get-request"
-            }
-            """).RootElement.Clone();
+        private static readonly JsonElement InputSchema = WorkspaceEntityToolSchemas.Denormalize(
+            "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/get-request");
 
         private readonly IDataAccessLayer dataAccessLayer;
 
@@ -125,12 +121,8 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
 
     private sealed class WorkspacesEntityUpdateTool : AIFunction
     {
-        private static readonly JsonElement InputSchema = JsonDocument.Parse(
-            """
-            {
-              "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/update-request"
-            }
-            """).RootElement.Clone();
+        private static readonly JsonElement InputSchema = WorkspaceEntityToolSchemas.Denormalize(
+            "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/update-request");
 
         private readonly IDataAccessLayer dataAccessLayer;
 
