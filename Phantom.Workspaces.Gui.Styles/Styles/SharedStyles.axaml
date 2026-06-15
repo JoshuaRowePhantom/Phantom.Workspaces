@@ -468,9 +468,13 @@
         <Setter Property="Spacing" Value="6" />
     </Style>
     <Style Selector="StackPanel.workspace-entity-header-row">
-        <Setter Property="Orientation" Value="Horizontal" />
-        <Setter Property="Spacing" Value="8" />
+        <Setter Property="Orientation" Value="Vertical" />
+        <Setter Property="Spacing" Value="2" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-header-row > TextBlock">
+        <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
     <Style Selector="TextBlock.workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
