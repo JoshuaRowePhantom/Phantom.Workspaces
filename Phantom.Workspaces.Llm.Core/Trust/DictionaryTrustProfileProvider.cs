@@ -5,9 +5,9 @@ namespace Phantom.Workspaces.Llm.Trust;
 /// <see cref="TrustProfileEntity"/> values keyed by name.
 /// </summary>
 /// <remarks>
-/// Base profiles are flattened depth-first (base-most first) with cycle detection, then composed
-/// restrictively by <see cref="TrustProfileComposer"/>. An entity data-access-backed provider can
-/// build the dictionary from a query and delegate to this type.
+/// Each base profile is composed into the profile that inherits it according to its
+/// <see cref="TrustInheritanceMode"/> (restrictive narrows, permissive widens), recursively and
+/// with cycle detection, via <see cref="TrustProfileComposer"/>.
 /// </remarks>
 public sealed class DictionaryTrustProfileProvider : ITrustProfileProvider
 {
@@ -25,43 +25,37 @@ public sealed class DictionaryTrustProfileProvider : ITrustProfileProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileName);
 
-        var ordered = new List<TrustProfileDefinition>();
-        var visiting = new HashSet<string>(StringComparer.Ordinal);
-        var resolved = new HashSet<string>(StringComparer.Ordinal);
-        this.Flatten(profileName, ordered, visiting, resolved);
-
-        return ValueTask.FromResult(TrustProfileComposer.Compose(ordered));
+        var composed = this.ComposeDefinition(profileName, new HashSet<string>(StringComparer.Ordinal));
+        return ValueTask.FromResult(TrustProfileComposer.Finalize(composed));
     }
 
-    private void Flatten(
-        string profileName,
-        List<TrustProfileDefinition> ordered,
-        HashSet<string> visiting,
-        HashSet<string> resolved)
+    private TrustProfileDefinition ComposeDefinition(string profileName, HashSet<string> visiting)
     {
-        if (resolved.Contains(profileName))
-        {
-            return;
-        }
-
         if (!visiting.Add(profileName))
         {
             throw new InvalidOperationException(
                 $"Cycle detected in trust profile inheritance involving '{profileName}'.");
         }
 
-        if (!this.entitiesByName.TryGetValue(profileName, out var entity))
+        try
         {
-            throw new InvalidOperationException($"Trust profile '{profileName}' could not be resolved.");
-        }
+            if (!this.entitiesByName.TryGetValue(profileName, out var entity))
+            {
+                throw new InvalidOperationException($"Trust profile '{profileName}' could not be resolved.");
+            }
 
-        foreach (var baseName in entity.BaseTrustProfileNames)
+            var effective = entity.Definition;
+            foreach (var baseReference in entity.Bases)
+            {
+                var baseDefinition = this.ComposeDefinition(baseReference.ProfileName, visiting);
+                effective = TrustProfileComposer.Merge(effective, baseDefinition, baseReference.Mode);
+            }
+
+            return effective;
+        }
+        finally
         {
-            this.Flatten(baseName, ordered, visiting, resolved);
+            visiting.Remove(profileName);
         }
-
-        ordered.Add(entity.Definition);
-        visiting.Remove(profileName);
-        resolved.Add(profileName);
     }
 }

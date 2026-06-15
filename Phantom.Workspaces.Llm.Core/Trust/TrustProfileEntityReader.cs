@@ -12,8 +12,8 @@ public sealed record TrustProfileEntity
     /// <summary>Optional simple lookup name for the profile.</summary>
     public string? Name { get; init; }
 
-    /// <summary>Names/ids of base profiles this profile inherits from.</summary>
-    public IReadOnlyList<string> BaseTrustProfileNames { get; init; } = [];
+    /// <summary>Base profile references this profile inherits from, each with an inheritance mode.</summary>
+    public IReadOnlyList<TrustProfileBaseReference> Bases { get; init; } = [];
 
     /// <summary>The policy carried by this profile (excluding inheritance).</summary>
     public TrustProfileDefinition Definition { get; init; } = new();
@@ -35,7 +35,7 @@ public static class TrustProfileEntityReader
         return new TrustProfileEntity
         {
             Name = ReadName(entity),
-            BaseTrustProfileNames = ReadStringArray(entity, "base-trust-profiles"),
+            Bases = ReadBaseReferences(entity),
             Definition = new TrustProfileDefinition
             {
                 HostingWorkspacesClientInstances = ReadStringArray(entity, "hosting-workspaces-client-instances"),
@@ -68,6 +68,55 @@ public static class TrustProfileEntityReader
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<TrustProfileBaseReference> ReadBaseReferences(JsonElement entity)
+    {
+        if (!entity.TryGetProperty("base-trust-profiles", out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var references = new List<TrustProfileBaseReference>();
+        foreach (var element in array.EnumerateArray())
+        {
+            switch (element.ValueKind)
+            {
+                // Back-compatible: a bare string reference inherits restrictively.
+                case JsonValueKind.String when !string.IsNullOrEmpty(element.GetString()):
+                    references.Add(new TrustProfileBaseReference(element.GetString()!, TrustInheritanceMode.Restrictive));
+                    break;
+                case JsonValueKind.Object:
+                    var profile = element.TryGetProperty("profile", out var profileElement)
+                        && profileElement.ValueKind == JsonValueKind.String
+                        ? profileElement.GetString()
+                        : null;
+                    if (string.IsNullOrEmpty(profile))
+                    {
+                        throw new InvalidOperationException("A base trust profile reference must include a 'profile' name.");
+                    }
+
+                    references.Add(new TrustProfileBaseReference(profile, ReadInheritanceMode(element)));
+                    break;
+            }
+        }
+
+        return references;
+    }
+
+    private static TrustInheritanceMode ReadInheritanceMode(JsonElement element)
+    {
+        if (!element.TryGetProperty("inheritance-mode", out var modeElement) || modeElement.ValueKind != JsonValueKind.String)
+        {
+            return TrustInheritanceMode.Restrictive;
+        }
+
+        return modeElement.GetString() switch
+        {
+            "restrictive" => TrustInheritanceMode.Restrictive,
+            "permissive" => TrustInheritanceMode.Permissive,
+            var other => throw new InvalidOperationException($"Unknown inheritance mode: '{other}'."),
+        };
     }
 
     private static IReadOnlyList<string> ReadStringArray(JsonElement entity, string propertyName)

@@ -34,7 +34,9 @@ public sealed class TrustProfileResolutionTests
         var parsed = TrustProfileEntityReader.Read(entity);
 
         Assert.Equal("default", parsed.Name);
-        Assert.Equal(["base-a"], parsed.BaseTrustProfileNames);
+        Assert.Single(parsed.Bases);
+        Assert.Equal("base-a", parsed.Bases[0].ProfileName);
+        Assert.Equal(TrustInheritanceMode.Restrictive, parsed.Bases[0].Mode);
         Assert.Equal([".", "remote-a"], parsed.Definition.HostingWorkspacesClientInstances);
         Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, parsed.Definition.NetworkAccessPolicy);
         Assert.Single(parsed.Definition.MountPoints);
@@ -62,7 +64,7 @@ public sealed class TrustProfileResolutionTests
         var parsed = TrustProfileEntityReader.Read(entity);
 
         Assert.Null(parsed.Name);
-        Assert.Empty(parsed.BaseTrustProfileNames);
+        Assert.Empty(parsed.Bases);
         Assert.Empty(parsed.Definition.HostingWorkspacesClientInstances);
         Assert.Equal(TrustNetworkAccessPolicy.NoNetwork, parsed.Definition.NetworkAccessPolicy);
         Assert.Equal(TrustHttpsProxyMode.Disabled, parsed.Definition.HttpsProxyPolicy.Mode);
@@ -87,7 +89,7 @@ public sealed class TrustProfileResolutionTests
             ["derived"] = new TrustProfileEntity
             {
                 Name = "derived",
-                BaseTrustProfileNames = ["base"],
+                Bases = [new TrustProfileBaseReference("base")],
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = [".", "remote-a"],
@@ -101,6 +103,108 @@ public sealed class TrustProfileResolutionTests
 
         Assert.Equal([".", "remote-a"], composed.HostingWorkspacesClientInstances);
         Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, composed.NetworkAccessPolicy);
+    }
+
+    [Fact]
+    public async Task Resolve_PermissiveBase_Widens()
+    {
+        var entitiesByName = new Dictionary<string, TrustProfileEntity>(StringComparer.Ordinal)
+        {
+            ["extra-access"] = new TrustProfileEntity
+            {
+                Name = "extra-access",
+                Definition = new TrustProfileDefinition
+                {
+                    HostingWorkspacesClientInstances = ["remote-b"],
+                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                },
+            },
+            ["agent"] = new TrustProfileEntity
+            {
+                Name = "agent",
+                Bases = [new TrustProfileBaseReference("extra-access", TrustInheritanceMode.Permissive)],
+                Definition = new TrustProfileDefinition
+                {
+                    HostingWorkspacesClientInstances = [".", "remote-a"],
+                    NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork,
+                },
+            },
+        };
+        var provider = new DictionaryTrustProfileProvider(entitiesByName);
+
+        var composed = await provider.ResolveAsync("agent");
+
+        Assert.Equal([".", "remote-a", "remote-b"], composed.HostingWorkspacesClientInstances);
+        Assert.Equal(TrustNetworkAccessPolicy.HostNetwork, composed.NetworkAccessPolicy);
+    }
+
+    [Fact]
+    public async Task Resolve_MixedModeBases_AppliesEachMode()
+    {
+        var entitiesByName = new Dictionary<string, TrustProfileEntity>(StringComparer.Ordinal)
+        {
+            ["computer-restriction"] = new TrustProfileEntity
+            {
+                Name = "computer-restriction",
+                Definition = new TrustProfileDefinition
+                {
+                    HostingWorkspacesClientInstances = ["."],
+                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                },
+            },
+            ["network-grant"] = new TrustProfileEntity
+            {
+                Name = "network-grant",
+                Definition = new TrustProfileDefinition
+                {
+                    HostingWorkspacesClientInstances = ["."],
+                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                },
+            },
+            ["agent"] = new TrustProfileEntity
+            {
+                Name = "agent",
+                Bases =
+                [
+                    new TrustProfileBaseReference("computer-restriction", TrustInheritanceMode.Restrictive),
+                    new TrustProfileBaseReference("network-grant", TrustInheritanceMode.Permissive),
+                ],
+                Definition = new TrustProfileDefinition
+                {
+                    HostingWorkspacesClientInstances = [".", "remote-a"],
+                    NetworkAccessPolicy = TrustNetworkAccessPolicy.NoNetwork,
+                },
+            },
+        };
+        var provider = new DictionaryTrustProfileProvider(entitiesByName);
+
+        var composed = await provider.ResolveAsync("agent");
+
+        // Restrictive base narrows the computer set to "."; permissive base widens the network.
+        Assert.Equal(["."], composed.HostingWorkspacesClientInstances);
+        Assert.Equal(TrustNetworkAccessPolicy.HostNetwork, composed.NetworkAccessPolicy);
+    }
+
+    [Fact]
+    public void Read_ParsesInheritanceModeObject()
+    {
+        var entity = JsonDocument.Parse(
+            """
+            {
+              "base-trust-profiles": [
+                { "profile": "base-a", "inheritance-mode": "permissive" },
+                "base-b"
+              ]
+            }
+            """).RootElement;
+
+        var parsed = TrustProfileEntityReader.Read(entity);
+
+        Assert.Equal(2, parsed.Bases.Count);
+        Assert.Equal("base-a", parsed.Bases[0].ProfileName);
+        Assert.Equal(TrustInheritanceMode.Permissive, parsed.Bases[0].Mode);
+        Assert.Equal("base-b", parsed.Bases[1].ProfileName);
+        Assert.Equal(TrustInheritanceMode.Restrictive, parsed.Bases[1].Mode);
     }
 
     [Fact]
@@ -118,8 +222,8 @@ public sealed class TrustProfileResolutionTests
     {
         var entitiesByName = new Dictionary<string, TrustProfileEntity>(StringComparer.Ordinal)
         {
-            ["a"] = new TrustProfileEntity { Name = "a", BaseTrustProfileNames = ["b"] },
-            ["b"] = new TrustProfileEntity { Name = "b", BaseTrustProfileNames = ["a"] },
+            ["a"] = new TrustProfileEntity { Name = "a", Bases = [new TrustProfileBaseReference("b")] },
+            ["b"] = new TrustProfileEntity { Name = "b", Bases = [new TrustProfileBaseReference("a")] },
         };
         var provider = new DictionaryTrustProfileProvider(entitiesByName);
 
