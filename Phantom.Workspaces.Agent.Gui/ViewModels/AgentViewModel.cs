@@ -26,11 +26,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly Span outputSelectableRunningRootSpan = new();
     private ChatHistoryDocumentModel? historyDocumentModel;
     private RunningChatItemsDocumentModel? runningDocumentModel;
-    private AgentChatTextOutputModel? textOutputModel;
     private SelectableTextBlockChatOutputModel? selectableTextBlockOutputModel;
     private bool isReasoningVisible;
     private string agentSessionId;
-    private string outputText = string.Empty;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
     public AgentViewModel(AgentChat agentChat, string displayName, ObservableLoggerFactory loggerFactory)
@@ -60,7 +58,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.outputSelectableRootSpan.Inlines.Add(this.outputSelectableHistoryRootSpan);
         this.outputSelectableRootSpan.Inlines.Add(this.outputSelectableRunningRootSpan);
         this.AttachOutputDocumentModels();
-        this.AttachOutputTextModel();
         this.AttachSelectableOutputModel();
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
@@ -124,13 +121,10 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public FlowDocument OutputDocument { get; private set; }
 
-    public string OutputText
-    {
-        get => this.outputText;
-        private set => this.SetProperty(ref this.outputText, value);
-    }
-
     public Span OutputSelectableRootSpan => this.outputSelectableRootSpan;
+
+    /// <summary>Raised when the selectable output content changes (for example, to follow the bottom).</summary>
+    public event EventHandler? SelectableOutputContentChanged;
 
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
     {
@@ -175,7 +169,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
         this.historyDocumentModel?.Refresh();
         this.runningDocumentModel?.Refresh();
-        this.textOutputModel?.Refresh();
         this.selectableTextBlockOutputModel?.Refresh();
     }
 
@@ -278,8 +271,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         this.historyDocumentModel?.Dispose();
         this.runningDocumentModel?.Dispose();
-        this.textOutputModel?.Dispose();
-        this.selectableTextBlockOutputModel?.Dispose();
+        if (this.selectableTextBlockOutputModel is not null)
+        {
+            this.selectableTextBlockOutputModel.ContentChanged -= this.OnSelectableOutputContentChanged;
+            this.selectableTextBlockOutputModel.Dispose();
+        }
 
         this.InputQueue.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
@@ -299,15 +295,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
     }
 
-    private void AttachOutputTextModel()
-    {
-        this.textOutputModel = new AgentChatTextOutputModel(
-            this.History,
-            this.RunningItems,
-            () => this.IsReasoningVisible,
-            text => this.OutputText = text);
-    }
-
     private void AttachSelectableOutputModel()
     {
         this.selectableTextBlockOutputModel = new SelectableTextBlockChatOutputModel(
@@ -316,7 +303,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.outputSelectableHistoryRootSpan,
             this.outputSelectableRunningRootSpan,
             () => this.IsReasoningVisible);
+        this.selectableTextBlockOutputModel.ContentChanged += this.OnSelectableOutputContentChanged;
     }
+
+    private void OnSelectableOutputContentChanged(object? sender, EventArgs e)
+        => this.SelectableOutputContentChanged?.Invoke(this, EventArgs.Empty);
 
     private Model? ResolveAgentModel()
     {

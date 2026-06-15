@@ -63,7 +63,7 @@ public sealed class AgentViewModelDocumentTests
     }
 
     [AvaloniaFact]
-    public async Task LiveCollections_UpdateSelectableOutputText()
+    public async Task LiveCollections_UpdateSelectableOutput()
     {
         await using var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
@@ -72,7 +72,7 @@ public sealed class AgentViewModelDocumentTests
         chat.EnqueueUserMessage("hello text model");
         await WaitForConditionAsync(chat.History, () => viewModel.History.Count >= 2, "history to populate");
 
-        Assert.Contains("hello text model", viewModel.OutputText, StringComparison.Ordinal);
+        Assert.Contains("hello text model", GetSelectableText(viewModel), StringComparison.Ordinal);
         var runningItem = chat.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
@@ -80,13 +80,12 @@ public sealed class AgentViewModelDocumentTests
         });
         await WaitForConditionAsync(chat.RunningItems, () => viewModel.RunningItems.Count == 1, "running item to appear");
 
-        Assert.Contains("assistant (running)", viewModel.OutputText, StringComparison.Ordinal);
-        Assert.Contains("in progress", viewModel.OutputText, StringComparison.Ordinal);
+        Assert.Contains("in progress", GetSelectableText(viewModel), StringComparison.Ordinal);
 
         chat.CompleteRunningItem(runningItem, writeToHistory: false);
         await WaitForConditionAsync(chat.RunningItems, () => viewModel.RunningItems.Count == 0, "running item to clear");
 
-        Assert.DoesNotContain("assistant (running)", viewModel.OutputText, StringComparison.Ordinal);
+        Assert.DoesNotContain("in progress", GetSelectableText(viewModel), StringComparison.Ordinal);
     }
 
     private static async Task WaitForConditionAsync(
@@ -162,4 +161,27 @@ public sealed class AgentViewModelDocumentTests
 
     private static string GetText(IEnumerable<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
+
+    private static string GetSelectableText(AgentViewModel viewModel)
+    {
+        var builder = new System.Text.StringBuilder();
+        AppendInlineText(viewModel.OutputSelectableRootSpan.Inlines, builder);
+        return builder.ToString();
+    }
+
+    private static void AppendInlineText(InlineCollection inlines, System.Text.StringBuilder builder)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case Run run:
+                    builder.Append(run.Text);
+                    break;
+                case Span span:
+                    AppendInlineText(span.Inlines, builder);
+                    break;
+            }
+        }
+    }
 }

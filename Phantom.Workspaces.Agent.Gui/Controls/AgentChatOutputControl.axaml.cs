@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Collections.Specialized;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,7 +23,7 @@ public partial class AgentChatOutputControl : UserControl
     private bool hasAppliedInitialSelectableOutputScroll;
     private bool selectableOutputPinnedToBottom = true;
     private Span? selectableOutputRootSpan;
-    private readonly List<INotifyCollectionChanged> subscribedInlineCollections = [];
+    private AgentViewModel? subscribedViewModel;
 
     public AgentChatOutputControl()
     {
@@ -105,7 +103,7 @@ public partial class AgentChatOutputControl : UserControl
 
     private void OnUnloaded(object? sender, RoutedEventArgs e)
     {
-        this.ResetInlineCollectionSubscriptions();
+        this.DetachSelectableOutputSubscription();
     }
 
     private void ScrollHistoryToBottom()
@@ -120,7 +118,7 @@ public partial class AgentChatOutputControl : UserControl
         viewer.Offset = new Avalonia.Vector(viewer.Offset.X, maxVerticalOffset);
     }
 
-    private void OnSelectableOutputTextChanged()
+    private void OnSelectableOutputContentChanged(object? sender, EventArgs e)
     {
         if (this.OutputMode != AgentChatOutputMode.SelectableTextBox)
         {
@@ -187,9 +185,11 @@ public partial class AgentChatOutputControl : UserControl
         {
             selectableOutputText.Inlines.Clear();
             this.selectableOutputRootSpan = null;
-            this.ResetInlineCollectionSubscriptions();
+            this.DetachSelectableOutputSubscription();
             return;
         }
+
+        this.AttachSelectableOutputSubscription(agentViewModel);
 
         var rootSpan = agentViewModel.OutputSelectableRootSpan;
         if (ReferenceEquals(this.selectableOutputRootSpan, rootSpan))
@@ -200,49 +200,28 @@ public partial class AgentChatOutputControl : UserControl
         selectableOutputText.Inlines.Clear();
         selectableOutputText.Inlines.Add(rootSpan);
         this.selectableOutputRootSpan = rootSpan;
-        this.ResetInlineCollectionSubscriptions();
-        this.AttachInlineCollectionSubscriptionsRecursive(rootSpan.Inlines);
     }
 
-    private void ResetInlineCollectionSubscriptions()
+    private void AttachSelectableOutputSubscription(AgentViewModel agentViewModel)
     {
-        foreach (var collection in this.subscribedInlineCollections)
-        {
-            collection.CollectionChanged -= this.OnSelectableInlineCollectionChanged;
-        }
-
-        this.subscribedInlineCollections.Clear();
-    }
-
-    private void AttachInlineCollectionSubscriptionsRecursive(InlineCollection inlines)
-    {
-        if (inlines is not INotifyCollectionChanged notifications)
+        if (ReferenceEquals(this.subscribedViewModel, agentViewModel))
         {
             return;
         }
 
-        if (!this.subscribedInlineCollections.Contains(notifications))
-        {
-            notifications.CollectionChanged += this.OnSelectableInlineCollectionChanged;
-            this.subscribedInlineCollections.Add(notifications);
-        }
-
-        foreach (var inline in inlines)
-        {
-            if (inline is Span span)
-            {
-                this.AttachInlineCollectionSubscriptionsRecursive(span.Inlines);
-            }
-        }
+        this.DetachSelectableOutputSubscription();
+        this.subscribedViewModel = agentViewModel;
+        agentViewModel.SelectableOutputContentChanged += this.OnSelectableOutputContentChanged;
     }
 
-    private void OnSelectableInlineCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void DetachSelectableOutputSubscription()
     {
-        if (this.selectableOutputRootSpan is not null)
+        if (this.subscribedViewModel is null)
         {
-            this.AttachInlineCollectionSubscriptionsRecursive(this.selectableOutputRootSpan.Inlines);
+            return;
         }
 
-        this.OnSelectableOutputTextChanged();
+        this.subscribedViewModel.SelectableOutputContentChanged -= this.OnSelectableOutputContentChanged;
+        this.subscribedViewModel = null;
     }
 }
