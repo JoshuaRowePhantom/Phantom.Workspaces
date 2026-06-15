@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.RemoteAccessSettingsView"
+             x:DataType="vm:RemoteAccessSettingsViewModel">
+    <StackPanel Spacing="12">
+        <TextBlock Text="Remote access" FontWeight="Bold" />
+
+        <CheckBox Content="Host the web data-access endpoint from this instance"
+                  IsChecked="{Binding HostingEnabled}" />
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Listen URL" />
+            <TextBox PlaceholderText="http://localhost:5280" Text="{Binding ListenUrl}" />
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Dev tunnel access mode" />
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding AvailableAccessModes}"
+                      SelectedItem="{Binding DevTunnelAccessMode}" />
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Dev tunnel access-token source (env var name)" />
+            <TextBox PlaceholderText="DEVTUNNEL_TOKEN" Text="{Binding DevTunnelAccessTokenSource}" />
+        </StackPanel>
+
+        <TextBlock Text="Warning: anonymous tunnel access exposes workspace data without authentication."
+                   Foreground="#B00020"
+                   TextWrapping="Wrap"
+                   IsVisible="{Binding IsAnonymousAccessWarningVisible}" />
+    </StackPanel>
+</UserControl>

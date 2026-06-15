@@ -1,0 +1,34 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             xmlns:views="using:Phantom.Workspaces.Views.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.RepositorySettingsView"
+             x:DataType="vm:RepositoryConnectionSettingsViewModel">
+    <UserControl.DataTemplates>
+        <DataTemplate DataType="vm:LocalMongoContainerSettingsViewModel">
+            <views:LocalMongoContainerSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:RemoteMongoSettingsViewModel">
+            <views:RemoteMongoSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:WebSettingsViewModel">
+            <views:WebSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:DevTunnelWebSettingsViewModel">
+            <views:DevTunnelWebSettingsView />
+        </DataTemplate>
+    </UserControl.DataTemplates>
+    <StackPanel Spacing="12">
+        <TextBlock Text="Repository" FontWeight="Bold" />
+        <StackPanel Spacing="4">
+            <TextBlock Text="Data-access mode" />
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding AvailableModes}"
+                      SelectedItem="{Binding Mode}" />
+        </StackPanel>
+        <ContentControl Content="{Binding ActiveSettings}" />
+    </StackPanel>
+</UserControl>

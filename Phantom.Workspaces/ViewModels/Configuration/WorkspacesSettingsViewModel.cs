@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,13 +10,15 @@ namespace Phantom.Workspaces.ViewModels.Configuration;
 /// <summary>
 /// Shared settings view model used by both the first-run installation wizard and the settings
 /// dialog. It composes the repository and remote-access settings plus visual preferences over a
-/// <see cref="WorkspacesConfiguration"/>, and persists changes.
+/// <see cref="WorkspacesConfiguration"/>, and persists changes. The settings dialog renders the
+/// <see cref="Sections"/> in a master-detail layout (section list on the left, the selected
+/// section's view model on the right).
 /// </summary>
 public sealed class WorkspacesSettingsViewModel : ViewModelBase
 {
     private readonly ConfigurationPersistenceService persistenceService;
     private readonly WorkspacesConfiguration baseConfiguration;
-    private string theme;
+    private SettingsSectionViewModel selectedSection;
 
     /// <summary>Creates a settings view model starting from default configuration.</summary>
     public WorkspacesSettingsViewModel(ConfigurationPersistenceService persistenceService)
@@ -36,10 +39,18 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         this.RemoteAccess = new RemoteAccessSettingsViewModel(
             configuration.RemoteHosting,
             configuration.DevTunnel);
-        this.theme = configuration.Visual.Theme;
+        this.Appearance = new AppearanceSettingsViewModel(configuration.Visual.Theme);
 
         this.Repository.PropertyChanged += this.OnSectionChanged;
         this.RemoteAccess.PropertyChanged += this.OnSectionChanged;
+
+        this.Sections =
+        [
+            new SettingsSectionViewModel("Repository", this.Repository),
+            new SettingsSectionViewModel("Remote access", this.RemoteAccess),
+            new SettingsSectionViewModel("Appearance", this.Appearance),
+        ];
+        this.selectedSection = this.Sections[0];
     }
 
     /// <summary>Repository data-access settings.</summary>
@@ -48,11 +59,30 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     /// <summary>Remote-hosting and dev tunnel settings.</summary>
     public RemoteAccessSettingsViewModel RemoteAccess { get; }
 
+    /// <summary>Appearance/visual settings.</summary>
+    public AppearanceSettingsViewModel Appearance { get; }
+
+    /// <summary>The settings sections shown in the dialog's master-detail layout.</summary>
+    public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
+
+    /// <summary>The currently selected settings section.</summary>
+    public SettingsSectionViewModel SelectedSection
+    {
+        get => this.selectedSection;
+        set
+        {
+            if (value is not null)
+            {
+                this.SetProperty(ref this.selectedSection, value);
+            }
+        }
+    }
+
     /// <summary>The selected visual theme.</summary>
     public string Theme
     {
-        get => this.theme;
-        set => this.SetProperty(ref this.theme, value);
+        get => this.Appearance.Theme;
+        set => this.Appearance.Theme = value;
     }
 
     /// <summary>Whether all sections are valid and the configuration can be saved.</summary>
@@ -64,7 +94,7 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         DataAccess = this.Repository.ToProfile(),
         RemoteHosting = this.RemoteAccess.ToRemoteHostingSettings(),
         DevTunnel = this.RemoteAccess.ToDevTunnelConfiguration(this.baseConfiguration.DevTunnel),
-        Visual = this.baseConfiguration.Visual with { Theme = this.Theme },
+        Visual = this.baseConfiguration.Visual with { Theme = this.Appearance.Theme },
     };
 
     /// <summary>Builds and persists the configuration, returning the saved configuration.</summary>
