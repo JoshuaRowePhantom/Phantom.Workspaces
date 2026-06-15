@@ -68,6 +68,10 @@ public sealed class SchemaDenormalizerTests
 
         var json = schema.GetRawText();
         Assert.Contains("get-entity", json, StringComparison.Ordinal);
+        // The LLM-facing description (entity-type names vs display-name guidance) is preserved,
+        // while the stripped-only $comment is not.
+        Assert.Contains("canonical name", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("$comment", json, StringComparison.Ordinal);
         Assert.True(schema.TryGetProperty("$defs", out _));
         AssertNoExternalReferences(schema);
     }

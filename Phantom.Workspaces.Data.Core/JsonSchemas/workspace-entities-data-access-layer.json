@@ -48,6 +48,8 @@
           ]
         },
         "entity-type-names": {
+          "$comment": "Filter by entity type. Each value must be an entity type's canonical name (a single component from its 'names' property, e.g. 'task') or its entity id. This is NOT the entity type's display-name.",
+          "description": "Filter results to entities of these entity types. Each value must be an entity type's canonical name (taken from the entity type's 'names' property, for example 'task' or 'note') or its entity id. Do NOT use the entity type's display-name here; the display-name is a human-facing label and is not interchangeable with the name. To discover valid values, get entity types and read their 'names'.",
           "type": "array",
           "items": {
             "$ref": "core.json#/$defs/entity-type-id"

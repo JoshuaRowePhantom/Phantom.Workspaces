@@ -7,7 +7,8 @@
       "format": "uuid"
     },
     "entity-type-id": {
-      "$comment": "Either the entity type name or the entity type's entity id.",
+      "$comment": "An entity type's canonical name (a single component from the entity type's 'names' property) or the entity type's entity id. Never the entity type's display-name.",
+      "description": "An entity type's canonical name (from the entity type's 'names' property, e.g. 'task') or its entity id. Not the display-name, which is a human-facing label and is not interchangeable with the name.",
       "type": "string"
     },
     "x-entity-type": {

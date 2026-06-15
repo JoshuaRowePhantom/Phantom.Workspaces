@@ -55,6 +55,24 @@ Property filtering behavior:
 5. Use `properties` only when filtering many entities, or when you only need a small set of short content properties.
 6. For single entity-type reads, prefer omitting `properties` and reading the full entity.
 
+## Entity type names vs. display names (avoid a common mistake)
+
+When filtering by entity type (the `entity-type-names` field in a `get-request`, or a query's
+entity-type clause), each value must be the entity type's **canonical name** — a single component
+taken from the entity type's `names` property (for example `task`, `note`, `entity-type`) — or the
+entity type's **entity id**.
+
+Do **not** use an entity type's **display-name**. The display-name is a human-facing label (for
+example `"Work Item"`) and is **not interchangeable** with the entity type's name. Passing a
+display-name as an `entity-type-names` value will not match anything.
+
+- Correct: `"entity-type-names": ["task"]`
+- Incorrect: `"entity-type-names": ["Task Item"]`  (this is a display-name, not a name)
+
+To discover valid `entity-type-names` values, list the entity types and read their `names`
+(see "list all entity types and their names" below); use a value from `names`, not from
+`display-name`.
+
 ## `workspaces_entity_update` shape and semantics
 
 Use one tool for add, replace, and delete. Pass:
@@ -133,3 +151,6 @@ Use this `workspaces_entity_get` request to list each entity type with its displ
   "properties": ["display-name", "names"]
 }
 ```
+
+When you later filter by entity type, use a value from each type's `names` (its canonical name),
+never its `display-name`.
