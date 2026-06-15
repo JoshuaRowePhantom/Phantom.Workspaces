@@ -19,7 +19,7 @@
     "displayName": "GitHub Copilot Workspace Assistant",
     "description": "Default GitHub Copilot SDK agent for workspace entity operations.",
     "model": {
-      "id": "gpt-4.1-mini",
+      "id": "auto",
       "provider": "github-copilot",
       "apiType": "OpenAI",
       "connection": {

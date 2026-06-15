@@ -49,13 +49,14 @@ unacknowledged batch on the next run.
 
 ```text
 ComputeEmbeddingsAsync(request: { [entitySnapshot] }) -> { [embedding] }
-UpdateEmbeddingsAsync(request: [{ entityId, embedding }]) -> { success }
+UpdateEmbeddingsAsync(request: [{ entityId, concurrencyToken, embedding }]) -> { success }
 ```
 
 - `ComputeEmbeddings` turns entity snapshots into embedding vectors via the configured
   **embeddings provider**. MIME / non-text content is handled specially by the provider; for now,
   non-text content is stripped before embedding.
-- `UpdateEmbeddings` stores the computed vectors in the MongoDB vector index, keyed by entity id.
+- `UpdateEmbeddings` stores the computed vectors in the MongoDB vector index, keyed by entity id,
+  and includes the `concurrencyToken` to ensure safe updates.
 
 ### Indexer flow
 
