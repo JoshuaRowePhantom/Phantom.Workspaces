@@ -304,6 +304,9 @@ public sealed record QueryEntitySnapshot : EntitySnapshot
 
     [JsonPropertyName("full-text-query-scores")]
     public required IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores { get; init; }
+
+    [JsonPropertyName("vector-query-scores")]
+    public IReadOnlyCollection<VectorQueryScore> VectorQueryScores { get; init; } = [];
 }
 
 /// <summary>
@@ -317,6 +320,19 @@ public sealed record QueryEntitySnapshot : EntitySnapshot
 /// The relevance score for the match.
 /// </param>
 public sealed record FullTextQueryScore
+{
+    [JsonPropertyName("query-identifier")]
+    public required QueryClauseIdentifier QueryIdentifier { get; init; }
+
+    [JsonPropertyName("score")]
+    public required double Score { get; init; }
+}
+
+/// <summary>
+/// When an entity matches a Vector query, the VectorQueryScore contains the similarity score for
+/// that match and the identifier of the corresponding vector query clause.
+/// </summary>
+public sealed record VectorQueryScore
 {
     [JsonPropertyName("query-identifier")]
     public required QueryClauseIdentifier QueryIdentifier { get; init; }
@@ -606,6 +622,33 @@ public sealed record EntityFullTextQueryClause : EntityQueryClause
     [JsonPropertyName("query-text")]
     public required FullTextQueryText QueryText { get; init; }
 
+    [JsonPropertyName("minimum-query-score")]
+    public MinimumQueryScore? MinimumQueryScore { get; init; }
+}
+
+/// <summary>
+/// A semantic (vector) similarity clause. It carries either query text (embedded at query time
+/// via the configured embeddings provider) or a precomputed query embedding, and matches entities
+/// ranked by cosine similarity, contributing a <see cref="VectorQueryScore"/> per match.
+/// </summary>
+public sealed record EntityVectorQueryClause : EntityQueryClause
+{
+    [JsonPropertyName("vector-query-identifier")]
+    public required QueryClauseIdentifier VectorQueryIdentifier { get; init; }
+
+    /// <summary>Query text to embed at query time. Mutually exclusive with <see cref="QueryEmbedding"/>.</summary>
+    [JsonPropertyName("query-text")]
+    public string? QueryText { get; init; }
+
+    /// <summary>A precomputed query embedding. Mutually exclusive with <see cref="QueryText"/>.</summary>
+    [JsonPropertyName("query-embedding")]
+    public IReadOnlyList<float>? QueryEmbedding { get; init; }
+
+    /// <summary>Maximum number of nearest entities to return (the vector index limit).</summary>
+    [JsonPropertyName("number-of-candidates")]
+    public int? NumberOfCandidates { get; init; }
+
+    /// <summary>Minimum similarity score for a match to be included.</summary>
     [JsonPropertyName("minimum-query-score")]
     public MinimumQueryScore? MinimumQueryScore { get; init; }
 }

@@ -2,12 +2,19 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Vector;
 
 namespace Phantom.Workspaces.Data.Offline;
 
 public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 {
+    private readonly IEmbeddingsProvider embeddingsProvider;
     private State currentState = State.CreateInitial();
+
+    public InMemoryDataAccessLayer(IEmbeddingsProvider? embeddingsProvider = null)
+    {
+        this.embeddingsProvider = embeddingsProvider ?? new DeterministicEmbeddingsProvider();
+    }
 
     public Task<ExportResult> ExportAsync(
         ExportRequest request,
@@ -41,7 +48,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
-        return this.ReadState().QueryAsync(request, cancellationToken);
+        return this.ReadState().QueryAsync(request, this.embeddingsProvider, cancellationToken);
     }
 
     public Task<UpdateResult> UpdateAsync(
@@ -152,9 +159,10 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
         public Task<QueryResult> QueryAsync(
             QueryRequest request,
+            IEmbeddingsProvider embeddingsProvider,
             CancellationToken cancellationToken)
         {
-            return this.snapshot.QueryAsync(request, cancellationToken);
+            return this.snapshot.QueryAsync(request, embeddingsProvider, cancellationToken);
         }
 
         public UpdateOutcome UpdateAsync(
@@ -747,8 +755,9 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 });
         }
 
-        public Task<QueryResult> QueryAsync(
+        public async Task<QueryResult> QueryAsync(
             QueryRequest request,
+            IEmbeddingsProvider embeddingsProvider,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -760,26 +769,39 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
             foreach (var timestamp in timestamps)
             {
-                var entitySnapshots = this.entities
-                    .Select(
-                        entityEntry =>
+                var versionsById = new Dictionary<EntityId, EntityVersion>();
+                var candidates = new List<InMemoryQueryEvaluator.Candidate>();
+                foreach (var entityEntry in this.entities)
+                {
+                    var version = this.FindVersion(entityEntry.Key, timestamp);
+                    if (version is null)
+                    {
+                        continue;
+                    }
+
+                    versionsById[entityEntry.Key] = version;
+                    candidates.Add(new InMemoryQueryEvaluator.Candidate(entityEntry.Key, version.Data?.RootElement));
+                }
+
+                var evaluator = new InMemoryQueryEvaluator(candidates, embeddingsProvider);
+                var evaluated = await evaluator.EvaluateAsync(request.Clauses, cancellationToken).ConfigureAwait(false);
+
+                var entitySnapshots = evaluated
+                    .Select(entity =>
+                    {
+                        var version = versionsById[entity.Id];
+                        return new QueryEntitySnapshot
                         {
-                            var version = this.FindVersion(entityEntry.Key, timestamp);
-                            return version is null
-                                ? null
-                                : new QueryEntitySnapshot
-                                {
-                                    EntityId = entityEntry.Key,
-                                    ConcurrencyTag = version.ConcurrencyTag,
-                                    ModifiedTime = version.Timestamp,
-                                    Data = version.Data?.RootElement,
-                                    Relationships = Array.Empty<EntitySnapshot>(),
-                                    MatchingClauseIdentifiers = request.Clauses.Select(clause => clause.ClauseIdentifier).ToArray(),
-                                    FullTextQueryScores = Array.Empty<FullTextQueryScore>(),
-                                };
-                        })
-                    .Where(entitySnapshot => entitySnapshot is not null)
-                    .Select(entitySnapshot => entitySnapshot!)
+                            EntityId = entity.Id,
+                            ConcurrencyTag = version.ConcurrencyTag,
+                            ModifiedTime = version.Timestamp,
+                            Data = version.Data?.RootElement,
+                            Relationships = Array.Empty<EntitySnapshot>(),
+                            MatchingClauseIdentifiers = entity.MatchingClauseIdentifiers,
+                            FullTextQueryScores = entity.FullTextScores,
+                            VectorQueryScores = entity.VectorScores,
+                        };
+                    })
                     .ToArray();
 
                 batches.Add(
@@ -790,11 +812,10 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     });
             }
 
-            return Task.FromResult(
-                new QueryResult
-                {
-                    Batches = batches,
-                });
+            return new QueryResult
+            {
+                Batches = batches,
+            };
         }
 
         private EntityVersion? FindVersion(
