@@ -1,0 +1,23 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.RemoteMongoSettingsView"
+             x:DataType="vm:RemoteMongoSettingsViewModel">
+    <StackPanel Spacing="8">
+        <StackPanel Spacing="4">
+            <TextBlock Text="Connection-string source (env var name)" />
+            <TextBox Watermark="MONGO_CONNECTION" Text="{Binding ConnectionStringSource}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Database name" />
+            <TextBox Watermark="phantom-workspaces" Text="{Binding DatabaseName}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Root collection" />
+            <TextBox Watermark="entities" Text="{Binding RootCollectionName}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

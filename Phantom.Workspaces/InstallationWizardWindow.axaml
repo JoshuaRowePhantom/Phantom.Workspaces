@@ -1,0 +1,90 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+        xmlns:views="using:Phantom.Workspaces.Views.Configuration"
+        mc:Ignorable="d"
+        x:Class="Phantom.Workspaces.InstallationWizardWindow"
+        x:DataType="vm:WorkspacesSettingsViewModel"
+        Width="480"
+        Height="580"
+        CanResize="False"
+        WindowStartupLocation="CenterScreen"
+        Title="Phantom.Workspaces Setup">
+    <Window.DataTemplates>
+        <DataTemplate DataType="vm:LocalMongoContainerSettingsViewModel">
+            <views:LocalMongoContainerSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:RemoteMongoSettingsViewModel">
+            <views:RemoteMongoSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:WebSettingsViewModel">
+            <views:WebSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:DevTunnelWebSettingsViewModel">
+            <views:DevTunnelWebSettingsView />
+        </DataTemplate>
+    </Window.DataTemplates>
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+        <TextBlock Grid.Row="0"
+                   Text="Welcome — choose how Phantom.Workspaces connects to its data."
+                   TextWrapping="Wrap"
+                   FontSize="16"
+                   Margin="0,0,0,16" />
+
+        <ScrollViewer Grid.Row="1">
+            <StackPanel Spacing="12">
+                <TextBlock Text="Repository" FontWeight="Bold" />
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Data-access mode" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Repository.AvailableModes}"
+                              SelectedItem="{Binding Repository.Mode}" />
+                </StackPanel>
+
+                <ContentControl Content="{Binding Repository.ActiveSettings}" />
+
+                <TextBlock Text="Remote access" FontWeight="Bold" Margin="0,8,0,0" />
+
+                <CheckBox Content="Host the web data-access endpoint from this instance"
+                          IsChecked="{Binding RemoteAccess.HostingEnabled}" />
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Listen URL" />
+                    <TextBox Watermark="http://localhost:5280" Text="{Binding RemoteAccess.ListenUrl}" />
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Dev tunnel access mode" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding RemoteAccess.AvailableAccessModes}"
+                              SelectedItem="{Binding RemoteAccess.DevTunnelAccessMode}" />
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Dev tunnel access-token source (env var name)" />
+                    <TextBox Watermark="DEVTUNNEL_TOKEN" Text="{Binding RemoteAccess.DevTunnelAccessTokenSource}" />
+                </StackPanel>
+
+                <TextBlock Text="Warning: anonymous tunnel access exposes workspace data without authentication."
+                           Foreground="#B00020"
+                           TextWrapping="Wrap"
+                           IsVisible="{Binding RemoteAccess.IsAnonymousAccessWarningVisible}" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="Cancel" Click="OnCancelClicked" />
+            <Button Content="Complete setup"
+                    IsEnabled="{Binding CanSave}"
+                    Click="OnCompleteClicked" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
@@ -6,17 +7,24 @@ using Phantom.Workspaces.Configuration;
 namespace Phantom.Workspaces.ViewModels.Configuration;
 
 /// <summary>
-/// Hosts the editable settings categories (repository, remote access, visual) over a shared
+/// Shared settings view model used by both the first-run installation wizard and the settings
+/// dialog. It composes the repository and remote-access settings plus visual preferences over a
 /// <see cref="WorkspacesConfiguration"/>, and persists changes.
 /// </summary>
-public sealed class SettingsDialogViewModel : ViewModelBase
+public sealed class WorkspacesSettingsViewModel : ViewModelBase
 {
     private readonly ConfigurationPersistenceService persistenceService;
     private readonly WorkspacesConfiguration baseConfiguration;
     private string theme;
 
-    /// <summary>Creates a settings dialog over the supplied configuration.</summary>
-    public SettingsDialogViewModel(
+    /// <summary>Creates a settings view model starting from default configuration.</summary>
+    public WorkspacesSettingsViewModel(ConfigurationPersistenceService persistenceService)
+        : this(persistenceService, new WorkspacesConfiguration())
+    {
+    }
+
+    /// <summary>Creates a settings view model over the supplied configuration.</summary>
+    public WorkspacesSettingsViewModel(
         ConfigurationPersistenceService persistenceService,
         WorkspacesConfiguration configuration)
     {
@@ -34,10 +42,10 @@ public sealed class SettingsDialogViewModel : ViewModelBase
         this.RemoteAccess.PropertyChanged += this.OnSectionChanged;
     }
 
-    /// <summary>Repository data-access settings category.</summary>
+    /// <summary>Repository data-access settings.</summary>
     public RepositoryConnectionSettingsViewModel Repository { get; }
 
-    /// <summary>Remote access / hosting settings category.</summary>
+    /// <summary>Remote-hosting and dev tunnel settings.</summary>
     public RemoteAccessSettingsViewModel RemoteAccess { get; }
 
     /// <summary>The selected visual theme.</summary>
@@ -47,10 +55,10 @@ public sealed class SettingsDialogViewModel : ViewModelBase
         set => this.SetProperty(ref this.theme, value);
     }
 
-    /// <summary>Whether all categories are valid and settings can be saved.</summary>
+    /// <summary>Whether all sections are valid and the configuration can be saved.</summary>
     public bool CanSave => this.Repository.IsValid && this.RemoteAccess.IsValid;
 
-    /// <summary>Builds the configuration represented by the current category state.</summary>
+    /// <summary>Builds the configuration represented by the current view-model state.</summary>
     public WorkspacesConfiguration BuildConfiguration() => this.baseConfiguration with
     {
         DataAccess = this.Repository.ToProfile(),
@@ -74,6 +82,6 @@ public sealed class SettingsDialogViewModel : ViewModelBase
         return configuration;
     }
 
-    private void OnSectionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    private void OnSectionChanged(object? sender, PropertyChangedEventArgs e)
         => this.RaisePropertyChanged(nameof(this.CanSave));
 }

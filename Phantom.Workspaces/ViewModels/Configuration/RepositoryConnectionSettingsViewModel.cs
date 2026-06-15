@@ -1,23 +1,16 @@
 using System;
+using System.ComponentModel;
 using Phantom.Workspaces.Configuration;
 
 namespace Phantom.Workspaces.ViewModels.Configuration;
 
 /// <summary>
-/// Editable view model for the repository data-access connection settings used by both the
-/// installation wizard and the settings dialog.
+/// Editable view model for the repository data-access connection settings. Holds a sub-view-model
+/// per connection type; the GUI binds to <see cref="ActiveSettings"/> (resolved by subtype).
 /// </summary>
 public sealed class RepositoryConnectionSettingsViewModel : ViewModelBase
 {
     private DataAccessMode mode;
-    private string? mongoContainerName;
-    private string? mongoDataDirectory;
-    private string? mongoDatabaseName;
-    private string? mongoRootCollectionName;
-    private int? mongoHostPort;
-    private string? mongoConnectionStringSource;
-    private string? webEndpoint;
-    private string? devTunnelTokenSource;
 
     /// <summary>Creates a view model with default settings.</summary>
     public RepositoryConnectionSettingsViewModel()
@@ -30,109 +23,72 @@ public sealed class RepositoryConnectionSettingsViewModel : ViewModelBase
     {
         ArgumentNullException.ThrowIfNull(profile);
         this.mode = profile.Mode;
-        this.mongoContainerName = profile.MongoContainerName;
-        this.mongoDataDirectory = profile.MongoDataDirectory;
-        this.mongoDatabaseName = profile.MongoDatabaseName;
-        this.mongoRootCollectionName = profile.MongoRootCollectionName;
-        this.mongoHostPort = profile.MongoHostPort;
-        this.mongoConnectionStringSource = profile.MongoConnectionStringSource;
-        this.webEndpoint = profile.WebEndpoint;
-        this.devTunnelTokenSource = profile.DevTunnelTokenSource;
+        this.LocalMongoContainer = new LocalMongoContainerSettingsViewModel(profile);
+        this.RemoteMongo = new RemoteMongoSettingsViewModel(profile);
+        this.Web = new WebSettingsViewModel(profile);
+        this.DevTunnelWeb = new DevTunnelWebSettingsViewModel(profile);
+
+        this.LocalMongoContainer.PropertyChanged += this.OnActiveSettingsChanged;
+        this.RemoteMongo.PropertyChanged += this.OnActiveSettingsChanged;
+        this.Web.PropertyChanged += this.OnActiveSettingsChanged;
+        this.DevTunnelWeb.PropertyChanged += this.OnActiveSettingsChanged;
     }
+
+    /// <summary>The selectable data-access modes for binding.</summary>
+    public static DataAccessMode[] AvailableModes { get; } =
+    [
+        DataAccessMode.LocalMongoContainer,
+        DataAccessMode.RemoteMongo,
+        DataAccessMode.Web,
+        DataAccessMode.DevTunnelWeb,
+    ];
+
+    /// <summary>Local MongoDB container settings.</summary>
+    public LocalMongoContainerSettingsViewModel LocalMongoContainer { get; }
+
+    /// <summary>Remote MongoDB settings.</summary>
+    public RemoteMongoSettingsViewModel RemoteMongo { get; }
+
+    /// <summary>Remote web endpoint settings.</summary>
+    public WebSettingsViewModel Web { get; }
+
+    /// <summary>Dev tunnel web endpoint settings.</summary>
+    public DevTunnelWebSettingsViewModel DevTunnelWeb { get; }
 
     /// <summary>The selected data-access mode.</summary>
     public DataAccessMode Mode
     {
         get => this.mode;
-        set => this.SetValidatedProperty(ref this.mode, value);
+        set
+        {
+            if (this.SetProperty(ref this.mode, value))
+            {
+                this.RaisePropertyChanged(nameof(this.ActiveSettings));
+                this.RaisePropertyChanged(nameof(this.IsValid));
+            }
+        }
     }
 
-    /// <summary>Container name for the local MongoDB container mode.</summary>
-    public string? MongoContainerName
+    /// <summary>The sub-view-model for the currently selected mode.</summary>
+    public RepositoryConnectionModeViewModel ActiveSettings => this.Mode switch
     {
-        get => this.mongoContainerName;
-        set => this.SetValidatedProperty(ref this.mongoContainerName, value);
-    }
-
-    /// <summary>Host data directory mapped into the MongoDB container.</summary>
-    public string? MongoDataDirectory
-    {
-        get => this.mongoDataDirectory;
-        set => this.SetValidatedProperty(ref this.mongoDataDirectory, value);
-    }
-
-    /// <summary>MongoDB database name.</summary>
-    public string? MongoDatabaseName
-    {
-        get => this.mongoDatabaseName;
-        set => this.SetValidatedProperty(ref this.mongoDatabaseName, value);
-    }
-
-    /// <summary>Root collection name for entity storage.</summary>
-    public string? MongoRootCollectionName
-    {
-        get => this.mongoRootCollectionName;
-        set => this.SetValidatedProperty(ref this.mongoRootCollectionName, value);
-    }
-
-    /// <summary>Host port the MongoDB container is published on.</summary>
-    public int? MongoHostPort
-    {
-        get => this.mongoHostPort;
-        set => this.SetValidatedProperty(ref this.mongoHostPort, value);
-    }
-
-    /// <summary>Source name for the remote MongoDB connection string (never the raw value).</summary>
-    public string? MongoConnectionStringSource
-    {
-        get => this.mongoConnectionStringSource;
-        set => this.SetValidatedProperty(ref this.mongoConnectionStringSource, value);
-    }
-
-    /// <summary>Absolute web endpoint URL for web / dev tunnel modes.</summary>
-    public string? WebEndpoint
-    {
-        get => this.webEndpoint;
-        set => this.SetValidatedProperty(ref this.webEndpoint, value);
-    }
-
-    /// <summary>Source name for the dev tunnel access token (never the raw token).</summary>
-    public string? DevTunnelTokenSource
-    {
-        get => this.devTunnelTokenSource;
-        set => this.SetValidatedProperty(ref this.devTunnelTokenSource, value);
-    }
-
-    /// <summary>Whether the current settings are complete and valid for the selected mode.</summary>
-    public bool IsValid => this.Mode switch
-    {
-        DataAccessMode.LocalMongoContainer =>
-            !string.IsNullOrWhiteSpace(this.MongoContainerName)
-            && !string.IsNullOrWhiteSpace(this.MongoRootCollectionName),
-        DataAccessMode.RemoteMongo =>
-            !string.IsNullOrWhiteSpace(this.MongoConnectionStringSource),
-        DataAccessMode.Web or DataAccessMode.DevTunnelWeb =>
-            Uri.TryCreate(this.WebEndpoint, UriKind.Absolute, out _),
-        _ => false,
+        DataAccessMode.LocalMongoContainer => this.LocalMongoContainer,
+        DataAccessMode.RemoteMongo => this.RemoteMongo,
+        DataAccessMode.Web => this.Web,
+        DataAccessMode.DevTunnelWeb => this.DevTunnelWeb,
+        _ => this.LocalMongoContainer,
     };
 
-    /// <summary>Projects the current settings into a <see cref="DataAccessConnectionProfile"/>.</summary>
-    public DataAccessConnectionProfile ToProfile() => new()
-    {
-        Mode = this.Mode,
-        MongoContainerName = this.MongoContainerName,
-        MongoDataDirectory = this.MongoDataDirectory,
-        MongoDatabaseName = this.MongoDatabaseName,
-        MongoRootCollectionName = this.MongoRootCollectionName,
-        MongoHostPort = this.MongoHostPort,
-        MongoConnectionStringSource = this.MongoConnectionStringSource,
-        WebEndpoint = this.WebEndpoint,
-        DevTunnelTokenSource = this.DevTunnelTokenSource,
-    };
+    /// <summary>Whether the active connection settings are complete and valid.</summary>
+    public bool IsValid => this.ActiveSettings.IsValid;
 
-    private void SetValidatedProperty<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)
+    /// <summary>Projects the active connection settings into a <see cref="DataAccessConnectionProfile"/>.</summary>
+    public DataAccessConnectionProfile ToProfile() => this.ActiveSettings.ToProfile();
+
+    private void OnActiveSettingsChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (this.SetProperty(ref field, value, propertyName))
+        if (e.PropertyName == nameof(RepositoryConnectionModeViewModel.IsValid)
+            && ReferenceEquals(sender, this.ActiveSettings))
         {
             this.RaisePropertyChanged(nameof(this.IsValid));
         }

@@ -1,0 +1,13 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.WebSettingsView"
+             x:DataType="vm:WebSettingsViewModel">
+    <StackPanel Spacing="4">
+        <TextBlock Text="Web endpoint" />
+        <TextBox Watermark="https://host.example/" Text="{Binding Endpoint}" />
+    </StackPanel>
+</UserControl>

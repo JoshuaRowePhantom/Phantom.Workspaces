@@ -34,6 +34,14 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         this.tunnelName = devTunnel.TunnelName;
     }
 
+    /// <summary>The selectable dev tunnel access modes for binding.</summary>
+    public static DevTunnelAccessMode[] AvailableAccessModes { get; } =
+    [
+        DevTunnelAccessMode.Private,
+        DevTunnelAccessMode.Token,
+        DevTunnelAccessMode.Anonymous,
+    ];
+
     /// <summary>Whether this instance exposes the web data-access endpoint.</summary>
     public bool HostingEnabled
     {

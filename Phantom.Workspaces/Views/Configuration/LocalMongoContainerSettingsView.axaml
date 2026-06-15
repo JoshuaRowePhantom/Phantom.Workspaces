@@ -1,0 +1,27 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.LocalMongoContainerSettingsView"
+             x:DataType="vm:LocalMongoContainerSettingsViewModel">
+    <StackPanel Spacing="8">
+        <StackPanel Spacing="4">
+            <TextBlock Text="MongoDB container name" />
+            <TextBox Watermark="mongodb" Text="{Binding ContainerName}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Root collection" />
+            <TextBox Watermark="entities" Text="{Binding RootCollectionName}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Database name" />
+            <TextBox Watermark="phantom-workspaces" Text="{Binding DatabaseName}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Data directory" />
+            <TextBox Watermark="./mongo-data" Text="{Binding DataDirectory}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

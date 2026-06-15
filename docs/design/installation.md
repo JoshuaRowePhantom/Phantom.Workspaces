@@ -77,21 +77,28 @@ Implemented so far (`Phantom.Workspaces/Configuration/`):
 2. `ConfigurationPersistenceService` — async load/save with defaults, default user-profile
    path (`%APPDATA%/Phantom.Workspaces/config.json`), camelCase + string-enum JSON, and
    directory creation on save.
-3. Setup wizard / settings view models (`Phantom.Workspaces/ViewModels/Configuration/`):
-   `RepositoryConnectionSettingsViewModel` and `RemoteAccessSettingsViewModel` (per-mode
-   validation, secret-source-only fields, anonymous-access warning), composed by
-   `InstallationWizardViewModel` (`CanComplete`/`CompleteAsync`) and `SettingsDialogViewModel`
-   (`CanSave`/`SaveAsync`). Covered by `InstallationWizardViewModelTests`.
+3. Settings view models (`Phantom.Workspaces/ViewModels/Configuration/`): a single shared
+   `WorkspacesSettingsViewModel` backs both the first-run wizard and the settings dialog. It
+   composes `RepositoryConnectionSettingsViewModel` — which holds a sub-view-model per
+   connection type (`LocalMongoContainerSettingsViewModel`, `RemoteMongoSettingsViewModel`,
+   `WebSettingsViewModel`, `DevTunnelWebSettingsViewModel`) exposed via `ActiveSettings` — and
+   `RemoteAccessSettingsViewModel` (per-mode validation, secret-source-only fields,
+   anonymous-access warning). Covered by `WorkspacesSettingsViewModelTests`.
+4. AXAML views + windows (`Phantom.Workspaces/Views/Configuration/`,
+   `InstallationWizardWindow`, `SettingsDialogWindow`): the repository section binds to the
+   active connection subtype through per-subtype `DataTemplate`s/`UserControl`s. `App.axaml.cs`
+   runs the wizard on first launch when no configuration exists (explicit startup arguments
+   still take precedence), then continues with `configuration.ToRepositorySource()`.
 
 Secret-safety is structural: the model stores only secret *sources* (for example
 `DevTunnelTokenSource`, `AccessTokenSource`, `MongoConnectionStringSource` — environment
 variable names), never raw token or connection-string values, so no tracked configuration
 artifact can contain a raw secret.
 
-Not yet implemented: the Avalonia setup-wizard / settings dialog **views** (AXAML) and their
-host windows, live service reconfiguration on settings change, and the elevated Mongo installer
-service wrapper (the installer script `scripts/install-mongodb-container.ps1` exists). The
-wizard/settings **view models** are implemented and tested.
+Not yet implemented: live service reconfiguration on settings change, and the elevated Mongo
+installer service wrapper (the installer script `scripts/install-mongodb-container.ps1`
+exists). The wizard/settings view models, per-subtype views, and host windows are implemented
+and tested, and the wizard is wired into first-run startup.
 
 ## New classes
 
