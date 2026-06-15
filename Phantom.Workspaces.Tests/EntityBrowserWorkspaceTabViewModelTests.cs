@@ -87,12 +87,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Contains("[\"entity-types\",\"workspace\"]", parentItem.ChildItemKeys);
 
         parentItem.IsExpanded = true;
-        await WaitForConditionAsync(viewModel, () =>
-            viewModel.EntityList.Items.Any(item =>
-                string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal)));
-
-        var childItem = Assert.Single(
-            viewModel.EntityList.Items,
+        var childItem = await WaitForItemAsync(
+            viewModel,
             item => string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal));
         Assert.Equal(2, childItem.Level);
         Assert.Equal(parentItem.ItemKey, childItem.ParentItemKey);
@@ -163,13 +159,10 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             item => string.Equals(item.ItemKey, "[\"documentation\"]", StringComparison.Ordinal));
         documentationItem.IsExpanded = true;
 
-        await WaitForConditionAsync(viewModel, () =>
-            viewModel.EntityList.Items.Any(item =>
-                string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal)));
-
-        var noteItem = Assert.Single(
-            viewModel.EntityList.Items,
-            item => string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal));
+        var noteItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal)
+                && item.FieldEditors.Any(static fieldEditor => fieldEditor.FieldName == "content"));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
@@ -235,15 +228,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             item => string.Equals(item.ItemKey, "[\"notes\"]", StringComparison.Ordinal));
         notesItem.IsExpanded = true;
 
-        await WaitForConditionAsync(viewModel, () =>
-            viewModel.EntityList.Items.Any(item =>
-                string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
-                || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal)));
-
-        var noteItem = Assert.Single(
-            viewModel.EntityList.Items,
-            item => string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
-                || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal));
+        var noteItem = await WaitForItemAsync(
+            viewModel,
+            item => (string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
+                    || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal))
+                && item.FieldEditors.Any(static fieldEditor => fieldEditor.FieldName == "content"));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
@@ -309,15 +298,10 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             item => string.Equals(item.ItemKey, "[\"entity-types\"]", StringComparison.Ordinal));
         entityTypesItem.IsExpanded = true;
 
-        await WaitForConditionAsync(viewModel, () =>
-            viewModel.EntityList.Items.Any(item =>
-                item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
-                && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema")));
-
-        var noteTypeItem = viewModel.EntityList.Items.FirstOrDefault(item =>
-            item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
-            && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema"));
-        Assert.NotNull(noteTypeItem);
+        var noteTypeItem = await WaitForItemAsync(
+            viewModel,
+            item => item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
+                && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema"));
         var schemaField = Assert.Single(noteTypeItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "schema");
         var schemaEditor = Assert.IsType<JsonSchemaFieldEditorViewModel>(schemaField);
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
@@ -373,6 +357,51 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             Data = document.RootElement.Clone(),
             Relationships = Array.Empty<EntitySnapshot>(),
         };
+    }
+
+    // The entity list is rebuilt (Clear + re-add of freshly created item view models) on every
+    // subscription delivery and expansion change, so re-querying viewModel.EntityList.Items with
+    // Assert.Single after awaiting a condition is racy: a rebuild can momentarily drop the item in
+    // the gap between the await resuming and the assertion running. Capture the matching item while
+    // the condition holds (inside the CollectionChanged handler) and assert against that instance.
+    // The captured item's identity-, structure-, and field-editor data are stable even after the
+    // live collection is rebuilt, so the assertions no longer depend on collection timing.
+    private static async Task<EntityListItemViewModel> WaitForItemAsync(
+        EntityBrowserWorkspaceTabViewModel viewModel,
+        Func<EntityListItemViewModel, bool> predicate)
+    {
+        var existing = viewModel.EntityList.Items.FirstOrDefault(predicate);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var signal = new TaskCompletionSource<EntityListItemViewModel>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            var match = viewModel.EntityList.Items.FirstOrDefault(predicate);
+            if (match is not null)
+            {
+                signal.TrySetResult(match);
+            }
+        }
+
+        viewModel.EntityList.Items.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            var match = viewModel.EntityList.Items.FirstOrDefault(predicate);
+            if (match is not null)
+            {
+                return match;
+            }
+
+            return await signal.Task;
+        }
+        finally
+        {
+            viewModel.EntityList.Items.CollectionChanged -= OnCollectionChanged;
+        }
     }
 
     private static async Task WaitForConditionAsync(
