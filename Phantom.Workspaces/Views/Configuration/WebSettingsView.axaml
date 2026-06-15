@@ -8,6 +8,6 @@
              x:DataType="vm:WebSettingsViewModel">
     <StackPanel Spacing="4">
         <TextBlock Text="Web endpoint" />
-        <TextBox Watermark="https://host.example/" Text="{Binding Endpoint}" />
+        <TextBox PlaceholderText="https://host.example/" Text="{Binding Endpoint}" />
     </StackPanel>
 </UserControl>

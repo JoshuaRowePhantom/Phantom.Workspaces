@@ -8,7 +8,7 @@
         MinWidth="360"
         MinHeight="160"
         CanResize="False"
-        SystemDecorations="BorderOnly"
+        WindowDecorations="BorderOnly"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="False"
         Title="Starting Phantom.Workspaces">

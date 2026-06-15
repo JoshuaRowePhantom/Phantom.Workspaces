@@ -9,11 +9,11 @@
     <StackPanel Spacing="8">
         <StackPanel Spacing="4">
             <TextBlock Text="Dev tunnel endpoint" />
-            <TextBox Watermark="https://host.devtunnels.ms/" Text="{Binding Endpoint}" />
+            <TextBox PlaceholderText="https://host.devtunnels.ms/" Text="{Binding Endpoint}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Access-token source (env var name)" />
-            <TextBox Watermark="DEVTUNNEL_TOKEN" Text="{Binding AccessTokenSource}" />
+            <TextBox PlaceholderText="DEVTUNNEL_TOKEN" Text="{Binding AccessTokenSource}" />
         </StackPanel>
     </StackPanel>
 </UserControl>

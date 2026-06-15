@@ -9,19 +9,19 @@
     <StackPanel Spacing="8">
         <StackPanel Spacing="4">
             <TextBlock Text="MongoDB container name" />
-            <TextBox Watermark="mongodb" Text="{Binding ContainerName}" />
+            <TextBox PlaceholderText="mongodb" Text="{Binding ContainerName}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Root collection" />
-            <TextBox Watermark="entities" Text="{Binding RootCollectionName}" />
+            <TextBox PlaceholderText="entities" Text="{Binding RootCollectionName}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Database name" />
-            <TextBox Watermark="phantom-workspaces" Text="{Binding DatabaseName}" />
+            <TextBox PlaceholderText="phantom-workspaces" Text="{Binding DatabaseName}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Data directory" />
-            <TextBox Watermark="./mongo-data" Text="{Binding DataDirectory}" />
+            <TextBox PlaceholderText="./mongo-data" Text="{Binding DataDirectory}" />
         </StackPanel>
     </StackPanel>
 </UserControl>

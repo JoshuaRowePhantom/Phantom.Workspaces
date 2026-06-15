@@ -9,15 +9,15 @@
     <StackPanel Spacing="8">
         <StackPanel Spacing="4">
             <TextBlock Text="Connection-string source (env var name)" />
-            <TextBox Watermark="MONGO_CONNECTION" Text="{Binding ConnectionStringSource}" />
+            <TextBox PlaceholderText="MONGO_CONNECTION" Text="{Binding ConnectionStringSource}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Database name" />
-            <TextBox Watermark="phantom-workspaces" Text="{Binding DatabaseName}" />
+            <TextBox PlaceholderText="phantom-workspaces" Text="{Binding DatabaseName}" />
         </StackPanel>
         <StackPanel Spacing="4">
             <TextBlock Text="Root collection" />
-            <TextBox Watermark="entities" Text="{Binding RootCollectionName}" />
+            <TextBox PlaceholderText="entities" Text="{Binding RootCollectionName}" />
         </StackPanel>
     </StackPanel>
 </UserControl>
