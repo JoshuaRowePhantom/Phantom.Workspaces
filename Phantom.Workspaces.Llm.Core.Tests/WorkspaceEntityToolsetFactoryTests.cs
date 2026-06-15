@@ -53,6 +53,56 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     }
 
     [Fact]
+    public async Task WorkspacesEntityGet_ReturnsStructuredJsonElement_NotDoubleEncoded()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
+        var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
+        var entityId = Guid.NewGuid();
+
+        await updateTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["update-metadata"] = JsonDocument.Parse("""{ "comment": { "text": "Seed entity" } }""").RootElement.Clone(),
+                ["changes"] = JsonDocument.Parse(
+                    $$"""
+                    [
+                      {
+                        "entity-id": "{{entityId:D}}",
+                        "entity-change-mode": "replace",
+                        "data": {
+                          "entity-types": ["sample"],
+                          "names": [["samples", "one"]],
+                          "display-name": "Sample Entity"
+                        }
+                      }
+                    ]
+                    """).RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var result = await getTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["get-entity"] = JsonDocument.Parse($$"""[{"entity-id":"{{entityId:D}}"}]""").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        // The tool result must be structured JSON, not a stringified-JSON text envelope.
+        var element = Assert.IsType<JsonElement>(result);
+        Assert.Equal(JsonValueKind.Object, element.ValueKind);
+        Assert.Equal(JsonValueKind.Array, element.GetProperty("batches").ValueKind);
+
+        // Guard against the prior double-encoding: no {"type":"text","text":"{...}"} wrapper,
+        // and the payload is not a JSON string that itself contains escaped JSON.
+        Assert.False(element.TryGetProperty("type", out _));
+        Assert.False(element.TryGetProperty("text", out _));
+        var serialized = element.GetRawText();
+        Assert.DoesNotContain("\"type\":\"text\"", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u0022", serialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task WorkspacesEntityGet_WithPropertiesFilter_ReturnsRequestedFields()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
@@ -95,7 +145,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                 ["properties"] = JsonDocument.Parse("""["display-name","content.default.content.text"]""").RootElement.Clone(),
             }),
             CancellationToken.None);
-        var resultJson = ReadJsonFromTextContent(result);
+        var resultJson = ReadJsonResult(result);
         var data = resultJson
             .GetProperty("batches")[0]
             .GetProperty("entities")[0]
@@ -133,7 +183,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                     """).RootElement.Clone(),
             }),
             CancellationToken.None);
-        var addJson = ReadJsonFromTextContent(addResult);
+        var addJson = ReadJsonResult(addResult);
         Assert.Equal("Added", addJson.GetProperty("entityResults")[0].GetProperty("updateState").GetString());
 
         var getResult = await getTool.InvokeAsync(
@@ -142,7 +192,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                 ["get-entity"] = JsonDocument.Parse($$"""[{"entity-id":"{{entityId:D}}"}]""").RootElement.Clone(),
             }),
             CancellationToken.None);
-        var getJson = ReadJsonFromTextContent(getResult);
+        var getJson = ReadJsonResult(getResult);
         var concurrencyTag = getJson.GetProperty("batches")[0].GetProperty("entities")[0].GetProperty("concurrencyTag").GetString();
         Assert.False(string.IsNullOrWhiteSpace(concurrencyTag));
 
@@ -163,7 +213,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                     """).RootElement.Clone(),
             }),
             CancellationToken.None);
-        var deleteJson = ReadJsonFromTextContent(deleteResult);
+        var deleteJson = ReadJsonResult(deleteResult);
         Assert.Equal("Removed", deleteJson.GetProperty("entityResults")[0].GetProperty("updateState").GetString());
     }
 
@@ -174,7 +224,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
         var generateGuidTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_generate_guid");
 
         var result = await generateGuidTool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>()), CancellationToken.None);
-        var json = ReadJsonFromTextContent(result);
+        var json = ReadJsonResult(result);
         Assert.True(Guid.TryParse(json.GetProperty("entityId").GetString(), out _));
     }
 
@@ -192,15 +242,13 @@ public sealed class WorkspaceEntityToolsetFactoryTests
             }),
             CancellationToken.None);
 
-        var textContent = Assert.IsType<TextContent>(result);
-        Assert.Contains("requires a valid GetRequest payload", textContent.Text, StringComparison.Ordinal);
+        var textResult = Assert.IsType<string>(result);
+        Assert.Contains("requires a valid GetRequest payload", textResult, StringComparison.Ordinal);
     }
 
-    private static JsonElement ReadJsonFromTextContent(object? result)
+    private static JsonElement ReadJsonResult(object? result)
     {
-        var textContent = Assert.IsType<TextContent>(result);
-        using var document = JsonDocument.Parse(textContent.Text);
-        return document.RootElement.Clone();
+        return Assert.IsType<JsonElement>(result);
     }
 
     private static async Task<AIFunction> GetToolAsync(

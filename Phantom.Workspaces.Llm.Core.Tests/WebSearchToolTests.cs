@@ -42,14 +42,16 @@ public sealed class WebSearchToolTests
         var arguments = new AIFunctionArguments(new Dictionary<string, object?> { { "query", "test search" } });
         var result = await tool.InvokeAsync(arguments, CancellationToken.None);
 
-        var searchResult = Assert.IsType<WebSearchToolResultContent>(result);
-        Assert.NotNull(searchResult.Outputs);
-        Assert.Equal(2, searchResult.Outputs!.Count);
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.Equal("Placeholder", resultJson.GetProperty("provider").GetString());
+        Assert.Equal("test search", resultJson.GetProperty("query").GetString());
+        var results = resultJson.GetProperty("results");
+        Assert.Equal(2, results.GetArrayLength());
 
-        var firstResult = Assert.IsType<UriContent>(searchResult.Outputs[0]);
-        Assert.NotNull(firstResult.Uri);
-        Assert.Contains("test search", firstResult.AdditionalProperties?["title"]?.ToString() ?? "");
-        Assert.NotNull(firstResult.AdditionalProperties?["snippet"]);
+        var firstResult = results[0];
+        Assert.False(string.IsNullOrWhiteSpace(firstResult.GetProperty("url").GetString()));
+        Assert.Contains("test search", firstResult.GetProperty("title").GetString() ?? "", StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(firstResult.GetProperty("snippet").GetString()));
     }
 
     [Fact]
@@ -98,9 +100,9 @@ public sealed class WebSearchToolTests
         });
         var result = await tool.InvokeAsync(arguments, CancellationToken.None);
 
-        var searchResult = Assert.IsType<WebSearchToolResultContent>(result);
-        Assert.NotNull(searchResult.Outputs);
-        Assert.Equal(2, searchResult.Outputs!.Count);
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.Equal("Placeholder", resultJson.GetProperty("provider").GetString());
+        Assert.Equal(2, resultJson.GetProperty("results").GetArrayLength());
     }
 
     [Fact]
@@ -119,9 +121,9 @@ public sealed class WebSearchToolTests
         });
         var result = await tool.InvokeAsync(arguments, CancellationToken.None);
 
-        var searchResult = Assert.IsType<WebSearchToolResultContent>(result);
-        Assert.NotNull(searchResult.Outputs);
-        Assert.Equal(2, searchResult.Outputs!.Count);
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.Equal("json test", resultJson.GetProperty("query").GetString());
+        Assert.Equal(2, resultJson.GetProperty("results").GetArrayLength());
     }
 
     [Fact]
@@ -140,9 +142,9 @@ public sealed class WebSearchToolTests
         });
         var result = await tool.InvokeAsync(arguments, CancellationToken.None);
 
-        var searchResult = Assert.IsType<WebSearchToolResultContent>(result);
-        Assert.NotNull(searchResult.Outputs);
-        Assert.True(searchResult.Outputs!.Count > 0);
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.Equal("Placeholder", resultJson.GetProperty("provider").GetString());
+        Assert.True(resultJson.GetProperty("results").GetArrayLength() > 0);
     }
 
     [Fact]
@@ -161,9 +163,9 @@ public sealed class WebSearchToolTests
         });
         var result = await tool.InvokeAsync(arguments, CancellationToken.None);
 
-        var searchResult = Assert.IsType<WebSearchToolResultContent>(result);
-        Assert.NotNull(searchResult.Outputs);
-        Assert.Equal(2, searchResult.Outputs!.Count);
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.Equal("Placeholder", resultJson.GetProperty("provider").GetString());
+        Assert.Equal(2, resultJson.GetProperty("results").GetArrayLength());
     }
 
     [Fact]

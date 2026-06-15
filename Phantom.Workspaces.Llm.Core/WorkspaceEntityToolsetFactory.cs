@@ -96,12 +96,12 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
         {
             if (!TryParseGetRequest(arguments, out var getRequest, out var parseError))
             {
-                return new TextContent(parseError);
+                return parseError;
             }
 
             var getResult = await this.dataAccessLayer.GetAsync(getRequest, cancellationToken);
             var requestedProperties = ResolveRequestedProperties(getRequest);
-            return new TextContent(SerializeAsJson(
+            return SerializeToJsonElement(
                 new
                 {
                     batches = getResult.Batches.Select(batch => new
@@ -115,7 +115,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
                             },
                         entities = batch.Entities.Select(entity => ToSerializableEntity(entity, requestedProperties)),
                     }),
-                }));
+                });
         }
     }
 
@@ -144,11 +144,11 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
         {
             if (!TryParseUpdateRequest(arguments, out var updateRequest, out var parseError))
             {
-                return new TextContent(parseError);
+                return parseError;
             }
 
             var updateResult = await this.dataAccessLayer.UpdateAsync(updateRequest, cancellationToken);
-            return new TextContent(SerializeAsJson(ToSerializableUpdateResult(updateResult)));
+            return SerializeToJsonElement(ToSerializableUpdateResult(updateResult));
         }
     }
 
@@ -177,7 +177,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
             _ = arguments;
             _ = cancellationToken;
             var entityId = Guid.NewGuid().ToString("D");
-            return ValueTask.FromResult<object?>(new TextContent(SerializeAsJson(new { entityId })));
+            return ValueTask.FromResult<object?>(SerializeToJsonElement(new { entityId }));
         }
     }
 
@@ -635,8 +635,8 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
         }
     }
 
-    private static string SerializeAsJson(object value)
+    private static JsonElement SerializeToJsonElement(object value)
     {
-        return JsonSerializer.Serialize(value);
+        return JsonSerializer.SerializeToElement(value);
     }
 }

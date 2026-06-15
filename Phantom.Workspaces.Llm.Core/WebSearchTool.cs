@@ -85,23 +85,23 @@ public sealed class WebSearchTool : AIFunction
             var query = ExtractString(arguments, "query");
             if (string.IsNullOrWhiteSpace(query))
             {
-                return new TextContent("web_search requires a 'query' parameter.");
+                return "web_search requires a 'query' parameter.";
             }
 
             return await ExecuteWebSearchAsync(query, arguments, cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            return new TextContent("Web search was cancelled.");
+            return "Web search was cancelled.";
         }
         catch (Exception exception)
         {
             logger?.LogError(exception, "Web search execution failed");
-            return new TextContent($"Web search failed. {exception.Message}");
+            return $"Web search failed. {exception.Message}";
         }
     }
 
-    private async Task<WebSearchToolResultContent> ExecuteWebSearchAsync(
+    private async Task<JsonElement> ExecuteWebSearchAsync(
         string query,
         AIFunctionArguments arguments,
         CancellationToken cancellationToken)
@@ -125,19 +125,17 @@ public sealed class WebSearchTool : AIFunction
             _ => GeneratePlaceholderResults(query),
         };
 
-        var resultContent = new WebSearchToolResultContent(callId: string.Empty);
-        resultContent.Outputs = results
-            .Select(r =>
+        return JsonSerializer.SerializeToElement(new
+        {
+            provider = provider.ToString(),
+            query,
+            results = results.Select(static result => new
             {
-                var uriContent = new UriContent(r.Url, "text/html");
-                uriContent.AdditionalProperties ??= [];
-                uriContent.AdditionalProperties["title"] = r.Title;
-                uriContent.AdditionalProperties["snippet"] = r.Snippet;
-                return (AIContent)uriContent;
-            })
-            .ToList();
-
-        return resultContent;
+                url = result.Url,
+                title = result.Title,
+                snippet = result.Snippet,
+            }),
+        });
     }
 
     private async Task<List<SearchResult>> SearchBingAsync(string query, CancellationToken cancellationToken)
