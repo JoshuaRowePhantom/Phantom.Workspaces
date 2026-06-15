@@ -8,10 +8,7 @@ public sealed class WebClientDataAccessLayer : IDataAccessLayer, IDisposable
 {
     private readonly HttpClient httpClient;
     private readonly bool ownsHttpClient;
-    private static readonly JsonSerializerOptions JsonSerializerOptions = new()
-    {
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
+    private static readonly JsonSerializerOptions JsonSerializerOptions = WebDataAccessJsonSerialization.Options;
 
     public WebClientDataAccessLayer(
         string endpoint,

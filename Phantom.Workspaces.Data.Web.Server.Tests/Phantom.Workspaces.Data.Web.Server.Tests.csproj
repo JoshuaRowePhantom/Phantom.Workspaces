@@ -16,6 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Server\Phantom.Workspaces.Data.Web.Server.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Client\Phantom.Workspaces.Data.Web.Client.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
