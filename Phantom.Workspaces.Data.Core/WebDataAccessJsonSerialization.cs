@@ -5,9 +5,9 @@ namespace Phantom.Workspaces.Data;
 
 /// <summary>
 /// Canonical JSON serializer options shared by the web data-access client and server so their
-/// request/response wire formats are symmetric. The data-access DTOs rely on default
-/// (PascalCase) naming for unattributed members and explicit <see cref="JsonPropertyNameAttribute"/>
-/// for the rest; both sides must therefore use the same naming policy.
+/// request/response wire formats are symmetric. Every data-access DTO member that crosses the
+/// wire carries an explicit <see cref="JsonPropertyNameAttribute"/>, so the wire format does not
+/// depend on a naming policy; these options only control null handling.
 /// </summary>
 public static class WebDataAccessJsonSerialization
 {

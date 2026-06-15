@@ -88,31 +88,41 @@ public sealed record EntityChange
 
 public sealed record UpdateResult
 {
+    [JsonPropertyName("entity-results")]
     public required IReadOnlyCollection<EntityUpdateResult> EntityResults { get; init; }
 }
 
 public sealed record EntityUpdateResult
 {
+    [JsonPropertyName("update-state")]
     public required UpdateState UpdateState { get; init; }
 
+    [JsonPropertyName("requested-entity-id")]
     public required EntityId RequestedEntityId { get; init; }
 
+    [JsonPropertyName("resulting-entity-id")]
     public required EntityId ResultingEntityId { get; init; }
 
+    [JsonPropertyName("concurrency-tag")]
     public ConcurrencyTag? ConcurrencyTag { get; init; }
 
+    [JsonPropertyName("concurrency-match-state")]
     public required ConcurrencyMatchState ConcurrencyMatchState { get; init; }
 
+    [JsonPropertyName("current-entity")]
     public EntitySnapshot? CurrentEntity { get; init; }
 
+    [JsonPropertyName("errors")]
     public required IReadOnlyCollection<UpdateError> Errors { get; init; }
 }
 
 public sealed record UpdateError
 {
+    [JsonPropertyName("message")]
     public required string Message { get; init; }
 
     // This is set if there is a related entity id causing the failure.
+    [JsonPropertyName("related-entity-id")]
     public EntityId? RelatedEntityId { get; init; }
 }
 
@@ -178,6 +188,7 @@ public sealed record GetRelationshipRequest
 
 public sealed record GetResult
 {
+    [JsonPropertyName("batches")]
     public required IReadOnlyCollection<TimestampedEntityBatch> Batches { get; init; }
 }
 
@@ -192,23 +203,28 @@ public sealed record GetResult
 /// </param>
 public sealed record QueryRequest
 {
+    [JsonPropertyName("clauses")]
     public required IReadOnlyCollection<TopLevelQueryClause> Clauses { get; init; }
 
+    [JsonPropertyName("timestamps")]
     public IReadOnlyCollection<Timestamp?>? Timestamps { get; init; }
 }
 
 public sealed record QueryResult
 {
+    [JsonPropertyName("batches")]
     public required IReadOnlyCollection<TimestampedQueryBatch> Batches { get; init; }
 }
 
 public sealed record GetHistoryRequest
 {
+    [JsonPropertyName("entity-ids")]
     public required IReadOnlyCollection<EntityId> EntityIds { get; init; }
 }
 
 public sealed record GetHistoryResult
 {
+    [JsonPropertyName("history")]
     public required IReadOnlyCollection<EntityHistoryEntry> History { get; init; }
 }
 
@@ -218,6 +234,7 @@ public sealed record GetHistoryResult
 /// </summary>
 public sealed record ExportRequest
 {
+    [JsonPropertyName("snapshot-time")]
     public Timestamp? SnapshotTime { get; init; }
 }
 
@@ -227,25 +244,31 @@ public sealed record ExportRequest
 /// </summary>
 public sealed record ExportResult
 {
+    [JsonPropertyName("change-batches")]
     public required IReadOnlyCollection<ExportChangeBatch> ChangeBatches { get; init; }
 
+    [JsonPropertyName("final-snapshot-time")]
     public required Timestamp FinalSnapshotTime { get; init; }
 }
 
 public sealed record GetChangedEntitiesRequest
 {
+    [JsonPropertyName("entity-id-timestamps")]
     public required IReadOnlyCollection<EntityIdTimestamp> EntityIdTimestamps { get; init; }
 }
 
 public sealed record GetChangedEntitiesResult
 {
+    [JsonPropertyName("entities")]
     public required IReadOnlyCollection<ChangedEntitySnapshot> Entities { get; init; }
 }
 
 public sealed record TimestampedEntityBatch
 {
+    [JsonPropertyName("timestamp")]
     public Timestamp? Timestamp { get; init; }
 
+    [JsonPropertyName("entities")]
     public required IReadOnlyCollection<EntitySnapshot> Entities { get; init; }
 }
 
@@ -255,8 +278,10 @@ public sealed record TimestampedEntityBatch
 /// </summary>
 public sealed record TimestampedQueryBatch
 {
+    [JsonPropertyName("timestamp")]
     public Timestamp? Timestamp { get; init; }
 
+    [JsonPropertyName("entities")]
     public required IReadOnlyCollection<QueryEntitySnapshot> Entities { get; init; }
 }
 
@@ -271,10 +296,13 @@ public sealed record TimestampedQueryBatch
 /// </param>
 public sealed record QueryEntitySnapshot : EntitySnapshot
 {
+    [JsonPropertyName("classified-time")]
     public Timestamp? ClassifiedTime { get; init; }
 
+    [JsonPropertyName("matching-clause-identifiers")]
     public required IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers { get; init; }
 
+    [JsonPropertyName("full-text-query-scores")]
     public required IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores { get; init; }
 }
 
@@ -290,28 +318,35 @@ public sealed record QueryEntitySnapshot : EntitySnapshot
 /// </param>
 public sealed record FullTextQueryScore
 {
+    [JsonPropertyName("query-identifier")]
     public required QueryClauseIdentifier QueryIdentifier { get; init; }
 
+    [JsonPropertyName("score")]
     public required double Score { get; init; }
 }
 
 public sealed record EntityHistoryEntry
 {
+    [JsonPropertyName("entity-id")]
     public required EntityId EntityId { get; init; }
 
+    [JsonPropertyName("update-times")]
     public required IReadOnlyCollection<Timestamp> UpdateTimes { get; init; }
 }
 
 public sealed record ExportChangeBatch
 {
+    [JsonPropertyName("change-time")]
     public required Timestamp ChangeTime { get; init; }
 
+    [JsonPropertyName("entities")]
     public required IReadOnlyCollection<QueryEntitySnapshot> Entities { get; init; }
 }
 
 public sealed record ChangedEntitySnapshot
 {
     // The changed entity.
+    [JsonPropertyName("entity")]
     public EntitySnapshot? Entity { get; init; }
 }
 
@@ -335,14 +370,19 @@ public sealed record ChangedEntitySnapshot
 /// </param>
 public record EntitySnapshot
 {
+    [JsonPropertyName("entity-id")]
     public required EntityId EntityId { get; init; }
 
+    [JsonPropertyName("concurrency-tag")]
     public ConcurrencyTag? ConcurrencyTag { get; init; }
 
+    [JsonPropertyName("modified-time")]
     public required Timestamp ModifiedTime { get; init; }
 
+    [JsonPropertyName("data")]
     public JsonElement? Data { get; init; }
 
+    [JsonPropertyName("relationships")]
     public required IReadOnlyCollection<EntitySnapshot> Relationships { get; init; }
 }
 
@@ -442,8 +482,8 @@ public readonly record struct Timestamp(
 public readonly record struct RenderTimeIndex(string Value);
 
 public readonly record struct EntityIdTimestamp(
-    EntityId EntityId,
-    Timestamp Timestamp);
+    [property: JsonPropertyName("entity-id")] EntityId EntityId,
+    [property: JsonPropertyName("timestamp")] Timestamp Timestamp);
 
 public readonly record struct QueryClauseIdentifier(string Value);
 
@@ -502,8 +542,10 @@ public readonly record struct MinimumQueryScore(double Value);
 
 public sealed record TopLevelQueryClause
 {
+    [JsonPropertyName("clause-identifier")]
     public required QueryClauseIdentifier ClauseIdentifier { get; init; }
 
+    [JsonPropertyName("clause")]
     public required QueryClause Clause { get; init; }
 }
 
@@ -511,23 +553,28 @@ public abstract record QueryClause;
 
 public sealed record AndQueryClause : QueryClause
 {
+    [JsonPropertyName("clauses")]
     public required IReadOnlyCollection<QueryClause> Clauses { get; init; }
 }
 
 public sealed record OrQueryClause : QueryClause
 {
+    [JsonPropertyName("clauses")]
     public required IReadOnlyCollection<QueryClause> Clauses { get; init; }
 }
 
 public sealed record NotQueryClause : QueryClause
 {
+    [JsonPropertyName("clause")]
     public required QueryClause Clause { get; init; }
 }
 
 public sealed record TopQueryClause : QueryClause
 {
+    [JsonPropertyName("result-limit")]
     public required QueryResultLimit ResultLimit { get; init; }
 
+    [JsonPropertyName("clause")]
     public required QueryClause Clause { get; init; }
 }
 
@@ -535,53 +582,70 @@ public abstract record EntityQueryClause : QueryClause;
 
 public sealed record EntityTypeQueryClause : EntityQueryClause
 {
+    [JsonPropertyName("entity-type-names")]
     public required EntityTypeNameSet EntityTypeNames { get; init; }
 }
 
 public sealed record EntityFieldQueryClause : EntityQueryClause
 {
+    [JsonPropertyName("field-path")]
     public required FieldPath FieldPath { get; init; }
 
+    [JsonPropertyName("comparison-operator")]
     public required FieldComparisonOperator ComparisonOperator { get; init; }
 
+    [JsonPropertyName("value")]
     public JsonElement? Value { get; init; }
 }
 
 public sealed record EntityFullTextQueryClause : EntityQueryClause
 {
+    [JsonPropertyName("full-text-query-identifier")]
     public required QueryClauseIdentifier FullTextQueryIdentifier { get; init; }
 
+    [JsonPropertyName("query-text")]
     public required FullTextQueryText QueryText { get; init; }
 
+    [JsonPropertyName("minimum-query-score")]
     public MinimumQueryScore? MinimumQueryScore { get; init; }
 }
 
 public sealed record EntityParticipationQueryClause : EntityQueryClause
 {
+    [JsonPropertyName("relationship-type-names")]
     public required RelationshipTypeNameSet RelationshipTypeNames { get; init; }
 
+    [JsonPropertyName("participation-role-names")]
     public RoleNameSet? ParticipationRoleNames { get; init; }
 
+    [JsonPropertyName("must-have")]
     public EntityParticipationRequirement? MustHave { get; init; }
 }
 
 public sealed record TransitQueryClause : QueryClause
 {
+    [JsonPropertyName("source-clause-identifier")]
     public required QueryClauseIdentifier SourceClauseIdentifier { get; init; }
 
+    [JsonPropertyName("relationship-type-names")]
     public required RelationshipTypeNameSet RelationshipTypeNames { get; init; }
 
+    [JsonPropertyName("source-participation-role-names")]
     public RoleNameSet? SourceParticipationRoleNames { get; init; }
 
+    [JsonPropertyName("destination-participation-role-names")]
     public RoleNameSet? DestinationParticipationRoleNames { get; init; }
 
+    [JsonPropertyName("match-clause")]
     public required QueryClause MatchClause { get; init; }
 }
 
 public sealed record EntityParticipationRequirement
 {
+    [JsonPropertyName("participation-role-names")]
     public RoleNameSet? ParticipationRoleNames { get; init; }
 
+    [JsonPropertyName("clause")]
     public required QueryClause Clause { get; init; }
 }
 
