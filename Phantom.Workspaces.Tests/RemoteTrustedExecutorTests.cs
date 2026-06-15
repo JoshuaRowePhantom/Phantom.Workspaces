@@ -73,6 +73,33 @@ public sealed class RemoteTrustedExecutorTests
     }
 
     [AvaloniaFact]
+    public async Task WebRemoteChatClient_Streaming_YieldsRemoteResponse()
+    {
+        var cannedResponse = new ChatResponse(new ChatMessage(ChatRole.Assistant, "streamed-remote"));
+        var handler = new FakeHttpMessageHandler((_, _) =>
+        {
+            var json = JsonSerializer.Serialize(cannedResponse, AIJsonUtilities.DefaultOptions);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
+        using var chatClient = new WebRemoteChatClient(
+            "https://remote.example/",
+            "{\"kind\":\"prompt\",\"name\":\"a\"}",
+            httpClient: httpClient);
+
+        var aggregated = new StringBuilder();
+        await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
+        {
+            aggregated.Append(update.Text);
+        }
+
+        Assert.Equal("streamed-remote", aggregated.ToString());
+    }
+
+    [AvaloniaFact]
     public async Task WebRemoteChatClient_NonSuccessStatus_Throws()
     {
         var handler = new FakeHttpMessageHandler((_, _) =>
