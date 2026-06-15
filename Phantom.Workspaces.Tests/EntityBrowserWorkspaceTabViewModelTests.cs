@@ -326,7 +326,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     private static Task<EntityBroker> CreateBrokerAsync()
     {
         return EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            new UnknownRepositorySource(),
             TestContext.Current.CancellationToken);
     }
 

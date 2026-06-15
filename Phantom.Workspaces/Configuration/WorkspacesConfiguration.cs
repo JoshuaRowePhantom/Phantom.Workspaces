@@ -154,16 +154,13 @@ public sealed record WorkspacesConfiguration
     {
         return this.DataAccess.Mode switch
         {
-            DataAccessMode.LocalMongoContainer => new RepositorySource(
-                RepositorySourceType.MongoDb,
-                this.DataAccess.MongoContainerName ?? string.Empty,
-                MongoDbContainerName: this.DataAccess.MongoContainerName,
-                MongoDbDataDirectory: this.DataAccess.MongoDataDirectory,
-                MongoDbDatabaseName: this.DataAccess.MongoDatabaseName,
-                MongoDbRootCollectionName: this.DataAccess.MongoRootCollectionName,
-                MongoDbHostPort: this.DataAccess.MongoHostPort),
-            DataAccessMode.Web or DataAccessMode.DevTunnelWeb => new RepositorySource(
-                RepositorySourceType.Web,
+            DataAccessMode.LocalMongoContainer => new MongoDbRepositorySource(
+                ContainerName: this.DataAccess.MongoContainerName ?? string.Empty,
+                RootCollectionName: this.DataAccess.MongoRootCollectionName ?? string.Empty,
+                DataDirectory: this.DataAccess.MongoDataDirectory,
+                DatabaseName: this.DataAccess.MongoDatabaseName,
+                HostPort: this.DataAccess.MongoHostPort),
+            DataAccessMode.Web or DataAccessMode.DevTunnelWeb => new WebRepositorySource(
                 this.DataAccess.WebEndpoint
                     ?? throw new InvalidOperationException(
                         "Web data-access mode requires a web endpoint URL.")),

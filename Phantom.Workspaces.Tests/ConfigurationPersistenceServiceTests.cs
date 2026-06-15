@@ -120,10 +120,10 @@ public sealed class ConfigurationPersistenceServiceTests
 
         var repositorySource = configuration.ToRepositorySource();
 
-        Assert.Equal(RepositorySourceType.MongoDb, repositorySource.SourceType);
-        Assert.Equal("mongodb", repositorySource.MongoDbContainerName);
-        Assert.Equal("entities", repositorySource.MongoDbRootCollectionName);
-        Assert.Equal(27017, repositorySource.MongoDbHostPort);
+        var mongo = Assert.IsType<MongoDbRepositorySource>(repositorySource);
+        Assert.Equal("mongodb", mongo.ContainerName);
+        Assert.Equal("entities", mongo.RootCollectionName);
+        Assert.Equal(27017, mongo.HostPort);
     }
 
     [AvaloniaFact]
@@ -140,8 +140,8 @@ public sealed class ConfigurationPersistenceServiceTests
 
         var repositorySource = configuration.ToRepositorySource();
 
-        Assert.Equal(RepositorySourceType.Web, repositorySource.SourceType);
-        Assert.Equal("https://workspaces.example/", repositorySource.RawValue);
+        var web = Assert.IsType<WebRepositorySource>(repositorySource);
+        Assert.Equal("https://workspaces.example/", web.Endpoint);
     }
 
     [AvaloniaFact]

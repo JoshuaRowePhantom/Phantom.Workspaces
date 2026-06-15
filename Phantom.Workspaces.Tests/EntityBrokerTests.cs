@@ -12,7 +12,7 @@ public sealed class EntityBrokerTests
     {
         var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            new UnknownRepositorySource(),
             ct);
 
         var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
@@ -468,7 +468,7 @@ public sealed class EntityBrokerTests
     private static Task<EntityBroker> CreateBrokerAsync(CancellationToken cancellationToken)
     {
         return EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            new UnknownRepositorySource(),
             cancellationToken);
     }
 

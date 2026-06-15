@@ -271,7 +271,7 @@ public sealed class MainWindowIntegrationTests
 
     private static RepositorySource CreateInMemoryRepositorySource()
     {
-        return new RepositorySource(RepositorySourceType.Unknown, "(none)");
+        return new UnknownRepositorySource();
     }
 
     private static EntityBroker GetEntityBroker(

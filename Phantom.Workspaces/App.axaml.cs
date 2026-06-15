@@ -72,7 +72,7 @@ public partial class App : Application
         Window loadingWindow)
     {
         var argumentSource = RepositorySource.Parse(Program.StartupArguments);
-        if (argumentSource.SourceType != RepositorySourceType.Unknown)
+        if (argumentSource is not UnknownRepositorySource)
         {
             return argumentSource;
         }

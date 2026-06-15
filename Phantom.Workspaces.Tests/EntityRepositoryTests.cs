@@ -10,7 +10,7 @@ public sealed class EntityRepositoryTests
     {
         var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            new UnknownRepositorySource(),
             ct);
         var repository = broker.EntityRepository;
         var snapshots = await repository.ExportEntitySnapshotsAsync(ct);
@@ -27,7 +27,7 @@ public sealed class EntityRepositoryTests
     {
         var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(
-            new RepositorySource(RepositorySourceType.Unknown, "(none)"),
+            new UnknownRepositorySource(),
             ct);
         var repository = broker.EntityRepository;
         var entityId = new EntityId("55555555-5555-5555-5555-555555555555");
@@ -66,7 +66,7 @@ public sealed class EntityRepositoryTests
     [AvaloniaFact]
     public async Task CreateAsync_InitializesWorkspaceEntitySessionDiscoveryEntities()
     {
-        var repository = await EntityRepository.CreateAsync(new RepositorySource(RepositorySourceType.Unknown, "(none)"));
+        var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
 
         Assert.Contains(repository.WorkspaceEntitySession.UserEntityId, snapshots.Keys);

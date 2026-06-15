@@ -127,11 +127,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         set => this.SetProperty(ref this.selectedWorkspacePane, value);
     }
 
-    public string RepositoryStatusText => this.RepositorySource.SourceType switch
+    public string RepositoryStatusText => this.RepositorySource switch
     {
-        RepositorySourceType.Web => $"Web DAL source: {this.RepositorySource.RawValue}",
-        RepositorySourceType.LocalGit => $"Local git source: {this.RepositorySource.RawValue}",
-        RepositorySourceType.MongoDb => $"MongoDb DAL source: {this.RepositorySource.MongoDbContainerName}/{this.RepositorySource.MongoDbRootCollectionName}",
+        WebRepositorySource web => $"Web DAL source: {web.Endpoint}",
+        LocalGitRepositorySource git => $"Local git source: {git.Path}",
+        MongoDbRepositorySource mongo => $"MongoDb DAL source: {mongo.ContainerName}/{mongo.RootCollectionName}",
         _ => "In-memory repository source.",
     };
 

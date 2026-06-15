@@ -43,12 +43,13 @@ public sealed class EntityRepository
         RepositorySource repositorySource)
     {
         var underlyingDataAccessLayer = CreateUnderlyingDataAccessLayer(repositorySource);
-        var coreDataAccessLayer = repositorySource.SourceType == RepositorySourceType.Web
+        var isWebSource = repositorySource is WebRepositorySource;
+        var coreDataAccessLayer = isWebSource
             ? underlyingDataAccessLayer
             : new MergeProcessingDataAccessLayer(
                 new ReferentialIntegrityDataAccessLayer(
                     new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
-        if (repositorySource.SourceType != RepositorySourceType.Web)
+        if (!isWebSource)
         {
             await EnsureSeedDataIfNeededAsync(coreDataAccessLayer);
         }
@@ -101,55 +102,55 @@ public sealed class EntityRepository
     private static IDataAccessLayer CreateUnderlyingDataAccessLayer(
         RepositorySource repositorySource)
     {
-        return repositorySource.SourceType switch
+        return repositorySource switch
         {
-            RepositorySourceType.Web => CreateWebDataAccessLayer(repositorySource),
-            RepositorySourceType.LocalGit => new GitDataAccessLayer(repositorySource.RawValue),
-            RepositorySourceType.MongoDb => CreateMongoDbDataAccessLayer(repositorySource),
+            WebRepositorySource web => CreateWebDataAccessLayer(web),
+            LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
+            MongoDbRepositorySource mongo => CreateMongoDbDataAccessLayer(mongo),
             _ => new InMemoryDataAccessLayer(),
         };
     }
 
-    private static IDataAccessLayer CreateWebDataAccessLayer(RepositorySource repositorySource)
+    private static IDataAccessLayer CreateWebDataAccessLayer(WebRepositorySource repositorySource)
     {
-        if (string.IsNullOrWhiteSpace(repositorySource.RawValue))
+        if (string.IsNullOrWhiteSpace(repositorySource.Endpoint))
         {
             throw new InvalidOperationException("Web repository source requires an endpoint URL.");
         }
 
-        return new WebClientDataAccessLayer(repositorySource.RawValue);
+        return new WebClientDataAccessLayer(repositorySource.Endpoint);
     }
 
     private static IDataAccessLayer CreateMongoDbDataAccessLayer(
-        RepositorySource repositorySource)
+        MongoDbRepositorySource repositorySource)
     {
-        if (string.IsNullOrWhiteSpace(repositorySource.MongoDbContainerName))
+        if (string.IsNullOrWhiteSpace(repositorySource.ContainerName))
         {
             throw new InvalidOperationException("MongoDb container name is required for MongoDb repository sources.");
         }
 
-        if (string.IsNullOrWhiteSpace(repositorySource.MongoDbRootCollectionName))
+        if (string.IsNullOrWhiteSpace(repositorySource.RootCollectionName))
         {
             throw new InvalidOperationException("MongoDb root collection name is required for MongoDb repository sources.");
         }
 
-        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(repositorySource.MongoDbDataDirectory)
+        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(repositorySource.DataDirectory)
             ? Path.GetFullPath(".\\mongo-data")
-            : repositorySource.MongoDbDataDirectory;
-        var mongoDbDatabaseName = string.IsNullOrWhiteSpace(repositorySource.MongoDbDatabaseName)
+            : repositorySource.DataDirectory;
+        var mongoDbDatabaseName = string.IsNullOrWhiteSpace(repositorySource.DatabaseName)
             ? "phantom-workspaces"
-            : repositorySource.MongoDbDatabaseName;
+            : repositorySource.DatabaseName;
 
         var connectionDefinition = MongoDbConnectionDefinition.CreateContainer(
-            repositorySource.MongoDbContainerName,
+            repositorySource.ContainerName,
             mongoDbDataDirectory,
             mongoDbDatabaseName,
-            repositorySource.MongoDbRootCollectionName,
-            repositorySource.MongoDbHostPort);
+            repositorySource.RootCollectionName,
+            repositorySource.HostPort);
         var mongoDbConnectionBroker = new MongoDbConnectionBroker();
         var mongoDbClient = mongoDbConnectionBroker.GetClientAsync(connectionDefinition).AsTask().GetAwaiter().GetResult();
         var mongoDbDatabase = mongoDbClient.GetDatabase(mongoDbDatabaseName);
-        return new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.MongoDbRootCollectionName);
+        return new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.RootCollectionName);
     }
 
     private static async Task EnsureSeedDataIfNeededAsync(

@@ -105,27 +105,27 @@ public sealed class AgentSessionShortcutContext
     private static async Task<IAgentPersistenceStore> CreateAgentPersistenceStoreAsync(
         RepositorySource repositorySource)
     {
-        if (repositorySource.SourceType != RepositorySourceType.MongoDb
-            || string.IsNullOrWhiteSpace(repositorySource.MongoDbContainerName)
-            || string.IsNullOrWhiteSpace(repositorySource.MongoDbRootCollectionName))
+        if (repositorySource is not MongoDbRepositorySource mongoSource
+            || string.IsNullOrWhiteSpace(mongoSource.ContainerName)
+            || string.IsNullOrWhiteSpace(mongoSource.RootCollectionName))
         {
             return AgentPersistenceStoreFactory.CreateInMemory();
         }
 
-        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(repositorySource.MongoDbDataDirectory)
+        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(mongoSource.DataDirectory)
             ? Path.GetFullPath(".\\mongo-data")
-            : repositorySource.MongoDbDataDirectory;
-        var mongoDbDatabaseName = string.IsNullOrWhiteSpace(repositorySource.MongoDbDatabaseName)
+            : mongoSource.DataDirectory;
+        var mongoDbDatabaseName = string.IsNullOrWhiteSpace(mongoSource.DatabaseName)
             ? "phantom-workspaces"
-            : repositorySource.MongoDbDatabaseName;
-        var agentSessionCollectionName = $"{repositorySource.MongoDbRootCollectionName}{AgentSessionCollectionSuffix}";
+            : mongoSource.DatabaseName;
+        var agentSessionCollectionName = $"{mongoSource.RootCollectionName}{AgentSessionCollectionSuffix}";
         var chatHistoryProviderDefinition = ChatHistoryProviderDefinition.CreateMongoDb(
             provider: "container",
             databaseName: mongoDbDatabaseName,
             collectionName: agentSessionCollectionName,
-            containerName: repositorySource.MongoDbContainerName,
+            containerName: mongoSource.ContainerName,
             dataDirectory: mongoDbDataDirectory,
-            hostPort: repositorySource.MongoDbHostPort);
+            hostPort: mongoSource.HostPort);
         return await AgentPersistenceStoreFactory.CreateAsync(chatHistoryProviderDefinition);
     }
 

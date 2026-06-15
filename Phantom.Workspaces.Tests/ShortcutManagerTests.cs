@@ -169,7 +169,7 @@ public sealed class ShortcutManagerTests
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
-        => new(RepositorySourceType.Unknown, "(none)");
+        => new UnknownRepositorySource();
 
     private static SubscribedEntityViewModel CreateEntity(
         string entityType,

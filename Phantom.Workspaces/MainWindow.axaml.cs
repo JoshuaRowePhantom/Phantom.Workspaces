@@ -7,7 +7,7 @@ namespace Phantom.Workspaces;
 public partial class MainWindow : Window
 {
     public MainWindow()
-        : this(new MainWindowViewModel(new RepositorySource(RepositorySourceType.Unknown, "(none)")))
+        : this(new MainWindowViewModel(new UnknownRepositorySource()))
     {
     }
 

@@ -9,8 +9,8 @@ public sealed class RepositorySourceTests
     {
         var source = RepositorySource.Parse(["C:\\dev\\Phantom.Workspaces-Playspace"]);
 
-        Assert.Equal(RepositorySourceType.LocalGit, source.SourceType);
-        Assert.Equal(Path.GetFullPath("C:\\dev\\Phantom.Workspaces-Playspace"), source.RawValue);
+        var gitSource = Assert.IsType<LocalGitRepositorySource>(source);
+        Assert.Equal(Path.GetFullPath("C:\\dev\\Phantom.Workspaces-Playspace"), gitSource.Path);
     }
 
     [AvaloniaFact]
@@ -20,8 +20,16 @@ public sealed class RepositorySourceTests
 
         var source = RepositorySource.Parse([webSource]);
 
-        Assert.Equal(RepositorySourceType.Web, source.SourceType);
-        Assert.Equal(webSource, source.RawValue);
+        var web = Assert.IsType<WebRepositorySource>(source);
+        Assert.Equal(webSource, web.Endpoint);
+    }
+
+    [AvaloniaFact]
+    public void Parse_ReturnsUnknownSource_ForNoArguments()
+    {
+        var source = RepositorySource.Parse([]);
+
+        Assert.IsType<UnknownRepositorySource>(source);
     }
 
     [AvaloniaFact]
@@ -41,10 +49,10 @@ public sealed class RepositorySourceTests
             "27017",
         ]);
 
-        Assert.Equal(RepositorySourceType.MongoDb, source.SourceType);
-        Assert.Equal("phantom-mongodb", source.MongoDbContainerName);
-        Assert.Equal("playspace", source.MongoDbRootCollectionName);
-        Assert.Equal(Path.GetFullPath(".\\mongo-data"), source.MongoDbDataDirectory);
-        Assert.Equal(27017, source.MongoDbHostPort);
+        var mongo = Assert.IsType<MongoDbRepositorySource>(source);
+        Assert.Equal("phantom-mongodb", mongo.ContainerName);
+        Assert.Equal("playspace", mongo.RootCollectionName);
+        Assert.Equal(Path.GetFullPath(".\\mongo-data"), mongo.DataDirectory);
+        Assert.Equal(27017, mongo.HostPort);
     }
 }

@@ -4,29 +4,22 @@ using System.IO;
 
 namespace Phantom.Workspaces;
 
-public enum RepositorySourceType
+/// <summary>
+/// Describes where a workspace repository's data comes from. This is a closed hierarchy of
+/// concrete sources (<see cref="WebRepositorySource"/>, <see cref="LocalGitRepositorySource"/>,
+/// <see cref="MongoDbRepositorySource"/>, <see cref="UnknownRepositorySource"/>); consumers
+/// pattern-match on the concrete type.
+/// </summary>
+public abstract record RepositorySource
 {
-    Unknown = 0,
-    Web = 1,
-    LocalGit = 2,
-    MongoDb = 3,
-}
-
-public sealed record RepositorySource(
-    RepositorySourceType SourceType,
-    string RawValue,
-    string? MongoDbContainerName = null,
-    string? MongoDbDataDirectory = null,
-    string? MongoDbDatabaseName = null,
-    string? MongoDbRootCollectionName = null,
-    int? MongoDbHostPort = null)
-{
-    public static RepositorySource Parse(
-        IReadOnlyList<string> args)
+    /// <summary>
+    /// Parses startup arguments into the appropriate <see cref="RepositorySource"/>.
+    /// </summary>
+    public static RepositorySource Parse(IReadOnlyList<string> args)
     {
         if (args.Count == 0 || string.IsNullOrWhiteSpace(args[0]))
         {
-            return new RepositorySource(RepositorySourceType.Unknown, "(none)");
+            return new UnknownRepositorySource();
         }
 
         var firstArg = args[0].Trim();
@@ -38,10 +31,10 @@ public sealed record RepositorySource(
         if (Uri.TryCreate(firstArg, UriKind.Absolute, out var uri)
             && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
-            return new RepositorySource(RepositorySourceType.Web, firstArg);
+            return new WebRepositorySource(firstArg);
         }
 
-        return new RepositorySource(RepositorySourceType.LocalGit, Path.GetFullPath(firstArg));
+        return new LocalGitRepositorySource(Path.GetFullPath(firstArg));
     }
 
     private static RepositorySource ParseNamedArguments(
@@ -101,14 +94,12 @@ public sealed record RepositorySource(
             ? null
             : Path.GetFullPath(mongoDbDataDirectory);
 
-        return new RepositorySource(
-            RepositorySourceType.MongoDb,
-            string.Join(' ', args),
-            MongoDbContainerName: mongoDbContainerName,
-            MongoDbDataDirectory: resolvedDataDirectory,
-            MongoDbDatabaseName: mongoDbDatabaseName,
-            MongoDbRootCollectionName: mongoDbRootCollectionName,
-            MongoDbHostPort: mongoDbHostPort);
+        return new MongoDbRepositorySource(
+            ContainerName: mongoDbContainerName,
+            RootCollectionName: mongoDbRootCollectionName,
+            DataDirectory: resolvedDataDirectory,
+            DatabaseName: mongoDbDatabaseName,
+            HostPort: mongoDbHostPort);
     }
 
     private static int? ParseOptionalInteger(
@@ -129,3 +120,20 @@ public sealed record RepositorySource(
         return parsedInteger;
     }
 }
+
+/// <summary>An unspecified repository source; resolves to an in-memory data access layer.</summary>
+public sealed record UnknownRepositorySource : RepositorySource;
+
+/// <summary>A remote Phantom.Workspaces web data-access endpoint.</summary>
+public sealed record WebRepositorySource(string Endpoint) : RepositorySource;
+
+/// <summary>A local Git-backed repository at the given path.</summary>
+public sealed record LocalGitRepositorySource(string Path) : RepositorySource;
+
+/// <summary>A MongoDB container-backed repository.</summary>
+public sealed record MongoDbRepositorySource(
+    string ContainerName,
+    string RootCollectionName,
+    string? DataDirectory = null,
+    string? DatabaseName = null,
+    int? HostPort = null) : RepositorySource;
