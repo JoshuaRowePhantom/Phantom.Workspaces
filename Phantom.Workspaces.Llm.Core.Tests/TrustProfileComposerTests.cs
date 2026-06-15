@@ -133,4 +133,90 @@ public sealed class TrustProfileComposerTests
         var anyOf = composed.AllowedMcpToolCallSchema["anyOf"]!.AsArray();
         Assert.Equal(2, anyOf.Count);
     }
+
+    [Fact]
+    public void MergePermissive_ClientInstances_Union()
+    {
+        var primary = new TrustProfileDefinition { HostingWorkspacesClientInstances = [".", "remote-a"] };
+        var other = new TrustProfileDefinition { HostingWorkspacesClientInstances = ["remote-a", "remote-b"] };
+
+        var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Permissive);
+
+        Assert.Equal([".", "remote-a", "remote-b"], merged.HostingWorkspacesClientInstances);
+    }
+
+    [Fact]
+    public void MergePermissive_NetworkAccess_MostPermissiveWins()
+    {
+        var primary = new TrustProfileDefinition { NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork };
+        var other = new TrustProfileDefinition { NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork };
+
+        var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Permissive);
+
+        Assert.Equal(TrustNetworkAccessPolicy.HostNetwork, merged.NetworkAccessPolicy);
+    }
+
+    [Fact]
+    public void MergePermissive_Mounts_UnionAndWidenToReadWrite()
+    {
+        var primary = new TrustProfileDefinition
+        {
+            MountPoints =
+            [
+                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadOnly, TrustMountType.Bind),
+            ],
+        };
+        var other = new TrustProfileDefinition
+        {
+            MountPoints =
+            [
+                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadWrite, TrustMountType.Bind),
+                new TrustMountPoint("/extra", "/extra", TrustMountAccessMode.ReadOnly, TrustMountType.Bind),
+            ],
+        };
+
+        var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Permissive);
+
+        Assert.Equal(2, merged.MountPoints.Count);
+        var workspace = merged.MountPoints.Single(static mount => mount.TargetPath == "/workspace");
+        Assert.Equal(TrustMountAccessMode.ReadWrite, workspace.AccessMode);
+        Assert.Contains(merged.MountPoints, static mount => mount.TargetPath == "/extra");
+    }
+
+    [Fact]
+    public void MergePermissive_HttpsProxy_WeakestRequirementWins()
+    {
+        var primary = new TrustProfileDefinition
+        {
+            HttpsProxyPolicy = new TrustHttpsProxyPolicy(TrustHttpsProxyMode.Required, "https://proxy:8443"),
+        };
+        var other = new TrustProfileDefinition
+        {
+            HttpsProxyPolicy = new TrustHttpsProxyPolicy(TrustHttpsProxyMode.Disabled),
+        };
+
+        var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Permissive);
+
+        Assert.Equal(TrustHttpsProxyMode.Disabled, merged.HttpsProxyPolicy.Mode);
+    }
+
+    [Fact]
+    public void MergeRestrictive_MatchesComposeBehavior()
+    {
+        var primary = new TrustProfileDefinition
+        {
+            HostingWorkspacesClientInstances = [".", "remote-a"],
+            NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+        };
+        var other = new TrustProfileDefinition
+        {
+            HostingWorkspacesClientInstances = ["remote-a"],
+            NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork,
+        };
+
+        var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Restrictive);
+
+        Assert.Equal(["remote-a"], merged.HostingWorkspacesClientInstances);
+        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, merged.NetworkAccessPolicy);
+    }
 }

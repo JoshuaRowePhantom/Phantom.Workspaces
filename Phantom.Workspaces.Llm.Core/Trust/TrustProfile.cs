@@ -54,6 +54,23 @@ public enum TrustHttpsProxyMode
     Required = 2,
 }
 
+/// <summary>
+/// How a base trust profile combines with the profile that inherits it.
+/// </summary>
+public enum TrustInheritanceMode
+{
+    /// <summary>The base narrows the inheriting profile (intersection / most-restrictive).</summary>
+    Restrictive = 0,
+
+    /// <summary>The base widens the inheriting profile (union / most-permissive).</summary>
+    Permissive = 1,
+}
+
+/// <summary>A reference to a base trust profile plus the mode used to combine it.</summary>
+public sealed record TrustProfileBaseReference(
+    string ProfileName,
+    TrustInheritanceMode Mode = TrustInheritanceMode.Restrictive);
+
 /// <summary>A single mount declaration granted by a trust profile.</summary>
 public sealed record TrustMountPoint(
     string SourcePath,
