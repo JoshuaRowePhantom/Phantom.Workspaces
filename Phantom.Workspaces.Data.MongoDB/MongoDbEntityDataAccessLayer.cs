@@ -128,6 +128,14 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 TypeNames = typeNames.ToArray(),
             });
 
+            // Recompute the denormalized current-version projection used for native querying.
+            updatedDocument.Current = new MongoDbCurrentProjection
+            {
+                TypeNames = typeNames.ToArray(),
+                SearchText = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(change.Data),
+                IsDeleted = nextDataJson is null,
+            };
+
             pendingWrites.Add(updatedDocument);
             currentEntities[entityId.Value.ToString()] = updatedDocument;
 
@@ -221,18 +229,103 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         };
     }
 
-    public Task<QueryResult> QueryAsync(
+    public async Task<QueryResult> QueryAsync(
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(new QueryResult
+        ArgumentNullException.ThrowIfNull(request);
+
+        var timestamps = request.Timestamps is { Count: > 0 }
+            ? request.Timestamps.ToArray()
+            : new Timestamp?[] { null };
+
+        // Native querying targets the denormalized current-version projection, so it only supports
+        // "now" (null timestamp) queries. As-of-timestamp querying is a follow-up.
+        if (timestamps.Any(static timestamp => timestamp is not null))
         {
-            Batches = request.Timestamps?.Select(timestamp => new TimestampedQueryBatch
+            throw new NotSupportedException(
+                "MongoDB query evaluation currently supports only current (null-timestamp) queries.");
+        }
+
+        var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
+            _entityCollection.CollectionNamespace.CollectionName);
+        var translator = new MongoDbQueryTranslator();
+
+        var batches = new List<TimestampedQueryBatch>();
+        foreach (var timestamp in timestamps)
+        {
+            var matchedClauses = new Dictionary<string, HashSet<QueryClauseIdentifier>>(StringComparer.Ordinal);
+            var documentsById = new Dictionary<string, BsonDocument>(StringComparer.Ordinal);
+
+            foreach (var topLevelClause in request.Clauses)
             {
-                Timestamp = timestamp,
-                Entities = [],
-            }).ToArray() ?? [new TimestampedQueryBatch { Timestamp = null, Entities = [] }],
-        });
+                var filter = translator.TranslateToFilter(topLevelClause.Clause);
+                var find = bsonCollection.Find(filter);
+                if (MongoDbQueryTranslator.GetResultLimit(topLevelClause.Clause) is { } limit && limit >= 0)
+                {
+                    find = find.Limit(limit);
+                }
+
+                var documents = await find.ToListAsync(cancellationToken).ConfigureAwait(false);
+                foreach (var document in documents)
+                {
+                    var id = document["_id"].AsString;
+                    documentsById[id] = document;
+                    if (!matchedClauses.TryGetValue(id, out var identifiers))
+                    {
+                        matchedClauses[id] = identifiers = [];
+                    }
+
+                    identifiers.Add(topLevelClause.ClauseIdentifier);
+                }
+            }
+
+            var entities = new List<QueryEntitySnapshot>();
+            foreach (var (id, identifiers) in matchedClauses)
+            {
+                var snapshot = BuildCurrentSnapshot(documentsById[id]);
+                if (snapshot is not null)
+                {
+                    entities.Add(snapshot with { MatchingClauseIdentifiers = identifiers.ToArray() });
+                }
+            }
+
+            batches.Add(new TimestampedQueryBatch { Timestamp = timestamp, Entities = entities });
+        }
+
+        return new QueryResult { Batches = batches };
+    }
+
+    private static QueryEntitySnapshot? BuildCurrentSnapshot(BsonDocument document)
+    {
+        if (!document.TryGetValue("Versions", out var versionsValue) || versionsValue is not BsonArray { Count: > 0 } versions)
+        {
+            return null;
+        }
+
+        var latest = versions[^1].AsBsonDocument;
+        var dataJson = latest.TryGetValue("DataJson", out var dataJsonValue) && !dataJsonValue.IsBsonNull
+            ? dataJsonValue.AsString
+            : null;
+        if (dataJson is null)
+        {
+            return null;
+        }
+
+        var versionId = latest["VersionId"].AsObjectId;
+        var timestampUtc = latest["TimestampUtc"].ToUniversalTime();
+        var modifiedTime = new Timestamp(new DateTimeOffset(timestampUtc, TimeSpan.Zero), versionId.ToString());
+
+        return new QueryEntitySnapshot
+        {
+            EntityId = new EntityId(document["_id"].AsString),
+            ConcurrencyTag = new ConcurrencyTag(versionId.ToString()),
+            ModifiedTime = modifiedTime,
+            Data = JsonDocument.Parse(dataJson).RootElement.Clone(),
+            Relationships = [],
+            MatchingClauseIdentifiers = [],
+            FullTextQueryScores = [],
+        };
     }
 
     public async Task<GetHistoryResult> GetHistoryAsync(
@@ -695,6 +788,26 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         public string Id { get; init; } = string.Empty;
 
         public List<MongoDbEntityVersion> Versions { get; init; } = [];
+
+        /// <summary>
+        /// Denormalized projection of the latest version, used for native query-clause evaluation
+        /// (see <see cref="MongoDbQueryTranslator"/>). Recomputed on every write.
+        /// </summary>
+        [BsonElement("current")]
+        [BsonIgnoreIfNull]
+        public MongoDbCurrentProjection? Current { get; set; }
+    }
+
+    private sealed class MongoDbCurrentProjection
+    {
+        [BsonElement("type-names")]
+        public string[] TypeNames { get; init; } = [];
+
+        [BsonElement("search-text")]
+        public string SearchText { get; init; } = string.Empty;
+
+        [BsonElement("is-deleted")]
+        public bool IsDeleted { get; init; }
     }
 
     private sealed class MongoDbEntityVersion
