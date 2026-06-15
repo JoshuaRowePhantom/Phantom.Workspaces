@@ -34,7 +34,17 @@ a dedicated `IChatClient` adapter, `CopilotSdkChatClient`.
   `SessionErrorEvent` as an exception).
 - Maps `ChatOptions.Reasoning.Effort` to the SDK `ReasoningEffort` string and
   `ChatOptions.Instructions` to the session `SystemMessage`.
-- Approves tool execution with `PermissionHandler.ApproveAll`.
+- Forwards the agent's function tools: `ChatOptions.Tools` (the `AIFunction`
+  entries) are passed to `SessionConfig.Tools` via the testable
+  `CopilotSdkChatClient.BuildSessionConfig`. The Copilot CLI runs the agentic
+  tool loop itself and invokes these handlers in-process, so without this the
+  session would only expose the CLI's built-in tools and the workspace
+  `AIFunction`s (for example `workspaces_entity_get`) would never reach the
+  model. Note: the Copilot session is created once and cached, so the tool set
+  is captured from the first turn's options; changing the enabled tools later
+  requires a new session.
+- Approves tool execution with `PermissionHandler.ApproveAll` (covers both the
+  CLI's built-in tools and our custom `custom_tool` callbacks).
 
 `AgentChat` registers the resolved chat client as an owned async resource, so the
 Copilot CLI process is disposed when the chat is disposed.

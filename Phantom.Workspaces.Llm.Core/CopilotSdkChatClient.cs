@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using GitHub.Copilot.SDK;
@@ -94,6 +95,52 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
         }
 
         return providerConfig;
+    }
+
+    /// <summary>
+    /// Builds the Copilot SDK <see cref="SessionConfig"/> for a turn, forwarding the agent's
+    /// model, BYOK provider, reasoning effort, system instructions, and—critically—its function
+    /// tools. The Copilot CLI otherwise only exposes its own built-in tools, so without forwarding
+    /// <see cref="ChatOptions.Tools"/> the workspace <see cref="AIFunction"/>s (for example
+    /// <c>workspaces_entity_get</c>) never reach the model.
+    /// </summary>
+    public static SessionConfig BuildSessionConfig(
+        string modelId,
+        CopilotByokOptions? byokOptions,
+        ChatOptions? options)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        var sessionConfig = new SessionConfig
+        {
+            Model = modelId,
+            Streaming = true,
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+        };
+
+        if (byokOptions is not null)
+        {
+            sessionConfig.Provider = CreateProviderConfig(byokOptions, modelId);
+        }
+
+        var reasoningEffort = MapReasoningEffort(options?.Reasoning?.Effort);
+        if (reasoningEffort is not null)
+        {
+            sessionConfig.ReasoningEffort = reasoningEffort;
+        }
+
+        if (!string.IsNullOrWhiteSpace(options?.Instructions))
+        {
+            sessionConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
+        }
+
+        var tools = options?.Tools?.OfType<AIFunction>().ToList();
+        if (tools is { Count: > 0 })
+        {
+            sessionConfig.Tools = tools;
+        }
+
+        return sessionConfig;
     }
 
     /// <inheritdoc />
@@ -300,28 +347,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
 
             await client.StartAsync(cancellationToken).ConfigureAwait(false);
 
-            var sessionConfig = new SessionConfig
-            {
-                Model = this.modelId,
-                Streaming = true,
-                OnPermissionRequest = PermissionHandler.ApproveAll,
-            };
-
-            if (this.byokOptions is not null)
-            {
-                sessionConfig.Provider = CreateProviderConfig(this.byokOptions, this.modelId);
-            }
-
-            var reasoningEffort = MapReasoningEffort(options?.Reasoning?.Effort);
-            if (reasoningEffort is not null)
-            {
-                sessionConfig.ReasoningEffort = reasoningEffort;
-            }
-
-            if (!string.IsNullOrWhiteSpace(options?.Instructions))
-            {
-                sessionConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
-            }
+            var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
 
             var session = await client.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
 
