@@ -26,6 +26,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
     private readonly string displayName;
     private readonly string? gitHubToken;
     private readonly ILoggerFactory? loggerFactory;
+    private readonly CopilotByokOptions? byokOptions;
+    private readonly string? cliPath;
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
@@ -43,11 +45,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
     /// logged-in Copilot user instead.
     /// </param>
     /// <param name="loggerFactory">Optional logger factory for SDK diagnostics.</param>
+    /// <param name="byokOptions">
+    /// Optional bring-your-own-key configuration pointing the session at a custom
+    /// OpenAI-compatible endpoint instead of GitHub's hosted models.
+    /// </param>
+    /// <param name="cliPath">Optional explicit path to the Copilot CLI executable.</param>
     public CopilotSdkChatClient(
         string modelId,
         string displayName,
         string? gitHubToken,
-        ILoggerFactory? loggerFactory)
+        ILoggerFactory? loggerFactory,
+        CopilotByokOptions? byokOptions = null,
+        string? cliPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -56,6 +65,35 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
         this.displayName = displayName;
         this.gitHubToken = string.IsNullOrWhiteSpace(gitHubToken) ? null : gitHubToken;
         this.loggerFactory = loggerFactory;
+        this.byokOptions = byokOptions;
+        this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? null : cliPath;
+    }
+
+    /// <summary>
+    /// Builds the Copilot SDK <see cref="ProviderConfig"/> from BYOK options for the given model.
+    /// </summary>
+    public static ProviderConfig CreateProviderConfig(CopilotByokOptions byokOptions, string modelId)
+    {
+        ArgumentNullException.ThrowIfNull(byokOptions);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        var providerConfig = new ProviderConfig
+        {
+            Type = byokOptions.ProviderType,
+            WireApi = byokOptions.WireApi,
+            BaseUrl = byokOptions.BaseUrl,
+            ApiKey = byokOptions.ApiKey,
+            BearerToken = byokOptions.BearerToken,
+            ModelId = modelId,
+            WireModel = byokOptions.WireModel,
+        };
+
+        if (byokOptions.Headers is not null)
+        {
+            providerConfig.Headers = new Dictionary<string, string>(byokOptions.Headers);
+        }
+
+        return providerConfig;
     }
 
     /// <inheritdoc />
@@ -257,6 +295,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
             {
                 GitHubToken = this.gitHubToken,
                 Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                CliPath = this.cliPath,
             });
 
             await client.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -267,6 +306,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
                 Streaming = true,
                 OnPermissionRequest = PermissionHandler.ApproveAll,
             };
+
+            if (this.byokOptions is not null)
+            {
+                sessionConfig.Provider = CreateProviderConfig(this.byokOptions, this.modelId);
+            }
 
             var reasoningEffort = MapReasoningEffort(options?.Reasoning?.Effort);
             if (reasoningEffort is not null)

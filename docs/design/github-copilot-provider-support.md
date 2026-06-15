@@ -69,3 +69,20 @@ Copilot CLI process is disposed when the chat is disposed.
 2. Adding fallback behavior between provider types.
 3. Replaying full prior history into the Copilot session on restore (the live session
    retains context across turns within a single chat lifetime).
+
+## BYOK testing
+
+`CopilotSdkChatClient` accepts optional `CopilotByokOptions` (and `cliPath`). When provided, the
+session is configured with a Copilot SDK `ProviderConfig` (`CreateProviderConfig`) that points
+the CLI at a custom OpenAI-compatible endpoint instead of GitHub's hosted models. This lets the
+provider be exercised against one of our own test chat providers:
+
+- `OpenAiCompatibleChatServer` (test helper) fronts any `IChatClient` (for example
+  `EchoChatClient`) over `HttpListener` at `http://localhost:{port}/`, serving non-streaming
+  chat completions and SSE streaming chunks (the CLI requests streaming).
+- Deterministic tests (`CopilotByokTests`): `CreateProviderConfig` mapping, and the server
+  round-tripping the echo provider over HTTP.
+- An opt-in end-to-end test (`CopilotProvider_Byok_AgainstTestServer_EndToEnd`) runs a real
+  Copilot CLI session against the local server; it is gated on `COPILOT_BYOK_E2E=1` (plus the
+  Copilot CLI, via `COPILOT_CLI_PATH`) so it never runs in the deterministic suite. Verified
+  passing locally: the CLI accepts the BYOK provider and surfaces the test server's response.
