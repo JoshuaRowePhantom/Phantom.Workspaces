@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Linq;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Primitives;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Llm;
@@ -53,8 +56,11 @@ internal abstract class AgentChatSelectableInlineCollectionTransformer<TSource, 
 
 internal sealed class SelectableTextBlockChatOutputModel : IDisposable
 {
+    private readonly IReadOnlyList<AgentChatHistoryItem> historyItems;
+    private readonly IReadOnlyList<AgentChatRunningItem> runningItems;
     private readonly ChatHistorySelectableInlineModel historyModel;
     private readonly RunningChatItemsSelectableInlineModel runningModel;
+    private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = [];
 
     public SelectableTextBlockChatOutputModel(
         IReadOnlyList<AgentChatHistoryItem> historyItems,
@@ -63,6 +69,8 @@ internal sealed class SelectableTextBlockChatOutputModel : IDisposable
         Span runningRootSpan,
         Func<bool> isReasoningVisible)
     {
+        this.historyItems = historyItems;
+        this.runningItems = runningItems;
         this.historyModel = new ChatHistorySelectableInlineModel(
             historyRootSpan,
             historyItems,
@@ -71,18 +79,89 @@ internal sealed class SelectableTextBlockChatOutputModel : IDisposable
             runningRootSpan,
             runningItems,
             isReasoningVisible);
+
+        // Raise a single ContentChanged signal from the view model so the view can react
+        // (for example, to keep scrolled to the bottom) without walking the inline tree.
+        if (historyItems is INotifyCollectionChanged historyChanged)
+        {
+            historyChanged.CollectionChanged += this.OnContentCollectionChanged;
+        }
+
+        if (runningItems is INotifyCollectionChanged runningChanged)
+        {
+            runningChanged.CollectionChanged += this.OnRunningCollectionChanged;
+        }
+
+        this.SyncRunningItemSubscriptions();
     }
+
+    /// <summary>Raised whenever the rendered selectable output content changes.</summary>
+    public event EventHandler? ContentChanged;
 
     public void Refresh()
     {
         this.historyModel.Refresh();
         this.runningModel.Refresh();
+        this.RaiseContentChanged();
     }
 
     public void Dispose()
     {
+        if (this.historyItems is INotifyCollectionChanged historyChanged)
+        {
+            historyChanged.CollectionChanged -= this.OnContentCollectionChanged;
+        }
+
+        if (this.runningItems is INotifyCollectionChanged runningChanged)
+        {
+            runningChanged.CollectionChanged -= this.OnRunningCollectionChanged;
+        }
+
+        foreach (var pair in this.runningItemHandlers)
+        {
+            pair.Key.Items.CollectionChanged -= pair.Value;
+        }
+
+        this.runningItemHandlers.Clear();
+
         this.runningModel.Dispose();
         this.historyModel.Dispose();
+    }
+
+    private void OnContentCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        => this.RaiseContentChanged();
+
+    private void OnRunningCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        this.SyncRunningItemSubscriptions();
+        this.RaiseContentChanged();
+    }
+
+    private void OnRunningItemMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        => this.RaiseContentChanged();
+
+    private void RaiseContentChanged() => this.ContentChanged?.Invoke(this, EventArgs.Empty);
+
+    private void SyncRunningItemSubscriptions()
+    {
+        var removedItems = this.runningItemHandlers.Keys.Except(this.runningItems).ToArray();
+        foreach (var removedItem in removedItems)
+        {
+            removedItem.Items.CollectionChanged -= this.runningItemHandlers[removedItem];
+            this.runningItemHandlers.Remove(removedItem);
+        }
+
+        foreach (var runningItem in this.runningItems)
+        {
+            if (this.runningItemHandlers.ContainsKey(runningItem))
+            {
+                continue;
+            }
+
+            NotifyCollectionChangedEventHandler handler = this.OnRunningItemMessagesChanged;
+            runningItem.Items.CollectionChanged += handler;
+            this.runningItemHandlers[runningItem] = handler;
+        }
     }
 }
 
@@ -276,6 +355,8 @@ internal sealed class RunningChatItemSelectableInlineModel : AgentChatSelectable
 internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInlineModel
 {
     private readonly Func<bool> isReasoningVisible;
+    private readonly Dictionary<string, bool> toolExpansionState = new(StringComparer.Ordinal);
+    private readonly List<ToolContentSelectableInlineModel> toolModels = [];
     private AgentChatHistoryItem source;
 
     public ChatMessageSelectableInlineModel(
@@ -303,6 +384,7 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
 
     private void Render()
     {
+        this.ClearToolModels();
         this.Span.Inlines.Clear();
         this.Span.Classes.Clear();
         this.Span.Classes.Add("agent-chat-selectable-message");
@@ -330,12 +412,16 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
                     this.AppendLine(textContent.Text);
                     break;
                 case FunctionCallContent functionCallContent:
-                    this.AppendLine($"tool call: {functionCallContent.Name}", "agent-chat-selectable-meta");
-                    this.AppendLine(DocumentBlockUtilities.PrettyJson(functionCallContent.Arguments), "agent-chat-selectable-monospace");
+                    this.AppendToolContent(
+                        $"call:{functionCallContent.CallId}",
+                        $"tool call: {functionCallContent.Name}",
+                        () => DocumentBlockUtilities.PrettyJson(functionCallContent.Arguments));
                     break;
                 case FunctionResultContent functionResultContent:
-                    this.AppendLine($"tool result: {functionResultContent.CallId}", "agent-chat-selectable-meta");
-                    this.AppendLine(DocumentBlockUtilities.PrettyJson(functionResultContent.Result), "agent-chat-selectable-monospace");
+                    this.AppendToolContent(
+                        $"result:{functionResultContent.CallId}",
+                        $"tool result: {functionResultContent.CallId}",
+                        () => DocumentBlockUtilities.PrettyJson(functionResultContent.Result));
                     break;
                 case DataContent dataContent:
                     if (DocumentBlockUtilities.IsImageMediaType(dataContent.MediaType))
@@ -364,6 +450,28 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
         this.Span.Inlines.Add(new LineBreak());
     }
 
+    private void AppendToolContent(string stateKey, string headerLabel, Func<string> dataTextFactory)
+    {
+        var initiallyExpanded = this.toolExpansionState.TryGetValue(stateKey, out var expanded) && expanded;
+        var toolModel = new ToolContentSelectableInlineModel(
+            headerLabel,
+            dataTextFactory,
+            initiallyExpanded,
+            isExpanded => this.toolExpansionState[stateKey] = isExpanded);
+        this.toolModels.Add(toolModel);
+        this.Span.Inlines.Add(toolModel.Inline);
+    }
+
+    private void ClearToolModels()
+    {
+        for (var index = 0; index < this.toolModels.Count; index++)
+        {
+            this.toolModels[index].Dispose();
+        }
+
+        this.toolModels.Clear();
+    }
+
     private void AppendLine(string text, string? className = null)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -383,5 +491,131 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
         lineSpan.Inlines.Add(run);
         lineSpan.Inlines.Add(new LineBreak());
         this.Span.Inlines.Add(lineSpan);
+    }
+}
+
+/// <summary>
+/// Renders a single tool call or tool result as a collapsible expander. The tool data
+/// span starts empty (collapsed) and is populated only when the expander is expanded,
+/// and cleared again when it is collapsed, so collapsed tool content never participates
+/// in rendering during streaming. Tool results that parse as JSON are pretty-printed.
+/// </summary>
+internal sealed class ToolContentSelectableInlineModel : IDisposable
+{
+    private const string CollapsedIndicator = "\u25B8";
+    private const string ExpandedIndicator = "\u25BE";
+
+    private readonly Func<string> dataTextFactory;
+    private readonly Action<bool>? expandedChanged;
+    private readonly string headerLabel;
+    private readonly Span dataSpan = new();
+    private readonly ToggleButton toggleButton;
+
+    private bool isExpanded;
+    private bool isUpdatingToggle;
+    private string? cachedDataText;
+
+    public ToolContentSelectableInlineModel(
+        string headerLabel,
+        Func<string> dataTextFactory,
+        bool initiallyExpanded,
+        Action<bool>? expandedChanged = null)
+    {
+        ArgumentNullException.ThrowIfNull(headerLabel);
+        ArgumentNullException.ThrowIfNull(dataTextFactory);
+        this.headerLabel = headerLabel;
+        this.dataTextFactory = dataTextFactory;
+        this.expandedChanged = expandedChanged;
+        this.isExpanded = initiallyExpanded;
+
+        this.dataSpan.Classes.Add("agent-chat-selectable-tool-data");
+        this.dataSpan.Classes.Add("agent-chat-selectable-monospace");
+
+        this.toggleButton = new ToggleButton
+        {
+            IsChecked = initiallyExpanded,
+        };
+        this.toggleButton.Classes.Add("agent-chat-selectable-tool-toggle");
+        this.toggleButton.IsCheckedChanged += this.OnToggleCheckedChanged;
+        this.UpdateToggleContent();
+
+        this.Span = new Span();
+        this.Span.Classes.Add("agent-chat-selectable-tool");
+        this.Span.Inlines.Add(new InlineUIContainer(this.toggleButton));
+        this.Span.Inlines.Add(this.dataSpan);
+
+        this.ApplyExpansion();
+    }
+
+    public Span Span { get; }
+
+    public Inline Inline => this.Span;
+
+    public bool IsExpanded => this.isExpanded;
+
+    // Exposed for tests to observe lazily-populated tool data.
+    public Span DataSpan => this.dataSpan;
+
+    public void SetExpanded(bool expanded)
+    {
+        if (this.isExpanded == expanded)
+        {
+            return;
+        }
+
+        this.isExpanded = expanded;
+        this.UpdateToggleContent();
+        this.expandedChanged?.Invoke(expanded);
+        this.ApplyExpansion();
+    }
+
+    private void OnToggleCheckedChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (this.isUpdatingToggle)
+        {
+            return;
+        }
+
+        this.SetExpanded(this.toggleButton.IsChecked == true);
+    }
+
+    private void UpdateToggleContent()
+    {
+        this.isUpdatingToggle = true;
+        try
+        {
+            if (this.toggleButton.IsChecked != this.isExpanded)
+            {
+                this.toggleButton.IsChecked = this.isExpanded;
+            }
+
+            var indicator = this.isExpanded ? ExpandedIndicator : CollapsedIndicator;
+            this.toggleButton.Content = $"{indicator} {this.headerLabel}";
+        }
+        finally
+        {
+            this.isUpdatingToggle = false;
+        }
+    }
+
+    private void ApplyExpansion()
+    {
+        this.dataSpan.Inlines.Clear();
+
+        if (!this.isExpanded)
+        {
+            return;
+        }
+
+        this.cachedDataText ??= this.dataTextFactory() ?? string.Empty;
+        var run = new Run(this.cachedDataText);
+        run.Classes.Add("agent-chat-selectable-monospace");
+        this.dataSpan.Inlines.Add(run);
+        this.dataSpan.Inlines.Add(new LineBreak());
+    }
+
+    public void Dispose()
+    {
+        this.toggleButton.IsCheckedChanged -= this.OnToggleCheckedChanged;
     }
 }

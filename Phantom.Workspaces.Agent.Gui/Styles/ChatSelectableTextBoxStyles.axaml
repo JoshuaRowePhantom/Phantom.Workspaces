@@ -54,6 +54,16 @@
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.strong.Foreground}" />
     </Style>
 
+    <Style Selector="ToggleButton.agent-chat-selectable-tool-toggle">
+        <Setter Property="Padding" Value="6,1" />
+        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.warning.Foreground}" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+    </Style>
+
     <Style Selector="Span.agent-chat-selectable-error">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.error.Foreground}" />
         <Setter Property="FontWeight" Value="Bold" />
