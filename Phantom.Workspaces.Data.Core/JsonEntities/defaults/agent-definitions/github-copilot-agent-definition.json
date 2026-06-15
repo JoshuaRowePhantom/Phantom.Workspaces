@@ -1,0 +1,53 @@
+{
+  "entity-id": "d96af1b9-9b53-469b-be78-a49e871300fd",
+  "entity-types": [
+    "agent-definition"
+  ],
+  "names": [
+    [
+      "defaults",
+      "agent-definitions",
+      "github-copilot"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Copilot Workspace Assistant"
+  },
+  "definition": {
+    "kind": "prompt",
+    "name": "github-copilot",
+    "displayName": "GitHub Copilot Workspace Assistant",
+    "description": "Default GitHub Copilot SDK agent for workspace entity operations.",
+    "model": {
+      "id": "gpt-4.1-mini",
+      "provider": "github-copilot",
+      "apiType": "OpenAI",
+      "connection": {
+        "kind": "key",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "options": {
+        "temperature": 0.2,
+        "maxOutputTokens": 2048
+      }
+    },
+    "instructions": "You are a helpful AI assistant powered by the GitHub Copilot SDK.\nRespond clearly and concisely.\nUse workspace entity tools to inspect and modify workspace data safely.",
+    "tools": [
+      {
+        "kind": "workspace-entity",
+        "description": "Read and modify workspace entities."
+      }
+    ],
+    "metadata": {
+      "version": "1.0",
+      "author": "Phantom Workspaces",
+      "tags": [
+        "github-copilot",
+        "workspace"
+      ],
+      "prerequisites": [
+        "Sign in to the GitHub Copilot CLI, or set GITHUB_TOKEN in your environment with Copilot access."
+      ]
+    }
+  }
+}

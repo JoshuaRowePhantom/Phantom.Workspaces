@@ -2,7 +2,7 @@
   "kind": "prompt",
   "name": "github-copilot-chat",
   "displayName": "GitHub Copilot Chat",
-  "description": "A chat agent using GitHub Copilot provider integration.",
+  "description": "A chat agent using the GitHub Copilot SDK provider",
   "model": {
     "id": "gpt-4.1-mini",
     "provider": "github-copilot",
@@ -16,11 +16,29 @@
       "maxOutputTokens": 2048
     }
   },
-  "instructions": "You are a helpful assistant. Keep answers concise and practical.",
+  "instructions": "You are a helpful assistant. Keep answers concise and practical.\nYou can also use GitHub MCP tools to read and manage repository data when needed.",
   "tools": [
     {
       "kind": "web_request",
       "description": "Make HTTP requests to fetch web pages and resources"
+    },
+    {
+      "kind": "filesystem"
+    },
+    {
+      "name": "github",
+      "kind": "mcp",
+      "description": "GitHub MCP server providing tools for repositories, issues, pull requests, code search, and workflows.",
+      "connection": {
+        "kind": "key",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "serverName": "github",
+      "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server)",
+      "approvalMode": {
+        "kind": "never"
+      }
     }
   ],
   "metadata": {
@@ -28,10 +46,13 @@
     "author": "Phantom Workspaces",
     "tags": [
       "github-copilot",
-      "chat"
+      "copilot-sdk",
+      "chat",
+      "mcp",
+      "github"
     ],
     "prerequisites": [
-      "Set GITHUB_TOKEN in your environment."
+      "Sign in to the GitHub Copilot CLI, or set GITHUB_TOKEN in your environment with Copilot and GitHub MCP access."
     ]
   }
 }
