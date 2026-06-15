@@ -115,17 +115,36 @@ The clause is added to the C# model and to the data-access-layer JSON schema, wi
 
 ## MongoDB implementation
 
+The container defaults to the **Atlas Local** image (`mongodb/mongodb-atlas-local`), which bundles
+the `mongot` search process and therefore supports `$search` / `$vectorSearch` locally; the
+community `mongo` image does not. The image is overridable via the container connection
+definition's `image-name`.
+
+`MongoDbQueryTranslator` converts a `QueryClause` tree into native MongoDB driver constructs using
+**dynamic but secure** construction: every value is bound through the driver's
+`FilterDefinitionBuilder` and `BsonValue` / `BsonRegularExpression` APIs (never string-interpolated),
+so untrusted query text and field values are serialized as BSON literals and cannot inject query
+operators. Full-text terms are matched as escaped, case-insensitive regular expressions.
+
+The translator targets a denormalized **current-version projection** maintained on each entity
+document write (`current.type-names`, `current.search-text`, `current.embedding`,
+`current.is-deleted`).
+
 In `MongoDbEntityDataAccessLayer`:
 
-1. **Index** — a MongoDB vector search index over the embedding field (per embeddings `ModelId` /
-   `Dimensions`), created/ensured on startup.
-2. **Storage** — `UpdateEmbeddingsAsync` upserts the vector (and its model metadata) onto the
-   entity's document/sidecar collection.
-3. **Search** — an `EntityVectorQueryClause` compiles to a `$vectorSearch` aggregation stage
-   (`queryVector`, `numCandidates`, `limit`, optional pre-filter from sibling clauses), returning
-   matches with their similarity scores.
-4. **Queue state** — per-queue head timestamps are stored in a dedicated collection;
-   `ProcessQueueAsync` reads/advances it and returns entities ordered by modified time.
+1. **Query (current)** — `QueryAsync` runs the translated `FilterDefinition` natively against the
+   `current.*` projection for null-timestamp queries (entity-type, full-text, And/Or/Not, Top).
+   As-of-timestamp querying is a follow-up.
+2. **Index** — a MongoDB vector search index over `current.embedding` (per embeddings `ModelId` /
+   `Dimensions`), created/ensured on startup *(follow-up)*.
+3. **Storage** — `UpdateEmbeddingsAsync` upserts the vector (and its model metadata) onto the
+   entity's current projection *(follow-up)*.
+4. **Search** — `EntityVectorQueryClause` compiles to a `$vectorSearch` aggregation stage via
+   `MongoDbQueryTranslator.BuildVectorSearchStage` (`queryVector`, `numCandidates`, `limit`,
+   optional pre-filter from sibling clauses), returning matches with similarity scores *(stage
+   builder implemented; live execution against the Atlas vector index is a follow-up)*.
+5. **Queue state** — per-queue head timestamps are stored in a dedicated collection;
+   `ProcessQueueAsync` reads/advances it and returns entities ordered by modified time *(follow-up)*.
 
 ## Relationship-as-note enforcement
 
