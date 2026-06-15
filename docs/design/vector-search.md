@@ -7,17 +7,22 @@ find related entities and connections by meaning rather than exact text. Because
 embeddings is expensive, indexing is **decoupled** from entity updates through a queue, and runs
 as a scheduled tool (see `docs/design/scheduled-tools.md`).
 
-## Scope: MongoDB only
+## Scope: MongoDB (production) and in-memory (testing/dev)
 
-Vector search is supported **only on the MongoDB data-access layer**. The vector index, embedding
-storage, and `$vectorSearch` query execution live in `Phantom.Workspaces.Data.MongoDB`. Other
-data-access layers (in-memory, git, web client) do not implement vector search:
+The persistent vector index, embedding storage, and `$vectorSearch` query execution live in
+`Phantom.Workspaces.Data.MongoDB` — MongoDB (Atlas Vector Search / `$vectorSearch`) provides the
+approximate-nearest-neighbor index we rely on for production, and we do not maintain a second
+production vector engine.
 
-- They throw a clear `NotSupportedException` for the vector APIs / a vector query clause, or
+The **in-memory** data-access layer (`Phantom.Workspaces.Data.Offline.InMemoryDataAccessLayer`)
+also supports query-clause evaluation and vector search via a brute-force cosine ranking over
+entity text projections, computed at query time through an injected `IEmbeddingsProvider`
+(defaulting to `DeterministicEmbeddingsProvider`). This makes the full query + vector pipeline
+testable without MongoDB. Other data-access layers (git, web client) do not implement vector
+search:
+
+- They throw a clear `NotSupportedException` for unsupported clauses, or
 - (web client) forward the request to a MongoDB-backed server that does.
-
-This is an intentional constraint: MongoDB (Atlas Vector Search / `$vectorSearch`) provides the
-approximate-nearest-neighbor index we rely on; we do not maintain a second vector engine.
 
 ## Decoupled indexing model
 
@@ -33,7 +38,7 @@ Queues are managed through `IDataAccessLayer`. A queue's head state is simply th
 the last entity processed** in that queue.
 
 ```text
-ProcessQueueAsync(request: { queueName, token?, count }) -> { entities, token }
+ProcessQueueAsync(request: { queueName, token?, count, get-request? }) -> { entities, token }
 ```
 
 - If `token` is omitted, `ProcessQueue` reads the persisted head for `queueName`; if `token` is
@@ -41,6 +46,8 @@ ProcessQueueAsync(request: { queueName, token?, count }) -> { entities, token }
 - It then returns up to `count` entities in modified-timestamp order starting after the head, plus
   the `token` (timestamp) the caller should pass next time to acknowledge this batch.
 - The token is a `Timestamp` (the same modified-time used elsewhere in the DAL).
+- The "get-request" scopes entities to the given filter (for example, the entity classifier
+  tool filters entities to within the current user).
 
 This gives at-least-once processing with resumable progress: a crashed indexer re-reads the
 unacknowledged batch on the next run.
@@ -62,7 +69,7 @@ UpdateEmbeddingsAsync(request: [{ entityId, concurrencyToken, embedding }]) -> {
 
 The vector indexer (a scheduled tool):
 
-1. `ProcessQueueAsync({ queueName: "vector-index", count })` to get the next batch.
+1. `ProcessQueueAsync({ queueName: "vector-index", count: #, get-request: {} })` to get the next batch.
 2. `ComputeEmbeddingsAsync` for the batch.
 3. `UpdateEmbeddingsAsync` to persist the vectors.
 4. `ProcessQueueAsync({ queueName, token })` to acknowledge the batch (advance the head).
@@ -129,11 +136,16 @@ rationale for the connection is itself embeddable and discoverable by vector sea
 ## New classes
 
 1. `IEmbeddingsProvider` / concrete provider(s) — compute embeddings from entity text.
+   *(Implemented: `IEmbeddingsProvider`, `EmbeddingInput`/`Embedding`, `EntityTextProjection`, and
+   `DeterministicEmbeddingsProvider` in `Phantom.Workspaces.Data.Vector`.)*
 2. `EntityVectorQueryClause` — the vector query clause in the `QueryClause` hierarchy.
-3. `VectorIndexerTool` — scheduled tool driving the indexer flow (see scheduled-tools.md).
-4. MongoDB DAL additions — `$vectorSearch` clause compilation, embedding upsert, queue-state
+   *(Implemented, with `VectorQueryScore` surfaced on `QueryEntitySnapshot`.)*
+3. `InMemoryQueryEvaluator` — in-memory query-clause + vector evaluation used by
+   `InMemoryDataAccessLayer.QueryAsync`. *(Implemented.)*
+4. `VectorIndexerTool` — scheduled tool driving the indexer flow (see scheduled-tools.md).
+5. MongoDB DAL additions — `$vectorSearch` clause compilation, embedding upsert, queue-state
    collection access, and vector index management (within `Phantom.Workspaces.Data.MongoDB`).
-5. `IDataAccessLayer` API additions — `ProcessQueueAsync`, `ComputeEmbeddingsAsync`,
+6. `IDataAccessLayer` API additions — `ProcessQueueAsync`, `ComputeEmbeddingsAsync`,
    `UpdateEmbeddingsAsync` (MongoDB-backed; unsupported elsewhere).
 
 ## Key integration points
