@@ -1,0 +1,49 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/tool-execution-result.json",
+  "description": "Schema for tool-execution-result entities. Each entity records a single run of a scheduled tool: which tool ran, when it started and finished, its status, and arbitrary result content. A run may have child tool-execution-result entities (linked as related entities) that record sub-tasks and incremental progress.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "description": "Must include the 'tool-execution-result' entity type.",
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "tool-execution-result"
+      }
+    },
+    "tool-name": {
+      "description": "The name of the tool that produced this result.",
+      "type": "string"
+    },
+    "start-time": {
+      "description": "The UTC time at which the tool run started, as an RFC 3339 date-time.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "end-time": {
+      "description": "The UTC time at which the tool run finished, as an RFC 3339 date-time. Absent while the run is still in progress.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "description": "The current status of the tool run.",
+      "type": "string",
+      "enum": [
+        "running",
+        "succeeded",
+        "failed"
+      ]
+    }
+  },
+  "required": [
+    "tool-name",
+    "start-time"
+  ]
+}

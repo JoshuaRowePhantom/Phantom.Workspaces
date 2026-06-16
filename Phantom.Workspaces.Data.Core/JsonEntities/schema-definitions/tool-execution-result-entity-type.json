@@ -1,0 +1,30 @@
+{
+  "entity-id": "b3e1f2a4-5c6d-4e7f-8a9b-0c1d2e3f4a5b",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/tool-execution-result.json"
+    ],
+    [
+      "entity-types",
+      "tool-execution-result"
+    ]
+  ],
+  "display-name": {
+    "default": "Tool Execution Result Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/tool-execution-result-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/tool-execution-result.json"
+  },
+  "default-name-prefixes": []
+}
