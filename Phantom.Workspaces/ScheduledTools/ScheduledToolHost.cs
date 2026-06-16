@@ -21,6 +21,7 @@ public sealed class ScheduledToolHost
     private readonly ToolExecutionResultWriter resultWriter;
     private readonly TimeProvider timeProvider;
     private readonly HashSet<EntityId> runningRelationships = new();
+    private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
     private readonly object runningLock = new();
 
     public ScheduledToolHost(
@@ -33,6 +34,18 @@ public sealed class ScheduledToolHost
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.resultWriter = resultWriter ?? new ToolExecutionResultWriter(dataAccessLayer, this.timeProvider);
+    }
+
+    /// <summary>Raised whenever the set of currently-running scheduled tools changes.</summary>
+    public event EventHandler? RunningExecutionsChanged;
+
+    /// <summary>A snapshot of the scheduled tools currently running on this host.</summary>
+    public IReadOnlyList<RunningScheduledTool> GetRunningExecutions()
+    {
+        lock (this.runningLock)
+        {
+            return this.runningExecutions.Values.ToArray();
+        }
     }
 
     /// <summary>
@@ -174,6 +187,7 @@ public sealed class ScheduledToolHost
         }
 
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
+        this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents);
         try
         {
             await tool.RunAsync(
@@ -192,6 +206,38 @@ public sealed class ScheduledToolHost
         {
             await this.resultWriter.CompleteAsync(handle, success: false, content: exception.Message, cancellationToken).ConfigureAwait(false);
             throw;
+        }
+        finally
+        {
+            this.RemoveRunningExecution(relationship.RelationshipId);
+        }
+    }
+
+    private void AddRunningExecution(EntityId relationshipId, string toolType, IReadOnlyList<string> hostNameComponents)
+    {
+        lock (this.runningLock)
+        {
+            this.runningExecutions[relationshipId] = new RunningScheduledTool(
+                relationshipId,
+                toolType,
+                hostNameComponents,
+                this.timeProvider.GetUtcNow());
+        }
+
+        this.RunningExecutionsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void RemoveRunningExecution(EntityId relationshipId)
+    {
+        bool removed;
+        lock (this.runningLock)
+        {
+            removed = this.runningExecutions.Remove(relationshipId);
+        }
+
+        if (removed)
+        {
+            this.RunningExecutionsChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -362,3 +408,10 @@ public sealed class ScheduledToolHost
         IReadOnlyList<EntityId> ScheduleEntityIds,
         IReadOnlyList<EntityId> TargetEntityIds);
 }
+
+/// <summary>A scheduled tool that is currently running on a host.</summary>
+public sealed record RunningScheduledTool(
+    EntityId RelationshipId,
+    string ToolType,
+    IReadOnlyList<string> HostNameComponents,
+    DateTimeOffset StartedAt);
