@@ -17,14 +17,29 @@ public sealed class LocalMongoContainerSettingsViewModel : RepositoryConnectionM
     public LocalMongoContainerSettingsViewModel(DataAccessConnectionProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        this.containerName = profile.MongoContainerName;
+        this.containerName = string.IsNullOrWhiteSpace(profile.MongoContainerName)
+            ? DefaultContainerName
+            : profile.MongoContainerName;
         this.dataDirectory = string.IsNullOrWhiteSpace(profile.MongoDataDirectory)
             ? GetDefaultDataDirectory()
             : profile.MongoDataDirectory;
-        this.databaseName = profile.MongoDatabaseName;
-        this.rootCollectionName = profile.MongoRootCollectionName;
+        this.databaseName = string.IsNullOrWhiteSpace(profile.MongoDatabaseName)
+            ? DefaultDatabaseName
+            : profile.MongoDatabaseName;
+        this.rootCollectionName = string.IsNullOrWhiteSpace(profile.MongoRootCollectionName)
+            ? DefaultRootCollectionName
+            : profile.MongoRootCollectionName;
         this.hostPort = profile.MongoHostPort;
     }
+
+    /// <summary>The default container name pre-filled when a profile does not specify one.</summary>
+    public const string DefaultContainerName = "mongodb";
+
+    /// <summary>The default root collection name pre-filled when a profile does not specify one.</summary>
+    public const string DefaultRootCollectionName = "entities";
+
+    /// <summary>The default database name pre-filled when a profile does not specify one.</summary>
+    public const string DefaultDatabaseName = "phantom-workspaces";
 
     /// <summary>
     /// The wizard/GUI default Mongo data directory used to pre-fill the field when a profile does not

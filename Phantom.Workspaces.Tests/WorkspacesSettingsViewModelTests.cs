@@ -35,11 +35,14 @@ public sealed class WorkspacesSettingsViewModelTests
         viewModel.Web.Endpoint = "https://workspaces.example/";
         Assert.True(viewModel.IsValid);
 
-        // Switching to an unconfigured mode flips validity.
+        // LocalMongoContainer pre-fills its required fields with defaults, so it is valid immediately.
         viewModel.Mode = DataAccessMode.LocalMongoContainer;
+        Assert.True(viewModel.IsValid);
+
+        // Clearing a required field flips validity.
+        viewModel.LocalMongoContainer.RootCollectionName = string.Empty;
         Assert.False(viewModel.IsValid);
 
-        viewModel.LocalMongoContainer.ContainerName = "mongodb";
         viewModel.LocalMongoContainer.RootCollectionName = "entities";
         Assert.True(viewModel.IsValid);
     }
@@ -60,6 +63,35 @@ public sealed class WorkspacesSettingsViewModelTests
             new DataAccessConnectionProfile { MongoDataDirectory = "D:/explicit/mongo" });
 
         Assert.Equal("D:/explicit/mongo", settings.DataDirectory);
+    }
+
+    [AvaloniaFact]
+    public void LocalMongoContainer_FreshProfile_PreFillsDefaultsAndIsValid()
+    {
+        var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile());
+
+        Assert.Equal(LocalMongoContainerSettingsViewModel.DefaultContainerName, settings.ContainerName);
+        Assert.Equal(LocalMongoContainerSettingsViewModel.DefaultRootCollectionName, settings.RootCollectionName);
+        Assert.Equal(LocalMongoContainerSettingsViewModel.DefaultDatabaseName, settings.DatabaseName);
+        Assert.False(string.IsNullOrWhiteSpace(settings.DataDirectory));
+
+        // With every field pre-filled, the wizard is valid out of the box and Complete setup is enabled.
+        Assert.True(settings.IsValid);
+    }
+
+    [AvaloniaFact]
+    public void LocalMongoContainer_PreservesConfiguredNames()
+    {
+        var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile
+        {
+            MongoContainerName = "custom-container",
+            MongoRootCollectionName = "custom-root",
+            MongoDatabaseName = "custom-db",
+        });
+
+        Assert.Equal("custom-container", settings.ContainerName);
+        Assert.Equal("custom-root", settings.RootCollectionName);
+        Assert.Equal("custom-db", settings.DatabaseName);
     }
 
     [AvaloniaFact]
