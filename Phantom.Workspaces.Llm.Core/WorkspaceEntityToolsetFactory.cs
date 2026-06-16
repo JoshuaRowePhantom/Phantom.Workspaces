@@ -134,7 +134,9 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
         public override string Name => "workspaces_entity_update";
 
         public override string Description =>
-            "Execute a workspace UpdateRequest. Use this single tool for add, replace, and delete changes.";
+            "Execute a workspace UpdateRequest. Use this single tool for add, replace, and delete changes. "
+            + "Every relationship you create or replace (any entity carrying a \"participants\" object) must "
+            + "include a non-empty \"note\" property stating WHY the relationship is being applied.";
 
         public override JsonElement JsonSchema => InputSchema;
 
@@ -147,9 +149,48 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
                 return parseError;
             }
 
+            if (ValidateRelationshipReasonNotes(updateRequest) is { } reasonNoteError)
+            {
+                return reasonNoteError;
+            }
+
             var updateResult = await this.dataAccessLayer.UpdateAsync(updateRequest, cancellationToken);
             return SerializeToJsonElement(ToSerializableUpdateResult(updateResult));
         }
+    }
+
+    /// <summary>
+    /// Enforces the relationship reason-note requirement: every relationship the AI workspace tooling
+    /// creates or replaces (any entity whose data carries a <c>participants</c> object) must include a
+    /// non-empty <c>note</c> property capturing <em>why</em> the relationship was applied. Returns an
+    /// error message when a relationship change omits the note, or <see langword="null"/> when valid.
+    /// </summary>
+    private static string? ValidateRelationshipReasonNotes(UpdateRequest updateRequest)
+    {
+        foreach (var change in updateRequest.Changes)
+        {
+            if (change.EntityChangeMode != EntityChangeMode.Replace || change.Data is not { } data)
+            {
+                continue;
+            }
+
+            if (data.ValueKind != JsonValueKind.Object
+                || !data.TryGetProperty("participants", out var participants)
+                || participants.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!data.TryGetProperty("note", out var note)
+                || note.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(note.GetString()))
+            {
+                return "Each relationship created or replaced via workspaces_entity_update must include a "
+                    + "non-empty \"note\" property explaining WHY the relationship is being applied.";
+            }
+        }
+
+        return null;
     }
 
     private sealed class WorkspacesEntityGenerateGuidTool : AIFunction

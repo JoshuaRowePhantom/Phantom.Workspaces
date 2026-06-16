@@ -101,6 +101,20 @@ Update behaviors:
 2. Replace: send full replacement `data` and current `concurrency-tag`.
 3. Delete: set `data` to `null` and send current `concurrency-tag`.
 
+## Relationship reason-note rule
+
+Every relationship you create or replace — any entity whose `data` carries a `participants` object —
+**must** include a non-empty `note` property stating *why* the relationship is being applied. Updates
+that add or replace a relationship without a `note` reason are rejected. Example:
+
+```json
+{
+  "entity-types": ["assigned-to", "relationship"],
+  "participants": { "target": "<task-guid>", "user": "<user-guid>" },
+  "note": "Assigned to the user on the project board."
+}
+```
+
 ## GUID generation rule
 
 Do not call `workspaces_entity_generate_guid` for normal single-entity adds.

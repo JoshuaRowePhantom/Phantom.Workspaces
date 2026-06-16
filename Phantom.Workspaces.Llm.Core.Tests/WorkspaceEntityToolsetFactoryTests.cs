@@ -218,6 +218,80 @@ public sealed class WorkspaceEntityToolsetFactoryTests
     }
 
     [Fact]
+    public async Task WorkspacesEntityUpdate_RelationshipWithoutReasonNote_IsRejectedAndNotWritten()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
+        var getTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_get");
+        var relationshipId = Guid.NewGuid();
+
+        var result = await updateTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["update-metadata"] = JsonDocument.Parse("""{ "comment": { "text": "Create relationship" } }""").RootElement.Clone(),
+                ["changes"] = JsonDocument.Parse(
+                    $$"""
+                    [
+                      {
+                        "entity-id": "{{relationshipId:D}}",
+                        "entity-change-mode": "replace",
+                        "data": {
+                          "entity-types": ["assigned-to", "relationship"],
+                          "participants": { "target": "{{Guid.NewGuid():D}}", "user": "{{Guid.NewGuid():D}}" }
+                        }
+                      }
+                    ]
+                    """).RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var error = Assert.IsType<string>(result);
+        Assert.Contains("note", error, StringComparison.Ordinal);
+
+        // The relationship must not have been written when the reason note is missing.
+        var getResult = await getTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["get-entity"] = JsonDocument.Parse($$"""[{"entity-id":"{{relationshipId:D}}"}]""").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+        var getJson = ReadJsonResult(getResult);
+        Assert.Empty(getJson.GetProperty("batches")[0].GetProperty("entities").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task WorkspacesEntityUpdate_RelationshipWithReasonNote_Succeeds()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var updateTool = await GetToolAsync(dataAccessLayer, "workspaces_entity_update");
+        var relationshipId = Guid.NewGuid();
+
+        var result = await updateTool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["update-metadata"] = JsonDocument.Parse("""{ "comment": { "text": "Create relationship" } }""").RootElement.Clone(),
+                ["changes"] = JsonDocument.Parse(
+                    $$"""
+                    [
+                      {
+                        "entity-id": "{{relationshipId:D}}",
+                        "entity-change-mode": "replace",
+                        "data": {
+                          "entity-types": ["assigned-to", "relationship"],
+                          "participants": { "target": "{{Guid.NewGuid():D}}", "user": "{{Guid.NewGuid():D}}" },
+                          "note": "Task is assigned to the user per the project board."
+                        }
+                      }
+                    ]
+                    """).RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var json = ReadJsonResult(result);
+        Assert.Equal("Added", json.GetProperty("entityResults")[0].GetProperty("updateState").GetString());
+    }
+
+    [Fact]
     public async Task WorkspacesEntityGenerateGuid_ReturnsGuid()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();

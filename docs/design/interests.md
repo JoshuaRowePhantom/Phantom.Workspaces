@@ -200,6 +200,11 @@ AI workspace tools must require a **`note` (reason) property** on every relation
 (this is a property capturing *why*, not a requirement that the relationship be entity-type `note`).
 Enforced in the workspace entity update tooling; surfaced as an editable badge/relationship tooltip.
 
+Implemented: `WorkspaceEntityToolsetFactory.ValidateRelationshipReasonNotes` rejects any
+`workspaces_entity_update` Replace change whose `data` carries a `participants` object but no non-empty
+`note` string; documented in the agent tool-instruction-details note and the tool description. The
+editable badge tooltip is delivered with the badge pipeline (`interests-toggleable-glyphs`).
+
 ### Build order
 
 `actionable-blocked-interest-types` (the `interest-type` model + `x-entity-types` change + seeded
