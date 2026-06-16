@@ -46,8 +46,13 @@ Child results (sub-tasks / progress) are nested beneath their parent result enti
 > `ScheduledToolRegistry` dispatch by `tool.type`; `ToolExecutionResultWriter` records runs as
 > `tool-execution-result` entities; and `ScheduledToolHost.RunDueToolsAsync` discovers
 > tool-relationships targeting the host, evaluates schedules against the last recorded execution, and
-> runs due tools (no double-start). The concrete built-in tools, the result browser GUI, and the
-> running-tools display are still to come.
+> runs due tools (no double-start). The built-in tools are implemented — `VectorIndexerTool`,
+> `EntityClassifierTool`, `GitWorkspaceScanTool`, and `CopilotSessionDiscoveryTool`. The host exposes
+> in-flight running state (`GetRunningExecutions` + `RunningExecutionsChanged`); the GUI view-model
+> cores are implemented — `ScheduledToolsRunningViewModel` (running display) and
+> `ToolResultBrowserViewModel` (result browser). The remaining work is the thin Avalonia views /
+> windows and wiring them into the main window (shared with the connection-status network icon from
+> `reverse-tunnel-trust-execution`).
 
 When a host is running, it executes the scheduled tools bound to it. For a `user-computer-profile`
 host, the host process is the **`Phantom.Workspaces` executable**.
