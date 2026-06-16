@@ -28,18 +28,24 @@ public sealed class InterestViewQueryTests
         await SeedAssignedToAsync(dataAccessLayer, assignedTask, alice);
         await SeedAssignedToAsync(dataAccessLayer, unassignedTask, bob);
 
-        // Two related members share a name-hierarchy parent (the auto-created folder ["projects","alpha"]).
-        var relatedOne = await SeedNoteAsync(dataAccessLayer, ["projects", "alpha", "one"], "Member One");
-        var relatedTwo = await SeedNoteAsync(dataAccessLayer, ["projects", "alpha", "two"], "Member Two");
+        // Two related members share a contextual parent, reached via the relationship type the member
+        // entity type's entity-type-view designates in its parent-hierarchy-relationships (here the
+        // registered 'reference' type, traversing to the 'target' role). A member whose entity-type-view
+        // has no parent-hierarchy-relationships (or none matching) has no contextual parent.
+        var contextualParent = await SeedNoteAsync(dataAccessLayer, ["notes", "parent"], "Parent");
+        var relatedOne = await SeedNoteAsync(dataAccessLayer, ["notes", "one"], "Member One");
+        var relatedTwo = await SeedNoteAsync(dataAccessLayer, ["notes", "two"], "Member Two");
         var unrelated = await SeedNoteAsync(dataAccessLayer, ["notes", "x"], "Unrelated");
 
         await SeedRelatedAsync(dataAccessLayer, assignedTask, relatedOne);
         await SeedRelatedAsync(dataAccessLayer, assignedTask, relatedTwo);
         await SeedRelatedAsync(dataAccessLayer, unassignedTask, unrelated);
 
-        // The contextual parent of the related members is the auto-created folder entity at their
-        // name prefix.
-        var contextualParent = await GetEntityIdByNameAsync(dataAccessLayer, ["projects", "alpha"]);
+        // The 'note' entity-type-view designates 'reference' (target role) as its contextual-parent
+        // relationship; both members reference the same parent.
+        await SeedNoteParentHierarchyViewAsync(dataAccessLayer);
+        await SeedReferenceAsync(dataAccessLayer, source: relatedOne, target: contextualParent);
+        await SeedReferenceAsync(dataAccessLayer, source: relatedTwo, target: contextualParent);
 
         var roots = await AssembleWorkstreamsAsync(dataAccessLayer, alice);
         var viewModels = PopulateHierarchyViewModels(roots);
@@ -135,50 +141,92 @@ public sealed class InterestViewQueryTests
         return participants.Where(snapshot => snapshot.EntityId != taskId).ToArray();
     }
 
-    private static async Task<EntityId> GetEntityIdByNameAsync(IDataAccessLayer dataAccessLayer, string[] name)
+    private static async Task<EntitySnapshot?> GetContextualParentAsync(IDataAccessLayer dataAccessLayer, EntitySnapshot entity)
+    {
+        foreach (var entityType in ReadEntityTypes(entity.Data))
+        {
+            var view = await GetEntityByNameAsync(dataAccessLayer, ["entity-type-views", entityType]);
+            if (view?.Data is not { } viewData
+                || !viewData.TryGetProperty("parent-hierarchy-relationships", out var traversals)
+                || traversals.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var traversal in traversals.EnumerateArray())
+            {
+                var relationshipTypeIds = ReadStringArray(traversal, "relationship-type-ids");
+                if (relationshipTypeIds.Length == 0)
+                {
+                    continue;
+                }
+
+                var parentRoleNames = ReadStringArray(traversal, "relationship-role-names");
+                var parents = await ExecuteAsync(dataAccessLayer, new EntityParticipationQueryClause
+                {
+                    RelationshipTypeNames = new RelationshipTypeNameSet(relationshipTypeIds),
+                    ParticipationRoleNames = parentRoleNames.Length > 0 ? new RoleNameSet(parentRoleNames) : null,
+                    MustHave = new EntityParticipationRequirement
+                    {
+                        Clause = new EntityFieldQueryClause
+                        {
+                            FieldPath = new FieldPath("entity-id"),
+                            ComparisonOperator = FieldComparisonOperator.Equals,
+                            Value = JsonSerializer.SerializeToElement(entity.EntityId.Value.ToString()),
+                        },
+                    },
+                });
+
+                var parent = parents.FirstOrDefault(candidate => candidate.EntityId != entity.EntityId);
+                if (parent is not null)
+                {
+                    return parent;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task<EntitySnapshot?> GetEntityByNameAsync(IDataAccessLayer dataAccessLayer, string[] name)
     {
         var result = await dataAccessLayer.GetAsync(new GetRequest
         {
             Entities = [new GetEntityRequest { EntityName = new EntityName(name) }],
             Timestamps = [null],
         });
-        var snapshot = result.Batches
-            .SelectMany(batch => batch.Entities)
-            .First(entity => entity.Data is not null);
-        return snapshot.EntityId;
-    }
-
-    private static async Task<EntitySnapshot?> GetContextualParentAsync(IDataAccessLayer dataAccessLayer, EntitySnapshot entity)
-    {
-        var name = ReadPrimaryName(entity.Data);
-        if (name is null || name.Length < 2)
-        {
-            return null;
-        }
-
-        var result = await dataAccessLayer.GetAsync(new GetRequest
-        {
-            Entities = [new GetEntityRequest { EntityName = new EntityName(name[..^1]) }],
-            Timestamps = [null],
-        });
         return result.Batches.SelectMany(batch => batch.Entities).FirstOrDefault(snapshot => snapshot.Data is not null);
     }
 
-    private static string[]? ReadPrimaryName(JsonElement? data)
+    private static IEnumerable<string> ReadEntityTypes(JsonElement? data)
     {
         if (data is { ValueKind: JsonValueKind.Object } element
-            && element.TryGetProperty("names", out var names)
-            && names.ValueKind == JsonValueKind.Array
-            && names.GetArrayLength() > 0)
+            && element.TryGetProperty("entity-types", out var types)
+            && types.ValueKind == JsonValueKind.Array)
         {
-            var first = names[0];
-            if (first.ValueKind == JsonValueKind.Array)
+            foreach (var type in types.EnumerateArray())
             {
-                return first.EnumerateArray().Select(component => component.GetString() ?? string.Empty).ToArray();
+                if (type.ValueKind == JsonValueKind.String && type.GetString() is { Length: > 0 } value)
+                {
+                    yield return value;
+                }
             }
         }
+    }
 
-        return null;
+    private static string[] ReadStringArray(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(propertyName, out var array)
+            && array.ValueKind == JsonValueKind.Array)
+        {
+            return array.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()!)
+                .ToArray();
+        }
+
+        return [];
     }
 
     private List<ViewEntityViewModel> PopulateHierarchyViewModels(IReadOnlyList<WorkstreamNode> roots)
@@ -255,6 +303,30 @@ public sealed class InterestViewQueryTests
               "entity-types": ["related","relationship"],
               "names": [["relationships","related-{{first.Value}}-{{second.Value}}"]],
               "participants": { "entities": ["{{first.Value}}", "{{second.Value}}"] }
+            }
+            """);
+
+    private static Task SeedReferenceAsync(IDataAccessLayer dataAccessLayer, EntityId source, EntityId target)
+        => SeedAsync(
+            dataAccessLayer,
+            $$"""
+            {
+              "entity-types": ["reference","relationship"],
+              "names": [["relationships","ref-{{source.Value}}-{{target.Value}}"]],
+              "participants": { "source": "{{source.Value}}", "target": "{{target.Value}}" }
+            }
+            """);
+
+    private static Task SeedNoteParentHierarchyViewAsync(IDataAccessLayer dataAccessLayer)
+        => SeedAsync(
+            dataAccessLayer,
+            """
+            {
+              "entity-types": ["entity-type-view"],
+              "names": [["entity-type-views","note"]],
+              "parent-hierarchy-relationships": [
+                { "relationship-type-ids": ["reference"], "relationship-role-names": ["target"], "max-depth": 1 }
+              ]
             }
             """);
 
