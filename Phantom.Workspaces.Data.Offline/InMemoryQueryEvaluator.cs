@@ -124,6 +124,9 @@ internal sealed class InMemoryQueryEvaluator
             case EntityVectorQueryClause vectorClause:
                 return await this.MatchVectorAsync(vectorClause, cancellationToken).ConfigureAwait(false);
 
+            case EntityParticipationQueryClause participationClause:
+                return await this.MatchParticipationAsync(participationClause, cancellationToken).ConfigureAwait(false);
+
             default:
                 throw new NotSupportedException(
                     $"In-memory query evaluation does not support the '{clause.GetType().Name}' clause.");
@@ -146,6 +149,136 @@ internal sealed class InMemoryQueryEvaluator
         }
 
         return result;
+    }
+
+    private async Task<HashSet<EntityId>> MatchParticipationAsync(
+        EntityParticipationQueryClause clause,
+        CancellationToken cancellationToken)
+    {
+        var relationshipTypeNames = clause.RelationshipTypeNames.Values is { Length: > 0 } typeValues
+            ? new HashSet<string>(typeValues, StringComparer.Ordinal)
+            : null;
+        var resultRoleNames = clause.ParticipationRoleNames?.Values is { Length: > 0 } roleValues
+            ? new HashSet<string>(roleValues, StringComparer.Ordinal)
+            : null;
+
+        HashSet<EntityId>? mustHaveMatches = null;
+        HashSet<string>? mustHaveRoleNames = null;
+        if (clause.MustHave is { } mustHave)
+        {
+            mustHaveMatches = await this.EvaluateClauseAsync(mustHave.Clause, cancellationToken).ConfigureAwait(false);
+            mustHaveRoleNames = mustHave.ParticipationRoleNames?.Values is { Length: > 0 } mustHaveRoles
+                ? new HashSet<string>(mustHaveRoles, StringComparer.Ordinal)
+                : null;
+        }
+
+        var result = new HashSet<EntityId>();
+        foreach (var candidate in this.candidates)
+        {
+            if (candidate.Data is not { } data)
+            {
+                continue;
+            }
+
+            // Only relationships of the requested type(s) participate.
+            if (relationshipTypeNames is not null && !relationshipTypeNames.Overlaps(ReadEntityTypes(data)))
+            {
+                continue;
+            }
+
+            if (!data.TryGetProperty("participants", out var participants)
+                || participants.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            // MustHave: the relationship must also carry a participant (in the given roles, or any
+            // role when unspecified) that matches the sub-clause - e.g. the 'user' participant is the
+            // current user.
+            if (clause.MustHave is not null && !MustHaveSatisfied(participants, mustHaveRoleNames, mustHaveMatches!))
+            {
+                continue;
+            }
+
+            // Collect entities participating in the requested roles (or all roles when unspecified).
+            foreach (var participant in participants.EnumerateObject())
+            {
+                if (resultRoleNames is not null && !resultRoleNames.Contains(participant.Name))
+                {
+                    continue;
+                }
+
+                foreach (var id in ReadParticipantIds(participant.Value))
+                {
+                    result.Add(id);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static bool MustHaveSatisfied(
+        JsonElement participants,
+        HashSet<string>? mustHaveRoleNames,
+        HashSet<EntityId> mustHaveMatches)
+    {
+        foreach (var participant in participants.EnumerateObject())
+        {
+            if (mustHaveRoleNames is not null && !mustHaveRoleNames.Contains(participant.Name))
+            {
+                continue;
+            }
+
+            foreach (var id in ReadParticipantIds(participant.Value))
+            {
+                if (mustHaveMatches.Contains(id))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<EntityId> ReadParticipantIds(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            if (TryParseEntityId(value, out var id))
+            {
+                yield return id;
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in value.EnumerateArray())
+            {
+                if (TryParseEntityId(element, out var id))
+                {
+                    yield return id;
+                }
+            }
+        }
+    }
+
+    private static bool TryParseEntityId(JsonElement element, out EntityId id)
+    {
+        id = default;
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var value = element.GetString();
+        if (string.IsNullOrWhiteSpace(value) || !Guid.TryParse(value, out var guid))
+        {
+            return false;
+        }
+
+        id = new EntityId(guid);
+        return true;
     }
 
     private async Task<HashSet<EntityId>> MatchVectorAsync(EntityVectorQueryClause clause, CancellationToken cancellationToken)
