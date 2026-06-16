@@ -11,8 +11,10 @@
 
 The `workstreams` view (`JsonEntities/views/workstreams-view.json`, currently a title with no
 sub-views) should show the **tasks assigned to the current user**, organized in their natural
-**hierarchy** (parent task → child tasks → …), so the user sees their work grouped by the larger
-efforts it belongs to rather than as a flat list.
+**hierarchy** (parent task → child tasks → …), and, under each task (workstream node), **all entities
+related to that workstream** (notes, git worktrees, work items, sessions, …) — so the user sees their
+work grouped by the larger efforts it belongs to, together with the material that belongs to each
+effort, rather than as a flat list.
 
 This reuses the existing **view mechanism** (`docs/design/llm-session.md`, `JsonSchemas/view.json`):
 a view is a tree of `sub-views`, each either a reference to another view or an inline
@@ -42,6 +44,14 @@ Two modeling decisions (confirmed in review):
    always another `task` (a sub-workstream nests under its parent task); there are no non-task
    hierarchy ancestors.
 
+3. **Workstream membership uses the `related` relationship.** Arbitrary entities are associated with
+   a workstream through the existing general-purpose **`related`** relationship type
+   (`JsonSchemas/related.json`: a `participants.entities` list of 2+ entity ids, unordered). This
+   answers the review question "which relationship type is this?": it is `related` (a `task` and the
+   member entity are co-participants in a `related` instance). The entity classifier is instructed to
+   create a `related` relationship between an entity and the workstream's `task` when the entity is
+   clearly part of that workstream (see "Interaction with interests / classifier").
+
 ## View definition
 
 `workstreams-view.json` gains one inline `view-definition` sub-view — this JSON is the **primary
@@ -51,11 +61,13 @@ artifact**; everything else is a generic enhancement to the standard view model:
   the assignment relationship (see "Contextual entities" below). The view does **not** itself filter
   out completed/cancelled tasks; stale terminal tasks are hidden via the `not-interesting` interest
   applied by the entity classifier (see "Interaction with interests").
-- `relationships-to-return`: request parent/child task relationships (and the assignment
-  relationship) so the standard view model can nest the results in one round-trip rather than N
+- `relationships-to-return`: request the parent/child task relationships (for hierarchy), the
+  assignment relationship, **and the `related` relationships** so the standard view model can nest
+  both child tasks and related member entities under each task in one round-trip rather than N
   queries.
 - `entity-type-views`: a `task` presentation that shows title, `status`, and the interest badges
-  (consistent with `interests-toggleable-glyphs`).
+  (consistent with `interests-toggleable-glyphs`), plus default presentations for the member entity
+  types surfaced under a task.
 - `disposition`: `expanded` (it is an expanded sub-view of `main`).
 
 ## Rendering via the standard view model (no bespoke view-model)
@@ -74,20 +86,22 @@ only two generic capabilities added to this existing path:
    assignee instead names the current-user context placeholder, which `MainWindowViewModel` binds
    before issuing the `GetRequest`. This is reusable by any view (e.g. the inbox), not workstreams-specific.
 
-2. **Parent/child relationship nesting.** `ViewEntityViewModel` already carries an `indentLevel`, but
+2. **Parent/child + membership nesting.** `ViewEntityViewModel` already carries an `indentLevel`, but
    the view-definition path currently emits every result at `indentLevel: 0`. Extend it so that, when
-   a `view-definition` returns `relationships-to-return` parent/child links, the standard view model
-   assembles the returned entities into a forest and emits them depth-first with increasing
-   `indentLevel` (roots at 0, children at 1, …). Roots are results whose parent is absent or not in
-   the result set; a returned task whose parent is not in the set surfaces as a root (no assigned work
-   is hidden). Ordering within a level is stable (`status` active-first, then title). This nesting is
-   generic — driven entirely by `relationships-to-return` — so any hierarchical view benefits.
+   a `view-definition` returns `relationships-to-return`, the standard view model assembles the
+   returned entities into a forest and emits them depth-first with increasing `indentLevel` (roots at
+   0, children at 1, …). Two relationship roles drive nesting: parent/child **task** relationships
+   nest sub-tasks under their parent task, and **`related`** relationships nest member entities under
+   the task they belong to. Roots are results whose parent is absent or not in the result set; a
+   returned task whose parent is not in the set surfaces as a root (no assigned work is hidden).
+   Ordering within a level is stable (`status` active-first, then title). This nesting is generic —
+   driven entirely by `relationships-to-return` — so any hierarchical view benefits.
 
 Both enhancements live in `MainWindowViewModel`'s view-definition handling and the shared
 `ViewEntityViewModel`; presentation continues to use the existing centralized styles and the
 `ScrollViewer.AllowAutoHide="False"` convention already in the view's AXAML.
 
-## Interaction with interests
+## Interaction with interests and the entity classifier
 
 - Tasks carrying the `not-interesting` interest are filtered out unless "show hidden items" is set,
   consistent with `not-interesting-filter`.
@@ -95,12 +109,21 @@ Both enhancements live in `MainWindowViewModel`'s view-definition handling and t
   decision, the entity classifier's task instructions mark a task with the `not-interesting` interest
   when it has been in a terminal state (`completed` or `cancelled`) **and** has not been modified for
   a week. Those tasks then drop out of the workstreams view via the `not-interesting` filter, while
-  recently-closed tasks remain visible. This rule belongs in the entity classifier instructions (todo
-  `classifier-interest-instructions`), keeping the workstreams view itself free of status-specific
-  filtering logic.
-- The `actionable` interest is what the **inbox** view keys on (`inbox-actionable-view`); workstreams
-  is the broader hierarchical view of all assigned tasks, so the two are complementary: inbox =
-  "what to act on now", workstreams = "everything I own, in context".
+  recently-closed tasks remain visible.
+- **Workstream membership is established by the classifier.** The entity classifier is instructed
+  that when an entity is clearly part of a workstream, it should associate that entity with the
+  corresponding `task` via a **`related`** relationship. The workstreams view then surfaces those
+  members under the task (via `relationships-to-return`).
+- **`actionable` / `blocked` are user-scoped interests.** The inbox (`inbox-actionable-view`) shows
+  **all entities** — not only tasks — that carry the `actionable` interest. This requires new
+  interest types `actionable` (by a user) and `blocked` (by a user), each allowing a `user`
+  participant so they apply per user. Each entity type's classifier instructions must specify when an
+  entity of that type becomes actionable / not-actionable / blocked / not-blocked. These rules live in
+  the entity classifier instructions (todo `classifier-interest-instructions`) and the interest-type
+  definitions (todo `actionable-blocked-interest-types`), keeping the views themselves free of
+  type-specific logic.
+- workstreams = "everything I own, in context (with its related material)"; inbox = "everything
+  actionable right now (any type)" — the two are complementary.
 
 ## Test tasks
 
@@ -138,10 +161,17 @@ Both enhancements live in `MainWindowViewModel`'s view-definition handling and t
 1. **Assignment** is a relationship from the `task` to the `user` entity (not a string field).
 2. **Hierarchy** is task-to-task: a task's parent is always another `task`; there are no non-task
    ancestors.
-3. **Completed/cancelled aging** is handled by the entity classifier: a terminal task unmodified for
+3. **Workstream membership** uses the existing **`related`** relationship type (confirmed in review):
+   the classifier associates an entity with a workstream by creating a `related` relationship between
+   the entity and the workstream's `task`; the view shows all such members under the task.
+4. **Completed/cancelled aging** is handled by the entity classifier: a terminal task unmodified for
    over a week is marked `not-interesting`, which hides it via the `not-interesting` filter — there
    is no separate show-completed toggle in the view.
-4. **No bespoke view-model/AXAML.** Use the ordinary view's model. The standard view model
+5. **No bespoke view-model/AXAML.** Use the ordinary view's model. The standard view model
    (`MainWindowViewModel` + `ViewEntityViewModel` + the `view-definition` JSON) is extended
-   generically to support contextual entities and parent/child relationship nesting; the workstreams
-   view is then pure configuration. (Incorporated throughout this document.)
+   generically to support contextual entities and parent/child + `related` nesting; the workstreams
+   view is then pure configuration.
+6. **`actionable` / `blocked` interests (by a user)** are new interest types (todo
+   `actionable-blocked-interest-types`); the inbox shows **all entities** carrying `actionable` (any
+   type, not just tasks), and each entity type's classifier instructions define its
+   actionable/not-actionable/blocked/not-blocked transitions (todo `classifier-interest-instructions`).
