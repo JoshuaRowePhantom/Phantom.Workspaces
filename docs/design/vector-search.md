@@ -90,6 +90,21 @@ IEmbeddingsProvider
 - The provider's `ModelId` and `Dimensions` are recorded with stored vectors so a model change can
   trigger reindexing and so queries use a matching query-embedding.
 
+### Configuration
+
+The data-access layers take an optional `IEmbeddingsProvider` and fall back to a built-in default
+when none is supplied:
+
+- **Default:** `DeterministicEmbeddingsProvider` (`ModelId` `deterministic-hash-v1`, `Dimensions`
+  256) — FNV-1a feature hashing into an L2-normalized vector. It is deterministic and dependency-free
+  so tests and offline/dev use need no external embedding service.
+- **Injection:** `MongoDbEntityDataAccessLayer` and `InMemoryDataAccessLayer` accept the provider as
+  a constructor argument; production can supply a model-backed provider (for example, an Ollama- or
+  OpenAI-compatible implementation) without changing call sites.
+- The provider's `Dimensions` drives the MongoDB vector index definition (`numDimensions`), so the
+  index and stored embeddings stay consistent with the configured model (see *MongoDB
+  implementation* below).
+
 ## Vector query integration
 
 Vector search is expressed as a new clause in the existing query API (the `QueryClause` hierarchy
