@@ -21,7 +21,7 @@
     },
     "assigned-to": {
       "type": "string",
-      "description": "Reference to the user this task is assigned to"
+      "description": "Source-system-dependent assignee value carried over from the originating system (for example, an Azure DevOps assignee). Its exact meaning and format vary by source system. This raw value is not an entity reference; the entity classifier uses it to choose which user to apply the 'assigned-to' interest to."
     }
   }
 }
