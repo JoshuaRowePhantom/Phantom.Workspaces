@@ -42,7 +42,8 @@ public static class TrustProfileEntityReader
                 NetworkAccessPolicy = ReadNetworkAccessPolicy(entity),
                 MountPoints = ReadMountPoints(entity),
                 HttpsProxyPolicy = ReadHttpsProxyPolicy(entity),
-                AllowedMcpToolCallSchemas = ReadSchemas(entity),
+                AllowedMcpToolCallSchemas = ReadSchemas(entity, "allowed-mcp-tool-call-schemas"),
+                RestrictedMcpToolCallSchemas = ReadSchemas(entity, "restricted-mcp-tool-call-schemas"),
             },
         };
     }
@@ -228,9 +229,9 @@ public static class TrustProfileEntityReader
         return new TrustHttpsProxyPolicy(mode, proxyUrl, credentialsReference);
     }
 
-    private static IReadOnlyList<JsonObject> ReadSchemas(JsonElement entity)
+    private static IReadOnlyList<JsonObject> ReadSchemas(JsonElement entity, string propertyName)
     {
-        if (!entity.TryGetProperty("allowed-mcp-tool-call-schemas", out var schemas) || schemas.ValueKind != JsonValueKind.Array)
+        if (!entity.TryGetProperty(propertyName, out var schemas) || schemas.ValueKind != JsonValueKind.Array)
         {
             return [];
         }

@@ -66,6 +66,7 @@ public static class TrustProfileComposer
                 ? StrongerProxy(primary.HttpsProxyPolicy, other.HttpsProxyPolicy)
                 : WeakerProxy(primary.HttpsProxyPolicy, other.HttpsProxyPolicy),
             AllowedMcpToolCallSchemas = UnionSchemas(primary.AllowedMcpToolCallSchemas, other.AllowedMcpToolCallSchemas),
+            RestrictedMcpToolCallSchemas = UnionSchemas(primary.RestrictedMcpToolCallSchemas, other.RestrictedMcpToolCallSchemas),
         };
     }
 
@@ -80,7 +81,9 @@ public static class TrustProfileComposer
             NetworkAccessPolicy = definition.NetworkAccessPolicy,
             MountPoints = definition.MountPoints,
             HttpsProxyPolicy = definition.HttpsProxyPolicy,
-            AllowedMcpToolCallSchema = BuildMcpToolCallSchema(definition.AllowedMcpToolCallSchemas),
+            AllowedMcpToolCallSchema = BuildMcpToolCallSchema(
+                definition.AllowedMcpToolCallSchemas,
+                definition.RestrictedMcpToolCallSchemas),
         };
     }
 
@@ -191,26 +194,50 @@ public static class TrustProfileComposer
         return result;
     }
 
-    private static JsonObject BuildMcpToolCallSchema(IReadOnlyList<JsonObject> schemas)
+    private static JsonObject BuildMcpToolCallSchema(
+        IReadOnlyList<JsonObject> allowedSchemas,
+        IReadOnlyList<JsonObject> restrictedSchemas)
     {
-        if (schemas.Count == 0)
+        JsonObject allowedEnvelope;
+        if (allowedSchemas.Count == 0)
         {
             // No allowed tool-call schemas: deny everything. "not": {} rejects all instances
             // because the empty schema matches everything.
-            return new JsonObject { ["not"] = new JsonObject() };
+            allowedEnvelope = new JsonObject { ["not"] = new JsonObject() };
+        }
+        else
+        {
+            var anyOf = new JsonArray();
+            foreach (var schema in allowedSchemas)
+            {
+                anyOf.Add(schema.DeepClone());
+            }
+
+            allowedEnvelope = new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray("toolName", "input"),
+                ["anyOf"] = anyOf,
+            };
         }
 
-        var anyOf = new JsonArray();
-        foreach (var schema in schemas)
+        if (restrictedSchemas.Count == 0)
         {
-            anyOf.Add(schema.DeepClone());
+            return allowedEnvelope;
+        }
+
+        // A tool call must satisfy the allowed envelope AND not match any restricted schema.
+        var restrictedAnyOf = new JsonArray();
+        foreach (var schema in restrictedSchemas)
+        {
+            restrictedAnyOf.Add(schema.DeepClone());
         }
 
         return new JsonObject
         {
-            ["type"] = "object",
-            ["required"] = new JsonArray("toolName", "input"),
-            ["anyOf"] = anyOf,
+            ["allOf"] = new JsonArray(
+                allowedEnvelope,
+                new JsonObject { ["not"] = new JsonObject { ["anyOf"] = restrictedAnyOf } }),
         };
     }
 }

@@ -108,6 +108,13 @@ public sealed record TrustProfileDefinition
 
     /// <summary>One or more MCP tool-call envelope schemas; composed with <c>anyOf</c>.</summary>
     public IReadOnlyList<JsonObject> AllowedMcpToolCallSchemas { get; init; } = [];
+
+    /// <summary>
+    /// One or more MCP tool-call envelope schemas that are explicitly denied. A tool call matching
+    /// any restricted schema is rejected even if it also matches an allowed schema. Composed
+    /// independently of <see cref="AllowedMcpToolCallSchemas"/>.
+    /// </summary>
+    public IReadOnlyList<JsonObject> RestrictedMcpToolCallSchemas { get; init; } = [];
 }
 
 /// <summary>

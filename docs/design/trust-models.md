@@ -45,9 +45,14 @@ Implemented (`Phantom.Workspaces.Llm.Core/Trust/`):
 2. Composition (`TrustProfileComposer.cs`): `Merge(primary, other, mode)` supports both
    `Restrictive` (intersect client instances, most-restrictive network, intersect mounts with
    read-only narrowing, strongest proxy) and `Permissive` (union client instances, most-permissive
-   network, union mounts with read-write widening, weakest proxy). MCP tool-call schemas always
-   compose into one additive `anyOf` envelope; `Finalize` produces the runtime `TrustProfile`.
-   `Compose(list)` keeps restrictive behavior. Order-independent (each merge is commutative).
+   network, union mounts with read-write widening, weakest proxy). MCP tool-call schemas are
+   composed in two independent lists: **allowed** schemas compose into one additive `anyOf` envelope,
+   and **restricted** (deny) schemas compose into their own additive `anyOf`. `Finalize` produces the
+   runtime `TrustProfile` whose effective schema is the allowed envelope, and—when any restricted
+   schema is present—`allOf: [ allowed-envelope, { not: { anyOf: restricted } } ]`, so a tool call
+   matching any restricted schema is rejected even if it also matches an allowed schema. Both lists
+   accumulate (union) across inheritance regardless of mode. `Compose(list)` keeps restrictive
+   behavior. Order-independent (each merge is commutative).
 
 Covered by `TrustProfileComposerTests`.
 

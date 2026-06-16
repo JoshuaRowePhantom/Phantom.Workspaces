@@ -110,6 +110,61 @@ public sealed class TrustProfileComposerTests
     }
 
     [Fact]
+    public void Compose_RestrictedSchema_DeniesMatchingToolCall_EvenWhenAllowed()
+    {
+        var definition = new TrustProfileDefinition
+        {
+            // Allow any tool whose name is a string.
+            AllowedMcpToolCallSchemas =
+            [
+                new JsonObject { ["properties"] = new JsonObject { ["toolName"] = new JsonObject { ["type"] = "string" } } },
+            ],
+            // But explicitly deny the write_file tool.
+            RestrictedMcpToolCallSchemas =
+            [
+                new JsonObject { ["properties"] = new JsonObject { ["toolName"] = new JsonObject { ["const"] = "write_file" } } },
+            ],
+        };
+
+        var composed = TrustProfileComposer.Compose([definition]);
+        var authorizer = new TrustToolCallAuthorizer(composed);
+
+        Assert.True(authorizer.IsToolCallAllowed("read_file", new JsonObject()));
+        Assert.False(authorizer.IsToolCallAllowed("write_file", new JsonObject()));
+    }
+
+    [Fact]
+    public void Compose_RestrictedSchemas_AreUnionedAcrossInheritance()
+    {
+        var baseDefinition = new TrustProfileDefinition
+        {
+            AllowedMcpToolCallSchemas =
+            [
+                new JsonObject { ["properties"] = new JsonObject { ["toolName"] = new JsonObject { ["type"] = "string" } } },
+            ],
+            RestrictedMcpToolCallSchemas =
+            [
+                new JsonObject { ["properties"] = new JsonObject { ["toolName"] = new JsonObject { ["const"] = "delete_all" } } },
+            ],
+        };
+        var derived = new TrustProfileDefinition
+        {
+            RestrictedMcpToolCallSchemas =
+            [
+                new JsonObject { ["properties"] = new JsonObject { ["toolName"] = new JsonObject { ["const"] = "format_disk" } } },
+            ],
+        };
+
+        var composed = TrustProfileComposer.Compose([baseDefinition, derived]);
+        var authorizer = new TrustToolCallAuthorizer(composed);
+
+        // Both denies accumulate; an unrelated allowed tool still passes.
+        Assert.True(authorizer.IsToolCallAllowed("read_file", new JsonObject()));
+        Assert.False(authorizer.IsToolCallAllowed("delete_all", new JsonObject()));
+        Assert.False(authorizer.IsToolCallAllowed("format_disk", new JsonObject()));
+    }
+
+    [Fact]
     public void Compose_McpSchemas_ComposesAnyOf()
     {
         var first = new TrustProfileDefinition
