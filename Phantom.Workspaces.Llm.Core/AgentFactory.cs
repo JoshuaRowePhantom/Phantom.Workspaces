@@ -457,7 +457,7 @@ public static class AgentFactory
             {
                 if (string.Equals(envVarName, "GITHUB_TOKEN", StringComparison.OrdinalIgnoreCase))
                 {
-                    var githubCliToken = ResolveGithubTokenFromCli();
+                    var githubCliToken = GitHubAuthTokenResolver.ResolveFromCli();
                     if (!string.IsNullOrWhiteSpace(githubCliToken))
                     {
                         return githubCliToken;
@@ -473,47 +473,4 @@ public static class AgentFactory
 
         return trimmed;
     }
-
-    private static string? ResolveGithubTokenFromCli()
-    {
-        Process? process;
-        try
-        {
-            process = Process.Start(new ProcessStartInfo
-            {
-                FileName = "gh",
-                Arguments = "auth token",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
-        }
-        catch (Win32Exception)
-        {
-            return null;
-        }
-
-        if (process is null)
-        {
-            return null;
-        }
-
-        using (process)
-        {
-            if (!process.WaitForExit(10000))
-            {
-                process.Kill(entireProcessTree: true);
-                throw new InvalidOperationException("Timed out while resolving GITHUB_TOKEN via 'gh auth token'.");
-            }
-
-            if (process.ExitCode != 0)
-            {
-                return null;
-            }
-
-            return process.StandardOutput.ReadToEnd().Trim();
-        }
-    }
-
 }
