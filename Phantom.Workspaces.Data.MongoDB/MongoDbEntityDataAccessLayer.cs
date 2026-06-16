@@ -301,6 +301,25 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     continue;
                 }
 
+                if (topLevelClause.Clause is EntityParticipationQueryClause participationClause)
+                {
+                    var participantDocuments = await ExecuteParticipationClauseAsync(
+                        bsonCollection, translator, participationClause, cancellationToken).ConfigureAwait(false);
+                    foreach (var document in participantDocuments)
+                    {
+                        var participantId = document["_id"].AsString;
+                        documentsById[participantId] = document;
+                        if (!matchedClauses.TryGetValue(participantId, out var participantIdentifiers))
+                        {
+                            matchedClauses[participantId] = participantIdentifiers = [];
+                        }
+
+                        participantIdentifiers.Add(topLevelClause.ClauseIdentifier);
+                    }
+
+                    continue;
+                }
+
                 var filter = translator.TranslateToFilter(topLevelClause.Clause);
                 var find = bsonCollection.Find(filter);
                 if (MongoDbQueryTranslator.GetResultLimit(topLevelClause.Clause) is { } limit && limit >= 0)
@@ -496,6 +515,119 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         return snapshots;
+    }
+
+    /// <summary>
+    /// Executes an <see cref="EntityParticipationQueryClause"/> as a native aggregation: it matches
+    /// relationship documents of the requested type(s) (optionally requiring a participant matching
+    /// the MustHave sub-clause), collects the participant ids in the requested roles, and
+    /// <c>$lookup</c>-joins back to the entity collection to return the participant entity documents.
+    /// </summary>
+    private async Task<List<BsonDocument>> ExecuteParticipationClauseAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        MongoDbQueryTranslator translator,
+        EntityParticipationQueryClause clause,
+        CancellationToken cancellationToken)
+    {
+        var relationshipTypes = new BsonArray(clause.RelationshipTypeNames.Values ?? []);
+        var collectionName = bsonCollection.CollectionNamespace.CollectionName;
+
+        var pipeline = new List<BsonDocument>
+        {
+            // Non-deleted relationship documents carrying one of the requested types (native match).
+            new("$match", new BsonDocument
+            {
+                { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
+                { MongoDbQueryTranslator.TypeNamesField, new BsonDocument("$in", relationshipTypes) },
+            }),
+        };
+
+        // MustHave: the relationship must carry a participant (in the given roles, or any role) whose
+        // id is among the entities matching the MustHave sub-clause. The sub-clause is translated to a
+        // native filter and resolved to its matching ids first.
+        if (clause.MustHave is { } mustHave)
+        {
+            var mustHaveFilter = translator.TranslateToFilter(mustHave.Clause);
+            var mustHaveDocuments = await bsonCollection
+                .Find(mustHaveFilter)
+                .Project(Builders<BsonDocument>.Projection.Include("_id"))
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+            var mustHaveIds = new BsonArray(mustHaveDocuments.Select(document => document["_id"]));
+
+            pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray
+            {
+                new BsonDocument("$size", new BsonDocument("$setIntersection", new BsonArray
+                {
+                    BuildRoleIdsExpression(mustHave.ParticipationRoleNames?.Values),
+                    mustHaveIds,
+                })),
+                0,
+            }))));
+        }
+
+        // Collect the participant ids in the result roles, then join to the entity documents.
+        pipeline.Add(new BsonDocument("$project", new BsonDocument("ids", BuildRoleIdsExpression(clause.ParticipationRoleNames?.Values))));
+        pipeline.Add(new BsonDocument("$unwind", "$ids"));
+        pipeline.Add(new BsonDocument("$lookup", new BsonDocument
+        {
+            { "from", collectionName },
+            { "localField", "ids" },
+            { "foreignField", "_id" },
+            { "as", "entity" },
+        }));
+        pipeline.Add(new BsonDocument("$unwind", "$entity"));
+        pipeline.Add(new BsonDocument("$match", new BsonDocument("entity." + MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true))));
+        // Deduplicate participant entities (a shared participant referenced by several relationships).
+        pipeline.Add(new BsonDocument("$group", new BsonDocument
+        {
+            { "_id", "$entity._id" },
+            { "doc", new BsonDocument("$first", "$entity") },
+        }));
+        pipeline.Add(new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$doc")));
+
+        return await bsonCollection
+            .Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Builds an aggregation expression yielding the flat array of participant ids for the given roles
+    /// (all roles when <paramref name="roleNames"/> is null/empty), normalizing each role value (a
+    /// single id or an array of ids) into the array.
+    /// </summary>
+    private static BsonDocument BuildRoleIdsExpression(string[]? roleNames)
+    {
+        // participants as an array of { k: roleName, v: roleValue } entries.
+        BsonValue entries = new BsonDocument("$objectToArray",
+            new BsonDocument("$ifNull", new BsonArray { "$current.data.participants", new BsonDocument() }));
+
+        if (roleNames is { Length: > 0 })
+        {
+            entries = new BsonDocument("$filter", new BsonDocument
+            {
+                { "input", entries },
+                { "as", "entry" },
+                { "cond", new BsonDocument("$in", new BsonArray { "$$entry.k", new BsonArray(roleNames) }) },
+            });
+        }
+
+        return new BsonDocument("$reduce", new BsonDocument
+        {
+            { "input", entries },
+            { "initialValue", new BsonArray() },
+            {
+                "in", new BsonDocument("$concatArrays", new BsonArray
+                {
+                    "$$value",
+                    new BsonDocument("$cond", new BsonArray
+                    {
+                        new BsonDocument("$isArray", "$$this.v"),
+                        "$$this.v",
+                        new BsonArray { "$$this.v" },
+                    }),
+                })
+            },
+        });
     }
 
     private static QueryEntitySnapshot? BuildCurrentSnapshot(BsonDocument document)

@@ -113,6 +113,88 @@ public sealed class MongoDbNativeDataRoundTripTests
         Assert.DoesNotContain(new EntityId(otherId), ids);
     }
 
+    [Fact]
+    public async Task ParticipationClause_JoinsParticipantsOfTypedRelationship_FilteredByMustHave()
+    {
+        var dataAccessLayer = CreateDataAccessLayer();
+        var user = Guid.NewGuid();
+        var otherUser = Guid.NewGuid();
+        var assignedTask = Guid.NewGuid();
+        var otherTask = Guid.NewGuid();
+
+        await SeedRawAsync(dataAccessLayer, user, """{ "entity-types": ["user"] }""");
+        await SeedRawAsync(dataAccessLayer, otherUser, """{ "entity-types": ["user"] }""");
+        await SeedRawAsync(dataAccessLayer, assignedTask, """{ "entity-types": ["task"], "display-name": { "default": "Mine" } }""");
+        await SeedRawAsync(dataAccessLayer, otherTask, """{ "entity-types": ["task"], "display-name": { "default": "Theirs" } }""");
+        await SeedRawAsync(dataAccessLayer, Guid.NewGuid(), $$"""{ "entity-types": ["assigned-to","relationship"], "participants": { "target": "{{assignedTask}}", "user": "{{user}}" } }""");
+        await SeedRawAsync(dataAccessLayer, Guid.NewGuid(), $$"""{ "entity-types": ["assigned-to","relationship"], "participants": { "target": "{{otherTask}}", "user": "{{otherUser}}" } }""");
+
+        var result = await dataAccessLayer.QueryAsync(new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("assigned"),
+                    Clause = new EntityParticipationQueryClause
+                    {
+                        RelationshipTypeNames = new RelationshipTypeNameSet(["assigned-to"]),
+                        ParticipationRoleNames = new RoleNameSet(["target"]),
+                        MustHave = new EntityParticipationRequirement
+                        {
+                            ParticipationRoleNames = new RoleNameSet(["user"]),
+                            Clause = new EntityFieldQueryClause
+                            {
+                                FieldPath = new FieldPath("entity-id"),
+                                ComparisonOperator = FieldComparisonOperator.Equals,
+                                Value = JsonSerializer.SerializeToElement(user.ToString()),
+                            },
+                        },
+                    },
+                },
+            ],
+        });
+
+        var ids = result.Batches.SelectMany(batch => batch.Entities).Select(entity => entity.EntityId).ToHashSet();
+        Assert.Contains(new EntityId(assignedTask), ids);
+        Assert.DoesNotContain(new EntityId(otherTask), ids);
+        Assert.DoesNotContain(new EntityId(user), ids);
+    }
+
+    private static async Task SeedRawAsync(MongoDbEntityDataAccessLayer dataAccessLayer, Guid id, string bodyJson)
+    {
+        using var body = JsonDocument.Parse(bodyJson);
+        using var stream = new System.IO.MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("entity-id", id);
+            foreach (var property in body.RootElement.EnumerateObject())
+            {
+                property.WriteTo(writer);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        using var document = JsonDocument.Parse(stream.ToArray());
+        var result = await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId(id),
+                    ConcurrencyTag = null,
+                    Data = document.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+        Assert.DoesNotContain(result.EntityResults, static r => r.UpdateState == UpdateState.Failed);
+    }
+
     private static async Task SeedAsync(MongoDbEntityDataAccessLayer dataAccessLayer, Guid id, string priority)
     {
         var json =
