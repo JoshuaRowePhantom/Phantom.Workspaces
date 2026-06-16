@@ -10,16 +10,15 @@ namespace Phantom.Workspaces.Data.Offline;
 
 /// <summary>
 /// Evaluates a <see cref="QueryRequest"/>'s clause trees against an in-memory set of candidate
-/// entities. Supports the composable clauses (And/Or/Not/Top) plus entity-type, full-text and
-/// vector (semantic) clauses. Full-text and vector clauses contribute per-clause scores. Clauses
-/// that require relationship traversal (participation/transit) and field comparisons are not yet
-/// supported and raise <see cref="NotSupportedException"/>.
+/// entities. Supports the composable clauses (And/Or/Not/Top) plus entity-type and vector
+/// (semantic) clauses. Vector clauses contribute per-clause scores. Clauses that require
+/// relationship traversal (participation/transit) and field comparisons are not yet supported and
+/// raise <see cref="NotSupportedException"/>.
 /// </summary>
 internal sealed class InMemoryQueryEvaluator
 {
     private readonly IReadOnlyList<Candidate> candidates;
     private readonly IEmbeddingsProvider embeddingsProvider;
-    private readonly Dictionary<EntityId, List<FullTextQueryScore>> fullTextScores = [];
     private readonly Dictionary<EntityId, List<VectorQueryScore>> vectorScores = [];
 
     public InMemoryQueryEvaluator(
@@ -37,7 +36,6 @@ internal sealed class InMemoryQueryEvaluator
     public sealed record EvaluatedEntity(
         EntityId Id,
         IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers,
-        IReadOnlyCollection<FullTextQueryScore> FullTextScores,
         IReadOnlyCollection<VectorQueryScore> VectorScores);
 
     public async Task<IReadOnlyList<EvaluatedEntity>> EvaluateAsync(
@@ -63,7 +61,6 @@ internal sealed class InMemoryQueryEvaluator
             .Select(entry => new EvaluatedEntity(
                 entry.Key,
                 entry.Value.ToArray(),
-                this.fullTextScores.TryGetValue(entry.Key, out var fullText) ? fullText.ToArray() : [],
                 this.vectorScores.TryGetValue(entry.Key, out var vector) ? vector.ToArray() : []))
             .ToArray();
     }
@@ -124,9 +121,6 @@ internal sealed class InMemoryQueryEvaluator
             case EntityTypeQueryClause entityTypeClause:
                 return this.MatchEntityTypes(entityTypeClause);
 
-            case EntityFullTextQueryClause fullTextClause:
-                return this.MatchFullText(fullTextClause);
-
             case EntityVectorQueryClause vectorClause:
                 return await this.MatchVectorAsync(vectorClause, cancellationToken).ConfigureAwait(false);
 
@@ -148,30 +142,6 @@ internal sealed class InMemoryQueryEvaluator
             if (requiredTypes.All(types.Contains))
             {
                 result.Add(candidate.Id);
-            }
-        }
-
-        return result;
-    }
-
-    private HashSet<EntityId> MatchFullText(EntityFullTextQueryClause clause)
-    {
-        var result = new HashSet<EntityId>();
-        var queryText = clause.QueryText.Value?.ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(queryText))
-        {
-            return result;
-        }
-
-        var minimumScore = clause.MinimumQueryScore?.Value ?? double.Epsilon;
-        foreach (var candidate in this.candidates)
-        {
-            var text = EntityTextProjection.ProjectText(candidate.Data).ToLowerInvariant();
-            var score = CountOccurrences(text, queryText);
-            if (score > 0 && score >= minimumScore)
-            {
-                result.Add(candidate.Id);
-                this.AddFullTextScore(candidate.Id, clause.FullTextQueryIdentifier, score);
             }
         }
 
@@ -264,25 +234,7 @@ internal sealed class InMemoryQueryEvaluator
             }
         }
 
-        if (this.fullTextScores.TryGetValue(id, out var fullTextScoreList))
-        {
-            foreach (var score in fullTextScoreList)
-            {
-                best = Math.Max(best, score.Score);
-            }
-        }
-
         return best;
-    }
-
-    private void AddFullTextScore(EntityId id, QueryClauseIdentifier identifier, double score)
-    {
-        if (!this.fullTextScores.TryGetValue(id, out var list))
-        {
-            this.fullTextScores[id] = list = [];
-        }
-
-        list.Add(new FullTextQueryScore { QueryIdentifier = identifier, Score = score });
     }
 
     private void AddVectorScore(EntityId id, QueryClauseIdentifier identifier, double score)
@@ -316,24 +268,6 @@ internal sealed class InMemoryQueryEvaluator
         }
 
         return types;
-    }
-
-    private static double CountOccurrences(string text, string term)
-    {
-        if (string.IsNullOrEmpty(term))
-        {
-            return 0;
-        }
-
-        var count = 0;
-        var index = 0;
-        while ((index = text.IndexOf(term, index, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            index += term.Length;
-        }
-
-        return count;
     }
 
     private static double CosineSimilarity(IReadOnlyList<float> left, IReadOnlyList<float> right)

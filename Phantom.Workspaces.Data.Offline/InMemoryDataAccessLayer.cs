@@ -598,7 +598,6 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                                     Data = version.Data?.RootElement,
                                     Relationships = Array.Empty<EntitySnapshot>(),
                                     MatchingClauseIdentifiers = Array.Empty<QueryClauseIdentifier>(),
-                                    FullTextQueryScores = Array.Empty<FullTextQueryScore>(),
                                 },
                             ],
                         });
@@ -798,7 +797,6 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             Data = version.Data?.RootElement,
                             Relationships = Array.Empty<EntitySnapshot>(),
                             MatchingClauseIdentifiers = entity.MatchingClauseIdentifiers,
-                            FullTextQueryScores = entity.FullTextScores,
                             VectorQueryScores = entity.VectorScores,
                         };
                     })

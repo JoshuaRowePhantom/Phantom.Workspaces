@@ -291,9 +291,6 @@ public sealed record TimestampedQueryBatch
 /// <param name="MatchingClauseIdentifiers">
 /// The set of query clause identifiers that returned this entity.
 /// </param>
-/// <param name="FullTextQueryScores">
-/// The full text match scores for this entity.
-/// </param>
 public sealed record QueryEntitySnapshot : EntitySnapshot
 {
     [JsonPropertyName("classified-time")]
@@ -302,30 +299,8 @@ public sealed record QueryEntitySnapshot : EntitySnapshot
     [JsonPropertyName("matching-clause-identifiers")]
     public required IReadOnlyCollection<QueryClauseIdentifier> MatchingClauseIdentifiers { get; init; }
 
-    [JsonPropertyName("full-text-query-scores")]
-    public required IReadOnlyCollection<FullTextQueryScore> FullTextQueryScores { get; init; }
-
     [JsonPropertyName("vector-query-scores")]
     public IReadOnlyCollection<VectorQueryScore> VectorQueryScores { get; init; } = [];
-}
-
-/// <summary>
-/// When an entity matches a FullText query, the FullTextQueryScore
-/// contains the relevance score for that match, as well as the identifier of the corresponding query clause.
-/// </summary>
-/// <param name="QueryIdentifier">
-/// The identifier of the full text query clause that produced this match score. This can be used to correlate the score with the original query clause, and to distinguish scores from different full text query clauses if an entity matched multiple such clauses.
-/// </param>
-/// <param name="Score">
-/// The relevance score for the match.
-/// </param>
-public sealed record FullTextQueryScore
-{
-    [JsonPropertyName("query-identifier")]
-    public required QueryClauseIdentifier QueryIdentifier { get; init; }
-
-    [JsonPropertyName("score")]
-    public required double Score { get; init; }
 }
 
 /// <summary>
@@ -550,8 +525,6 @@ public readonly struct FieldPath : IEquatable<FieldPath>
     }
 }
 
-public readonly record struct FullTextQueryText(string Value);
-
 public readonly record struct RegularExpressionPattern(string Value);
 
 public readonly record struct MinimumQueryScore(double Value);
@@ -612,18 +585,6 @@ public sealed record EntityFieldQueryClause : EntityQueryClause
 
     [JsonPropertyName("value")]
     public JsonElement? Value { get; init; }
-}
-
-public sealed record EntityFullTextQueryClause : EntityQueryClause
-{
-    [JsonPropertyName("full-text-query-identifier")]
-    public required QueryClauseIdentifier FullTextQueryIdentifier { get; init; }
-
-    [JsonPropertyName("query-text")]
-    public required FullTextQueryText QueryText { get; init; }
-
-    [JsonPropertyName("minimum-query-score")]
-    public MinimumQueryScore? MinimumQueryScore { get; init; }
 }
 
 /// <summary>

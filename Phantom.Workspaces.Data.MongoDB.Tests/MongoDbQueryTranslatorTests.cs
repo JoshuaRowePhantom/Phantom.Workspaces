@@ -32,43 +32,6 @@ public sealed class MongoDbQueryTranslatorTests
     }
 
     [Fact]
-    public void FullText_TranslatesToCaseInsensitiveRegex_OnSearchText()
-    {
-        var translator = new MongoDbQueryTranslator();
-
-        var filter = translator.TranslateToFilter(new EntityFullTextQueryClause
-        {
-            FullTextQueryIdentifier = new QueryClauseIdentifier("ft"),
-            QueryText = new FullTextQueryText("hello"),
-        });
-
-        var rendered = Render(filter);
-        var regex = rendered["current.search-text"].AsBsonRegularExpression;
-        Assert.Equal("hello", regex.Pattern);
-        Assert.Equal("i", regex.Options);
-    }
-
-    [Fact]
-    public void FullText_EscapesRegexMetacharacters_PreventingInjection()
-    {
-        var translator = new MongoDbQueryTranslator();
-
-        // A malicious term packed with regex metacharacters must be matched literally.
-        var malicious = ".*|(){}[]^$+?\\";
-        var filter = translator.TranslateToFilter(new EntityFullTextQueryClause
-        {
-            FullTextQueryIdentifier = new QueryClauseIdentifier("ft"),
-            QueryText = new FullTextQueryText(malicious),
-        });
-
-        var rendered = Render(filter);
-        var regex = rendered["current.search-text"].AsBsonRegularExpression;
-        Assert.Equal(System.Text.RegularExpressions.Regex.Escape(malicious), regex.Pattern);
-        // The escaped pattern must not contain a bare unescaped alternation that could broaden the match.
-        Assert.Contains("\\|", regex.Pattern);
-    }
-
-    [Fact]
     public void And_Or_Not_Compose()
     {
         var translator = new MongoDbQueryTranslator();
@@ -82,11 +45,7 @@ public sealed class MongoDbQueryTranslatorTests
                 {
                     Clauses =
                     [
-                        new EntityFullTextQueryClause
-                        {
-                            FullTextQueryIdentifier = new QueryClauseIdentifier("ft"),
-                            QueryText = new FullTextQueryText("alpha"),
-                        },
+                        new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["important"]) },
                         new NotQueryClause
                         {
                             Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["archived"]) },
@@ -102,7 +61,6 @@ public sealed class MongoDbQueryTranslatorTests
         var json = rendered.ToJson();
         Assert.Contains("$or", json, System.StringComparison.Ordinal);
         Assert.Contains("current.type-names", json, System.StringComparison.Ordinal);
-        Assert.Contains("current.search-text", json, System.StringComparison.Ordinal);
         Assert.Contains("current.is-deleted", json, System.StringComparison.Ordinal);
     }
 

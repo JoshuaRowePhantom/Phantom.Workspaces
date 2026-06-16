@@ -99,7 +99,7 @@ The system separates UI, agent execution, data access, and external integrations
      - a transit query.
    - entity queries may be:
      - field queries with equals, greater-than, less-than, greater-than-or-equal-to, less-than-or-equal-to, regular-expression match, or array contains,
-     - full-text queries for approximate matching with a required identifier and optional minimum score threshold,
+     - vector (semantic-similarity) queries with a required identifier, query text or precomputed embedding, an optional candidate count, and an optional minimum score threshold,
      - participation queries by relationship type name and optional participation role name.
    - participation queries may include a must-have requirement with an optional role name and a clause that target objects must also satisfy.
    - transit queries:
@@ -109,10 +109,10 @@ The system separates UI, agent execution, data access, and external integrations
      - match the destination entities with a clause,
      - begin from the entities produced by the preceding entity query and traverse related entities.
    - each returned entity must indicate which clauses caused it to be returned.
-   - each full-text query must include an identifier.
+   - each vector query must include an identifier.
    - `top(n)` is a separate clause that limits the results of the nested clause.
-   - full-text queries may specify a minimum score threshold.
-   - entities that match a full-text query after other filtering must include a score associated with the full-text query identifier.
+   - vector queries may specify a minimum score threshold.
+   - entities that match a vector query after other filtering must include a similarity score associated with the vector query identifier.
 8. `Render`:
    - renders a view into the set of entities needed to satisfy that view,
    - when provided with a time index, returns the entities modified for the view since the previous render and a new time index,

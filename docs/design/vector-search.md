@@ -106,8 +106,8 @@ Top:
 
 - A new `EntityVectorQueryClause : EntityQueryClause` carries either query text (embedded at query
   time via `IEmbeddingsProvider`) or a precomputed query embedding, plus optional parameters
-  (number of candidates, minimum score). Like `EntityFullTextQueryClause`, it can contribute a
-  per-clause relevance score surfaced through `FullTextQueryScore` / an analogous vector score.
+  (number of candidates, minimum score). It contributes a per-clause relevance score surfaced
+  through a `VectorQueryScore`.
 - `TopQueryClause` bounds the result count, matching MongoDB `$vectorSearch` `limit`.
 
 The clause is added to the C# model and to the data-access-layer JSON schema, with explicit
@@ -122,18 +122,16 @@ definition's `image-name`.
 
 `MongoDbQueryTranslator` converts a `QueryClause` tree into native MongoDB driver constructs using
 **dynamic but secure** construction: every value is bound through the driver's
-`FilterDefinitionBuilder` and `BsonValue` / `BsonRegularExpression` APIs (never string-interpolated),
-so untrusted query text and field values are serialized as BSON literals and cannot inject query
-operators. Full-text terms are matched as escaped, case-insensitive regular expressions.
+`FilterDefinitionBuilder` and `BsonValue` APIs (never string-interpolated), so untrusted query text
+and field values are serialized as BSON literals and cannot inject query operators.
 
 The translator targets a denormalized **current-version projection** maintained on each entity
-document write (`current.type-names`, `current.search-text`, `current.embedding`,
-`current.is-deleted`).
+document write (`current.type-names`, `current.embedding`, `current.is-deleted`).
 
 In `MongoDbEntityDataAccessLayer`:
 
 1. **Query (current)** — `QueryAsync` runs the translated `FilterDefinition` natively against the
-   `current.*` projection for null-timestamp queries (entity-type, full-text, And/Or/Not, Top).
+   `current.*` projection for null-timestamp queries (entity-type, And/Or/Not, Top).
    As-of-timestamp querying is a follow-up.
 2. **Index** — `EnsureVectorIndexAsync` creates/ensures a MongoDB vector search index over
    `current.embedding` (sized to the embeddings provider's `Dimensions`, `cosine` similarity). It is

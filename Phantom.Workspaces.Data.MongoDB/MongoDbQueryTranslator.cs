@@ -27,9 +27,6 @@ public sealed class MongoDbQueryTranslator
     /// <summary>The projected entity-type-names array field.</summary>
     public const string TypeNamesField = CurrentField + ".type-names";
 
-    /// <summary>The projected, normalized search-text field.</summary>
-    public const string SearchTextField = CurrentField + ".search-text";
-
     /// <summary>The projected embedding-vector field.</summary>
     public const string EmbeddingField = CurrentField + ".embedding";
 
@@ -80,9 +77,6 @@ public sealed class MongoDbQueryTranslator
             case EntityTypeQueryClause typeClause:
                 return TranslateEntityType(typeClause);
 
-            case EntityFullTextQueryClause fullTextClause:
-                return TranslateFullText(fullTextClause);
-
             case EntityVectorQueryClause:
                 throw new NotSupportedException(
                     "Vector clauses must be compiled to a $vectorSearch stage, not a filter. Use BuildVectorSearchStage.");
@@ -104,17 +98,6 @@ public sealed class MongoDbQueryTranslator
         // Each required type must be present in the projected type-names array. The values are bound
         // as BSON string literals by the driver, so they cannot inject query operators.
         return Filter.All(TypeNamesField, requiredTypes);
-    }
-
-    private static FilterDefinition<BsonDocument> TranslateFullText(EntityFullTextQueryClause clause)
-    {
-        var term = clause.QueryText.Value ?? string.Empty;
-
-        // Match the term as a literal, case-insensitive substring. Regex.Escape neutralizes any
-        // regex metacharacters in the untrusted term, and BsonRegularExpression carries the pattern
-        // as a typed BSON value rather than interpolated query text.
-        var pattern = new BsonRegularExpression(System.Text.RegularExpressions.Regex.Escape(term), "i");
-        return Filter.Regex(SearchTextField, pattern);
     }
 
     /// <summary>

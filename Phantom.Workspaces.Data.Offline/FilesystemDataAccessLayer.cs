@@ -63,7 +63,6 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
                                     Data = entity.Data,
                                     Relationships = entity.Relationships,
                                     MatchingClauseIdentifiers = Array.Empty<QueryClauseIdentifier>(),
-                                    FullTextQueryScores = Array.Empty<FullTextQueryScore>(),
                                 },
                             ],
                         })

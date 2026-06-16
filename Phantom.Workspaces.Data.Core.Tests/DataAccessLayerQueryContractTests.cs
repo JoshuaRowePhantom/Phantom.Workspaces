@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Data.Tests;
 /// <summary>
 /// Contract tests for <see cref="IDataAccessLayer.QueryAsync"/> that any implementation supporting
 /// query-clause evaluation (and vector search) can run by supplying a data-access layer factory.
-/// Covers entity-type, full-text and vector clauses plus And/Or/Not/Top composition.
+/// Covers entity-type and vector clauses plus And/Or/Not/Top composition.
 /// </summary>
 public abstract class DataAccessLayerQueryContractTests
 {
@@ -32,29 +32,6 @@ public abstract class DataAccessLayerQueryContractTests
         var match = Assert.Single(matches);
         Assert.Equal(noteId, match.EntityId);
         Assert.Contains(new QueryClauseIdentifier("by-type"), match.MatchingClauseIdentifiers);
-    }
-
-    [Fact]
-    public async Task Query_FullText_MatchesAndReportsScore()
-    {
-        var dataAccessLayer = this.CreateDataAccessLayer();
-        var matchId = await AddEntityAsync(dataAccessLayer, ["note"], new EntityName("notes", "alpha"), "the quick brown fox");
-        await AddEntityAsync(dataAccessLayer, ["note"], new EntityName("notes", "beta"), "lazy sleeping dog");
-
-        var matches = await QueryAsync(
-            dataAccessLayer,
-            "by-text",
-            new EntityFullTextQueryClause
-            {
-                FullTextQueryIdentifier = new QueryClauseIdentifier("text-clause"),
-                QueryText = new FullTextQueryText("brown"),
-            });
-
-        var match = Assert.Single(matches);
-        Assert.Equal(matchId, match.EntityId);
-        var score = Assert.Single(match.FullTextQueryScores);
-        Assert.Equal(new QueryClauseIdentifier("text-clause"), score.QueryIdentifier);
-        Assert.True(score.Score > 0);
     }
 
     [Fact]
@@ -91,9 +68,9 @@ public abstract class DataAccessLayerQueryContractTests
     public async Task Query_And_IntersectsClauses()
     {
         var dataAccessLayer = this.CreateDataAccessLayer();
-        var bothId = await AddEntityAsync(dataAccessLayer, ["note"], new EntityName("notes", "both"), "important meeting notes");
-        await AddEntityAsync(dataAccessLayer, ["note"], new EntityName("notes", "typeonly"), "unrelated text");
-        await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "textonly"), "important meeting notes");
+        var bothId = await AddEntityAsync(dataAccessLayer, ["note", "meeting"], new EntityName("notes", "both"), "important meeting notes");
+        await AddEntityAsync(dataAccessLayer, ["note"], new EntityName("notes", "noteonly"), "unrelated text");
+        await AddEntityAsync(dataAccessLayer, ["meeting"], new EntityName("meetings", "meetingonly"), "important meeting notes");
 
         var matches = await QueryAsync(
             dataAccessLayer,
@@ -103,11 +80,7 @@ public abstract class DataAccessLayerQueryContractTests
                 Clauses =
                 [
                     new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["note"]) },
-                    new EntityFullTextQueryClause
-                    {
-                        FullTextQueryIdentifier = new QueryClauseIdentifier("text-clause"),
-                        QueryText = new FullTextQueryText("meeting"),
-                    },
+                    new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["meeting"]) },
                 ],
             });
 

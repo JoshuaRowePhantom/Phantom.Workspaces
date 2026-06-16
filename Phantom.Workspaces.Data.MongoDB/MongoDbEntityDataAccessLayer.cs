@@ -138,12 +138,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             });
 
             // Recompute the denormalized current-version projection used for native querying.
-            var searchText = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(change.Data);
+            var projectedText = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(change.Data);
             float[]? embedding = null;
-            if (nextDataJson is not null && !string.IsNullOrWhiteSpace(searchText))
+            if (nextDataJson is not null && !string.IsNullOrWhiteSpace(projectedText))
             {
                 var embeddings = await _embeddingsProvider.ComputeAsync(
-                    [new Phantom.Workspaces.Data.Vector.EmbeddingInput { EntityId = entityId.Value, Text = searchText }],
+                    [new Phantom.Workspaces.Data.Vector.EmbeddingInput { EntityId = entityId.Value, Text = projectedText }],
                     cancellationToken).ConfigureAwait(false);
                 embedding = embeddings[0].Values.ToArray();
             }
@@ -151,7 +151,6 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             updatedDocument.Current = new MongoDbCurrentProjection
             {
                 TypeNames = typeNames.ToArray(),
-                SearchText = searchText,
                 Embedding = embedding,
                 IsDeleted = nextDataJson is null,
             };
@@ -523,7 +522,6 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             Data = JsonDocument.Parse(dataJson).RootElement.Clone(),
             Relationships = [],
             MatchingClauseIdentifiers = [],
-            FullTextQueryScores = [],
         };
     }
 
@@ -588,7 +586,6 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     Data = tuple.Version.DataJson is null ? null : JsonDocument.Parse(tuple.Version.DataJson).RootElement.Clone(),
                     Relationships = [],
                     MatchingClauseIdentifiers = [],
-                    FullTextQueryScores = [],
                     ClassifiedTime = null,
                 },
             ],
@@ -1001,9 +998,6 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     {
         [BsonElement("type-names")]
         public string[] TypeNames { get; init; } = [];
-
-        [BsonElement("search-text")]
-        public string SearchText { get; init; } = string.Empty;
 
         [BsonElement("embedding")]
         [BsonIgnoreIfNull]
