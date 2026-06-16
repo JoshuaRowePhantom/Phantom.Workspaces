@@ -124,6 +124,20 @@ public sealed class MongoDbContainerConnectionDefinition : MongoDbConnectionDefi
     /// </summary>
     [JsonPropertyName("image-name")]
     public string? ImageName { get; init; }
+
+    /// <summary>Returns a copy of this definition with the given data directory.</summary>
+    public MongoDbContainerConnectionDefinition WithDataDirectory(string dataDirectory)
+    {
+        return new MongoDbContainerConnectionDefinition
+        {
+            ContainerName = this.ContainerName,
+            DataDirectory = dataDirectory,
+            DatabaseName = this.DatabaseName,
+            CollectionName = this.CollectionName,
+            HostPort = this.HostPort,
+            ImageName = this.ImageName,
+        };
+    }
 }
 
 public sealed class MongoDbExternalConnectionDefinition : MongoDbConnectionDefinition

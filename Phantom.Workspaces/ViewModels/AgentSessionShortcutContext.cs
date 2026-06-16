@@ -112,9 +112,7 @@ public sealed class AgentSessionShortcutContext
             return AgentPersistenceStoreFactory.CreateInMemory();
         }
 
-        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(mongoSource.DataDirectory)
-            ? Path.GetFullPath(".\\mongo-data")
-            : mongoSource.DataDirectory;
+        var mongoDbDataDirectory = mongoSource.DataDirectory ?? string.Empty;
         var mongoDbDatabaseName = string.IsNullOrWhiteSpace(mongoSource.DatabaseName)
             ? "phantom-workspaces"
             : mongoSource.DatabaseName;

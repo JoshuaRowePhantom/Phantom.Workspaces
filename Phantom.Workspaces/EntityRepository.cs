@@ -134,9 +134,7 @@ public sealed class EntityRepository
             throw new InvalidOperationException("MongoDb root collection name is required for MongoDb repository sources.");
         }
 
-        var mongoDbDataDirectory = string.IsNullOrWhiteSpace(repositorySource.DataDirectory)
-            ? Path.GetFullPath(".\\mongo-data")
-            : repositorySource.DataDirectory;
+        var mongoDbDataDirectory = repositorySource.DataDirectory ?? string.Empty;
         var mongoDbDatabaseName = string.IsNullOrWhiteSpace(repositorySource.DatabaseName)
             ? "phantom-workspaces"
             : repositorySource.DatabaseName;

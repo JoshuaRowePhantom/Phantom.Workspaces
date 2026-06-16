@@ -42,12 +42,8 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        Directory.CreateDirectory(DataDirectory);
-
-        // Reuse a long-lived container across test runs. The broker starts the existing container or
-        // creates one if absent. Destroying/recreating per run is expensive (Atlas Local performs a
-        // one-time replica-set + search-service initialization that restarts mongod and can take
-        // tens of seconds), so we leave it running and only reset collection state.
+        // The broker creates the data directory before starting the container; relying on that here
+        // gives integration coverage that the directory is created before the container starts.
         var client = await _connectionBroker.GetClientAsync(ConnectionDefinition);
         Database = client.GetDatabase(DatabaseName);
 
