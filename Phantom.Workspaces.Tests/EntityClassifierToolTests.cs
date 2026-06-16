@@ -156,6 +156,57 @@ public sealed class EntityClassifierToolTests
     }
 
     [Fact]
+    public async Task Run_IncludesInterestInstructions_AfterAllEntityTypes_AndBeforeEntityTypes()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        // Seed an interest-type entity (as the schema populator would).
+        await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "interest" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId(Guid.NewGuid()),
+                    ConcurrencyTag = null,
+                    Data = JsonDocument.Parse(
+                        """
+                        {
+                          "entity-types": ["interest-type","relationship-type","entity-type","note"],
+                          "names": [["entity-types","not-interesting"]],
+                          "applied": { "indicator": "x", "description": "Not interesting", "actionText": "Mark not interesting" },
+                          "notApplied": { "indicator": "", "description": "Interesting", "actionText": "Clear" }
+                        }
+                        """).RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+        await AddEntityAsync(dataAccessLayer, "target", "the entity body text");
+        var runner = new RecordingRunner();
+
+        await new EntityClassifierTool(runner).RunAsync(Context(dataAccessLayer), default);
+
+        var prompt = runner.Requests
+            .Select(r => r.Prompt)
+            .First(p => p.Contains("the entity body text", StringComparison.Ordinal));
+        var allTypesIndex = prompt.IndexOf("# All entity types", StringComparison.Ordinal);
+        var interestsIndex = prompt.IndexOf("# Interests", StringComparison.Ordinal);
+        var typesIndex = prompt.IndexOf("# Entity types", StringComparison.Ordinal);
+
+        Assert.True(allTypesIndex >= 0);
+        Assert.True(allTypesIndex < interestsIndex, "Interests should come after the entity-type list.");
+        Assert.True(interestsIndex < typesIndex, "Interests should come before the entity's own types.");
+
+        var interestSection = prompt[interestsIndex..typesIndex];
+        Assert.Contains("not-interesting", interestSection, StringComparison.Ordinal);
+        Assert.Contains("Not interesting", interestSection, StringComparison.Ordinal);
+        Assert.Contains("'note'", interestSection, StringComparison.Ordinal);
+        Assert.Contains("not-interesting", interestSection, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Run_RetrievesBeforeAndAfterSnapshots()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();

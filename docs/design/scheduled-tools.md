@@ -120,11 +120,24 @@ For each entity, the classifier tool:
 5. Presents a prompt in this order (to favor LLM KV-cache reuse):
    1. The classifier prompt.
    2. The set of all entity types.
-   3. The entity-type instructions.
-   4. The entity content.
-   5. The relationships the entity currently possesses.
+   3. The interest instructions (static across the run; see below).
+   4. The entity-type instructions.
+   5. The entity content.
+   6. The relationships the entity currently possesses.
 6. Asks the LLM to use workspace tools to create/remove relationships or make other state changes
    permitted by the entity type or by notes on the entity.
+
+### Interest instructions
+
+Immediately after the entity-type list (and before the entity-specific sections, to keep the static
+content KV-cache-friendly), the classifier emits an `# Interests` section built by querying the
+seeded `interest-type` entities (`docs/design/interests.md`). It lists each available interest with
+its applied-state description, and instructs the agent to: apply/remove interests by creating/removing
+the corresponding interest relationship (with `target`/`user`/`view` participants); include a `note`
+explaining *why* on every relationship it creates; mark a `completed`/`cancelled` task unmodified for
+over a week as `not-interesting`; derive a task's `assigned-to` interest from its source-system
+`assigned-to` field when missing; and associate an entity that is clearly part of a workstream with
+the corresponding task via a `related` relationship.
 
 The classifier runs the agent definition once per entity **without recording chat history**. As
 each batch is processed, it advances the queue token (a timestamp; see vector-search.md), so a run

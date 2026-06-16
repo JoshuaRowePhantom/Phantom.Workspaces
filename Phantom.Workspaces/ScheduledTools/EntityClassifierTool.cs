@@ -88,6 +88,7 @@ public sealed class EntityClassifierTool : IScheduledTool
 
         var classifierPrompt = ReadString(context.ToolEntity, ClassifierPromptProperty) ?? string.Empty;
         var allEntityTypeNames = await ReadAllEntityTypeNamesAsync(dataAccessLayer, cancellationToken).ConfigureAwait(false);
+        var interestInstructions = await ReadInterestInstructionsAsync(dataAccessLayer, cancellationToken).ConfigureAwait(false);
 
         Timestamp? token = null;
         var processedEntityIds = new HashSet<EntityId>();
@@ -118,7 +119,7 @@ public sealed class EntityClassifierTool : IScheduledTool
                 var beforeSnapshot = await ReadSnapshotAsync(dataAccessLayer, entity.EntityId, cancellationToken).ConfigureAwait(false)
                     ?? entity;
 
-                var prompt = AssemblePrompt(classifierPrompt, allEntityTypeNames, beforeSnapshot);
+                var prompt = AssemblePrompt(classifierPrompt, allEntityTypeNames, interestInstructions, beforeSnapshot);
 
                 await this.agentRunner.RunAsync(
                     new EntityClassificationRequest
@@ -142,6 +143,7 @@ public sealed class EntityClassifierTool : IScheduledTool
     private static string AssemblePrompt(
         string classifierPrompt,
         IReadOnlyList<string> allEntityTypeNames,
+        string interestInstructions,
         EntitySnapshot entity)
     {
         var builder = new StringBuilder();
@@ -150,6 +152,15 @@ public sealed class EntityClassifierTool : IScheduledTool
         builder.AppendLine("# All entity types");
         builder.AppendLine(string.Join(", ", allEntityTypeNames));
         builder.AppendLine();
+
+        // Interest instructions are static across the run (like the entity-type list) and are placed
+        // here, before the entity-specific sections, to favor LLM KV-cache reuse.
+        if (!string.IsNullOrWhiteSpace(interestInstructions))
+        {
+            builder.AppendLine(interestInstructions);
+            builder.AppendLine();
+        }
+
         builder.AppendLine("# Entity types");
         builder.AppendLine(string.Join(", ", ReadEntityTypes(entity.Data)));
         builder.AppendLine();
@@ -223,6 +234,130 @@ public sealed class EntityClassifierTool : IScheduledTool
         }
 
         return names.ToArray();
+    }
+
+    private static async Task<string> ReadInterestInstructionsAsync(
+        IDataAccessLayer dataAccessLayer,
+        CancellationToken cancellationToken)
+    {
+        var result = await dataAccessLayer.QueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("interest-types"),
+                        Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["interest-type"]) },
+                    },
+                ],
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var interests = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var snapshot in result.Batches.SelectMany(batch => batch.Entities))
+        {
+            if (snapshot.Data is not { } data)
+            {
+                continue;
+            }
+
+            var name = ReadInterestName(data);
+            if (name is null)
+            {
+                continue;
+            }
+
+            interests[name] = ReadAppliedDescription(data);
+        }
+
+        if (interests.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine("# Interests");
+        builder.AppendLine(
+            "Interests are relationships that attach contextual relevance to an entity and render as "
+            + "badges. Apply an interest by creating a relationship of that interest type whose 'target' "
+            + "participant is this entity (with 'user'/'view' participants for user/view-scoped "
+            + "interests); remove it by deleting that relationship. Whenever you create any relationship "
+            + "(including an interest or a workstream 'related' link), include a 'note' property "
+            + "explaining why you applied it.");
+        builder.AppendLine();
+        builder.AppendLine("Available interests:");
+        foreach (var (name, description) in interests)
+        {
+            builder.Append("- ").Append(name);
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                builder.Append(": ").Append(description);
+            }
+
+            builder.AppendLine();
+        }
+
+        builder.AppendLine();
+        builder.AppendLine(
+            "Rules: mark a completed or cancelled task that has not been modified for over a week as "
+            + "not-interesting. For a task without an assigned-to interest, choose the user from the "
+            + "task's source-system 'assigned-to' field and apply assigned-to. When an entity is clearly "
+            + "part of a workstream, associate it with the corresponding task via a 'related' "
+            + "relationship.");
+        return builder.ToString();
+    }
+
+    private static string? ReadInterestName(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object
+            || !data.TryGetProperty("names", out var nameArray)
+            || nameArray.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var name in nameArray.EnumerateArray())
+        {
+            if (name.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            var components = name.EnumerateArray().Select(component => component.GetString()).ToArray();
+            if (components.Length == 2
+                && string.Equals(components[0], "entity-types", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(components[1]))
+            {
+                return components[1];
+            }
+        }
+
+        return null;
+    }
+
+    private static string ReadAppliedDescription(JsonElement data)
+    {
+        if (data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("applied", out var applied)
+            && applied.ValueKind == JsonValueKind.Object
+            && applied.TryGetProperty("description", out var description))
+        {
+            return ReadLocalString(description);
+        }
+
+        return string.Empty;
+    }
+
+    private static string ReadLocalString(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Object when value.TryGetProperty("default", out var def) && def.ValueKind == JsonValueKind.String
+                => def.GetString() ?? string.Empty,
+            _ => string.Empty,
+        };
     }
 
     private static IReadOnlyList<string> ReadEntityTypes(JsonElement? data)
