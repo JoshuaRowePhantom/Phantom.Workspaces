@@ -51,6 +51,10 @@
         "get-entity": {
           "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/get-entity"
         },
+        "query": {
+          "description": "A query (clauses) that selects the entities shown by this sub-view, as an alternative to 'get-entity'. Use this for interest-driven views (for example, inbox and workstreams).",
+          "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/query-request"
+        },
         "relationships-to-return": {
           "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-entities-data-access-layer.json#/$defs/relationships-to-return"
         },
@@ -66,8 +70,19 @@
         }
       },
       "required": [
-        "disposition",
-        "get-entity"
+        "disposition"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "get-entity"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        }
       ],
       "unevaluatedProperties": false
     },

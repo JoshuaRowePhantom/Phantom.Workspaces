@@ -199,6 +199,234 @@
         "entity-change-mode"
       ],
       "unevaluatedProperties": false
+    },
+    "query-request": {
+      "description": "A query over entities expressed as one or more identified top-level clauses. Each clause selects entities; results carry the identifiers of the clauses that matched them.",
+      "type": "object",
+      "properties": {
+        "clauses": {
+          "description": "The identified top-level clauses to evaluate.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/top-level-query-clause"
+          }
+        },
+        "timestamps": {
+          "description": "Optional timestamps at which to evaluate the query; null/omitted means the current version.",
+          "$ref": "#/$defs/timestamps"
+        }
+      },
+      "required": [
+        "clauses"
+      ],
+      "unevaluatedProperties": false
+    },
+    "top-level-query-clause": {
+      "description": "A query clause paired with the identifier reported on the entities it returns.",
+      "type": "object",
+      "properties": {
+        "clause-identifier": {
+          "$ref": "#/$defs/query-clause-identifier"
+        },
+        "clause": {
+          "$ref": "#/$defs/query-clause"
+        }
+      },
+      "required": [
+        "clause-identifier",
+        "clause"
+      ],
+      "unevaluatedProperties": false
+    },
+    "query-clause-identifier": {
+      "description": "A stable identifier for a query clause, reported back on matching entities.",
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "unevaluatedProperties": false
+    },
+    "query-name-set": {
+      "description": "A set of names (entity-type, relationship-type, or role names depending on context).",
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "unevaluatedProperties": false
+    },
+    "query-field-path": {
+      "description": "A path to a field within entity data, as an ordered list of property components, e.g. [\"participants\", \"user\"].",
+      "type": "object",
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "components"
+      ],
+      "unevaluatedProperties": false
+    },
+    "query-clause": {
+      "description": "A polymorphic query clause. The 'clause-type' discriminator selects the clause form.",
+      "type": "object",
+      "required": [
+        "clause-type"
+      ],
+      "oneOf": [
+        {
+          "description": "Logical AND of sub-clauses.",
+          "properties": {
+            "clause-type": { "const": "and" },
+            "clauses": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/query-clause" }
+            }
+          },
+          "required": [ "clause-type", "clauses" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Logical OR of sub-clauses.",
+          "properties": {
+            "clause-type": { "const": "or" },
+            "clauses": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/query-clause" }
+            }
+          },
+          "required": [ "clause-type", "clauses" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Logical negation of a sub-clause.",
+          "properties": {
+            "clause-type": { "const": "not" },
+            "clause": { "$ref": "#/$defs/query-clause" }
+          },
+          "required": [ "clause-type", "clause" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Limits a sub-clause's results to the given count.",
+          "properties": {
+            "clause-type": { "const": "top" },
+            "result-limit": {
+              "type": "object",
+              "properties": { "value": { "type": "integer" } },
+              "required": [ "value" ],
+              "unevaluatedProperties": false
+            },
+            "clause": { "$ref": "#/$defs/query-clause" }
+          },
+          "required": [ "clause-type", "result-limit", "clause" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Matches entities of the given entity types.",
+          "properties": {
+            "clause-type": { "const": "entity-type" },
+            "entity-type-names": { "$ref": "#/$defs/query-name-set" }
+          },
+          "required": [ "clause-type", "entity-type-names" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Matches entities whose field at 'field-path' compares to 'value' under the operator.",
+          "properties": {
+            "clause-type": { "const": "entity-field" },
+            "field-path": { "$ref": "#/$defs/query-field-path" },
+            "comparison-operator": {
+              "type": "string",
+              "enum": [
+                "equals",
+                "greater-than",
+                "less-than",
+                "greater-than-or-equal-to",
+                "less-than-or-equal-to",
+                "regular-expression-match",
+                "contains"
+              ]
+            },
+            "value": {
+              "description": "The scalar value to compare against. Session meta-variables such as ${USER} are bound by the session data-access layer.",
+              "type": [ "object", "array", "string", "number", "boolean", "null" ]
+            }
+          },
+          "required": [ "clause-type", "field-path", "comparison-operator" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Semantic (vector) similarity clause over query text or a precomputed embedding.",
+          "properties": {
+            "clause-type": { "const": "entity-vector" },
+            "vector-query-identifier": { "$ref": "#/$defs/query-clause-identifier" },
+            "query-text": { "type": "string" },
+            "query-embedding": {
+              "type": "array",
+              "items": { "type": "number" }
+            },
+            "number-of-candidates": { "type": "integer" },
+            "minimum-query-score": {
+              "type": "object",
+              "properties": { "value": { "type": "number" } },
+              "required": [ "value" ],
+              "unevaluatedProperties": false
+            }
+          },
+          "required": [ "clause-type", "vector-query-identifier" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Returns the participant entities (in the given roles) of relationships of the given types, optionally requiring a participant matching the must-have sub-clause.",
+          "properties": {
+            "clause-type": { "const": "entity-participation" },
+            "relationship-type-names": { "$ref": "#/$defs/query-name-set" },
+            "participation-role-names": { "$ref": "#/$defs/query-name-set" },
+            "must-have": {
+              "type": "object",
+              "properties": {
+                "participation-role-names": { "$ref": "#/$defs/query-name-set" },
+                "clause": { "$ref": "#/$defs/query-clause" }
+              },
+              "required": [ "clause" ],
+              "unevaluatedProperties": false
+            }
+          },
+          "required": [ "clause-type", "relationship-type-names" ],
+          "unevaluatedProperties": false
+        },
+        {
+          "description": "Traverses relationships from a source clause's results to destination participant entities matching a clause.",
+          "properties": {
+            "clause-type": { "const": "transit" },
+            "source-clause-identifier": { "$ref": "#/$defs/query-clause-identifier" },
+            "relationship-type-names": { "$ref": "#/$defs/query-name-set" },
+            "source-participation-role-names": { "$ref": "#/$defs/query-name-set" },
+            "destination-participation-role-names": { "$ref": "#/$defs/query-name-set" },
+            "match-clause": { "$ref": "#/$defs/query-clause" }
+          },
+          "required": [ "clause-type", "source-clause-identifier", "relationship-type-names", "match-clause" ],
+          "unevaluatedProperties": false
+        }
+      ]
     }
   },
   "$ref": "#/$defs/get-request"

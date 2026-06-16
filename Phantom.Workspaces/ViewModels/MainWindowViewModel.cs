@@ -30,6 +30,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
     private readonly List<SubscribedGet> selectedViewSubViewSubscriptions = [];
+    private readonly List<SubscribedQuery> selectedViewSubViewQuerySubscriptions = [];
     private readonly ShortcutManager shortcutManager = new();
     private EntityClickShortcutHandler? entityClickShortcutHandler;
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
@@ -424,6 +425,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         var selectedView = this.selectedTopLevelView ?? EmptyView;
         this.selectedViewSubViewSubscriptions.Clear();
+        this.selectedViewSubViewQuerySubscriptions.Clear();
         selectedView.Entities.Clear();
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
@@ -470,15 +472,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     continue;
                 }
 
-                if (!TryReadSubViewGetRequest(subView, out var getRequest))
+                if (TryReadSubViewGetRequest(subView, out var getRequest))
                 {
+                    var getEntities = await this.LoadGetSubViewEntitiesAsync(getRequest);
+                    foreach (var getEntity in getEntities)
+                    {
+                        selectedView.Entities.Add(this.CreateViewEntityViewModel(getEntity, indentLevel: 0));
+                    }
+
                     continue;
                 }
 
-                var getEntities = await this.LoadGetSubViewEntitiesAsync(getRequest);
-                foreach (var getEntity in getEntities)
+                if (TryReadSubViewQueryRequest(subView, out var queryRequest))
                 {
-                    selectedView.Entities.Add(this.CreateViewEntityViewModel(getEntity, indentLevel: 0));
+                    var queryEntities = await this.LoadQuerySubViewEntitiesAsync(queryRequest);
+                    foreach (var queryEntity in queryEntities)
+                    {
+                        selectedView.Entities.Add(this.CreateViewEntityViewModel(queryEntity, indentLevel: 0));
+                    }
                 }
             }
         }
@@ -524,6 +535,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return subscribedGet.Results.ToArray();
+    }
+
+    private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadQuerySubViewEntitiesAsync(
+        QueryRequest queryRequest)
+    {
+        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(queryRequest);
+        this.selectedViewSubViewQuerySubscriptions.Add(subscribedQuery);
+
+        if (subscribedQuery.Results.Count == 0)
+        {
+            return Array.Empty<SubscribedEntityViewModel>();
+        }
+
+        return subscribedQuery.Results.ToArray();
     }
 
     private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
@@ -1194,6 +1219,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 ? timestamps
                 : [null],
         };
+        return true;
+    }
+
+    private static bool TryReadSubViewQueryRequest(
+        JsonElement subView,
+        out QueryRequest queryRequest)
+    {
+        queryRequest = null!;
+        if (!subView.TryGetProperty("query", out var queryElement)
+            || queryElement.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var deserialized = queryElement.Deserialize<QueryRequest>(WebDataAccessJsonSerialization.Options);
+        if (deserialized is null || deserialized.Clauses.Count == 0)
+        {
+            return false;
+        }
+
+        queryRequest = deserialized;
         return true;
     }
 

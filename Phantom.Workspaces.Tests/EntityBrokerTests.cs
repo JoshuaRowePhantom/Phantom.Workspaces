@@ -465,6 +465,82 @@ public sealed class EntityBrokerTests
         Assert.Equal("Stable (updated)", subscribedGet.Results[0].DisplayName);
     }
 
+    [AvaloniaFact]
+    public async Task SubscribeQueryAsync_ReturnsActionableInterestTargetsForUser()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId("c1c1c1c1-0000-0000-0000-000000000001");
+        var userId = new EntityId("c2c2c2c2-0000-0000-0000-000000000002");
+        var relationshipId = new EntityId("c3c3c3c3-0000-0000-0000-000000000003");
+        var broker = await CreateBrokerAsync(ct);
+
+        await SeedSnapshotAsync(broker, CreateSnapshot(
+            taskId,
+            new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-3), "1"),
+            """
+            {
+              "entity-id": "c1c1c1c1-0000-0000-0000-000000000001",
+              "entity-types": ["task"],
+              "names": [["tasks", "actionable-one"]],
+              "display-name": { "default": "Actionable Task" }
+            }
+            """));
+        await SeedSnapshotAsync(broker, CreateSnapshot(
+            userId,
+            new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-3), "1"),
+            """
+            {
+              "entity-id": "c2c2c2c2-0000-0000-0000-000000000002",
+              "entity-types": ["user"],
+              "names": [["users", "current", "one"]],
+              "display-name": { "default": "Current User" }
+            }
+            """));
+        await SeedSnapshotAsync(broker, CreateSnapshot(
+            relationshipId,
+            new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+            """
+            {
+              "entity-id": "c3c3c3c3-0000-0000-0000-000000000003",
+              "entity-types": ["actionable", "relationship"],
+              "participants": {
+                "target": "c1c1c1c1-0000-0000-0000-000000000001",
+                "user": "c2c2c2c2-0000-0000-0000-000000000002"
+              }
+            }
+            """));
+
+        var subscribedQuery = await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("actionable"),
+                        Clause = new EntityParticipationQueryClause
+                        {
+                            RelationshipTypeNames = new RelationshipTypeNameSet(["actionable"]),
+                            ParticipationRoleNames = new RoleNameSet(["target"]),
+                            MustHave = new EntityParticipationRequirement
+                            {
+                                ParticipationRoleNames = new RoleNameSet(["user"]),
+                                Clause = new EntityFieldQueryClause
+                                {
+                                    FieldPath = new FieldPath("entity-id"),
+                                    ComparisonOperator = FieldComparisonOperator.Equals,
+                                    Value = JsonDocument.Parse("\"c2c2c2c2-0000-0000-0000-000000000002\"").RootElement.Clone(),
+                                },
+                            },
+                        },
+                    },
+                ],
+            },
+            ct);
+
+        Assert.Equal(taskId, Assert.Single(subscribedQuery.Results).EntityId);
+    }
+
     private static Task<EntityBroker> CreateBrokerAsync(CancellationToken cancellationToken)
     {
         return EntityBroker.CreateInitializedAsync(

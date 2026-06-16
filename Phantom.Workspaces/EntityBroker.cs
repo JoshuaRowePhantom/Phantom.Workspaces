@@ -16,6 +16,7 @@ public sealed class EntityBroker
     private readonly object gate = new();
     private readonly Dictionary<EntityId, WeakReference<SubscribedEntityViewModel>> subscribedEntitiesById = new();
     private readonly List<WeakReference<SubscribedGet>> subscribedGets = new();
+    private readonly List<WeakReference<SubscribedQuery>> subscribedQueries = new();
 
     public EntityBroker(
         EntityRepository entityRepository)
@@ -88,6 +89,25 @@ public sealed class EntityBroker
 
         await subscribedGet.RefreshAsync(cancellationToken);
         return subscribedGet;
+    }
+
+    /// <summary>
+    /// Subscribes to a <see cref="QueryRequest"/>, returning a live <see cref="SubscribedQuery"/> whose
+    /// results are refreshed as the broker observes changes (mirrors <see cref="SubscribeGetAsync"/> for
+    /// query-driven views such as inbox and workstreams).
+    /// </summary>
+    public async Task<SubscribedQuery> SubscribeQueryAsync(
+        QueryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var subscribedQuery = new SubscribedQuery(this, request);
+        lock (this.gate)
+        {
+            this.subscribedQueries.Add(new WeakReference<SubscribedQuery>(subscribedQuery));
+        }
+
+        await subscribedQuery.RefreshAsync(cancellationToken);
+        return subscribedQuery;
     }
 
     public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
@@ -214,6 +234,7 @@ public sealed class EntityBroker
         }
 
         await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken);
+        await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken);
         if (changedEntityIds.Count == 0)
         {
             return;
@@ -234,6 +255,26 @@ public sealed class EntityBroker
     {
         var getResult = await this.entityRepository.DataAccessLayer.GetAsync(request, cancellationToken);
         var snapshots = getResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
+        var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
+
+        lock (this.gate)
+        {
+            foreach (var snapshot in snapshots)
+            {
+                entities.Add(this.UpsertSubscribedEntity(snapshot, changedEntityIds));
+            }
+        }
+
+        return entities;
+    }
+
+    internal async Task<IReadOnlyCollection<SubscribedEntityViewModel>> GetSubscribedEntitiesForQueryRequestAsync(
+        QueryRequest request,
+        ISet<EntityId>? changedEntityIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        var queryResult = await this.entityRepository.DataAccessLayer.QueryAsync(request, cancellationToken);
+        var snapshots = queryResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
         lock (this.gate)
@@ -449,6 +490,34 @@ public sealed class EntityBroker
             await subscribedGet.RefreshAsync(cancellationToken, changedEntityIds);
         }
     }
+
+    private async Task RefreshSubscribedQueriesAsync(
+        ISet<EntityId> changedEntityIds,
+        CancellationToken cancellationToken)
+    {
+        List<SubscribedQuery> liveSubscribedQueries;
+        lock (this.gate)
+        {
+            liveSubscribedQueries = new List<SubscribedQuery>();
+            var nextReferences = new List<WeakReference<SubscribedQuery>>();
+            foreach (var reference in this.subscribedQueries)
+            {
+                if (reference.TryGetTarget(out var subscribedQuery))
+                {
+                    liveSubscribedQueries.Add(subscribedQuery);
+                    nextReferences.Add(reference);
+                }
+            }
+
+            this.subscribedQueries.Clear();
+            this.subscribedQueries.AddRange(nextReferences);
+        }
+
+        foreach (var subscribedQuery in liveSubscribedQueries)
+        {
+            await subscribedQuery.RefreshAsync(cancellationToken, changedEntityIds);
+        }
+    }
 }
 
 public sealed class EntityBrokerChangedEventArgs : EventArgs
@@ -480,32 +549,76 @@ public sealed class SubscribedGet
             changedEntityIds,
             cancellationToken)).ToList();
 
+        SubscribedResults.Merge(this.Results, nextResults);
+    }
+}
+
+/// <summary>
+/// A live subscription to a <see cref="QueryRequest"/>. Its <see cref="Results"/> are kept in sync with
+/// the matching entities as the broker observes changes (the query-driven counterpart to
+/// <see cref="SubscribedGet"/>).
+/// </summary>
+public sealed class SubscribedQuery
+{
+    private readonly EntityBroker entityBroker;
+    private readonly QueryRequest request;
+
+    internal SubscribedQuery(
+        EntityBroker entityBroker,
+        QueryRequest request)
+    {
+        this.entityBroker = entityBroker;
+        this.request = request;
+    }
+
+    public ObservableCollection<SubscribedEntityViewModel> Results { get; } = [];
+
+    internal async Task RefreshAsync(
+        CancellationToken cancellationToken = default,
+        ISet<EntityId>? changedEntityIds = null)
+    {
+        var nextResults = (await this.entityBroker.GetSubscribedEntitiesForQueryRequestAsync(
+            this.request,
+            changedEntityIds,
+            cancellationToken)).ToList();
+
+        SubscribedResults.Merge(this.Results, nextResults);
+    }
+}
+
+/// <summary>Shared incremental merge of a subscribed result collection toward the next ordered result set.</summary>
+internal static class SubscribedResults
+{
+    public static void Merge(
+        ObservableCollection<SubscribedEntityViewModel> results,
+        IReadOnlyList<SubscribedEntityViewModel> nextResults)
+    {
         var nextIds = nextResults.Select(static result => result.EntityId).ToHashSet();
-        for (var index = this.Results.Count - 1; index >= 0; index--)
+        for (var index = results.Count - 1; index >= 0; index--)
         {
-            if (!nextIds.Contains(this.Results[index].EntityId))
+            if (!nextIds.Contains(results[index].EntityId))
             {
-                this.Results.RemoveAt(index);
+                results.RemoveAt(index);
             }
         }
 
         for (var targetIndex = 0; targetIndex < nextResults.Count; targetIndex++)
         {
             var expected = nextResults[targetIndex];
-            if (targetIndex < this.Results.Count
-                && ReferenceEquals(this.Results[targetIndex], expected))
+            if (targetIndex < results.Count
+                && ReferenceEquals(results[targetIndex], expected))
             {
                 continue;
             }
 
-            var existingIndex = this.Results.IndexOf(expected);
+            var existingIndex = results.IndexOf(expected);
             if (existingIndex >= 0)
             {
-                this.Results.Move(existingIndex, targetIndex);
+                results.Move(existingIndex, targetIndex);
                 continue;
             }
 
-            this.Results.Insert(targetIndex, expected);
+            results.Insert(targetIndex, expected);
         }
     }
 }
