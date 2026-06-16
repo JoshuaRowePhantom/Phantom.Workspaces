@@ -33,13 +33,28 @@ public sealed class CommandLineOptionsTests
     }
 
     [Fact]
-    public void GetHelpText_DescribesKeyOptions()
+    public void GetHelpText_DescribesConfigFileOnlyUsage()
     {
         var helpText = CommandLineOptions.GetHelpText();
 
-        Assert.Contains("--data-store mongodb", helpText);
-        Assert.Contains("--mongodb-container-name", helpText);
-        Assert.Contains("--mongodb-root-collection-name", helpText);
+        Assert.Contains("<config-file>", helpText);
+        Assert.Contains("configuration file", helpText);
         Assert.Contains("/?", helpText);
+        // Repository parameters are no longer accepted on the command line.
+        Assert.DoesNotContain("--data-store", helpText);
+        Assert.DoesNotContain("--mongodb-container-name", helpText);
+    }
+
+    [Fact]
+    public void TryGetConfigurationFilePath_ReturnsFirstNonHelpArgument()
+    {
+        Assert.True(CommandLineOptions.TryGetConfigurationFilePath(["C:\\configs\\workspace.json"], out var path));
+        Assert.Equal("C:\\configs\\workspace.json", path);
+
+        Assert.True(CommandLineOptions.TryGetConfigurationFilePath(["/h", "C:\\configs\\workspace.json"], out var withHelp));
+        Assert.Equal("C:\\configs\\workspace.json", withHelp);
+
+        Assert.False(CommandLineOptions.TryGetConfigurationFilePath([], out var none));
+        Assert.Null(none);
     }
 }

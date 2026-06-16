@@ -1,58 +1,43 @@
 using System.IO;
+using System.Threading.Tasks;
+using Phantom.Workspaces.Configuration;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class RepositorySourceTests
 {
     [AvaloniaFact]
-    public void Parse_ReturnsLocalGitSource_ForFilesystemPath()
+    public async Task ConfigurationFile_ProjectsToRepositorySource()
     {
-        var source = RepositorySource.Parse(["C:\\dev\\Phantom.Workspaces-Playspace"]);
+        var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{System.Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "config.json");
+        try
+        {
+            var service = new ConfigurationPersistenceService(path);
+            await service.SaveAsync(new WorkspacesConfiguration
+            {
+                DataAccess = new DataAccessConnectionProfile
+                {
+                    Mode = DataAccessMode.LocalMongoContainer,
+                    MongoContainerName = "phantom-mongodb",
+                    MongoRootCollectionName = "entities",
+                    MongoDataDirectory = "C:/mongo-data",
+                },
+            });
 
-        var gitSource = Assert.IsType<LocalGitRepositorySource>(source);
-        Assert.Equal(Path.GetFullPath("C:\\dev\\Phantom.Workspaces-Playspace"), gitSource.Path);
-    }
-
-    [AvaloniaFact]
-    public void Parse_ReturnsWebSource_ForHttpsSource()
-    {
-        const string webSource = "https://example.test/repository";
-
-        var source = RepositorySource.Parse([webSource]);
-
-        var web = Assert.IsType<WebRepositorySource>(source);
-        Assert.Equal(webSource, web.Endpoint);
-    }
-
-    [AvaloniaFact]
-    public void Parse_ReturnsUnknownSource_ForNoArguments()
-    {
-        var source = RepositorySource.Parse([]);
-
-        Assert.IsType<UnknownRepositorySource>(source);
-    }
-
-    [AvaloniaFact]
-    public void Parse_ReturnsMongoDbSource_ForNamedArguments()
-    {
-        var source = RepositorySource.Parse(
-        [
-            "--data-store",
-            "mongodb",
-            "--mongodb-container-name",
-            "phantom-mongodb",
-            "--mongodb-root-collection-name",
-            "playspace",
-            "--mongodb-data-directory",
-            ".\\mongo-data",
-            "--mongodb-host-port",
-            "27017",
-        ]);
-
-        var mongo = Assert.IsType<MongoDbRepositorySource>(source);
-        Assert.Equal("phantom-mongodb", mongo.ContainerName);
-        Assert.Equal("playspace", mongo.RootCollectionName);
-        Assert.Equal(Path.GetFullPath(".\\mongo-data"), mongo.DataDirectory);
-        Assert.Equal(27017, mongo.HostPort);
+            // The CLI accepts only a config file path; the startup flow loads it and projects it.
+            Assert.True(CommandLineOptions.TryGetConfigurationFilePath([path], out var resolvedPath));
+            var configuration = await new ConfigurationPersistenceService(resolvedPath!).LoadAsync();
+            var mongo = Assert.IsType<MongoDbRepositorySource>(configuration.ToRepositorySource());
+            Assert.Equal("phantom-mongodb", mongo.ContainerName);
+            Assert.Equal("entities", mongo.RootCollectionName);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 }

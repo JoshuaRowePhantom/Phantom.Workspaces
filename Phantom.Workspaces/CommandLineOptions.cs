@@ -39,6 +39,30 @@ public static class CommandLineOptions
     }
 
     /// <summary>
+    /// Extracts the optional configuration file path argument (the first non-help argument). The
+    /// command line accepts only a configuration file path; repository and remote-access settings are
+    /// never supplied as command-line parameters.
+    /// </summary>
+    public static bool TryGetConfigurationFilePath(IReadOnlyList<string> arguments, out string? configurationFilePath)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        foreach (var argument in arguments)
+        {
+            if (string.IsNullOrWhiteSpace(argument) || HelpFlags.Contains(argument.Trim()))
+            {
+                continue;
+            }
+
+            configurationFilePath = argument.Trim();
+            return true;
+        }
+
+        configurationFilePath = null;
+        return false;
+    }
+
+    /// <summary>
     /// Builds the help text describing how to start Phantom.Workspaces and which options are
     /// available.
     /// </summary>
@@ -51,19 +75,13 @@ public static class CommandLineOptions
             "Usage:",
             "  Phantom.Workspaces                         Start using the saved configuration, or run",
             "                                             the first-run setup wizard if none exists.",
-            "  Phantom.Workspaces <path>                  Open a local Git-backed repository at <path>.",
-            "  Phantom.Workspaces <https-url>             Connect to a remote Phantom.Workspaces server.",
-            "  Phantom.Workspaces --data-store mongodb ... Open a MongoDB-backed repository (see options).",
+            "  Phantom.Workspaces <config-file>           Start using the configuration file at the",
+            "                                             given path.",
             "  Phantom.Workspaces /?                       Show this help.",
             string.Empty,
-            "MongoDB options (used with --data-store mongodb):",
-            "  --data-store mongodb                       Required. Selects the MongoDB data store.",
-            "  --mongodb-container-name <name>            Required. The MongoDB container name.",
-            "  --mongodb-root-collection-name <name>      Required. The root entity collection name.",
-            "  --mongodb-data-directory <path>            Optional. Defaults to",
-            "                                             <user home>/Phantom.Workspaces/Mongo.",
-            "  --mongodb-database-name <name>             Optional. Defaults to 'phantom-workspaces'.",
-            "  --mongodb-host-port <port>                 Optional. The host port mapped to MongoDB.",
+            "Repository and remote-access settings (data store, MongoDB container, endpoints, tokens,",
+            "etc.) are configured only through the configuration file or the first-run setup wizard,",
+            "never as command-line parameters.",
             string.Empty,
             "Help flags: /?, -?, /h, -h, /help, --help");
     }

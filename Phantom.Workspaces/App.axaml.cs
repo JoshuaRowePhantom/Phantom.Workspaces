@@ -80,13 +80,10 @@ public partial class App : Application
         IClassicDesktopStyleApplicationLifetime desktop,
         Window loadingWindow)
     {
-        var argumentSource = RepositorySource.Parse(Program.StartupArguments);
-        if (argumentSource is not UnknownRepositorySource)
-        {
-            return argumentSource;
-        }
+        var persistenceService = CommandLineOptions.TryGetConfigurationFilePath(Program.StartupArguments, out var configurationFilePath)
+            ? new ConfigurationPersistenceService(configurationFilePath!)
+            : new ConfigurationPersistenceService();
 
-        var persistenceService = new ConfigurationPersistenceService();
         if (persistenceService.ConfigurationExists())
         {
             var configuration = await persistenceService.LoadAsync();
