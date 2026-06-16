@@ -158,6 +158,13 @@ internal sealed class InMemoryQueryEvaluator
         var toCompute = new List<EmbeddingInput>();
         foreach (var candidate in this.candidates)
         {
+            // Deleted entities (null data) carry no searchable content, so they are never vector
+            // matches - consistent with entity-type clauses and the MongoDB is-deleted filter.
+            if (candidate.Data is null)
+            {
+                continue;
+            }
+
             if (candidate.StoredEmbedding is { Count: > 0 } stored)
             {
                 candidateEmbeddings.Add((candidate.Id, stored));
