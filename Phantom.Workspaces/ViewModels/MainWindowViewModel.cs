@@ -39,6 +39,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private Profile currentProfile = Profile.Default;
     private string selectedThemeName = ProfileThemeSettings.Dark.Name;
     private bool suppressThemeSelectionChange;
+    private bool showHiddenItems;
 
     public MainWindowViewModel(
         RepositorySource repositorySource)
@@ -115,6 +116,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public bool IsDebuggingEnabled => this.CurrentProfile.Debugging;
 
     public bool IsDebuggingDisabled => !this.IsDebuggingEnabled;
+
+    /// <summary>
+    /// Whether entities marked with the <c>not-interesting</c> interest are shown. When false (the
+    /// default), such entities are excluded from the view; toggling re-applies the selected view.
+    /// </summary>
+    public bool ShowHiddenItems
+    {
+        get => this.showHiddenItems;
+        set
+        {
+            if (this.SetProperty(ref this.showHiddenItems, value))
+            {
+                _ = this.ApplySelectedViewAsync();
+            }
+        }
+    }
 
     public ViewDefinitionViewModel SelectedTopLevelView
     {
@@ -533,7 +550,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadQuerySubViewEntitiesAsync(
         QueryRequest queryRequest)
     {
-        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(queryRequest);
+        // Exclude not-interesting targets at the query level (via a join) unless the user opts to show
+        // hidden items.
+        var effectiveQuery = this.ShowHiddenItems
+            ? queryRequest
+            : NotInterestingQuery.ExcludingNotInteresting(queryRequest);
+        var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
         this.selectedViewSubViewQuerySubscriptions.Add(subscribedQuery);
 
         if (subscribedQuery.Results.Count == 0)

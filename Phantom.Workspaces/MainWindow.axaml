@@ -66,6 +66,8 @@
                                    FontStyle="Italic"
                                    Classes="accent sticky-context-note"
                                    IsVisible="{Binding HasStickyParentContext}" />
+                        <CheckBox Content="Show hidden items"
+                                  IsChecked="{Binding ShowHiddenItems}" />
                     </StackPanel>
                 </Border>
 
