@@ -115,6 +115,15 @@ public sealed class MongoDbContainerConnectionDefinition : MongoDbConnectionDefi
 
     [JsonPropertyName("host-port")]
     public int? HostPort { get; init; }
+
+    /// <summary>
+    /// Optional container image override. Defaults to
+    /// <see cref="MongoDbContainerDefinitionGenerator.DefaultMongoImageName"/> (Atlas Local, which
+    /// supports <c>$vectorSearch</c>). Set to a community <c>mongo</c> image to opt out of the
+    /// bundled search process.
+    /// </summary>
+    [JsonPropertyName("image-name")]
+    public string? ImageName { get; init; }
 }
 
 public sealed class MongoDbExternalConnectionDefinition : MongoDbConnectionDefinition

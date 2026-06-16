@@ -4,7 +4,14 @@ namespace Phantom.Workspaces.Data.MongoDB;
 
 public sealed class MongoDbContainerDefinitionGenerator
 {
-    private const string MongoImageName = "mongo:latest";
+    /// <summary>
+    /// The default container image. Atlas Local bundles the <c>mongot</c> search process, so it
+    /// supports Atlas Search and Vector Search (<c>$search</c> / <c>$vectorSearch</c>) locally -
+    /// unlike the community <c>mongo</c> image. A connection definition may override this via
+    /// <see cref="MongoDbContainerConnectionDefinition.ImageName"/>.
+    /// </summary>
+    public const string DefaultMongoImageName = "mongodb/mongodb-atlas-local:latest";
+
     private const string MongoDataDirectory = "/data/db";
     private const int MongoContainerPort = 27017;
 
@@ -16,7 +23,9 @@ public sealed class MongoDbContainerDefinitionGenerator
         return new ContainerDefinition
         {
             ContainerName = connectionDefinition.ContainerName,
-            ImageName = MongoImageName,
+            ImageName = string.IsNullOrWhiteSpace(connectionDefinition.ImageName)
+                ? DefaultMongoImageName
+                : connectionDefinition.ImageName,
             NetworkType = ContainerNetworkType.Bridge,
             EnvironmentVariables = new Dictionary<string, string>(),
             Mounts = new List<ContainerMountDefinition>

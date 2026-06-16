@@ -43,8 +43,11 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         Directory.CreateDirectory(DataDirectory);
-        await TryDestroyAsync();
 
+        // Reuse a long-lived container across test runs. The broker starts the existing container or
+        // creates one if absent. Destroying/recreating per run is expensive (Atlas Local performs a
+        // one-time replica-set + search-service initialization that restarts mongod and can take
+        // tens of seconds), so we leave it running and only reset collection state.
         var client = await _connectionBroker.GetClientAsync(ConnectionDefinition);
         Database = client.GetDatabase(DatabaseName);
 
@@ -53,9 +56,9 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        // Leave the container running so subsequent runs reuse the warmed-up Atlas Local instance.
+        // Only clean up collection state.
         await ResetCollectionAsync();
-        await TryDestroyAsync();
-        TryDeleteDirectory(DataDirectory);
     }
 
     public async Task ResetCollectionAsync()
@@ -82,38 +85,6 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
         catch (MongoCommandException ex) when (ex.CodeName == "NamespaceNotFound")
         {
             // Collection does not exist yet.
-        }
-    }
-
-    private async Task TryDestroyAsync()
-    {
-        try
-        {
-            await _containerEngine.DestroyAsync(ContainerName);
-        }
-        catch (InvalidOperationException)
-        {
-            // Best-effort cleanup for deterministic reruns.
-        }
-    }
-
-    private static void TryDeleteDirectory(
-        string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup for deterministic reruns.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Best-effort cleanup for deterministic reruns.
         }
     }
 }

@@ -135,16 +135,29 @@ In `MongoDbEntityDataAccessLayer`:
 1. **Query (current)** — `QueryAsync` runs the translated `FilterDefinition` natively against the
    `current.*` projection for null-timestamp queries (entity-type, full-text, And/Or/Not, Top).
    As-of-timestamp querying is a follow-up.
-2. **Index** — a MongoDB vector search index over `current.embedding` (per embeddings `ModelId` /
-   `Dimensions`), created/ensured on startup *(follow-up)*.
-3. **Storage** — `UpdateEmbeddingsAsync` upserts the vector (and its model metadata) onto the
-   entity's current projection *(follow-up)*.
+2. **Index** — `EnsureVectorIndexAsync` creates/ensures a MongoDB vector search index over
+   `current.embedding` (sized to the embeddings provider's `Dimensions`, `cosine` similarity). It is
+   **self-healing**: if an index with the expected name exists but is in a terminal non-functional
+   state (`DOES_NOT_EXIST` / `FAILED`, e.g. orphaned by dropping/recreating the collection), it is
+   dropped (waiting for removal to settle) and recreated. *(Implemented.)*
+3. **Storage** — embeddings are computed via the configured `IEmbeddingsProvider` and stored on the
+   entity's `current.embedding` projection on each write. *(Implemented.)*
 4. **Search** — `EntityVectorQueryClause` compiles to a `$vectorSearch` aggregation stage via
-   `MongoDbQueryTranslator.BuildVectorSearchStage` (`queryVector`, `numCandidates`, `limit`,
-   optional pre-filter from sibling clauses), returning matches with similarity scores *(stage
-   builder implemented; live execution against the Atlas vector index is a follow-up)*.
+   `MongoDbQueryTranslator.BuildVectorSearchStage` (`queryVector`, `numCandidates` = `limit` × 10,
+   `limit`, optional pre-filter from sibling clauses); `ExecuteVectorClauseAsync` runs it and
+   projects the `vectorSearchScore` meta onto each match. *(Implemented and verified end-to-end
+   against the Atlas Local container — see Test tasks.)*
 5. **Queue state** — per-queue head timestamps are stored in a dedicated collection;
    `ProcessQueueAsync` reads/advances it and returns entities ordered by modified time *(follow-up)*.
+
+### Atlas vector index eventual consistency
+
+A freshly created Atlas vector index is **eventually consistent**: immediately after creation the
+index reports transient states (`NOT_STARTED` → `PENDING`/`BUILDING` → `READY`) and queries against
+it fail with phase-dependent errors ("Index … not initialized", "cannot query vector index … while
+in state NOT_STARTED", "Search Index Management service" not ready). Callers that create an index and
+query immediately must poll until the index becomes queryable; the MongoDB vector contract test does
+this (see Test tasks).
 
 ## Relationship-as-note enforcement
 
@@ -162,8 +175,9 @@ rationale for the connection is itself embeddable and discoverable by vector sea
 3. `InMemoryQueryEvaluator` — in-memory query-clause + vector evaluation used by
    `InMemoryDataAccessLayer.QueryAsync`. *(Implemented.)*
 4. `VectorIndexerTool` — scheduled tool driving the indexer flow (see scheduled-tools.md).
-5. MongoDB DAL additions — `$vectorSearch` clause compilation, embedding upsert, queue-state
-   collection access, and vector index management (within `Phantom.Workspaces.Data.MongoDB`).
+5. MongoDB DAL additions — `$vectorSearch` clause compilation, embedding storage on the current
+   projection, and self-healing vector index management *(implemented)*; queue-state collection
+   access *(follow-up)* — all within `Phantom.Workspaces.Data.MongoDB`.
 6. `IDataAccessLayer` API additions — `ProcessQueueAsync`, `ComputeEmbeddingsAsync`,
    `UpdateEmbeddingsAsync` (MongoDB-backed; unsupported elsewhere).
 
@@ -190,8 +204,15 @@ rationale for the connection is itself embeddable and discoverable by vector sea
 3. `EntityVectorQueryClause` compilation tests — produces the expected `$vectorSearch` stage and
    composes with pre-filter clauses under `And` / `Top`.
 4. Provider tests — MIME / non-text stripping; deterministic text projection from `EntitySnapshot`.
-5. End-to-end (MongoDB integration) — index a small set, query by text, assert nearest neighbors
-   and scores; assert non-MongoDB layers reject vector APIs.
+5. End-to-end (MongoDB integration) — `MongoDbDataAccessLayerVectorSearchContractTests` (tagged
+   `SlowDocker`) runs the shared vector contract against a real **Atlas Local** container: it seeds
+   entities, ensures the vector index, and **polls** the `$vectorSearch` query until the
+   eventually-consistent index is queryable, then asserts nearest-neighbor ranking, scores, and
+   candidate limiting. The in-memory derived contract test asserts the same semantics fast. The
+   shared `MongoDbTestDatabaseFixture` reuses a **long-lived** container across runs (it is not
+   destroyed on dispose) so the one-time Atlas Local replica-set + `mongot` search-service
+   initialization is paid once rather than per run; only collection state is reset between tests.
+   Non-MongoDB layers reject the vector APIs.
 6. Relationship-as-note enforcement tests — agent-tool-created relationships are rejected unless
    typed as `note`.
 

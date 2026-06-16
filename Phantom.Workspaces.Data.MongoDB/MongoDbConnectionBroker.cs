@@ -16,7 +16,7 @@ public sealed class MongoDbConnectionBroker
     public MongoDbConnectionBroker(
         ContainerEngine? containerEngine = null,
         MongoDbContainerDefinitionGenerator? containerDefinitionGenerator = null,
-        int connectVerificationAttempts = 8,
+        int connectVerificationAttempts = 20,
         TimeSpan? connectRetryDelay = null)
     {
         if (connectVerificationAttempts <= 0)
@@ -27,7 +27,10 @@ public sealed class MongoDbConnectionBroker
         _containerEngine = containerEngine ?? new WindowsDockerDesktopEngine();
         _containerDefinitionGenerator = containerDefinitionGenerator ?? new MongoDbContainerDefinitionGenerator();
         _connectVerificationAttempts = connectVerificationAttempts;
-        _connectRetryDelay = connectRetryDelay ?? TimeSpan.FromMilliseconds(250);
+        // The operational client uses generous server-selection timeouts (see CreateClient), so each
+        // readiness ping already waits for the server to become selectable on a cold start. A small
+        // number of additional retries covers transient heartbeat drops while mongod stabilizes.
+        _connectRetryDelay = connectRetryDelay ?? TimeSpan.FromSeconds(1);
     }
 
     public async ValueTask<IMongoClient> GetClientAsync(
@@ -72,9 +75,13 @@ public sealed class MongoDbConnectionBroker
         string connectionString)
     {
         var settings = MongoClientSettings.FromConnectionString(connectionString);
-        settings.ServerSelectionTimeout = TimeSpan.FromSeconds(1);
-        settings.ConnectTimeout = TimeSpan.FromSeconds(1);
-        settings.SocketTimeout = TimeSpan.FromSeconds(1);
+        // The Atlas Local image (mongod + mongot) can briefly drop heartbeats during cold start and
+        // while the search service warms up. Use generous operation timeouts so that real data
+        // operations do not fail spuriously once the broker has handed back the client. Readiness is
+        // bounded separately by VerifyConnectionAsync.
+        settings.ServerSelectionTimeout = TimeSpan.FromSeconds(30);
+        settings.ConnectTimeout = TimeSpan.FromSeconds(30);
+        settings.SocketTimeout = TimeSpan.FromSeconds(120);
         return new MongoClient(settings);
     }
 

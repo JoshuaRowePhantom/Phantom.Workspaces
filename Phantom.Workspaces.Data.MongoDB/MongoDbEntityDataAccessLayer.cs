@@ -7,11 +7,19 @@ namespace Phantom.Workspaces.Data.MongoDB;
 
 public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 {
+    /// <summary>The Atlas vector search index name over the current-version embedding field.</summary>
+    public const string VectorIndexName = "entity-current-embedding-index";
+
+    private const int VectorIndexRemovalPollAttempts = 30;
+    private static readonly TimeSpan VectorIndexRemovalPollInterval = TimeSpan.FromSeconds(2);
+
     private readonly IMongoCollection<MongoDbEntityDocument> _entityCollection;
+    private readonly Phantom.Workspaces.Data.Vector.IEmbeddingsProvider _embeddingsProvider;
 
     public MongoDbEntityDataAccessLayer(
         IMongoDatabase database,
-        string collectionName)
+        string collectionName,
+        Phantom.Workspaces.Data.Vector.IEmbeddingsProvider? embeddingsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(database);
         if (string.IsNullOrWhiteSpace(collectionName))
@@ -20,6 +28,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         _entityCollection = database.GetCollection<MongoDbEntityDocument>($"{collectionName}_entities");
+        _embeddingsProvider = embeddingsProvider ?? new Phantom.Workspaces.Data.Vector.DeterministicEmbeddingsProvider();
     }
 
     public async Task<UpdateResult> UpdateAsync(
@@ -129,10 +138,21 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             });
 
             // Recompute the denormalized current-version projection used for native querying.
+            var searchText = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(change.Data);
+            float[]? embedding = null;
+            if (nextDataJson is not null && !string.IsNullOrWhiteSpace(searchText))
+            {
+                var embeddings = await _embeddingsProvider.ComputeAsync(
+                    [new Phantom.Workspaces.Data.Vector.EmbeddingInput { EntityId = entityId.Value, Text = searchText }],
+                    cancellationToken).ConfigureAwait(false);
+                embedding = embeddings[0].Values.ToArray();
+            }
+
             updatedDocument.Current = new MongoDbCurrentProjection
             {
                 TypeNames = typeNames.ToArray(),
-                SearchText = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(change.Data),
+                SearchText = searchText,
+                Embedding = embedding,
                 IsDeleted = nextDataJson is null,
             };
 
@@ -256,9 +276,28 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             var matchedClauses = new Dictionary<string, HashSet<QueryClauseIdentifier>>(StringComparer.Ordinal);
             var documentsById = new Dictionary<string, BsonDocument>(StringComparer.Ordinal);
+            var vectorScoredEntities = new Dictionary<string, QueryEntitySnapshot>(StringComparer.Ordinal);
 
             foreach (var topLevelClause in request.Clauses)
             {
+                if (topLevelClause.Clause is EntityVectorQueryClause vectorClause)
+                {
+                    var vectorMatches = await ExecuteVectorClauseAsync(
+                        bsonCollection, topLevelClause, vectorClause, cancellationToken).ConfigureAwait(false);
+                    foreach (var vectorMatch in vectorMatches)
+                    {
+                        vectorScoredEntities[vectorMatch.EntityId.ToString()] = vectorMatch;
+                        if (!matchedClauses.TryGetValue(vectorMatch.EntityId.ToString(), out var vectorIdentifiers))
+                        {
+                            matchedClauses[vectorMatch.EntityId.ToString()] = vectorIdentifiers = [];
+                        }
+
+                        vectorIdentifiers.Add(topLevelClause.ClauseIdentifier);
+                    }
+
+                    continue;
+                }
+
                 var filter = translator.TranslateToFilter(topLevelClause.Clause);
                 var find = bsonCollection.Find(filter);
                 if (MongoDbQueryTranslator.GetResultLimit(topLevelClause.Clause) is { } limit && limit >= 0)
@@ -283,6 +322,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var entities = new List<QueryEntitySnapshot>();
             foreach (var (id, identifiers) in matchedClauses)
             {
+                if (vectorScoredEntities.TryGetValue(id, out var vectorEntity))
+                {
+                    entities.Add(vectorEntity with { MatchingClauseIdentifiers = identifiers.ToArray() });
+                    continue;
+                }
+
                 var snapshot = BuildCurrentSnapshot(documentsById[id]);
                 if (snapshot is not null)
                 {
@@ -294,6 +339,160 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         return new QueryResult { Batches = batches };
+    }
+
+    /// <summary>
+    /// Ensures the Atlas vector search index over the current-version embedding field exists and is
+    /// in a functional state. This requires an Atlas-capable deployment (Atlas, or the
+    /// mongodb/mongodb-atlas-local image); community MongoDB does not support search indexes.
+    /// </summary>
+    /// <remarks>
+    /// If an index with the expected name exists but is in a terminal non-functional state (for
+    /// example, it was orphaned by dropping and recreating the underlying collection, leaving it
+    /// reported as <c>DOES_NOT_EXIST</c> or <c>FAILED</c>), it is dropped and recreated so the index
+    /// self-heals. Indexes that are still building (<c>PENDING</c>/<c>BUILDING</c>) or ready are left
+    /// as-is.
+    /// </remarks>
+    public async Task EnsureVectorIndexAsync(CancellationToken cancellationToken = default)
+    {
+        var existing = await _entityCollection.SearchIndexes
+            .List()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var current = existing.FirstOrDefault(
+            index => index.GetValue("name", BsonString.Empty).AsString == VectorIndexName);
+        if (current is not null)
+        {
+            if (IsFunctionalVectorIndex(current))
+            {
+                return;
+            }
+
+            // The index name is registered but the index is dead (for example, orphaned by a
+            // collection drop). Drop it and wait for the deletion to settle so the recreate below
+            // does not race an in-progress delete of the same index name.
+            await _entityCollection.SearchIndexes
+                .DropOneAsync(VectorIndexName, cancellationToken)
+                .ConfigureAwait(false);
+            await WaitForVectorIndexRemovalAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var definition = new BsonDocument
+        {
+            {
+                "fields",
+                new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        { "type", "vector" },
+                        { "path", MongoDbQueryTranslator.EmbeddingField },
+                        { "numDimensions", _embeddingsProvider.Dimensions },
+                        { "similarity", "cosine" },
+                    },
+                }
+            },
+        };
+
+        await _entityCollection.SearchIndexes
+            .CreateOneAsync(
+                new CreateSearchIndexModel(VectorIndexName, SearchIndexType.VectorSearch, definition),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Determines whether an Atlas search index document describes an index that exists and is
+    /// either ready or actively building. A terminal status such as <c>DOES_NOT_EXIST</c> or
+    /// <c>FAILED</c> indicates a dead index that must be recreated.
+    /// </summary>
+    private static bool IsFunctionalVectorIndex(BsonDocument index)
+    {
+        var status = index.GetValue("status", BsonString.Empty).AsString;
+        return status switch
+        {
+            "DOES_NOT_EXIST" or "FAILED" => false,
+            _ => true,
+        };
+    }
+
+    /// <summary>
+    /// Polls until the vector search index name is no longer reported by the deployment, so a
+    /// freshly issued drop has fully settled before the index is recreated under the same name.
+    /// </summary>
+    private async Task WaitForVectorIndexRemovalAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < VectorIndexRemovalPollAttempts; attempt++)
+        {
+            var indexes = await _entityCollection.SearchIndexes
+                .List()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!indexes.Any(index => index.GetValue("name", BsonString.Empty).AsString == VectorIndexName))
+            {
+                return;
+            }
+
+            await Task.Delay(VectorIndexRemovalPollInterval, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<List<QueryEntitySnapshot>> ExecuteVectorClauseAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        TopLevelQueryClause topLevelClause,
+        EntityVectorQueryClause vectorClause,
+        CancellationToken cancellationToken)
+    {
+        var queryEmbedding = vectorClause.QueryEmbedding;
+        if (queryEmbedding is not { Count: > 0 })
+        {
+            if (string.IsNullOrWhiteSpace(vectorClause.QueryText))
+            {
+                throw new ArgumentException("A vector query clause requires query-text or a query-embedding.");
+            }
+
+            var computed = await _embeddingsProvider.ComputeAsync(
+                [new Phantom.Workspaces.Data.Vector.EmbeddingInput { EntityId = default, Text = vectorClause.QueryText! }],
+                cancellationToken).ConfigureAwait(false);
+            queryEmbedding = computed[0].Values;
+            vectorClause = vectorClause with { QueryEmbedding = queryEmbedding };
+        }
+
+        var vectorStage = MongoDbQueryTranslator.BuildVectorSearchStage(vectorClause, VectorIndexName);
+        var pipeline = new[]
+        {
+            vectorStage,
+            new BsonDocument("$addFields", new BsonDocument("vector-score", new BsonDocument("$meta", "vectorSearchScore"))),
+        };
+
+        var documents = await bsonCollection
+            .Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var snapshots = new List<QueryEntitySnapshot>();
+        foreach (var document in documents)
+        {
+            var snapshot = BuildCurrentSnapshot(document);
+            if (snapshot is null)
+            {
+                continue;
+            }
+
+            var score = document.TryGetValue("vector-score", out var scoreValue) ? scoreValue.ToDouble() : 0d;
+            snapshots.Add(snapshot with
+            {
+                MatchingClauseIdentifiers = [topLevelClause.ClauseIdentifier],
+                VectorQueryScores =
+                [
+                    new VectorQueryScore { QueryIdentifier = vectorClause.VectorQueryIdentifier, Score = score },
+                ],
+            });
+        }
+
+        return snapshots;
     }
 
     private static QueryEntitySnapshot? BuildCurrentSnapshot(BsonDocument document)
@@ -805,6 +1004,10 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         [BsonElement("search-text")]
         public string SearchText { get; init; } = string.Empty;
+
+        [BsonElement("embedding")]
+        [BsonIgnoreIfNull]
+        public float[]? Embedding { get; init; }
 
         [BsonElement("is-deleted")]
         public bool IsDeleted { get; init; }

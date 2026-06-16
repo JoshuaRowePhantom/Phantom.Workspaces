@@ -23,7 +23,7 @@ public sealed class MongoDbContainerDefinitionGeneratorTests
         var containerDefinition = generator.Generate(connectionDefinition);
 
         Assert.Equal("mongo-db", containerDefinition.ContainerName);
-        Assert.Equal("mongo:latest", containerDefinition.ImageName);
+        Assert.Equal("mongodb/mongodb-atlas-local:latest", containerDefinition.ImageName);
         Assert.Equal(ContainerNetworkType.Bridge, containerDefinition.NetworkType);
         Assert.Empty(containerDefinition.EnvironmentVariables);
         Assert.Single(containerDefinition.Mounts);
@@ -49,5 +49,41 @@ public sealed class MongoDbContainerDefinitionGeneratorTests
         Assert.Equal(containerDefinition.ContainerName, roundTrip.ContainerName);
         Assert.Equal(containerDefinition.ImageName, roundTrip.ImageName);
         Assert.True(validation.IsValid);
+    }
+
+    [Fact]
+    public void Generate_WhenImageNameOverridden_UsesOverride()
+    {
+        var generator = new MongoDbContainerDefinitionGenerator();
+        var connectionDefinition = new MongoDbContainerConnectionDefinition
+        {
+            ContainerName = "mongo-db",
+            DataDirectory = "C:\\mongo-data",
+            DatabaseName = "workspace-db",
+            CollectionName = "workspace-collection",
+            ImageName = "mongo:latest",
+        };
+
+        var containerDefinition = generator.Generate(connectionDefinition);
+
+        Assert.Equal("mongo:latest", containerDefinition.ImageName);
+    }
+
+    [Fact]
+    public void ContainerConnectionDefinition_WithImageName_RoundTripsThroughJson()
+    {
+        var definition = new MongoDbContainerConnectionDefinition
+        {
+            ContainerName = "mongo-db",
+            DataDirectory = "C:\\mongo-data",
+            DatabaseName = "workspace-db",
+            CollectionName = "workspace-collection",
+            ImageName = "mongodb/mongodb-atlas-local:8.0",
+        };
+
+        var roundTrip = Assert.IsType<MongoDbContainerConnectionDefinition>(
+            MongoDbConnectionDefinition.FromJson(definition.ToJson()));
+
+        Assert.Equal("mongodb/mongodb-atlas-local:8.0", roundTrip.ImageName);
     }
 }
