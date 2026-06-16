@@ -34,6 +34,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
 
     private CopilotClient? copilotClient;
     private CopilotSession? copilotSession;
+    private string? currentSessionSignature;
     private int disposeStarted;
 
     /// <summary>
@@ -387,7 +388,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
 
     private async Task<CopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
-        if (this.copilotSession is { } existingSession)
+        var signature = ComputeSessionSignature(options);
+
+        if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature)
         {
             return existingSession;
         }
@@ -395,32 +398,69 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
         await this.sessionInitializationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (this.copilotSession is { } alreadyInitialized)
+            if (this.copilotSession is { } alreadyInitialized && this.currentSessionSignature == signature)
             {
                 return alreadyInitialized;
             }
 
-            var client = new CopilotClient(new CopilotClientOptions
+            // The Copilot CLI captures the tool set (and other session config) when the session is
+            // created, so a change to the effective tools/instructions/reasoning between turns only
+            // takes effect by recreating the session. The CLI client is reused across recreations.
+            if (this.copilotClient is null)
             {
-                GitHubToken = this.gitHubToken,
-                Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                CliPath = this.cliPath,
-            });
+                var client = new CopilotClient(new CopilotClientOptions
+                {
+                    GitHubToken = this.gitHubToken,
+                    Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                    CliPath = this.cliPath,
+                });
 
-            await client.StartAsync(cancellationToken).ConfigureAwait(false);
+                await client.StartAsync(cancellationToken).ConfigureAwait(false);
+                this.copilotClient = client;
+            }
+
+            if (this.copilotSession is { } staleSession)
+            {
+                await staleSession.DisposeAsync().ConfigureAwait(false);
+                this.copilotSession = null;
+                this.currentSessionSignature = null;
+            }
 
             var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
+            var session = await this.copilotClient.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
 
-            var session = await client.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
-
-            this.copilotClient = client;
             this.copilotSession = session;
+            this.currentSessionSignature = signature;
             return session;
         }
         finally
         {
             this.sessionInitializationLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Computes a signature for the session-config inputs that, when changed between turns, require
+    /// recreating the Copilot session (so live tool toggling takes effect). The model and BYOK
+    /// provider are fixed for the lifetime of the client and are therefore not included. Tool order
+    /// is ignored so that only an actual change to the tool set forces a recreation.
+    /// </summary>
+    public static string ComputeSessionSignature(ChatOptions? options)
+    {
+        var toolNames = options?.Tools?
+            .OfType<AIFunction>()
+            .Select(static tool => tool.Name)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            ?? Enumerable.Empty<string>();
+
+        var instructions = options?.Instructions ?? string.Empty;
+        var reasoning = MapReasoningEffort(options?.Reasoning?.Effort) ?? string.Empty;
+
+        return string.Join(
+            '\u0001',
+            "tools=" + string.Join(',', toolNames),
+            "instructions=" + instructions,
+            "reasoning=" + reasoning);
     }
 
     private static string? MapReasoningEffort(ReasoningEffort? effort)

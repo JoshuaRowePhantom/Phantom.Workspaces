@@ -65,4 +65,69 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal("gpt-test", config.Model);
         Assert.True(config.Tools is null || config.Tools.Count == 0);
     }
+
+    [Fact]
+    public void ComputeSessionSignature_IsStableForEquivalentOptions_IgnoringToolOrder()
+    {
+        var toolA = AIFunctionFactory.Create((string id) => id, "alpha", "a");
+        var toolB = AIFunctionFactory.Create((string id) => id, "beta", "b");
+
+        var first = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            Instructions = "system",
+            Tools = [toolA, toolB],
+        });
+        var second = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            Instructions = "system",
+            Tools = [toolB, toolA],
+        });
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void ComputeSessionSignature_ChangesWhenToolSetChanges()
+    {
+        var toolA = AIFunctionFactory.Create((string id) => id, "alpha", "a");
+        var toolB = AIFunctionFactory.Create((string id) => id, "beta", "b");
+
+        var withOne = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions { Tools = [toolA] });
+        var withTwo = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions { Tools = [toolA, toolB] });
+
+        Assert.NotEqual(withOne, withTwo);
+    }
+
+    [Fact]
+    public void ComputeSessionSignature_ChangesWhenInstructionsChange()
+    {
+        var first = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions { Instructions = "one" });
+        var second = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions { Instructions = "two" });
+
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public void ComputeSessionSignature_ChangesWhenReasoningEffortChanges()
+    {
+        var low = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            Reasoning = new ReasoningOptions { Effort = ReasoningEffort.Low },
+        });
+        var high = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            Reasoning = new ReasoningOptions { Effort = ReasoningEffort.High },
+        });
+
+        Assert.NotEqual(low, high);
+    }
+
+    [Fact]
+    public void ComputeSessionSignature_TreatsNullAndEmptyOptionsAsEquivalent()
+    {
+        var fromNull = CopilotSdkChatClient.ComputeSessionSignature(null);
+        var fromEmpty = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions());
+
+        Assert.Equal(fromNull, fromEmpty);
+    }
 }
