@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Phantom.Workspaces.Configuration;
 
 namespace Phantom.Workspaces.ViewModels.Configuration;
@@ -17,10 +18,26 @@ public sealed class LocalMongoContainerSettingsViewModel : RepositoryConnectionM
     {
         ArgumentNullException.ThrowIfNull(profile);
         this.containerName = profile.MongoContainerName;
-        this.dataDirectory = profile.MongoDataDirectory;
+        this.dataDirectory = string.IsNullOrWhiteSpace(profile.MongoDataDirectory)
+            ? GetDefaultDataDirectory()
+            : profile.MongoDataDirectory;
         this.databaseName = profile.MongoDatabaseName;
         this.rootCollectionName = profile.MongoRootCollectionName;
         this.hostPort = profile.MongoHostPort;
+    }
+
+    /// <summary>
+    /// The wizard/GUI default Mongo data directory used to pre-fill the field when a profile does not
+    /// specify one: the current user's home directory plus <c>Phantom.Workspaces/Mongo</c> (local to
+    /// the user and clearly Phantom.Workspaces-purposed). The data layer applies no default; it is
+    /// configured here in the GUI and persisted into the profile.
+    /// </summary>
+    public static string GetDefaultDataDirectory()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Phantom.Workspaces",
+            "Mongo");
     }
 
     /// <inheritdoc />
@@ -64,6 +81,7 @@ public sealed class LocalMongoContainerSettingsViewModel : RepositoryConnectionM
     /// <inheritdoc />
     public override bool IsValid =>
         !string.IsNullOrWhiteSpace(this.ContainerName)
+        && !string.IsNullOrWhiteSpace(this.DataDirectory)
         && !string.IsNullOrWhiteSpace(this.RootCollectionName);
 
     /// <inheritdoc />

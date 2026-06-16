@@ -45,6 +45,44 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
+    public void LocalMongoContainer_DataDirectory_DefaultsToWizardDefault_WhenProfileHasNone()
+    {
+        var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile());
+
+        Assert.Equal(LocalMongoContainerSettingsViewModel.GetDefaultDataDirectory(), settings.DataDirectory);
+        Assert.False(string.IsNullOrWhiteSpace(settings.DataDirectory));
+    }
+
+    [AvaloniaFact]
+    public void LocalMongoContainer_DataDirectory_PreservesConfiguredValue()
+    {
+        var settings = new LocalMongoContainerSettingsViewModel(
+            new DataAccessConnectionProfile { MongoDataDirectory = "D:/explicit/mongo" });
+
+        Assert.Equal("D:/explicit/mongo", settings.DataDirectory);
+    }
+
+    [AvaloniaFact]
+    public void LocalMongoContainer_IsValid_RequiresDataDirectory()
+    {
+        var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile())
+        {
+            ContainerName = "mongodb",
+            RootCollectionName = "entities",
+        };
+
+        // The wizard/GUI default makes it valid out of the box.
+        Assert.True(settings.IsValid);
+
+        // Clearing the data directory invalidates it: the data layer requires it configured.
+        settings.DataDirectory = string.Empty;
+        Assert.False(settings.IsValid);
+
+        settings.DataDirectory = "C:/mongo-data";
+        Assert.True(settings.IsValid);
+    }
+
+    [AvaloniaFact]
     public void Repository_ToProfile_UsesActiveSubtype()
     {
         var viewModel = new RepositoryConnectionSettingsViewModel { Mode = DataAccessMode.DevTunnelWeb };

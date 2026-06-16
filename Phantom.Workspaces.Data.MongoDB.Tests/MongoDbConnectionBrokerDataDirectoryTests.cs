@@ -6,22 +6,7 @@ namespace Phantom.Workspaces.Data.MongoDB.Tests;
 public sealed class MongoDbConnectionBrokerDataDirectoryTests
 {
     [Fact]
-    public void GetDefaultContainerDataDirectory_IsUnderUserHome_AndIndicatesPurpose()
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var expected = Path.Combine(home, "Phantom.Workspaces", "Mongo");
-
-        Assert.Equal(expected, MongoDbConnectionBroker.GetDefaultContainerDataDirectory());
-    }
-
-    [Fact]
-    public void GetDefaultContainerDataDirectory_IsAbsolute()
-    {
-        Assert.True(Path.IsPathFullyQualified(MongoDbConnectionBroker.GetDefaultContainerDataDirectory()));
-    }
-
-    [Fact]
-    public void ResolveContainerDataDirectory_WhenEmpty_UsesDefault()
+    public void NormalizeContainerDataDirectory_WhenEmpty_Throws()
     {
         var connectionDefinition = new MongoDbContainerConnectionDefinition
         {
@@ -31,13 +16,12 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
             CollectionName = "collection",
         };
 
-        var resolved = MongoDbConnectionBroker.ResolveContainerDataDirectory(connectionDefinition);
-
-        Assert.Equal(MongoDbConnectionBroker.GetDefaultContainerDataDirectory(), resolved.DataDirectory);
+        Assert.Throws<InvalidOperationException>(
+            () => MongoDbConnectionBroker.NormalizeContainerDataDirectory(connectionDefinition));
     }
 
     [Fact]
-    public void ResolveContainerDataDirectory_WhenWhitespace_UsesDefault()
+    public void NormalizeContainerDataDirectory_WhenWhitespace_Throws()
     {
         var connectionDefinition = new MongoDbContainerConnectionDefinition
         {
@@ -47,13 +31,12 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
             CollectionName = "collection",
         };
 
-        var resolved = MongoDbConnectionBroker.ResolveContainerDataDirectory(connectionDefinition);
-
-        Assert.Equal(MongoDbConnectionBroker.GetDefaultContainerDataDirectory(), resolved.DataDirectory);
+        Assert.Throws<InvalidOperationException>(
+            () => MongoDbConnectionBroker.NormalizeContainerDataDirectory(connectionDefinition));
     }
 
     [Fact]
-    public void ResolveContainerDataDirectory_ExpandsLeadingTilde_ToAbsoluteHomePath()
+    public void NormalizeContainerDataDirectory_ExpandsLeadingTilde_ToAbsoluteHomePath()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var connectionDefinition = new MongoDbContainerConnectionDefinition
@@ -64,7 +47,7 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
             CollectionName = "collection",
         };
 
-        var resolved = MongoDbConnectionBroker.ResolveContainerDataDirectory(connectionDefinition);
+        var resolved = MongoDbConnectionBroker.NormalizeContainerDataDirectory(connectionDefinition);
 
         Assert.Equal(Path.Combine(home, "phantom.workspaces"), resolved.DataDirectory);
         Assert.DoesNotContain("~", resolved.DataDirectory);
@@ -72,7 +55,7 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
     }
 
     [Fact]
-    public void ResolveContainerDataDirectory_TildeOnly_ResolvesToHome()
+    public void NormalizeContainerDataDirectory_TildeOnly_ResolvesToHome()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var connectionDefinition = new MongoDbContainerConnectionDefinition
@@ -83,13 +66,13 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
             CollectionName = "collection",
         };
 
-        var resolved = MongoDbConnectionBroker.ResolveContainerDataDirectory(connectionDefinition);
+        var resolved = MongoDbConnectionBroker.NormalizeContainerDataDirectory(connectionDefinition);
 
         Assert.Equal(home, resolved.DataDirectory);
     }
 
     [Fact]
-    public void ResolveContainerDataDirectory_RelativePath_IsMadeAbsolute()
+    public void NormalizeContainerDataDirectory_RelativePath_IsMadeAbsolute()
     {
         var connectionDefinition = new MongoDbContainerConnectionDefinition
         {
@@ -99,14 +82,14 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
             CollectionName = "collection",
         };
 
-        var resolved = MongoDbConnectionBroker.ResolveContainerDataDirectory(connectionDefinition);
+        var resolved = MongoDbConnectionBroker.NormalizeContainerDataDirectory(connectionDefinition);
 
         Assert.True(Path.IsPathFullyQualified(resolved.DataDirectory));
         Assert.EndsWith(Path.Combine("relative", "mongo-data"), resolved.DataDirectory);
     }
 
     [Fact]
-    public void ResolveContainerDataDirectory_AbsolutePath_IsPreserved()
+    public void NormalizeContainerDataDirectory_AbsolutePath_IsPreserved()
     {
         var absolute = Path.Combine(Path.GetTempPath(), "explicit-mongo-data");
         var connectionDefinition = new MongoDbContainerConnectionDefinition
@@ -117,7 +100,7 @@ public sealed class MongoDbConnectionBrokerDataDirectoryTests
             CollectionName = "collection",
         };
 
-        var resolved = MongoDbConnectionBroker.ResolveContainerDataDirectory(connectionDefinition);
+        var resolved = MongoDbConnectionBroker.NormalizeContainerDataDirectory(connectionDefinition);
 
         Assert.Equal(Path.GetFullPath(absolute), resolved.DataDirectory);
     }

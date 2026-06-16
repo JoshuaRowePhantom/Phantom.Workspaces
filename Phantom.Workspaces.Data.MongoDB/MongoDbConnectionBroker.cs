@@ -51,37 +51,29 @@ public sealed class MongoDbConnectionBroker
     }
 
     /// <summary>
-    /// The default Mongo data directory used when a container connection does not specify one: the
-    /// current user's home directory plus <c>Phantom.Workspaces/Mongo</c>. This keeps the data
-    /// local to the user and clearly indicates its Phantom.Workspaces purpose.
+    /// Normalizes the data directory for a container connection: expands a leading <c>~</c> to the
+    /// user's home directory and resolves the result to a full, absolute path (the container engine
+    /// bind-mounts it and does not expand <c>~</c> or relative paths). The data directory must be
+    /// configured by the caller (the wizard/GUI supplies the default); this layer applies <b>no</b>
+    /// default and throws when none is set. Performs no I/O.
     /// </summary>
-    public static string GetDefaultContainerDataDirectory()
-    {
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Phantom.Workspaces",
-            "Mongo");
-    }
-
-    /// <summary>
-    /// Resolves the data directory for a container connection, substituting the default
-    /// (<see cref="GetDefaultContainerDataDirectory"/>) when none is specified and expanding a
-    /// leading <c>~</c> to the user's home directory. The result is always an absolute path because
-    /// the container engine bind-mounts it and does not expand <c>~</c> or relative paths. This
-    /// performs no I/O.
-    /// </summary>
-    public static MongoDbContainerConnectionDefinition ResolveContainerDataDirectory(
+    public static MongoDbContainerConnectionDefinition NormalizeContainerDataDirectory(
         MongoDbContainerConnectionDefinition connectionDefinition)
     {
         ArgumentNullException.ThrowIfNull(connectionDefinition);
 
-        var effectiveDataDirectory = string.IsNullOrWhiteSpace(connectionDefinition.DataDirectory)
-            ? GetDefaultContainerDataDirectory()
-            : ExpandAndNormalizeDirectory(connectionDefinition.DataDirectory);
+        if (string.IsNullOrWhiteSpace(connectionDefinition.DataDirectory))
+        {
+            throw new InvalidOperationException(
+                "The MongoDB container data directory must be configured. Configure it through the "
+                + "installation wizard or repository settings; the data layer applies no default.");
+        }
 
-        return string.Equals(effectiveDataDirectory, connectionDefinition.DataDirectory, StringComparison.Ordinal)
+        var normalizedDataDirectory = ExpandAndNormalizeDirectory(connectionDefinition.DataDirectory);
+
+        return string.Equals(normalizedDataDirectory, connectionDefinition.DataDirectory, StringComparison.Ordinal)
             ? connectionDefinition
-            : connectionDefinition.WithDataDirectory(effectiveDataDirectory);
+            : connectionDefinition.WithDataDirectory(normalizedDataDirectory);
     }
 
     /// <summary>
@@ -109,7 +101,7 @@ public sealed class MongoDbConnectionBroker
         MongoDbContainerConnectionDefinition connectionDefinition,
         CancellationToken cancellationToken)
     {
-        var resolvedConnectionDefinition = ResolveContainerDataDirectory(connectionDefinition);
+        var resolvedConnectionDefinition = NormalizeContainerDataDirectory(connectionDefinition);
 
         // The data directory is bind-mounted into the container; it must exist before the container
         // is created, otherwise the container engine fails to start it.
