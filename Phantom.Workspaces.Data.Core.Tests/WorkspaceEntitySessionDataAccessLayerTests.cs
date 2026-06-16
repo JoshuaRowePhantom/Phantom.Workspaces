@@ -94,6 +94,56 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
         Assert.Equal([new EntityName("test-note")], names);
     }
 
+    [Fact]
+    public async Task QueryAsync_BindsUserMetaVariable_InFieldClauseValue()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var workspaceEntitySession = await SeedWorkspaceEntitySessionAsync(dataAccessLayer);
+
+        // A task assigned to the session user, and one assigned to another user.
+        var assignedTask = new EntityId("aaaaaaaa-1111-1111-1111-111111111111");
+        var otherTask = new EntityId("bbbbbbbb-2222-2222-2222-222222222222");
+        var otherUser = new EntityId("cccccccc-3333-3333-3333-333333333333");
+        await UpsertEntityAsync(dataAccessLayer, assignedTask, """{ "entity-id": "aaaaaaaa-1111-1111-1111-111111111111", "entity-types": ["task"], "names": [["tasks","a"]] }""");
+        await UpsertEntityAsync(dataAccessLayer, otherTask, """{ "entity-id": "bbbbbbbb-2222-2222-2222-222222222222", "entity-types": ["task"], "names": [["tasks","b"]] }""");
+        await UpsertEntityAsync(dataAccessLayer, new EntityId("dddddddd-4444-4444-4444-444444444444"),
+            """{ "entity-id": "dddddddd-4444-4444-4444-444444444444", "entity-types": ["assigned-to","relationship"], "names": [["relationships","r1"]], "participants": { "target": "aaaaaaaa-1111-1111-1111-111111111111", "user": "11111111-1111-1111-1111-111111111111" } }""");
+        await UpsertEntityAsync(dataAccessLayer, new EntityId("eeeeeeee-5555-5555-5555-555555555555"),
+            $$"""{ "entity-id": "eeeeeeee-5555-5555-5555-555555555555", "entity-types": ["assigned-to","relationship"], "names": [["relationships","r2"]], "participants": { "target": "bbbbbbbb-2222-2222-2222-222222222222", "user": "{{otherUser.Value}}" } }""");
+
+        var sessionDataAccessLayer = new WorkspaceEntitySessionDataAccessLayer(dataAccessLayer, workspaceEntitySession);
+
+        var result = await sessionDataAccessLayer.QueryAsync(new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("assigned"),
+                    Clause = new EntityParticipationQueryClause
+                    {
+                        RelationshipTypeNames = new RelationshipTypeNameSet(["assigned-to"]),
+                        ParticipationRoleNames = new RoleNameSet(["target"]),
+                        MustHave = new EntityParticipationRequirement
+                        {
+                            ParticipationRoleNames = new RoleNameSet(["user"]),
+                            Clause = new EntityFieldQueryClause
+                            {
+                                FieldPath = new FieldPath("entity-id"),
+                                ComparisonOperator = FieldComparisonOperator.Equals,
+                                Value = JsonSerializer.SerializeToElement(WorkspaceEntityMetaVariables.User),
+                            },
+                        },
+                    },
+                },
+            ],
+        });
+
+        var ids = result.Batches.SelectMany(batch => batch.Entities).Select(entity => entity.EntityId).ToHashSet();
+        Assert.Contains(assignedTask, ids);
+        Assert.DoesNotContain(otherTask, ids);
+    }
+
     private static async Task<WorkspaceEntitySession> SeedWorkspaceEntitySessionAsync(
         IDataAccessLayer dataAccessLayer)
     {

@@ -1,8 +1,11 @@
+using System.Text.Json;
+
 namespace Phantom.Workspaces.Data;
 
 public sealed class WorkspaceEntitySessionDataAccessLayer : IDataAccessLayer
 {
     private readonly IDataAccessLayer underlyingDataAccessLayer;
+    private readonly WorkspaceEntitySession workspaceEntitySession;
     private readonly WorkspaceEntitySessionNameResolver workspaceEntitySessionNameResolver;
 
     public WorkspaceEntitySessionDataAccessLayer(
@@ -10,6 +13,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayer : IDataAccessLayer
         WorkspaceEntitySession workspaceEntitySession)
     {
         this.underlyingDataAccessLayer = underlyingDataAccessLayer;
+        this.workspaceEntitySession = workspaceEntitySession;
         this.workspaceEntitySessionNameResolver = new WorkspaceEntitySessionNameResolver(underlyingDataAccessLayer, workspaceEntitySession);
     }
 
@@ -83,7 +87,67 @@ public sealed class WorkspaceEntitySessionDataAccessLayer : IDataAccessLayer
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
-        return this.underlyingDataAccessLayer.QueryAsync(request, cancellationToken);
+        // Bind the current user/computer/profile session meta-variables (e.g. "${USER}") that appear
+        // as field-clause comparison values into the concrete session entity ids, so views can query
+        // for "the current user" without hard-coding an id. This mirrors the name rewriting in
+        // GetAsync.
+        var rewrittenClauses = request.Clauses
+            .Select(topLevelClause => topLevelClause with { Clause = this.RewriteSessionMetaVariables(topLevelClause.Clause) })
+            .ToArray();
+
+        return this.underlyingDataAccessLayer.QueryAsync(request with { Clauses = rewrittenClauses }, cancellationToken);
+    }
+
+    private QueryClause RewriteSessionMetaVariables(QueryClause clause)
+    {
+        switch (clause)
+        {
+            case AndQueryClause andClause:
+                return andClause with { Clauses = andClause.Clauses.Select(this.RewriteSessionMetaVariables).ToArray() };
+
+            case OrQueryClause orClause:
+                return orClause with { Clauses = orClause.Clauses.Select(this.RewriteSessionMetaVariables).ToArray() };
+
+            case NotQueryClause notClause:
+                return notClause with { Clause = this.RewriteSessionMetaVariables(notClause.Clause) };
+
+            case TopQueryClause topClause:
+                return topClause with { Clause = this.RewriteSessionMetaVariables(topClause.Clause) };
+
+            case TransitQueryClause transitClause:
+                return transitClause with { MatchClause = this.RewriteSessionMetaVariables(transitClause.MatchClause) };
+
+            case EntityParticipationQueryClause participationClause:
+                return participationClause.MustHave is { } mustHave
+                    ? participationClause with { MustHave = mustHave with { Clause = this.RewriteSessionMetaVariables(mustHave.Clause) } }
+                    : participationClause;
+
+            case EntityFieldQueryClause fieldClause:
+                return this.RewriteFieldClauseValue(fieldClause);
+
+            default:
+                return clause;
+        }
+    }
+
+    private EntityFieldQueryClause RewriteFieldClauseValue(EntityFieldQueryClause fieldClause)
+    {
+        if (fieldClause.Value is not { ValueKind: JsonValueKind.String } value)
+        {
+            return fieldClause;
+        }
+
+        var sessionEntityId = value.GetString() switch
+        {
+            WorkspaceEntityMetaVariables.User => this.workspaceEntitySession.UserEntityId,
+            WorkspaceEntityMetaVariables.Computer => this.workspaceEntitySession.ComputerEntityId,
+            WorkspaceEntityMetaVariables.UserProfile => this.workspaceEntitySession.UserComputerProfileEntityId,
+            _ => (EntityId?)null,
+        };
+
+        return sessionEntityId is { } entityId
+            ? fieldClause with { Value = JsonSerializer.SerializeToElement(entityId.Value.ToString()) }
+            : fieldClause;
     }
 
     public Task<GetHistoryResult> GetHistoryAsync(
