@@ -12,5 +12,30 @@
   "title": {
     "default": "Workstreams"
   },
-  "sub-views": []
+  "sub-views": [
+    {
+      "disposition": "expanded",
+      "query": {
+        "clauses": [
+          {
+            "clause-identifier": { "value": "assigned-to" },
+            "clause": {
+              "clause-type": "entity-participation",
+              "relationship-type-names": { "values": ["assigned-to"] },
+              "participation-role-names": { "values": ["target"] },
+              "must-have": {
+                "participation-role-names": { "values": ["user"] },
+                "clause": {
+                  "clause-type": "entity-field",
+                  "field-path": { "components": ["entity-id"] },
+                  "comparison-operator": "equals",
+                  "value": "${USER}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
 }
