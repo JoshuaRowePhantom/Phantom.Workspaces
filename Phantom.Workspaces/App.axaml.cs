@@ -29,6 +29,15 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            if (CommandLineOptions.IsHelpRequested(Program.StartupArguments))
+            {
+                var helpWindow = new HelpWindow();
+                desktop.MainWindow = helpWindow;
+                base.OnFrameworkInitializationCompleted();
+                helpWindow.Show();
+                return;
+            }
+
             var loadingViewModel = new LoadingWindowViewModel();
             var loadingWindow = new LoadingWindow(loadingViewModel);
             desktop.MainWindow = loadingWindow;

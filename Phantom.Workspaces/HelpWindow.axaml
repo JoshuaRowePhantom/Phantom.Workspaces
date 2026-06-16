@@ -1,0 +1,25 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Phantom.Workspaces.HelpWindow"
+        Width="680"
+        Height="500"
+        MinWidth="480"
+        MinHeight="320"
+        WindowStartupLocation="CenterScreen"
+        Title="Phantom.Workspaces - Help">
+    <Grid RowDefinitions="*,Auto"
+          Margin="16">
+        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      AllowAutoHide="False">
+            <SelectableTextBlock Name="HelpText"
+                                 FontFamily="Cascadia Mono,Consolas,Courier New,monospace"
+                                 TextWrapping="NoWrap" />
+        </ScrollViewer>
+        <Button Grid.Row="1"
+                Content="Close"
+                HorizontalAlignment="Right"
+                Margin="0,12,0,0"
+                Click="OnCloseClick" />
+    </Grid>
+</Window>
