@@ -78,6 +78,49 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
+    public async Task Populate_SeedsDefaultAgentDefinitionsScheduleAndProfile()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var seededNames = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .Where(static data => data.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
+            .SelectMany(static data => data.GetProperty("names").EnumerateArray())
+            .Select(static name => name.TryReadEntityName())
+            .Where(static name => name is not null)
+            .Select(static name => name!.Value.Components)
+            .ToArray();
+
+        string[][] expectedDefaults =
+        [
+            ["defaults", "agent-definitions", "workspaces"],
+            ["defaults", "agent-definitions", "github-copilot"],
+            ["defaults", "agent-definitions", "github-models"],
+            ["defaults", "profiles", "default"],
+            ["schedule", "every-day-at-09"],
+        ];
+
+        foreach (var expected in expectedDefaults)
+        {
+            Assert.Contains(
+                seededNames,
+                components => components.SequenceEqual(expected, StringComparer.Ordinal));
+        }
+    }
+
+    [Fact]
     public async Task Populate_EntityTypeSchema_IsEntityTypeAndRequiresSchema()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
