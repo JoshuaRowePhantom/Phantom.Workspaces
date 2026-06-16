@@ -157,13 +157,43 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
         await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var toolEventLock = new object();
+            var toolCalls = new List<FunctionCallContent>();
+            var toolResults = new List<FunctionResultContent>();
+
+            using var subscription = session.On(sessionEvent =>
+            {
+                switch (sessionEvent)
+                {
+                    case ToolExecutionStartEvent toolStart:
+                        lock (toolEventLock)
+                        {
+                            toolCalls.Add(CopilotToolEventMapper.MapToolStart(toolStart));
+                        }
+
+                        break;
+                    case ToolExecutionCompleteEvent toolComplete:
+                        lock (toolEventLock)
+                        {
+                            toolResults.Add(CopilotToolEventMapper.MapToolComplete(toolComplete));
+                        }
+
+                        break;
+                }
+            });
+
             var finalEvent = await session.SendAndWaitAsync(
                 new MessageOptions { Prompt = prompt },
                 timeout: null,
                 cancellationToken).ConfigureAwait(false);
 
-            return BuildResponse(finalEvent
-                ?? throw new InvalidOperationException("GitHub Copilot session returned no assistant message."));
+            lock (toolEventLock)
+            {
+                return BuildResponse(
+                    finalEvent ?? throw new InvalidOperationException("GitHub Copilot session returned no assistant message."),
+                    toolCalls,
+                    toolResults);
+            }
         }
         finally
         {
@@ -202,6 +232,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
                     {
                         Role = ChatRole.Assistant,
                         Contents = [new TextReasoningContent(reasoningDelta.Data.DeltaContent)],
+                    });
+                    break;
+                case ToolExecutionStartEvent toolStart:
+                    channel.Writer.TryWrite(new ChatResponseUpdate
+                    {
+                        Role = ChatRole.Assistant,
+                        Contents = [CopilotToolEventMapper.MapToolStart(toolStart)],
+                    });
+                    break;
+                case ToolExecutionCompleteEvent toolComplete:
+                    channel.Writer.TryWrite(new ChatResponseUpdate
+                    {
+                        Role = ChatRole.Tool,
+                        Contents = [CopilotToolEventMapper.MapToolComplete(toolComplete)],
                     });
                     break;
                 case SessionErrorEvent error:
@@ -306,17 +350,35 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
         return lastWithText?.Text ?? string.Empty;
     }
 
-    private static ChatResponse BuildResponse(AssistantMessageEvent finalEvent)
+    private static ChatResponse BuildResponse(
+        AssistantMessageEvent finalEvent,
+        IReadOnlyList<FunctionCallContent> toolCalls,
+        IReadOnlyList<FunctionResultContent> toolResults)
     {
-        var contents = new List<AIContent>();
-        if (!string.IsNullOrEmpty(finalEvent.Data.ReasoningText))
+        var messages = new List<ChatMessage>();
+
+        // Surface tool use the same way other providers do: function calls in an assistant message,
+        // their results in a tool message, before the final assistant text.
+        if (toolCalls.Count > 0)
         {
-            contents.Add(new TextReasoningContent(finalEvent.Data.ReasoningText));
+            messages.Add(new ChatMessage(ChatRole.Assistant, toolCalls.Cast<AIContent>().ToList()));
         }
 
-        contents.Add(new TextContent(finalEvent.Data.Content ?? string.Empty));
+        if (toolResults.Count > 0)
+        {
+            messages.Add(new ChatMessage(ChatRole.Tool, toolResults.Cast<AIContent>().ToList()));
+        }
 
-        return new ChatResponse(new ChatMessage(ChatRole.Assistant, contents))
+        var finalContents = new List<AIContent>();
+        if (!string.IsNullOrEmpty(finalEvent.Data.ReasoningText))
+        {
+            finalContents.Add(new TextReasoningContent(finalEvent.Data.ReasoningText));
+        }
+
+        finalContents.Add(new TextContent(finalEvent.Data.Content ?? string.Empty));
+        messages.Add(new ChatMessage(ChatRole.Assistant, finalContents));
+
+        return new ChatResponse(messages)
         {
             ResponseId = finalEvent.Data.MessageId,
             ModelId = null,

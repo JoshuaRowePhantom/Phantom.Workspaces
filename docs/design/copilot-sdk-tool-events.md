@@ -1,5 +1,9 @@
 # Surfacing GitHub Copilot SDK tool calls and results
 
+> **Status: implemented.** The mapping lives in `CopilotToolEventMapper`
+> (`Phantom.Workspaces.Llm.Core`) and is wired into both the streaming and non-streaming paths of
+> `CopilotSdkChatClient`. See `CopilotToolEventMapperTests` for coverage.
+
 ## Problem
 
 When an agent uses the **github-copilot** provider, `CopilotSdkChatClient` runs the
