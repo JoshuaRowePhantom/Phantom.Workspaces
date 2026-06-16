@@ -38,7 +38,7 @@
       "uniqueItems": true
     },
     "hosting-workspaces-client-instances": {
-      "$comment": "Hosting Workspaces client instance ids. Use '.' for local client instance.",
+      "$comment": "Hosting Workspaces client instance ids. Use '.' for the local client instance and '*' as a wildcard permitting any client instance (all machines).",
       "type": "array",
       "items": {
         "type": "string"

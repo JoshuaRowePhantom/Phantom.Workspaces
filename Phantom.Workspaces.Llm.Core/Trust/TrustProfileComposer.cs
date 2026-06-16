@@ -89,12 +89,29 @@ public static class TrustProfileComposer
 
     private static IReadOnlyList<string> IntersectInstances(IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
+        // A wildcard means "all instances", so it does not restrict the other side.
+        if (a.Contains(TrustProfile.WildcardClientInstance))
+        {
+            return b.ToList();
+        }
+
+        if (b.Contains(TrustProfile.WildcardClientInstance))
+        {
+            return a.ToList();
+        }
+
         var allowed = new HashSet<string>(b, StringComparer.Ordinal);
         return a.Where(allowed.Contains).ToList();
     }
 
     private static IReadOnlyList<string> UnionInstances(IReadOnlyList<string> a, IReadOnlyList<string> b)
     {
+        // A wildcard means "all instances", so the union is also "all".
+        if (a.Contains(TrustProfile.WildcardClientInstance) || b.Contains(TrustProfile.WildcardClientInstance))
+        {
+            return [TrustProfile.WildcardClientInstance];
+        }
+
         var result = new List<string>(a);
         var seen = new HashSet<string>(a, StringComparer.Ordinal);
         foreach (var instance in b)

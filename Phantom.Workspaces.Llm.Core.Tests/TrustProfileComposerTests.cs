@@ -37,6 +37,37 @@ public sealed class TrustProfileComposerTests
     }
 
     [Fact]
+    public void AllowsClientInstance_Wildcard_PermitsAnyInstance()
+    {
+        var profile = new TrustProfile { HostingWorkspacesClientInstances = [TrustProfile.WildcardClientInstance] };
+
+        Assert.True(profile.AllowsClientInstance("any-remote"));
+        Assert.True(profile.AllowsLocalExecution());
+    }
+
+    [Fact]
+    public void Compose_WildcardBase_DoesNotRestrictDerivedInstances()
+    {
+        var baseProfile = new TrustProfileDefinition { HostingWorkspacesClientInstances = [TrustProfile.WildcardClientInstance] };
+        var derived = new TrustProfileDefinition { HostingWorkspacesClientInstances = ["remote-a"] };
+
+        var composed = TrustProfileComposer.Compose([baseProfile, derived]);
+
+        Assert.Equal(["remote-a"], composed.HostingWorkspacesClientInstances);
+    }
+
+    [Fact]
+    public void MergePermissive_WildcardWins()
+    {
+        var first = new TrustProfileDefinition { HostingWorkspacesClientInstances = ["remote-a"] };
+        var second = new TrustProfileDefinition { HostingWorkspacesClientInstances = [TrustProfile.WildcardClientInstance] };
+
+        var merged = TrustProfileComposer.Merge(first, second, TrustInheritanceMode.Permissive);
+
+        Assert.Equal([TrustProfile.WildcardClientInstance], merged.HostingWorkspacesClientInstances);
+    }
+
+    [Fact]
     public void Compose_ClientInstances_Intersects()
     {
         var baseProfile = new TrustProfileDefinition

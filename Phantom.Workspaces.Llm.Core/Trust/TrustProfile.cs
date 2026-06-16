@@ -126,6 +126,9 @@ public sealed record TrustProfile
     /// <summary>Identifier for the local client instance.</summary>
     public const string LocalClientInstance = ".";
 
+    /// <summary>Wildcard identifier permitting execution on any client instance ("all machines").</summary>
+    public const string WildcardClientInstance = "*";
+
     /// <summary>Effective set of client instances this profile may run on.</summary>
     public IReadOnlyList<string> HostingWorkspacesClientInstances { get; init; } = [];
 
@@ -147,7 +150,8 @@ public sealed record TrustProfile
         ArgumentNullException.ThrowIfNull(clientInstance);
         foreach (var instance in this.HostingWorkspacesClientInstances)
         {
-            if (string.Equals(instance, clientInstance, StringComparison.Ordinal))
+            if (string.Equals(instance, WildcardClientInstance, StringComparison.Ordinal)
+                || string.Equals(instance, clientInstance, StringComparison.Ordinal))
             {
                 return true;
             }
