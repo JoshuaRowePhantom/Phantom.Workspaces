@@ -543,26 +543,27 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         };
 
         // MustHave: the relationship must carry a participant (in the given roles, or any role) whose
-        // id is among the entities matching the MustHave sub-clause. The sub-clause is translated to a
-        // native filter and resolved to its matching ids first.
+        // entity matches the MustHave sub-clause. This is a correlated $lookup join from the
+        // relationship's participant ids to the entity collection, with the translated sub-clause
+        // filter applied inside the join; the relationship is kept only if the join yields a match.
         if (clause.MustHave is { } mustHave)
         {
-            var mustHaveFilter = translator.TranslateToFilter(mustHave.Clause);
-            var mustHaveDocuments = await bsonCollection
-                .Find(mustHaveFilter)
-                .Project(Builders<BsonDocument>.Projection.Include("_id"))
-                .ToListAsync(cancellationToken).ConfigureAwait(false);
-            var mustHaveIds = new BsonArray(mustHaveDocuments.Select(document => document["_id"]));
+            var mustHaveFilter = RenderFilter(translator.TranslateToFilter(mustHave.Clause));
 
-            pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray
+            pipeline.Add(new BsonDocument("$lookup", new BsonDocument
             {
-                new BsonDocument("$size", new BsonDocument("$setIntersection", new BsonArray
+                { "from", collectionName },
+                { "let", new BsonDocument("mustHaveIds", BuildRoleIdsExpression(mustHave.ParticipationRoleNames?.Values)) },
                 {
-                    BuildRoleIdsExpression(mustHave.ParticipationRoleNames?.Values),
-                    mustHaveIds,
-                })),
-                0,
-            }))));
+                    "pipeline", new BsonArray
+                    {
+                        new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$in", new BsonArray { "$_id", "$$mustHaveIds" }))),
+                        new BsonDocument("$match", mustHaveFilter),
+                    }
+                },
+                { "as", "__mustHaveMatches" },
+            }));
+            pipeline.Add(new BsonDocument("$match", new BsonDocument("__mustHaveMatches.0", new BsonDocument("$exists", true))));
         }
 
         // Collect the participant ids in the result roles, then join to the entity documents.
@@ -589,6 +590,11 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             .Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private static BsonDocument RenderFilter(FilterDefinition<BsonDocument> filter)
+        => filter.Render(new RenderArgs<BsonDocument>(
+            global::MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry.GetSerializer<BsonDocument>(),
+            global::MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry));
 
     /// <summary>
     /// Builds an aggregation expression yielding the flat array of participant ids for the given roles
