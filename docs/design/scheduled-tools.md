@@ -41,6 +41,14 @@ Child results (sub-tasks / progress) are nested beneath their parent result enti
 
 ## Host runtime
 
+> **Status:** the host runtime is implemented in `Phantom.Workspaces/ScheduledTools/`:
+> `ScheduleEvaluator` (+ `ScheduleDefinition`) decides whether a schedule is due; `IScheduledTool` /
+> `ScheduledToolRegistry` dispatch by `tool.type`; `ToolExecutionResultWriter` records runs as
+> `tool-execution-result` entities; and `ScheduledToolHost.RunDueToolsAsync` discovers
+> tool-relationships targeting the host, evaluates schedules against the last recorded execution, and
+> runs due tools (no double-start). The concrete built-in tools, the result browser GUI, and the
+> running-tools display are still to come.
+
 When a host is running, it executes the scheduled tools bound to it. For a `user-computer-profile`
 host, the host process is the **`Phantom.Workspaces` executable**.
 
