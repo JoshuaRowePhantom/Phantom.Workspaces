@@ -1,6 +1,7 @@
 using System.IO;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
 
 namespace Phantom.Workspaces.Tests;
@@ -262,6 +263,31 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Equal("FluentLight", settings.BuildConfiguration().Visual.Theme);
     }
 
+    [AvaloniaFact]
+    public void Settings_WithoutProfileController_HasNoProfileSection()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        Assert.Null(settings.ProfileAppearance);
+        Assert.DoesNotContain(settings.Sections, section => section.Title == "Profile");
+    }
+
+    [AvaloniaFact]
+    public void Settings_WithProfileController_AddsLiveProfileSection()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var controller = new FakeProfileAppearanceController();
+
+        var settings = new WorkspacesSettingsViewModel(service, new WorkspacesConfiguration(), controller);
+
+        Assert.NotNull(settings.ProfileAppearance);
+        Assert.Same(controller, settings.ProfileAppearance!.Controller);
+
+        var profileSection = Assert.Single(settings.Sections, section => section.Title == "Profile");
+        Assert.Same(settings.ProfileAppearance, profileSection.Content);
+    }
+
     private static string CreateTempConfigPath()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-wizard-{System.Guid.NewGuid():N}");
@@ -275,5 +301,23 @@ public sealed class WorkspacesSettingsViewModelTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    private sealed class FakeProfileAppearanceController : IProfileAppearanceController
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        public System.Collections.Generic.IReadOnlyList<string> ThemeNames { get; } = ["dark", "light"];
+
+        public string SelectedThemeName { get; set; } = "dark";
+
+        public bool IsDebuggingEnabled => false;
+
+        public bool IsDebuggingDisabled => true;
+
+        public RelayCommand SetDebuggingCommand { get; } = new(_ => { });
+
+        private void RaisePropertyChanged(string propertyName)
+            => this.PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
     }
 }

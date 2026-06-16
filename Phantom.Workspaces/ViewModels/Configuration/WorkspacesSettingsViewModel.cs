@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.ViewModels.Configuration;
 
@@ -29,7 +30,8 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     /// <summary>Creates a settings view model over the supplied configuration.</summary>
     public WorkspacesSettingsViewModel(
         ConfigurationPersistenceService persistenceService,
-        WorkspacesConfiguration configuration)
+        WorkspacesConfiguration configuration,
+        IProfileAppearanceController? profileAppearance = null)
     {
         ArgumentNullException.ThrowIfNull(persistenceService);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -44,12 +46,22 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         this.Repository.PropertyChanged += this.OnSectionChanged;
         this.RemoteAccess.PropertyChanged += this.OnSectionChanged;
 
-        this.Sections =
-        [
-            new SettingsSectionViewModel("Repository", this.Repository),
-            new SettingsSectionViewModel("Remote access", this.RemoteAccess),
-            new SettingsSectionViewModel("Appearance", this.Appearance),
-        ];
+        var sections = new List<SettingsSectionViewModel>
+        {
+            new("Repository", this.Repository),
+            new("Remote access", this.RemoteAccess),
+            new("Appearance", this.Appearance),
+        };
+
+        // When opened from the running application, surface the live profile theme/debugging controls
+        // as a Profile section so those settings remain reachable from the unified settings dialog.
+        if (profileAppearance is not null)
+        {
+            this.ProfileAppearance = new ProfileAppearanceSettingsViewModel(profileAppearance);
+            sections.Add(new SettingsSectionViewModel("Profile", this.ProfileAppearance));
+        }
+
+        this.Sections = sections;
         this.selectedSection = this.Sections[0];
     }
 
@@ -61,6 +73,12 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
 
     /// <summary>Appearance/visual settings.</summary>
     public AppearanceSettingsViewModel Appearance { get; }
+
+    /// <summary>
+    /// Live profile theme/debugging section, present only when the dialog is opened from the running
+    /// application (the installation wizard has no running profile to control).
+    /// </summary>
+    public ProfileAppearanceSettingsViewModel? ProfileAppearance { get; }
 
     /// <summary>The settings sections shown in the dialog's master-detail layout.</summary>
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }

@@ -1,6 +1,10 @@
+using System;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.ViewModels;
+using Phantom.Workspaces.ViewModels.Configuration;
 
 namespace Phantom.Workspaces;
 
@@ -27,10 +31,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        var settingsWindow = new SettingsWindow
-        {
-            DataContext = viewModel,
-        };
+        // Open the unified master-detail settings dialog (Repository, Remote access, Appearance) built
+        // from the persisted configuration, with the live profile theme/debugging folded in as a
+        // Profile section so nothing from the legacy settings window is lost.
+        var persistenceService = new ConfigurationPersistenceService();
+        var configuration = persistenceService.ConfigurationExists()
+            ? await persistenceService.LoadAsync()
+            : new WorkspacesConfiguration();
+
+        var settingsViewModel = new WorkspacesSettingsViewModel(persistenceService, configuration, viewModel);
+        var settingsWindow = new SettingsDialogWindow(settingsViewModel);
 
         await settingsWindow.ShowDialog(this);
     }

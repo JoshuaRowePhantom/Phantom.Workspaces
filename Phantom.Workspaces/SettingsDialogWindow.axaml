@@ -22,6 +22,9 @@
         <DataTemplate DataType="vm:AppearanceSettingsViewModel">
             <views:AppearanceSettingsView />
         </DataTemplate>
+        <DataTemplate DataType="vm:ProfileAppearanceSettingsViewModel">
+            <views:ProfileAppearanceSettingsView />
+        </DataTemplate>
     </Window.DataTemplates>
 
     <Grid RowDefinitions="*,Auto" Margin="20">

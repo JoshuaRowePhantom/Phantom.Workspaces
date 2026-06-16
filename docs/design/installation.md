@@ -88,7 +88,12 @@ Implemented so far (`Phantom.Workspaces/Configuration/`):
    `InstallationWizardWindow`, `SettingsDialogWindow`): the repository section binds to the
    active connection subtype through per-subtype `DataTemplate`s/`UserControl`s. `App.axaml.cs`
    runs the wizard on first launch when no configuration exists (explicit startup arguments
-   still take precedence), then continues with `configuration.ToRepositorySource()`.
+   still take precedence), then continues with `configuration.ToRepositorySource()`. The main
+   window gear (`MainWindow.OnOpenSettingsClicked`) opens the same unified `SettingsDialogWindow`,
+   built from the persisted `WorkspacesConfiguration`; the live profile theme/debugging controls
+   are folded in as a `Profile` section (`ProfileAppearanceSettingsViewModel` over
+   `IProfileAppearanceController`, implemented by `MainWindowViewModel`) so they remain reachable
+   and apply/persist live. The legacy standalone `SettingsWindow` has been removed.
 
 Secret-safety is structural: the model stores only secret *sources* (for example
 `DevTunnelTokenSource`, `AccessTokenSource`, `MongoConnectionStringSource` — environment
