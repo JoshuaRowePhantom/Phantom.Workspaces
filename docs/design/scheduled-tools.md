@@ -54,6 +54,9 @@ host, the host process is the **`Phantom.Workspaces` executable**.
    profile resolved for its tool/agent definition, and on the host's client instance (see
    `docs/design/trust-models.md`). Tools that drive an agent use `ITrustedExecutor` to construct
    the agent on the correct (local or remote) client instance.
+5. Tools that are currently running when their schedule evaluates shall not be started again;
+   the current tool run is allowed to complete first, and the next run will start at the
+   next evaluation time.
 
 ## Tool progress
 
