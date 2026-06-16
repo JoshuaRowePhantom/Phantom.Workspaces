@@ -81,7 +81,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 ? (ConcurrencyTag?)null
                 : new ConcurrencyTag(currentVersion.VersionId.ToString());
 
-            if (currentVersion is not null && IsNoContentChange(currentVersion.DataJson, change.Data))
+            if (currentVersion is not null && IsNoContentChange(currentVersion.Data, change.Data))
             {
                 if (change.ConcurrencyTag is not null && change.ConcurrencyTag.Value.Value != currentVersion.VersionId.ToString())
                 {
@@ -121,8 +121,9 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var nowUtc = DateTime.UtcNow;
             var nextVersionId = ObjectId.GenerateNewId(nowUtc);
             var nextTag = new ConcurrencyTag(nextVersionId.ToString());
-            var nextDataJson = change.Data?.GetRawText();
-            var (names, typeNames) = ExtractNamesAndTypes(change.Data);
+            var hasData = change.Data is not null;
+            var nextDataBson = hasData ? MongoEntityData.ToBsonDocument(change.Data!.Value) : null;
+            var typeNames = ExtractTypeNames(change.Data);
 
             var updatedDocument = currentDocument ?? new MongoDbEntityDocument
             {
@@ -134,15 +135,13 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             {
                 VersionId = nextVersionId,
                 TimestampUtc = nowUtc,
-                DataJson = nextDataJson,
-                Names = names.ToArray(),
-                TypeNames = typeNames.ToArray(),
+                Data = nextDataBson,
             });
 
             // Recompute the denormalized current-version projection used for native querying.
             var projectedText = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(change.Data);
             float[]? embedding = null;
-            if (nextDataJson is not null && !string.IsNullOrWhiteSpace(projectedText))
+            if (hasData && !string.IsNullOrWhiteSpace(projectedText))
             {
                 var embeddings = await _embeddingsProvider.ComputeAsync(
                     [new Phantom.Workspaces.Data.Vector.EmbeddingInput { EntityId = entityId.Value, Text = projectedText }],
@@ -152,9 +151,10 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
             updatedDocument.Current = new MongoDbCurrentProjection
             {
+                Data = nextDataBson,
                 TypeNames = typeNames.ToArray(),
                 Embedding = embedding,
-                IsDeleted = nextDataJson is null,
+                IsDeleted = !hasData,
                 ModifiedTimeUtc = nowUtc,
                 ModifiedVersion = nextVersionId.ToString(),
             };
@@ -164,7 +164,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
             results.Add(new EntityUpdateResult
             {
-                UpdateState = nextDataJson is null ? UpdateState.Removed : currentVersion is null ? UpdateState.Added : UpdateState.Updated,
+                UpdateState = !hasData ? UpdateState.Removed : currentVersion is null ? UpdateState.Added : UpdateState.Updated,
                 RequestedEntityId = entityId.Value,
                 ResultingEntityId = entityId.Value,
                 ConcurrencyTag = nextTag,
@@ -174,7 +174,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     EntityId = entityId.Value,
                     ConcurrencyTag = nextTag,
                     ModifiedTime = new Timestamp(new DateTimeOffset(nowUtc, TimeSpan.Zero), nextVersionId.ToString()),
-                    Data = nextDataJson is null ? null : JsonDocument.Parse(nextDataJson).RootElement.Clone(),
+                    Data = change.Data?.Clone(),
                     Relationships = [],
                 },
                 Errors = [],
@@ -500,30 +500,32 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
     private static QueryEntitySnapshot? BuildCurrentSnapshot(BsonDocument document)
     {
-        if (!document.TryGetValue("Versions", out var versionsValue) || versionsValue is not BsonArray { Count: > 0 } versions)
+        if (!document.TryGetValue("current", out var currentValue) || currentValue is not BsonDocument current)
         {
             return null;
         }
 
-        var latest = versions[^1].AsBsonDocument;
-        var dataJson = latest.TryGetValue("DataJson", out var dataJsonValue) && !dataJsonValue.IsBsonNull
-            ? dataJsonValue.AsString
-            : null;
-        if (dataJson is null)
+        if (!current.TryGetValue("data", out var dataValue) || dataValue.IsBsonNull)
         {
             return null;
         }
 
-        var versionId = latest["VersionId"].AsObjectId;
-        var timestampUtc = latest["TimestampUtc"].ToUniversalTime();
-        var modifiedTime = new Timestamp(new DateTimeOffset(timestampUtc, TimeSpan.Zero), versionId.ToString());
+        var modifiedVersion = current.GetValue("modified-version", BsonNull.Value);
+        var modifiedTimeUtc = current.GetValue("modified-time-utc", BsonNull.Value);
+        if (modifiedVersion.IsBsonNull || modifiedTimeUtc.IsBsonNull)
+        {
+            return null;
+        }
+
+        var versionId = modifiedVersion.AsString;
+        var modifiedTime = new Timestamp(new DateTimeOffset(modifiedTimeUtc.ToUniversalTime(), TimeSpan.Zero), versionId);
 
         return new QueryEntitySnapshot
         {
             EntityId = new EntityId(document["_id"].AsString),
-            ConcurrencyTag = new ConcurrencyTag(versionId.ToString()),
+            ConcurrencyTag = new ConcurrencyTag(versionId),
             ModifiedTime = modifiedTime,
-            Data = JsonDocument.Parse(dataJson).RootElement.Clone(),
+            Data = MongoEntityData.ToJsonElement(dataValue),
             Relationships = [],
             MatchingClauseIdentifiers = [],
         };
@@ -647,25 +649,27 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// </summary>
     private static EntitySnapshot? BuildQueueSnapshot(BsonDocument document)
     {
-        if (!document.TryGetValue("Versions", out var versionsValue) || versionsValue is not BsonArray { Count: > 0 } versions)
+        if (!document.TryGetValue("current", out var currentValue) || currentValue is not BsonDocument current)
         {
             return null;
         }
 
-        var latest = versions[^1].AsBsonDocument;
-        var dataJson = latest.TryGetValue("DataJson", out var dataJsonValue) && !dataJsonValue.IsBsonNull
-            ? dataJsonValue.AsString
-            : null;
+        var modifiedVersion = current.GetValue("modified-version", BsonNull.Value);
+        var modifiedTimeUtc = current.GetValue("modified-time-utc", BsonNull.Value);
+        if (modifiedVersion.IsBsonNull || modifiedTimeUtc.IsBsonNull)
+        {
+            return null;
+        }
 
-        var versionId = latest["VersionId"].AsObjectId;
-        var timestampUtc = latest["TimestampUtc"].ToUniversalTime();
+        var dataValue = current.GetValue("data", BsonNull.Value);
+        var versionId = modifiedVersion.AsString;
 
         return new EntitySnapshot
         {
             EntityId = new EntityId(document["_id"].AsString),
-            ConcurrencyTag = new ConcurrencyTag(versionId.ToString()),
-            ModifiedTime = new Timestamp(new DateTimeOffset(timestampUtc, TimeSpan.Zero), versionId.ToString()),
-            Data = dataJson is null ? null : JsonDocument.Parse(dataJson).RootElement.Clone(),
+            ConcurrencyTag = new ConcurrencyTag(versionId),
+            ModifiedTime = new Timestamp(new DateTimeOffset(modifiedTimeUtc.ToUniversalTime(), TimeSpan.Zero), versionId),
+            Data = dataValue.IsBsonNull ? null : MongoEntityData.ToJsonElement(dataValue),
             Relationships = [],
         };
     }
@@ -728,7 +732,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     ModifiedTime = new Timestamp(
                         new DateTimeOffset(tuple.Version.TimestampUtc, TimeSpan.Zero),
                         tuple.Version.VersionId.ToString()),
-                    Data = tuple.Version.DataJson is null ? null : JsonDocument.Parse(tuple.Version.DataJson).RootElement.Clone(),
+                    Data = tuple.Version.Data is null ? null : MongoEntityData.ToJsonElement(tuple.Version.Data),
                     Relationships = [],
                     MatchingClauseIdentifiers = [],
                     ClassifiedTime = null,
@@ -774,7 +778,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var currentVersion = document.Versions.LastOrDefault();
             changed.Add(new ChangedEntitySnapshot
             {
-                Entity = currentVersion is null || currentVersion.DataJson is null
+                Entity = currentVersion is null || currentVersion.Data is null
                     ? null
                     : CreateSnapshot(entityTimestamp.EntityId, currentVersion),
             });
@@ -856,59 +860,28 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     }
 
     private static bool IsNoContentChange(
-        string? currentJson,
+        BsonDocument? currentData,
         JsonElement? nextData)
     {
-        if (currentJson is null || nextData is null)
+        if (currentData is null || nextData is null)
         {
-            return currentJson is null && nextData is null;
+            return currentData is null && nextData is null;
         }
 
-        using var currentDocument = JsonDocument.Parse(currentJson);
-        return JsonElement.DeepEquals(currentDocument.RootElement, nextData.Value);
+        return JsonElement.DeepEquals(MongoEntityData.ToJsonElement(currentData), nextData.Value);
     }
 
-    private static (IReadOnlyCollection<string> names, IReadOnlyCollection<string> typeNames) ExtractNamesAndTypes(
+    private static IReadOnlyCollection<string> ExtractTypeNames(
         JsonElement? data)
     {
         if (data is null || data.Value.ValueKind != JsonValueKind.Object)
         {
-            return ([], []);
-        }
-
-        var names = new List<string>();
-        if (data.Value.TryGetProperty("names", out var namesElement) && namesElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var entry in namesElement.EnumerateArray())
-            {
-                if (entry.ValueKind == JsonValueKind.String)
-                {
-                    var name = entry.GetString();
-                    if (!string.IsNullOrWhiteSpace(name))
-                    {
-                        names.Add(name);
-                    }
-                    continue;
-                }
-
-                if (entry.ValueKind == JsonValueKind.Array)
-                {
-                    var components = entry.EnumerateArray()
-                        .Where(static component => component.ValueKind == JsonValueKind.String)
-                        .Select(static component => component.GetString())
-                        .Where(static component => !string.IsNullOrWhiteSpace(component))
-                        .ToArray();
-                    if (components.Length > 0)
-                    {
-                        names.Add(string.Join('/', components!));
-                    }
-                }
-            }
+            return [];
         }
 
         var typeNames = data.Value.ExtractStringArray("type-names").ToList();
         typeNames.AddRange(data.Value.ExtractStringArray("entity-types"));
-        return (names, typeNames.Distinct(StringComparer.Ordinal).ToArray());
+        return typeNames.Distinct(StringComparer.Ordinal).ToArray();
     }
 
     private static IEnumerable<MongoDbEntityDocument> ResolveMatchingDocuments(
@@ -928,14 +901,14 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 document =>
                 {
                     var version = document.Versions.LastOrDefault();
-                    if (version is null || version.DataJson is null)
+                    if (version is null || version.Data is null)
                     {
                         return false;
                     }
 
                     if (requestedTypes is not null && requestedTypes.Length > 0)
                     {
-                        return version.TypeNames.Intersect(requestedTypes, StringComparer.Ordinal).Any();
+                        return ReadTypeNames(version.Data).Intersect(requestedTypes, StringComparer.Ordinal).Any();
                     }
 
                     return true;
@@ -947,22 +920,21 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         return allDocuments.Where(document =>
         {
             var version = document.Versions.LastOrDefault();
-            if (version is null || version.DataJson is null)
+            if (version is null || version.Data is null)
             {
                 return false;
             }
 
             if (requestedTypes is not null && requestedTypes.Length > 0)
             {
-                if (!version.TypeNames.Intersect(requestedTypes, StringComparer.Ordinal).Any())
+                if (!ReadTypeNames(version.Data).Intersect(requestedTypes, StringComparer.Ordinal).Any())
                 {
                     return false;
                 }
             }
 
-            foreach (var name in version.Names)
+            foreach (var components in ReadNameComponents(version.Data))
             {
-                var components = name.Split('/', StringSplitOptions.RemoveEmptyEntries);
                 if (request.EnumerateChildren == EnumerateChildrenAction.EnumerateSelf
                     && components.SequenceEqual(requestedName, StringComparer.Ordinal))
                 {
@@ -988,6 +960,42 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }).ToArray();
     }
 
+    /// <summary>Reads the entity-type names (merging <c>type-names</c> and <c>entity-types</c>) from version BSON data.</summary>
+    private static IReadOnlyCollection<string> ReadTypeNames(BsonDocument data)
+    {
+        var typeNames = new List<string>();
+        foreach (var field in new[] { "type-names", "entity-types" })
+        {
+            if (data.TryGetValue(field, out var value) && value is BsonArray array)
+            {
+                typeNames.AddRange(array.Where(item => item.IsString).Select(item => item.AsString));
+            }
+        }
+
+        return typeNames;
+    }
+
+    /// <summary>Reads each entity name as its string components from version BSON data.</summary>
+    private static IEnumerable<string[]> ReadNameComponents(BsonDocument data)
+    {
+        if (!data.TryGetValue("names", out var namesValue) || namesValue is not BsonArray names)
+        {
+            yield break;
+        }
+
+        foreach (var entry in names)
+        {
+            if (entry is BsonArray componentArray)
+            {
+                yield return componentArray.Where(component => component.IsString).Select(component => component.AsString).ToArray();
+            }
+            else if (entry.IsString)
+            {
+                yield return [entry.AsString];
+            }
+        }
+    }
+
     private static IReadOnlyCollection<EntitySnapshot> ResolveRelationshipsForEntity(
         IReadOnlyCollection<MongoDbEntityDocument> allDocuments,
         EntityId entityId,
@@ -1002,13 +1010,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         foreach (var document in allDocuments)
         {
             var version = document.Versions.LastOrDefault();
-            if (version is null || version.DataJson is null)
+            if (version is null || version.Data is null)
             {
                 continue;
             }
 
-            using var dataDocument = JsonDocument.Parse(version.DataJson);
-            var data = dataDocument.RootElement;
+            var data = MongoEntityData.ToJsonElement(version.Data);
             if (!TryGetParticipantEntityIds(data, out var participantIds) || !participantIds.Contains(entityId))
             {
                 continue;
@@ -1024,7 +1031,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 EntityId = new EntityId(document.Id),
                 ConcurrencyTag = new ConcurrencyTag(version.VersionId.ToString()),
                 ModifiedTime = new Timestamp(new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero), version.VersionId.ToString()),
-                Data = JsonDocument.Parse(version.DataJson).RootElement.Clone(),
+                Data = data,
                 Relationships = [],
             });
         }
@@ -1118,7 +1125,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             EntityId = entityId,
             ConcurrencyTag = new ConcurrencyTag(version.VersionId.ToString()),
             ModifiedTime = new Timestamp(new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero), version.VersionId.ToString()),
-            Data = version.DataJson is null ? null : JsonDocument.Parse(version.DataJson).RootElement.Clone(),
+            Data = version.Data is null ? null : MongoEntityData.ToJsonElement(version.Data),
             Relationships = [],
         };
     }
@@ -1141,6 +1148,11 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
     private sealed class MongoDbCurrentProjection
     {
+        /// <summary>The current version's entity data as native BSON, for native field/participant querying.</summary>
+        [BsonElement("data")]
+        [BsonIgnoreIfNull]
+        public BsonDocument? Data { get; init; }
+
         [BsonElement("type-names")]
         public string[] TypeNames { get; init; } = [];
 
@@ -1164,11 +1176,10 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         public DateTime TimestampUtc { get; init; }
 
-        public string? DataJson { get; init; }
-
-        public string[] Names { get; init; } = [];
-
-        public string[] TypeNames { get; init; } = [];
+        /// <summary>The entity data as native BSON; null for a tombstone (delete).</summary>
+        [BsonElement("data")]
+        [BsonIgnoreIfNull]
+        public BsonDocument? Data { get; init; }
     }
 
     private sealed class MongoDbQueueHead

@@ -16,6 +16,40 @@ public sealed class MongoDbQueryTranslatorTests
             BsonSerializer.SerializerRegistry));
 
     [Fact]
+    public void EntityField_TranslatesEqualsToCurrentDataPath()
+    {
+        var translator = new MongoDbQueryTranslator();
+
+        var filter = translator.TranslateToFilter(new EntityFieldQueryClause
+        {
+            FieldPath = new FieldPath("participants", "user"),
+            ComparisonOperator = FieldComparisonOperator.Equals,
+            Value = System.Text.Json.JsonSerializer.SerializeToElement("00000000-0000-0000-0000-000000000001"),
+        });
+
+        var rendered = Render(filter);
+        Assert.Equal(true, rendered["current.is-deleted"]["$ne"].AsBoolean);
+        // Eq renders as a direct field/value assignment on the current.data path.
+        Assert.Equal("00000000-0000-0000-0000-000000000001", rendered["current.data.participants.user"].AsString);
+    }
+
+    [Fact]
+    public void EntityField_TranslatesOrderedComparison()
+    {
+        var translator = new MongoDbQueryTranslator();
+
+        var filter = translator.TranslateToFilter(new EntityFieldQueryClause
+        {
+            FieldPath = new FieldPath("priority"),
+            ComparisonOperator = FieldComparisonOperator.GreaterThanOrEqualTo,
+            Value = System.Text.Json.JsonSerializer.SerializeToElement(3),
+        });
+
+        var rendered = Render(filter);
+        Assert.Equal(3, rendered["current.data.priority"]["$gte"].AsInt64);
+    }
+
+    [Fact]
     public void EntityType_TranslatesToAllOnProjectedTypeNames_ExcludingDeleted()
     {
         var translator = new MongoDbQueryTranslator();

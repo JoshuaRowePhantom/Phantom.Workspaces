@@ -33,6 +33,9 @@ public sealed class MongoDbQueryTranslator
     /// <summary>Marks a tombstoned (deleted) current version, which is excluded from query results.</summary>
     public const string IsDeletedField = CurrentField + ".is-deleted";
 
+    /// <summary>The projected current-version entity data (native BSON), for field/participant filters.</summary>
+    public const string DataField = CurrentField + ".data";
+
     private static readonly FilterDefinitionBuilder<BsonDocument> Filter = Builders<BsonDocument>.Filter;
 
     /// <summary>
@@ -77,6 +80,9 @@ public sealed class MongoDbQueryTranslator
             case EntityTypeQueryClause typeClause:
                 return TranslateEntityType(typeClause);
 
+            case EntityFieldQueryClause fieldClause:
+                return TranslateEntityField(fieldClause);
+
             case EntityVectorQueryClause:
                 throw new NotSupportedException(
                     "Vector clauses must be compiled to a $vectorSearch stage, not a filter. Use BuildVectorSearchStage.");
@@ -98,6 +104,77 @@ public sealed class MongoDbQueryTranslator
         // Each required type must be present in the projected type-names array. The values are bound
         // as BSON string literals by the driver, so they cannot inject query operators.
         return Filter.All(TypeNamesField, requiredTypes);
+    }
+
+    /// <summary>
+    /// Translates a field clause into a native filter over the denormalized current entity data
+    /// (<see cref="DataField"/>). The field path components are joined with dots to address nested
+    /// fields; values are bound as BSON literals by the driver.
+    /// </summary>
+    private static FilterDefinition<BsonDocument> TranslateEntityField(EntityFieldQueryClause clause)
+    {
+        var components = clause.FieldPath.Components ?? [];
+        if (components.Length == 0)
+        {
+            return Filter.Empty;
+        }
+
+        var field = string.Join('.', new[] { DataField }.Concat(components));
+        var value = clause.Value is { } jsonValue ? ConvertJsonScalar(jsonValue) : BsonNull.Value;
+
+        return clause.ComparisonOperator switch
+        {
+            // Eq on a scalar matches the scalar; Eq on an array field matches when the array contains
+            // the value (MongoDB semantics), which covers participant arrays.
+            FieldComparisonOperator.Equals => Filter.Eq(field, value),
+            FieldComparisonOperator.GreaterThan => Filter.Gt(field, value),
+            FieldComparisonOperator.LessThan => Filter.Lt(field, value),
+            FieldComparisonOperator.GreaterThanOrEqualTo => Filter.Gte(field, value),
+            FieldComparisonOperator.LessThanOrEqualTo => Filter.Lte(field, value),
+            FieldComparisonOperator.Contains => TranslateContains(field, value),
+            FieldComparisonOperator.RegularExpressionMatch => Filter.Regex(
+                field,
+                new BsonRegularExpression(value.IsString ? value.AsString : value.ToString())),
+            _ => throw new NotSupportedException(
+                $"MongoDB query translation does not support the '{clause.ComparisonOperator}' field comparison operator."),
+        };
+    }
+
+    private static FilterDefinition<BsonDocument> TranslateContains(string field, BsonValue value)
+    {
+        // Array containment is native Eq; string substring uses an escaped regex.
+        if (value.IsString)
+        {
+            var escaped = System.Text.RegularExpressions.Regex.Escape(value.AsString);
+            return Filter.Or(
+                Filter.Eq(field, value),
+                Filter.Regex(field, new BsonRegularExpression(escaped)));
+        }
+
+        return Filter.Eq(field, value);
+    }
+
+    private static BsonValue ConvertJsonScalar(System.Text.Json.JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.String:
+                return new BsonString(element.GetString());
+            case System.Text.Json.JsonValueKind.Number:
+                var raw = element.GetRawText();
+                return !raw.Contains('.') && !raw.Contains('e') && !raw.Contains('E') && element.TryGetInt64(out var l)
+                    ? new BsonInt64(l)
+                    : new BsonDouble(element.GetDouble());
+            case System.Text.Json.JsonValueKind.True:
+                return BsonBoolean.True;
+            case System.Text.Json.JsonValueKind.False:
+                return BsonBoolean.False;
+            case System.Text.Json.JsonValueKind.Null:
+                return BsonNull.Value;
+            default:
+                throw new NotSupportedException(
+                    "MongoDB field comparison values must be scalar (string, number, boolean, or null).");
+        }
     }
 
     /// <summary>
