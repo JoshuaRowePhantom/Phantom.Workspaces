@@ -31,6 +31,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private readonly DispatcherTimer refreshTimer;
     private readonly List<SubscribedGet> selectedViewSubViewSubscriptions = [];
     private readonly ShortcutManager shortcutManager = new();
+    private EntityClickShortcutHandler? entityClickShortcutHandler;
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -64,6 +65,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         this.shortcutManager.AddShortcutHandler(new ToggleJsonEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
 
+        // The click handler opens configured entity types on a plain card click. It is intentionally
+        // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity
+        // card click wiring invokes ActivateEntityClickCommand directly.
+        this.entityClickShortcutHandler = new EntityClickShortcutHandler(["workspace"], this.shortcutManager);
+        this.ActivateEntityClickCommand = new RelayCommand(async parameter => await this.OnActivateEntityClickAsync(parameter));
+
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
     }
@@ -75,6 +82,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     public ObservableCollection<WorkspacePaneViewModel> WorkspacePanes { get; }
 
     public RelayCommand ActivateShortcutCommand { get; }
+
+    public RelayCommand ActivateEntityClickCommand { get; }
 
     public RelayCommand SetDebuggingCommand { get; }
 
@@ -568,6 +577,36 @@ public sealed class MainWindowViewModel : ViewModelBase
             entityShortcut.IsEnabled = true;
             this.ActivateShortcutCommand.RaiseCanExecuteChanged();
         }
+    }
+
+    /// <summary>
+    /// Invoked when an entity card is clicked. Resolves the clicked entity and runs the
+    /// (unregistered) <see cref="EntityClickShortcutHandler"/>, which opens configured entity types.
+    /// </summary>
+    public Task<bool> ActivateEntityClickAsync(SubscribedEntityViewModel entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        return this.entityClickShortcutHandler is { } handler
+            ? handler.Handle(this, Shortcut.Open, entity)
+            : Task.FromResult(false);
+    }
+
+    private async Task OnActivateEntityClickAsync(
+        object? parameter)
+    {
+        var entity = parameter switch
+        {
+            ViewEntityViewModel viewEntity => viewEntity.Entity,
+            SubscribedEntityViewModel subscribedEntity => subscribedEntity,
+            _ => null,
+        };
+
+        if (entity is null)
+        {
+            return;
+        }
+
+        await this.ActivateEntityClickAsync(entity);
     }
 
     private ViewEntityViewModel CreateViewEntityViewModel(
