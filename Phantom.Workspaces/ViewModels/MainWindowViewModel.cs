@@ -475,21 +475,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (TryReadSubViewGetRequest(subView, out var getRequest))
                 {
                     var getEntities = await this.LoadGetSubViewEntitiesAsync(getRequest);
-                    foreach (var getEntity in getEntities)
-                    {
-                        selectedView.Entities.Add(this.CreateViewEntityViewModel(getEntity, indentLevel: 0));
-                    }
-
+                    await this.AddSubViewEntitiesWithHierarchyAsync(selectedView, getEntities);
                     continue;
                 }
 
                 if (TryReadSubViewQueryRequest(subView, out var queryRequest))
                 {
                     var queryEntities = await this.LoadQuerySubViewEntitiesAsync(queryRequest);
-                    foreach (var queryEntity in queryEntities)
-                    {
-                        selectedView.Entities.Add(this.CreateViewEntityViewModel(queryEntity, indentLevel: 0));
-                    }
+                    await this.AddSubViewEntitiesWithHierarchyAsync(selectedView, queryEntities);
                 }
             }
         }
@@ -645,6 +638,34 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.shortcutManager,
             indentLevel,
             isParentContext);
+    }
+
+    /// <summary>
+    /// Adds a sub-view's root entities to the view, assembling each entity's declared hierarchy
+    /// (related members grouped under contextual parents) and flattening it depth-first into the
+    /// indented entity list. Entities whose types declare no traversals render flat (indent 0).
+    /// </summary>
+    private async Task AddSubViewEntitiesWithHierarchyAsync(
+        ViewDefinitionViewModel selectedView,
+        IReadOnlyList<SubscribedEntityViewModel> rootEntities)
+    {
+        var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
+        foreach (var node in hierarchy)
+        {
+            this.AddHierarchyNode(selectedView, node, indentLevel: 0);
+        }
+    }
+
+    private void AddHierarchyNode(
+        ViewDefinitionViewModel selectedView,
+        ViewHierarchyNode node,
+        int indentLevel)
+    {
+        selectedView.Entities.Add(this.CreateViewEntityViewModel(node.Entity, indentLevel));
+        foreach (var child in node.Children)
+        {
+            this.AddHierarchyNode(selectedView, child, indentLevel + 1);
+        }
     }
 
     private async void OnRefreshTick(
