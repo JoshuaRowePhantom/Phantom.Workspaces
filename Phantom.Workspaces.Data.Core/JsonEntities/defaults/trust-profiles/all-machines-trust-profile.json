@@ -1,0 +1,32 @@
+{
+  "entity-id": "7a1d9c20-1111-4aaa-8bbb-000000000002",
+  "entity-types": [
+    "llm-trust-profile"
+  ],
+  "names": [
+    [
+      "trust-profiles",
+      "all-machines"
+    ]
+  ],
+  "display-name": {
+    "default": "All machines"
+  },
+  "hosting-workspaces-client-instances": [
+    "*"
+  ],
+  "mount-points": [],
+  "network-access-policy": "no-network",
+  "https-proxy-policy": {
+    "mode": "disabled"
+  },
+  "allowed-mcp-tool-call-schemas": [
+    {
+      "properties": {
+        "toolName": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

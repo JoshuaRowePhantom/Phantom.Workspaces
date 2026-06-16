@@ -141,6 +141,38 @@ public sealed class TrustProfileComposerTests
     }
 
     [Fact]
+    public void WorkspaceReadOnlyDefaultProfile_AllowsGet_DeniesUpdate()
+    {
+        // Mirrors JsonEntities/defaults/trust-profiles/workspace-read-only-trust-profile.json:
+        // read tools are allowed and the update tool is explicitly restricted.
+        var entity = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            """
+            {
+              "hosting-workspaces-client-instances": ["."],
+              "mount-points": [],
+              "network-access-policy": "no-network",
+              "https-proxy-policy": { "mode": "disabled" },
+              "allowed-mcp-tool-call-schemas": [
+                { "properties": { "toolName": { "const": "workspaces_entity_get" } } },
+                { "properties": { "toolName": { "const": "workspaces_entity_generate_guid" } } }
+              ],
+              "restricted-mcp-tool-call-schemas": [
+                { "properties": { "toolName": { "const": "workspaces_entity_update" } } }
+              ]
+            }
+            """);
+
+        var profileEntity = TrustProfileEntityReader.Read(entity);
+        var composed = TrustProfileComposer.Compose([profileEntity.Definition]);
+        var authorizer = new TrustToolCallAuthorizer(composed);
+
+        Assert.True(authorizer.IsToolCallAllowed("workspaces_entity_get", new JsonObject()));
+        Assert.True(authorizer.IsToolCallAllowed("workspaces_entity_generate_guid", new JsonObject()));
+        Assert.False(authorizer.IsToolCallAllowed("workspaces_entity_update", new JsonObject()));
+        Assert.True(composed.AllowsLocalExecution());
+    }
+
+    [Fact]
     public void Compose_RestrictedSchema_DeniesMatchingToolCall_EvenWhenAllowed()
     {
         var definition = new TrustProfileDefinition
