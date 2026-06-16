@@ -2,13 +2,14 @@ using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Trust;
+using System.Text.Json;
 
 namespace Phantom.Workspaces.Web.Server;
 
 /// <summary>
 /// Executes a remote agent turn for the <c>POST /agent/respond</c> endpoint. This is the remote
-/// host side of the Workspaces trust-model remoting: it runs the agent locally (model and, in
-/// future, trust-scoped tools) and returns the response.
+/// host side of the Workspaces trust-model remoting: it runs the agent locally and, when the caller
+/// supplies a trust profile, enforces its tool-call policy on the agent's tools.
 /// </summary>
 public static class AgentRespondHandler
 {
@@ -26,6 +27,15 @@ public static class AgentRespondHandler
 
         var chatOptions = new ChatOptions();
         AgentFactory.ConfigureChatOptions(agentDefinition, chatOptions);
+
+        // Enforce the caller-supplied trust profile's tool-call policy on the agent's tools so that
+        // disallowed tool calls are denied during this remote execution.
+        if (!string.IsNullOrWhiteSpace(request.TrustProfileJson))
+        {
+            var trustProfile = JsonSerializer.Deserialize<TrustProfile>(request.TrustProfileJson)
+                ?? throw new InvalidOperationException("The supplied trust profile content is invalid.");
+            TrustToolAuthorization.Apply(chatOptions, trustProfile);
+        }
 
         return await chatClient
             .GetResponseAsync(request.Messages, chatOptions, cancellationToken)

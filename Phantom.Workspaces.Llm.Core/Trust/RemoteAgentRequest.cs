@@ -16,4 +16,11 @@ public sealed record RemoteAgentRequest
 
     /// <summary>The conversation messages for this turn.</summary>
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
+
+    /// <summary>
+    /// Optional composed <see cref="TrustProfile"/> content (JSON) supplied by the caller. When present,
+    /// the remote host enforces the profile's tool-call policy on the agent's tools (the caller is
+    /// trusted to provide the effective profile; see docs/design/trust-execution-open-questions.md).
+    /// </summary>
+    public string? TrustProfileJson { get; init; }
 }
