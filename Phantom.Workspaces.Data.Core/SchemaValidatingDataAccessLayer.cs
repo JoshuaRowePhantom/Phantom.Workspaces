@@ -20,7 +20,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private const string JsonSchemaType = "json-schema";
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
     private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
-    private const string CustomEntityTypeKeyword = "x-entity-type";
+    private const string CustomEntityTypeKeyword = "x-entity-types";
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)

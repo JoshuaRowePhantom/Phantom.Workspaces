@@ -449,23 +449,13 @@ public sealed class FieldTypeResolver
     private static IReadOnlyCollection<string> ReadEntityTypes(
         JsonElement schemaNode)
     {
-        if (!schemaNode.TryGetProperty("x-entity-type", out var xEntityType))
+        if (!schemaNode.TryGetProperty("x-entity-types", out var xEntityTypes)
+            || xEntityTypes.ValueKind != JsonValueKind.Array)
         {
             return Array.Empty<string>();
         }
 
-        if (xEntityType.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(xEntityType.GetString()))
-        {
-            return new[] { xEntityType.GetString()! };
-        }
-
-        if (xEntityType.ValueKind != JsonValueKind.Array)
-        {
-            return Array.Empty<string>();
-        }
-
-        return xEntityType.EnumerateArray()
+        return xEntityTypes.EnumerateArray()
             .Where(static value => value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()))
             .Select(static value => value.GetString()!)
             .ToArray();

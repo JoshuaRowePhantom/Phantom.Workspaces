@@ -26,7 +26,7 @@
               "$ref": "core.json#/$defs/entity-id"
             }
           ],
-          "x-entity-type": "tool"
+          "x-entity-types": ["tool"]
         },
         "schedule": {
           "type": "array",
@@ -36,7 +36,7 @@
                 "$ref": "core.json#/$defs/entity-id"
               }
             ],
-            "x-entity-type": "schedule"
+            "x-entity-types": ["schedule"]
           },
           "minItems": 1
         },
@@ -48,7 +48,7 @@
                 "$ref": "core.json#/$defs/entity-id"
               }
             ],
-            "x-entity-type": "entity"
+            "x-entity-types": ["entity"]
           },
           "minItems": 1
         }

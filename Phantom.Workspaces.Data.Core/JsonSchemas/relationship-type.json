@@ -35,48 +35,21 @@
   },
   "$defs": {
     "participant-property-schema": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/singleton-participant-property-schema"
-        },
-        {
-          "$ref": "#/$defs/array-participant-property-schema"
-        }
-      ]
-    },
-    "singleton-participant-property-schema": {
+      "$comment": "A participant role: either a singleton entity reference or an array of them. Each may optionally declare x-entity-types (allowed entity types); absent means any entity type is allowed.",
       "type": "object",
       "properties": {
-        "x-entity-type": {
-          "$ref": "core.json#/$defs/entity-type-id"
-        }
-      },
-      "required": [
-        "x-entity-type"
-      ]
-    },
-    "array-participant-property-schema": {
-      "type": "object",
-      "properties": {
-        "type": {
-          "const": "array"
+        "x-entity-types": {
+          "$ref": "core.json#/$defs/x-entity-types"
         },
         "items": {
           "type": "object",
           "properties": {
-            "x-entity-type": {
-              "$ref": "core.json#/$defs/entity-type-id"
+            "x-entity-types": {
+              "$ref": "core.json#/$defs/x-entity-types"
             }
-          },
-          "required": [
-            "x-entity-type"
-          ]
+          }
         }
-      },
-      "required": [
-        "type",
-        "items"
-      ]
+      }
     }
   }
 }

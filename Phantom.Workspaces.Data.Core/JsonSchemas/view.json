@@ -30,7 +30,7 @@
       "properties": {
         "view-entity-id": {
           "$ref": "core.json#/$defs/entity-reference",
-          "x-entity-type": "view"
+          "x-entity-types": ["view"]
         },
         "disposition": {
           "$ref": "#/$defs/view-disposition"
@@ -61,7 +61,7 @@
           "type": "array",
           "items": {
             "$ref": "entity-type-view.json",
-            "x-entity-type": "entity-type-view"
+            "x-entity-types": ["entity-type-view"]
           }
         }
       },

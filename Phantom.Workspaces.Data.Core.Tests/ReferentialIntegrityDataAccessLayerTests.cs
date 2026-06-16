@@ -727,7 +727,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                   },
                   "target-entity-id": {
                     "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-id",
-                    "x-entity-type": "entity"
+                    "x-entity-types": ["entity"]
                   }
                 }
               }
@@ -786,7 +786,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                   },
                   "target-entity-name": {
                     "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-reference",
-                    "x-entity-type": "entity"
+                    "x-entity-types": ["entity"]
                   }
                 }
               }

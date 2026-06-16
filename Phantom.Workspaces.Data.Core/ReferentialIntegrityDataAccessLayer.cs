@@ -1243,23 +1243,13 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return Array.Empty<string>();
         }
 
-        if (!schemaNode.TryGetProperty("x-entity-type", out var xEntityType))
+        if (!schemaNode.TryGetProperty("x-entity-types", out var xEntityTypes)
+            || xEntityTypes.ValueKind != JsonValueKind.Array)
         {
             return Array.Empty<string>();
         }
 
-        if (xEntityType.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(xEntityType.GetString()))
-        {
-            return new[] { xEntityType.GetString()! };
-        }
-
-        if (xEntityType.ValueKind != JsonValueKind.Array)
-        {
-            return Array.Empty<string>();
-        }
-
-        return xEntityType.EnumerateArray()
+        return xEntityTypes.EnumerateArray()
             .Where(static element => element.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(element.GetString()))
             .Select(static element => element.GetString()!)
             .ToArray();

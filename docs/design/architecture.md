@@ -187,7 +187,7 @@ The system separates UI, agent execution, data access, and external integrations
    - the data access layer includes special logic to enforce referential integrity for relationships and their participants.
    - relationship entities are automatically removed when any participant is removed.
    - object-property entity-id references are validated so referenced entities exist.
-   - schema-driven entity-id references may constrain allowed target types via `x-entity-type`.
+   - schema-driven entity-id references may constrain allowed target types via `x-entity-types`.
    - synthetic `reference` relationships are managed by the data access layer and duplicate relationships are coalesced.
 14. Interest relationships:
    - define a special class of relationships called **interests**,

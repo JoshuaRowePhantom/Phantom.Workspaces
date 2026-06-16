@@ -315,7 +315,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
                 writer.WriteStartObject();
                 foreach (var property in element.EnumerateObject())
                 {
-                    if (string.Equals(property.Name, "x-entity-type", StringComparison.Ordinal)
+                    if (string.Equals(property.Name, "x-entity-types", StringComparison.Ordinal)
                         || string.Equals(property.Name, "x-default-mime-type", StringComparison.Ordinal))
                     {
                         continue;
