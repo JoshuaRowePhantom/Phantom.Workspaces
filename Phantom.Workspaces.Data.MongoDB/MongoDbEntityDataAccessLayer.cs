@@ -301,40 +301,18 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     continue;
                 }
 
-                if (topLevelClause.Clause is EntityParticipationQueryClause participationClause)
+                // Non-vector clauses resolve to their matching entity documents. Participation clauses
+                // (optionally composed with Not(participation) exclusions) are evaluated natively as a
+                // single aggregation join; field/type filters use a find.
+                var matchedDocuments = await this.ExecuteEntityClauseAsync(
+                    bsonCollection, translator, topLevelClause.Clause, cancellationToken).ConfigureAwait(false);
+                foreach (var matchedDocument in matchedDocuments)
                 {
-                    var participantDocuments = await ExecuteParticipationClauseAsync(
-                        bsonCollection, translator, participationClause, cancellationToken).ConfigureAwait(false);
-                    foreach (var document in participantDocuments)
+                    var matchedId = matchedDocument["_id"].AsString;
+                    documentsById[matchedId] = matchedDocument;
+                    if (!matchedClauses.TryGetValue(matchedId, out var identifiers))
                     {
-                        var participantId = document["_id"].AsString;
-                        documentsById[participantId] = document;
-                        if (!matchedClauses.TryGetValue(participantId, out var participantIdentifiers))
-                        {
-                            matchedClauses[participantId] = participantIdentifiers = [];
-                        }
-
-                        participantIdentifiers.Add(topLevelClause.ClauseIdentifier);
-                    }
-
-                    continue;
-                }
-
-                var filter = translator.TranslateToFilter(topLevelClause.Clause);
-                var find = bsonCollection.Find(filter);
-                if (MongoDbQueryTranslator.GetResultLimit(topLevelClause.Clause) is { } limit && limit >= 0)
-                {
-                    find = find.Limit(limit);
-                }
-
-                var documents = await find.ToListAsync(cancellationToken).ConfigureAwait(false);
-                foreach (var document in documents)
-                {
-                    var id = document["_id"].AsString;
-                    documentsById[id] = document;
-                    if (!matchedClauses.TryGetValue(id, out var identifiers))
-                    {
-                        matchedClauses[id] = identifiers = [];
+                        matchedClauses[matchedId] = identifiers = [];
                     }
 
                     identifiers.Add(topLevelClause.ClauseIdentifier);
@@ -522,11 +500,15 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// relationship documents of the requested type(s) (optionally requiring a participant matching
     /// the MustHave sub-clause), collects the participant ids in the requested roles, and
     /// <c>$lookup</c>-joins back to the entity collection to return the participant entity documents.
+    /// Each clause in <paramref name="exclusions"/> drops result entities that are a participant (in
+    /// that exclusion's role) of a relationship of the exclusion's type — a join-based
+    /// <c>Not(participation)</c>, used to filter out, for example, not-interesting targets.
     /// </summary>
     private async Task<List<BsonDocument>> ExecuteParticipationClauseAsync(
         IMongoCollection<BsonDocument> bsonCollection,
         MongoDbQueryTranslator translator,
         EntityParticipationQueryClause clause,
+        IReadOnlyList<EntityParticipationQueryClause> exclusions,
         CancellationToken cancellationToken)
     {
         var relationshipTypes = new BsonArray(clause.RelationshipTypeNames.Values ?? []);
@@ -586,9 +568,125 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }));
         pipeline.Add(new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$doc")));
 
+        // Exclusions (join-based Not(participation)): drop result entities that are a participant, in
+        // the exclusion's role(s), of a non-deleted relationship of the exclusion's type(s). Each is a
+        // correlated $lookup whose sub-pipeline finds such relationships for the entity; the entity is
+        // kept only when the lookup returns nothing.
+        for (var exclusionIndex = 0; exclusionIndex < exclusions.Count; exclusionIndex++)
+        {
+            var exclusion = exclusions[exclusionIndex];
+            var exclusionField = "__excluded" + exclusionIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var exclusionTypes = new BsonArray(exclusion.RelationshipTypeNames.Values ?? []);
+
+            pipeline.Add(new BsonDocument("$lookup", new BsonDocument
+            {
+                { "from", collectionName },
+                { "let", new BsonDocument("entityId", "$_id") },
+                {
+                    "pipeline", new BsonArray
+                    {
+                        new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$and", new BsonArray
+                        {
+                            new BsonDocument("$ne", new BsonArray { "$" + MongoDbQueryTranslator.IsDeletedField, true }),
+                            new BsonDocument("$gt", new BsonArray
+                            {
+                                new BsonDocument("$size", new BsonDocument("$setIntersection", new BsonArray
+                                {
+                                    new BsonDocument("$ifNull", new BsonArray { "$" + MongoDbQueryTranslator.TypeNamesField, new BsonArray() }),
+                                    exclusionTypes,
+                                })),
+                                0,
+                            }),
+                            new BsonDocument("$in", new BsonArray { "$$entityId", BuildRoleIdsExpression(exclusion.ParticipationRoleNames?.Values) }),
+                        }))),
+                    }
+                },
+                { "as", exclusionField },
+            }));
+            pipeline.Add(new BsonDocument("$match", new BsonDocument(exclusionField, new BsonDocument("$size", 0))));
+        }
+
         return await bsonCollection
             .Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves a non-vector top-level clause to its matching entity documents. Participation clauses
+    /// — bare, or composed as <c>And(participation, Not(participation), ...)</c> — are evaluated as a
+    /// single native aggregation join (the negated participations become exclusions); any other clause
+    /// is translated to a find filter.
+    /// </summary>
+    private async Task<List<BsonDocument>> ExecuteEntityClauseAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        MongoDbQueryTranslator translator,
+        QueryClause clause,
+        CancellationToken cancellationToken)
+    {
+        if (TryDecomposeParticipation(clause, out var positiveParticipation, out var exclusions))
+        {
+            return await this.ExecuteParticipationClauseAsync(
+                bsonCollection, translator, positiveParticipation, exclusions, cancellationToken).ConfigureAwait(false);
+        }
+
+        var filter = translator.TranslateToFilter(clause);
+        var find = bsonCollection.Find(filter);
+        if (MongoDbQueryTranslator.GetResultLimit(clause) is { } limit && limit >= 0)
+        {
+            find = find.Limit(limit);
+        }
+
+        return await find.ToListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Recognizes a participation clause, optionally composed via <c>And</c> with one or more
+    /// <c>Not(participation)</c> exclusions. Returns <see langword="false"/> for any other shape so the
+    /// caller falls back to filter translation.
+    /// </summary>
+    private static bool TryDecomposeParticipation(
+        QueryClause clause,
+        out EntityParticipationQueryClause positiveParticipation,
+        out IReadOnlyList<EntityParticipationQueryClause> exclusions)
+    {
+        positiveParticipation = null!;
+        exclusions = [];
+
+        if (clause is EntityParticipationQueryClause bareParticipation)
+        {
+            positiveParticipation = bareParticipation;
+            return true;
+        }
+
+        if (clause is AndQueryClause andClause)
+        {
+            EntityParticipationQueryClause? positive = null;
+            var negated = new List<EntityParticipationQueryClause>();
+            foreach (var subClause in andClause.Clauses)
+            {
+                if (subClause is EntityParticipationQueryClause participation && positive is null)
+                {
+                    positive = participation;
+                }
+                else if (subClause is NotQueryClause { Clause: EntityParticipationQueryClause negatedParticipation })
+                {
+                    negated.Add(negatedParticipation);
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            if (positive is not null)
+            {
+                positiveParticipation = positive;
+                exclusions = negated;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static BsonDocument RenderFilter(FilterDefinition<BsonDocument> filter)
