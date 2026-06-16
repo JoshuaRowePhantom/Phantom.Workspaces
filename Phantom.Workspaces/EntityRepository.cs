@@ -118,7 +118,13 @@ public sealed class EntityRepository
             throw new InvalidOperationException("Web repository source requires an endpoint URL.");
         }
 
-        return new WebClientDataAccessLayer(repositorySource.Endpoint);
+        // Dev tunnel access authorizes with the GitHub auth token (GITHUB_TOKEN env var, else
+        // `gh auth token`); plain web access uses no tunnel-authorization header.
+        var devTunnelAccessToken = repositorySource.UseGitHubAuthToken
+            ? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()
+            : null;
+
+        return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken);
     }
 
     private static IDataAccessLayer CreateMongoDbDataAccessLayer(

@@ -96,9 +96,11 @@ Implemented so far (`Phantom.Workspaces/Configuration/`):
    and apply/persist live. The legacy standalone `SettingsWindow` has been removed.
 
 Secret-safety is structural: the model stores only secret *sources* (for example
-`DevTunnelTokenSource`, `AccessTokenSource`, `MongoConnectionStringSource` — environment
-variable names), never raw token or connection-string values, so no tracked configuration
-artifact can contain a raw secret.
+`AccessTokenSource`, `MongoConnectionStringSource` — environment variable names), never raw
+token or connection-string values, so no tracked configuration artifact can contain a raw
+secret. The dev tunnel client (`DataAccessMode.DevTunnelWeb`) authorizes automatically with the
+GitHub auth token (`GITHUB_TOKEN`, else `gh auth token`, via `GitHubAuthTokenResolver`), so it
+needs no configured token source at all.
 
 Not yet implemented: live service reconfiguration on settings change, and the elevated Mongo
 installer service wrapper (the installer script `scripts/install-mongodb-container.ps1`

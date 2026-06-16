@@ -125,7 +125,13 @@ public abstract record RepositorySource
 public sealed record UnknownRepositorySource : RepositorySource;
 
 /// <summary>A remote Phantom.Workspaces web data-access endpoint.</summary>
-public sealed record WebRepositorySource(string Endpoint) : RepositorySource;
+/// <param name="Endpoint">The absolute endpoint URL.</param>
+/// <param name="UseGitHubAuthToken">
+/// When true (dev tunnel access), the <c>X-Tunnel-Authorization</c> token is resolved automatically
+/// from the GitHub auth token (the <c>GITHUB_TOKEN</c> environment variable, else <c>gh auth token</c>),
+/// so no token source needs to be configured.
+/// </param>
+public sealed record WebRepositorySource(string Endpoint, bool UseGitHubAuthToken = false) : RepositorySource;
 
 /// <summary>A local Git-backed repository at the given path.</summary>
 public sealed record LocalGitRepositorySource(string Path) : RepositorySource;

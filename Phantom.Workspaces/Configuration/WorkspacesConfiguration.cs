@@ -72,12 +72,6 @@ public sealed record DataAccessConnectionProfile
 
     /// <summary>Absolute web endpoint URL for web / dev tunnel modes.</summary>
     public string? WebEndpoint { get; init; }
-
-    /// <summary>
-    /// Name of the source that supplies the dev tunnel access token for
-    /// <see cref="DataAccessMode.DevTunnelWeb"/>. Never the raw token.
-    /// </summary>
-    public string? DevTunnelTokenSource { get; init; }
 }
 
 /// <summary>
@@ -160,10 +154,15 @@ public sealed record WorkspacesConfiguration
                 DataDirectory: this.DataAccess.MongoDataDirectory,
                 DatabaseName: this.DataAccess.MongoDatabaseName,
                 HostPort: this.DataAccess.MongoHostPort),
-            DataAccessMode.Web or DataAccessMode.DevTunnelWeb => new WebRepositorySource(
+            DataAccessMode.Web => new WebRepositorySource(
                 this.DataAccess.WebEndpoint
                     ?? throw new InvalidOperationException(
                         "Web data-access mode requires a web endpoint URL.")),
+            DataAccessMode.DevTunnelWeb => new WebRepositorySource(
+                this.DataAccess.WebEndpoint
+                    ?? throw new InvalidOperationException(
+                        "Dev tunnel web data-access mode requires a web endpoint URL."),
+                UseGitHubAuthToken: true),
             DataAccessMode.RemoteMongo => throw new InvalidOperationException(
                 "Remote MongoDB connection is not yet supported by RepositorySource."),
             _ => throw new InvalidOperationException(

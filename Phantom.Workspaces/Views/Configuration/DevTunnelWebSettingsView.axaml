@@ -11,9 +11,7 @@
             <TextBlock Text="Dev tunnel endpoint" />
             <TextBox PlaceholderText="https://host.devtunnels.ms/" Text="{Binding Endpoint}" />
         </StackPanel>
-        <StackPanel Spacing="4">
-            <TextBlock Text="Access-token source (env var name)" />
-            <TextBox PlaceholderText="DEVTUNNEL_TOKEN" Text="{Binding AccessTokenSource}" />
-        </StackPanel>
+        <TextBlock Text="Authorizes automatically with your GitHub auth token (GITHUB_TOKEN or 'gh auth token')."
+                   TextWrapping="Wrap" />
     </StackPanel>
 </UserControl>

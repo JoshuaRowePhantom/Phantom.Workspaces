@@ -120,13 +120,11 @@ public sealed class WorkspacesSettingsViewModelTests
     {
         var viewModel = new RepositoryConnectionSettingsViewModel { Mode = DataAccessMode.DevTunnelWeb };
         viewModel.DevTunnelWeb.Endpoint = "https://host.devtunnels.ms/";
-        viewModel.DevTunnelWeb.AccessTokenSource = "DEVTUNNEL_TOKEN";
 
         var profile = viewModel.ToProfile();
 
         Assert.Equal(DataAccessMode.DevTunnelWeb, profile.Mode);
         Assert.Equal("https://host.devtunnels.ms/", profile.WebEndpoint);
-        Assert.Equal("DEVTUNNEL_TOKEN", profile.DevTunnelTokenSource);
     }
 
     [AvaloniaFact]

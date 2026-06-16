@@ -201,14 +201,12 @@ public sealed class WebSettingsViewModel : RepositoryConnectionModeViewModel
 public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeViewModel
 {
     private string? endpoint;
-    private string? accessTokenSource;
 
     /// <summary>Creates the view model from an existing profile.</summary>
     public DevTunnelWebSettingsViewModel(DataAccessConnectionProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
         this.endpoint = profile.WebEndpoint;
-        this.accessTokenSource = profile.DevTunnelTokenSource;
     }
 
     /// <inheritdoc />
@@ -221,13 +219,6 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
         set => this.SetValidatedProperty(ref this.endpoint, value);
     }
 
-    /// <summary>Source name for the dev tunnel access token (never the raw token).</summary>
-    public string? AccessTokenSource
-    {
-        get => this.accessTokenSource;
-        set => this.SetValidatedProperty(ref this.accessTokenSource, value);
-    }
-
     /// <inheritdoc />
     public override bool IsValid => Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _);
 
@@ -236,6 +227,5 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
     {
         Mode = this.Mode,
         WebEndpoint = this.Endpoint,
-        DevTunnelTokenSource = this.AccessTokenSource,
     };
 }

@@ -31,7 +31,6 @@ public sealed class ConfigurationPersistenceServiceTests
             {
                 Mode = DataAccessMode.DevTunnelWeb,
                 WebEndpoint = "https://example.devtunnels.ms/",
-                DevTunnelTokenSource = "DEVTUNNEL_TOKEN",
             },
             RemoteHosting = new RemoteHostingSettings
             {
@@ -74,7 +73,6 @@ public sealed class ConfigurationPersistenceServiceTests
             {
                 Mode = DataAccessMode.DevTunnelWeb,
                 WebEndpoint = "https://example.devtunnels.ms/",
-                DevTunnelTokenSource = "DEVTUNNEL_TOKEN",
             },
             DevTunnel = new DevTunnelConfiguration
             {
@@ -89,7 +87,6 @@ public sealed class ConfigurationPersistenceServiceTests
             var json = await File.ReadAllTextAsync(path);
 
             // Only secret sources (env var names) are stored.
-            Assert.Contains("devTunnelTokenSource", json, System.StringComparison.Ordinal);
             Assert.Contains("accessTokenSource", json, System.StringComparison.Ordinal);
 
             // No raw-token-bearing properties exist in the serialized document.
@@ -142,6 +139,39 @@ public sealed class ConfigurationPersistenceServiceTests
 
         var web = Assert.IsType<WebRepositorySource>(repositorySource);
         Assert.Equal("https://workspaces.example/", web.Endpoint);
+    }
+
+    [AvaloniaFact]
+    public void ToRepositorySource_Web_DoesNotUseGitHubAuthToken()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.Web,
+                WebEndpoint = "https://workspaces.example/",
+            },
+        };
+
+        var web = Assert.IsType<WebRepositorySource>(configuration.ToRepositorySource());
+        Assert.False(web.UseGitHubAuthToken);
+    }
+
+    [AvaloniaFact]
+    public void ToRepositorySource_DevTunnelWeb_UsesGitHubAuthToken()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.DevTunnelWeb,
+                WebEndpoint = "https://host.devtunnels.ms/",
+            },
+        };
+
+        var web = Assert.IsType<WebRepositorySource>(configuration.ToRepositorySource());
+        Assert.Equal("https://host.devtunnels.ms/", web.Endpoint);
+        Assert.True(web.UseGitHubAuthToken);
     }
 
     [AvaloniaFact]
