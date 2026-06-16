@@ -1,0 +1,60 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/not-interesting.json",
+  "description": "Schema for not-interesting interest applications. Marks a target entity as not interesting so it is filtered out of query results and views (unless 'show hidden items' is selected). Optionally scoped to a user and/or a view; when neither is present, it applies globally.",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "not-interesting"
+      }
+    },
+    "participants": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "description": "The entity marked not interesting (any entity type)."
+        },
+        "user": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "user"
+          ],
+          "description": "Optional user for whom the target is not interesting (user scope)."
+        },
+        "view": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "view"
+          ],
+          "description": "Optional view in which the target is not interesting (view scope)."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

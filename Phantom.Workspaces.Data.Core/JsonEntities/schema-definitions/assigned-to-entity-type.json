@@ -1,0 +1,42 @@
+{
+  "entity-id": "e6a8c0d2-3f4b-4c5d-9e7f-8a0b1c2d3e4f",
+  "entity-types": [
+    "interest-type",
+    "relationship-type",
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/assigned-to.json"
+    ],
+    [
+      "entity-types",
+      "assigned-to"
+    ]
+  ],
+  "display-name": {
+    "default": "Assigned-To Interest"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/assigned-to-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/assigned-to.json"
+  },
+  "applied": {
+    "indicator": "👤",
+    "description": "Assigned to you",
+    "actionText": "Assign to user"
+  },
+  "notApplied": {
+    "indicator": "",
+    "description": "Not assigned",
+    "actionText": "Clear assignment"
+  },
+  "default-name-prefixes": []
+}

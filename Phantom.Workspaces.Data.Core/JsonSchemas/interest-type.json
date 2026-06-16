@@ -1,0 +1,49 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/interest-type.json",
+  "description": "Schema for interest-type entities: relationship-type definitions that also carry applied/not-applied badge UX. A concrete interest type (for example actionable, blocked, assigned-to, or not-interesting) declares its participant roles (a target entity and, for user-scoped interests, a user, and optionally a view) and the badge text shown when the interest is applied or not applied.",
+  "allOf": [
+    {
+      "$ref": "relationship-type.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "applied": {
+      "$ref": "#/$defs/interest-state-content",
+      "description": "Badge UX shown when the interest is applied to an entity."
+    },
+    "notApplied": {
+      "$ref": "#/$defs/interest-state-content",
+      "description": "Badge UX shown when the interest is not applied (the toggle-off state)."
+    }
+  },
+  "required": [
+    "applied",
+    "notApplied"
+  ],
+  "$defs": {
+    "interest-state-content": {
+      "type": "object",
+      "properties": {
+        "indicator": {
+          "$ref": "core.json#/$defs/local-string",
+          "description": "Short glyph/label shown on the badge for this state."
+        },
+        "description": {
+          "$ref": "core.json#/$defs/local-string",
+          "description": "Human-readable description of this state."
+        },
+        "actionText": {
+          "$ref": "core.json#/$defs/local-string",
+          "description": "Label for the action that transitions to this state."
+        }
+      },
+      "required": [
+        "indicator",
+        "description",
+        "actionText"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

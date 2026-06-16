@@ -1,0 +1,42 @@
+{
+  "entity-id": "b7f3c1a2-9d4e-4c8b-a1f6-3e5d7c9b0a21",
+  "entity-types": [
+    "interest-type",
+    "relationship-type",
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/not-interesting.json"
+    ],
+    [
+      "entity-types",
+      "not-interesting"
+    ]
+  ],
+  "display-name": {
+    "default": "Not Interesting Interest"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/not-interesting-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/not-interesting.json"
+  },
+  "applied": {
+    "indicator": "🚫",
+    "description": "Not interesting",
+    "actionText": "Mark not interesting"
+  },
+  "notApplied": {
+    "indicator": "",
+    "description": "Interesting",
+    "actionText": "Clear not-interesting"
+  },
+  "default-name-prefixes": []
+}

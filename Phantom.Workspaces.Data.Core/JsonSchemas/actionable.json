@@ -1,0 +1,61 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/actionable.json",
+  "description": "Schema for actionable interest applications. Marks a target entity as actionable by a user (it requires the user's action). Surfaced in the user's inbox. Optionally scoped to a view.",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "actionable"
+      }
+    },
+    "participants": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "description": "The entity that is actionable (any entity type)."
+        },
+        "user": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "user"
+          ],
+          "description": "The user for whom the target is actionable."
+        },
+        "view": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "view"
+          ],
+          "description": "Optional view in which the target is actionable (view scope)."
+        }
+      },
+      "required": [
+        "target",
+        "user"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

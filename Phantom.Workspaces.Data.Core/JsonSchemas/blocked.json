@@ -1,0 +1,61 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/blocked.json",
+  "description": "Schema for blocked interest applications. Marks a target entity as blocked for a user (the user is waiting on something before they can act). Optionally scoped to a view.",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "blocked"
+      }
+    },
+    "participants": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "description": "The entity that is blocked (any entity type)."
+        },
+        "user": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "user"
+          ],
+          "description": "The user for whom the target is blocked."
+        },
+        "view": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "view"
+          ],
+          "description": "Optional view in which the target is blocked (view scope)."
+        }
+      },
+      "required": [
+        "target",
+        "user"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

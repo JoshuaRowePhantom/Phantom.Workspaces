@@ -1,0 +1,53 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/assigned-to.json",
+  "description": "Schema for assigned-to interest applications. Marks a target task as assigned to a user. The entity classifier derives this from the task's source-system 'assigned-to' field; the workstreams view selects a user's tasks by this interest.",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "assigned-to"
+      }
+    },
+    "participants": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "task"
+          ],
+          "description": "The task assigned to the user."
+        },
+        "user": {
+          "allOf": [
+            {
+              "$ref": "core.json#/$defs/entity-id"
+            }
+          ],
+          "x-entity-types": [
+            "user"
+          ],
+          "description": "The user the task is assigned to."
+        }
+      },
+      "required": [
+        "target",
+        "user"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

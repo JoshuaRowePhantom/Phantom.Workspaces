@@ -1,0 +1,42 @@
+{
+  "entity-id": "c4e6a8b0-1d2f-4a3b-9c5d-6e7f8a9b0c1d",
+  "entity-types": [
+    "interest-type",
+    "relationship-type",
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/actionable.json"
+    ],
+    [
+      "entity-types",
+      "actionable"
+    ]
+  ],
+  "display-name": {
+    "default": "Actionable Interest"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/actionable-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/actionable.json"
+  },
+  "applied": {
+    "indicator": "❗",
+    "description": "Actionable",
+    "actionText": "Mark actionable"
+  },
+  "notApplied": {
+    "indicator": "",
+    "description": "Not actionable",
+    "actionText": "Clear actionable"
+  },
+  "default-name-prefixes": []
+}
