@@ -580,21 +580,23 @@ public readonly record struct EntityIdTimestamp(
     [property: JsonPropertyName("entity-id")] EntityId EntityId,
     [property: JsonPropertyName("timestamp")] Timestamp Timestamp);
 
-public readonly record struct QueryClauseIdentifier(string Value);
+public readonly record struct QueryClauseIdentifier([property: JsonPropertyName("value")] string Value);
 
-public readonly record struct EntityTypeNameSet(string[] Values);
+public readonly record struct EntityTypeNameSet([property: JsonPropertyName("values")] string[] Values);
 
-public readonly record struct RelationshipTypeNameSet(string[] Values);
+public readonly record struct RelationshipTypeNameSet([property: JsonPropertyName("values")] string[] Values);
 
-public readonly record struct RoleNameSet(string[] Values);
+public readonly record struct RoleNameSet([property: JsonPropertyName("values")] string[] Values);
 
 public readonly struct FieldPath : IEquatable<FieldPath>
 {
+    [JsonConstructor]
     public FieldPath(params string[] components)
     {
         this.Components = components ?? [];
     }
 
+    [JsonPropertyName("components")]
     public string[] Components { get; }
 
     public bool Equals(FieldPath other)
@@ -629,9 +631,9 @@ public readonly struct FieldPath : IEquatable<FieldPath>
     }
 }
 
-public readonly record struct RegularExpressionPattern(string Value);
+public readonly record struct RegularExpressionPattern([property: JsonPropertyName("value")] string Value);
 
-public readonly record struct MinimumQueryScore(double Value);
+public readonly record struct MinimumQueryScore([property: JsonPropertyName("value")] double Value);
 
 public sealed record TopLevelQueryClause
 {
@@ -642,6 +644,16 @@ public sealed record TopLevelQueryClause
     public required QueryClause Clause { get; init; }
 }
 
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "clause-type")]
+[JsonDerivedType(typeof(AndQueryClause), "and")]
+[JsonDerivedType(typeof(OrQueryClause), "or")]
+[JsonDerivedType(typeof(NotQueryClause), "not")]
+[JsonDerivedType(typeof(TopQueryClause), "top")]
+[JsonDerivedType(typeof(EntityTypeQueryClause), "entity-type")]
+[JsonDerivedType(typeof(EntityFieldQueryClause), "entity-field")]
+[JsonDerivedType(typeof(EntityVectorQueryClause), "entity-vector")]
+[JsonDerivedType(typeof(EntityParticipationQueryClause), "entity-participation")]
+[JsonDerivedType(typeof(TransitQueryClause), "transit")]
 public abstract record QueryClause;
 
 public sealed record AndQueryClause : QueryClause
@@ -757,18 +769,32 @@ public sealed record EntityParticipationRequirement
     public required QueryClause Clause { get; init; }
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<FieldComparisonOperator>))]
 public enum FieldComparisonOperator
 {
+    [JsonStringEnumMemberName("equals")]
     Equals = 0,
+
+    [JsonStringEnumMemberName("greater-than")]
     GreaterThan = 1,
+
+    [JsonStringEnumMemberName("less-than")]
     LessThan = 2,
+
+    [JsonStringEnumMemberName("greater-than-or-equal-to")]
     GreaterThanOrEqualTo = 3,
+
+    [JsonStringEnumMemberName("less-than-or-equal-to")]
     LessThanOrEqualTo = 4,
+
+    [JsonStringEnumMemberName("regular-expression-match")]
     RegularExpressionMatch = 5,
+
+    [JsonStringEnumMemberName("contains")]
     Contains = 6,
 }
 
-public readonly record struct QueryResultLimit(int Value);
+public readonly record struct QueryResultLimit([property: JsonPropertyName("value")] int Value);
 
 [JsonConverter(typeof(JsonStringEnumConverter<EntityChangeMode>))]
 public enum EntityChangeMode

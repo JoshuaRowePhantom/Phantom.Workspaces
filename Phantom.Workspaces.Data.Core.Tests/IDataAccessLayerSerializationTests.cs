@@ -106,6 +106,55 @@ public sealed class IDataAccessLayerSerializationTests
     }
 
     [Fact]
+    public void QueryRequest_WithPolymorphicClauses_RoundTripsAndUsesDiscriminator()
+    {
+        // The inbox query shape: entities that are the "target" of an "actionable" interest whose
+        // "user" participant is the current user.
+        var queryRequest = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("actionable"),
+                    Clause = new EntityParticipationQueryClause
+                    {
+                        RelationshipTypeNames = new RelationshipTypeNameSet(["actionable"]),
+                        ParticipationRoleNames = new RoleNameSet(["target"]),
+                        MustHave = new EntityParticipationRequirement
+                        {
+                            ParticipationRoleNames = new RoleNameSet(["user"]),
+                            Clause = new EntityFieldQueryClause
+                            {
+                                FieldPath = new FieldPath("entity-id"),
+                                ComparisonOperator = FieldComparisonOperator.Equals,
+                                Value = JsonDocument.Parse("\"${USER}\"").RootElement.Clone(),
+                            },
+                        },
+                    },
+                },
+            ],
+        };
+
+        var json = JsonSerializer.Serialize(queryRequest, WebDataAccessJsonSerialization.Options);
+
+        // The polymorphic discriminator and kebab-case enum value are present on the wire.
+        Assert.Contains("\"clause-type\":\"entity-participation\"", json, System.StringComparison.Ordinal);
+        Assert.Contains("\"clause-type\":\"entity-field\"", json, System.StringComparison.Ordinal);
+        Assert.Contains("\"comparison-operator\":\"equals\"", json, System.StringComparison.Ordinal);
+
+        var roundTripped = JsonSerializer.Deserialize<QueryRequest>(json, WebDataAccessJsonSerialization.Options);
+        Assert.NotNull(roundTripped);
+        var clause = Assert.IsType<EntityParticipationQueryClause>(Assert.Single(roundTripped!.Clauses).Clause);
+        Assert.Equal(["actionable"], clause.RelationshipTypeNames.Values);
+        Assert.Equal(["target"], clause.ParticipationRoleNames!.Value.Values);
+        var mustHaveClause = Assert.IsType<EntityFieldQueryClause>(clause.MustHave!.Clause);
+        Assert.Equal(["entity-id"], mustHaveClause.FieldPath.Components);
+        Assert.Equal(FieldComparisonOperator.Equals, mustHaveClause.ComparisonOperator);
+        Assert.Equal("${USER}", mustHaveClause.Value!.Value.GetString());
+    }
+
+    [Fact]
     public async Task Serialize_GetRequestShape_ValidatesWhenEmbeddedInViewSubView()
     {
         var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
