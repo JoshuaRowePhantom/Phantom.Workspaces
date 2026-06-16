@@ -69,6 +69,7 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
         await TryDropCollectionAsync($"{ChatHistoryCollectionName}-agents");
         await TryDropCollectionAsync($"{ChatHistoryCollectionName}-messages");
         await TryDropCollectionAsync($"{EntityCollectionName}_entities");
+        await TryDropCollectionAsync($"{EntityCollectionName}_queue_heads");
         await TryDropCollectionAsync(FilesystemEditCollectionName);
     }
 

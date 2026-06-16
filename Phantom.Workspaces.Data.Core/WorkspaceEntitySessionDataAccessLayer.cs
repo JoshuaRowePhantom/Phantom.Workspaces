@@ -20,6 +20,27 @@ public sealed class WorkspaceEntitySessionDataAccessLayer : IDataAccessLayer
         return this.underlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
     }
 
+    public Task<ProcessQueueResult> ProcessQueueAsync(
+        ProcessQueueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.underlyingDataAccessLayer.ProcessQueueAsync(request, cancellationToken);
+    }
+
+    public Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+        ComputeEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.underlyingDataAccessLayer.ComputeEmbeddingsAsync(request, cancellationToken);
+    }
+
+    public Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+        UpdateEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.underlyingDataAccessLayer.UpdateEmbeddingsAsync(request, cancellationToken);
+    }
+
     public async Task<GetResult> GetAsync(
         GetRequest request,
         CancellationToken cancellationToken = default)

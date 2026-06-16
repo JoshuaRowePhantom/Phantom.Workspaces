@@ -55,4 +55,25 @@ public abstract class BaseUpdateProcessingDataAccessLayer : IDataAccessLayer
     {
         return this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken);
     }
+
+    public virtual Task<ProcessQueueResult> ProcessQueueAsync(
+        ProcessQueueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.UnderlyingDataAccessLayer.ProcessQueueAsync(request, cancellationToken);
+    }
+
+    public virtual Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+        ComputeEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.UnderlyingDataAccessLayer.ComputeEmbeddingsAsync(request, cancellationToken);
+    }
+
+    public virtual Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+        UpdateEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.UnderlyingDataAccessLayer.UpdateEmbeddingsAsync(request, cancellationToken);
+    }
 }

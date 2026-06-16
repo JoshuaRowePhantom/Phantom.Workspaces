@@ -9,6 +9,9 @@ namespace Phantom.Workspaces.Data.Offline;
 public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 {
     private readonly IEmbeddingsProvider embeddingsProvider;
+    private readonly object embeddingsLock = new();
+    private readonly Dictionary<EntityId, IReadOnlyList<float>> storedEmbeddings = new();
+    private readonly Dictionary<string, Timestamp?> queueHeads = new(StringComparer.Ordinal);
     private State currentState = State.CreateInitial();
 
     public InMemoryDataAccessLayer(IEmbeddingsProvider? embeddingsProvider = null)
@@ -48,7 +51,13 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
-        return this.ReadState().QueryAsync(request, this.embeddingsProvider, cancellationToken);
+        IReadOnlyDictionary<EntityId, IReadOnlyList<float>> storedEmbeddingsSnapshot;
+        lock (this.embeddingsLock)
+        {
+            storedEmbeddingsSnapshot = new Dictionary<EntityId, IReadOnlyList<float>>(this.storedEmbeddings);
+        }
+
+        return this.ReadState().QueryAsync(request, this.embeddingsProvider, storedEmbeddingsSnapshot, cancellationToken);
     }
 
     public Task<UpdateResult> UpdateAsync(
@@ -66,9 +75,123 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                 Interlocked.CompareExchange(ref this.currentState, updateOutcome.NextState, state),
                 state))
             {
+                this.ClearEmbeddingsForDeletedEntities(updateOutcome.NextState);
                 return Task.FromResult(updateOutcome.UpdateResult);
             }
         }
+    }
+
+    public Task<ProcessQueueResult> ProcessQueueAsync(
+        ProcessQueueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var currentEntities = this.ReadState().GetCurrentEntities();
+
+        lock (this.embeddingsLock)
+        {
+            if (request.Token is { } acknowledgedToken)
+            {
+                this.queueHeads[request.QueueName] = acknowledgedToken;
+            }
+
+            this.queueHeads.TryGetValue(request.QueueName, out var head);
+
+            var batch = currentEntities
+                .Where(entity => head is null || IsAfter(entity.ModifiedTime, head.Value))
+                .OrderBy(entity => entity.ModifiedTime.DateTime)
+                .ThenBy(entity => entity.ModifiedTime.ChangeId, StringComparer.Ordinal)
+                .Take(Math.Max(0, request.Count))
+                .ToArray();
+
+            var nextToken = batch.Length > 0 ? batch[^1].ModifiedTime : head;
+            return Task.FromResult(new ProcessQueueResult
+            {
+                Entities = batch,
+                Token = nextToken,
+            });
+        }
+    }
+
+    public async Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+        ComputeEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var inputs = request.Entities
+            .Select(entity => new EmbeddingInput
+            {
+                EntityId = entity.EntityId,
+                Text = EntityTextProjection.ProjectText(entity.Data),
+            })
+            .ToArray();
+
+        var embeddings = await this.embeddingsProvider.ComputeAsync(inputs, cancellationToken).ConfigureAwait(false);
+
+        return new ComputeEmbeddingsResult
+        {
+            Embeddings = embeddings
+                .Select(embedding => new EntityEmbedding { EntityId = embedding.EntityId, Values = embedding.Values })
+                .ToArray(),
+        };
+    }
+
+    public Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+        UpdateEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (this.embeddingsLock)
+        {
+            foreach (var update in request.Updates)
+            {
+                if (update.Values is null)
+                {
+                    this.storedEmbeddings.Remove(update.EntityId);
+                }
+                else
+                {
+                    this.storedEmbeddings[update.EntityId] = update.Values.ToArray();
+                }
+            }
+        }
+
+        return Task.FromResult(new UpdateEmbeddingsResult { Success = true });
+    }
+
+    private void ClearEmbeddingsForDeletedEntities(State state)
+    {
+        var deletedEntityIds = state.GetCurrentEntities()
+            .Where(static entity => entity.Data is null)
+            .Select(static entity => entity.EntityId)
+            .ToArray();
+        if (deletedEntityIds.Length == 0)
+        {
+            return;
+        }
+
+        lock (this.embeddingsLock)
+        {
+            foreach (var entityId in deletedEntityIds)
+            {
+                this.storedEmbeddings.Remove(entityId);
+            }
+        }
+    }
+
+    private static bool IsAfter(Timestamp candidate, Timestamp reference)
+    {
+        if (candidate.DateTime != reference.DateTime)
+        {
+            return candidate.DateTime > reference.DateTime;
+        }
+
+        return string.CompareOrdinal(candidate.ChangeId, reference.ChangeId) > 0;
     }
 
     private State ReadState()
@@ -160,9 +283,15 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         public Task<QueryResult> QueryAsync(
             QueryRequest request,
             IEmbeddingsProvider embeddingsProvider,
+            IReadOnlyDictionary<EntityId, IReadOnlyList<float>> storedEmbeddings,
             CancellationToken cancellationToken)
         {
-            return this.snapshot.QueryAsync(request, embeddingsProvider, cancellationToken);
+            return this.snapshot.QueryAsync(request, embeddingsProvider, storedEmbeddings, cancellationToken);
+        }
+
+        public IReadOnlyList<EntitySnapshot> GetCurrentEntities()
+        {
+            return this.snapshot.GetCurrentEntities();
         }
 
         public UpdateOutcome UpdateAsync(
@@ -757,6 +886,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         public async Task<QueryResult> QueryAsync(
             QueryRequest request,
             IEmbeddingsProvider embeddingsProvider,
+            IReadOnlyDictionary<EntityId, IReadOnlyList<float>> storedEmbeddings,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -779,7 +909,11 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                     }
 
                     versionsById[entityEntry.Key] = version;
-                    candidates.Add(new InMemoryQueryEvaluator.Candidate(entityEntry.Key, version.Data?.RootElement));
+                    storedEmbeddings.TryGetValue(entityEntry.Key, out var storedEmbedding);
+                    candidates.Add(new InMemoryQueryEvaluator.Candidate(
+                        entityEntry.Key,
+                        version.Data?.RootElement,
+                        storedEmbedding));
                 }
 
                 var evaluator = new InMemoryQueryEvaluator(candidates, embeddingsProvider);
@@ -814,6 +948,31 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
             {
                 Batches = batches,
             };
+        }
+
+        public IReadOnlyList<EntitySnapshot> GetCurrentEntities()
+        {
+            var result = new List<EntitySnapshot>();
+            foreach (var entityEntry in this.entities)
+            {
+                var versions = entityEntry.Value.Versions;
+                if (versions.Count == 0)
+                {
+                    continue;
+                }
+
+                var latest = versions[^1];
+                result.Add(new EntitySnapshot
+                {
+                    EntityId = entityEntry.Key,
+                    ConcurrencyTag = latest.ConcurrencyTag,
+                    ModifiedTime = latest.Timestamp,
+                    Data = latest.Data?.RootElement,
+                    Relationships = Array.Empty<EntitySnapshot>(),
+                });
+            }
+
+            return result;
         }
 
         private EntityVersion? FindVersion(

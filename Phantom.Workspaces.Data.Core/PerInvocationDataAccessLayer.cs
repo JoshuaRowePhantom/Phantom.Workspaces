@@ -62,6 +62,30 @@ public sealed class PerInvocationDataAccessLayer : IDataAccessLayer
             dataAccessLayer => dataAccessLayer.UpdateAsync(request, cancellationToken));
     }
 
+    public Task<ProcessQueueResult> ProcessQueueAsync(
+        ProcessQueueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.ExecuteAsync(
+            dataAccessLayer => dataAccessLayer.ProcessQueueAsync(request, cancellationToken));
+    }
+
+    public Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+        ComputeEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.ExecuteAsync(
+            dataAccessLayer => dataAccessLayer.ComputeEmbeddingsAsync(request, cancellationToken));
+    }
+
+    public Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+        UpdateEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return this.ExecuteAsync(
+            dataAccessLayer => dataAccessLayer.UpdateEmbeddingsAsync(request, cancellationToken));
+    }
+
     private async Task<T> ExecuteAsync<T>(
         Func<IDataAccessLayer, Task<T>> execute)
     {

@@ -47,6 +47,38 @@ public interface IDataAccessLayer
     Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(
         GetChangedEntitiesRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Processes a named queue of recently-changed entities for decoupled background work (for
+    /// example, vector indexing). A queue's head is the timestamp of the last entity processed.
+    /// When <see cref="ProcessQueueRequest.Token"/> is supplied, the persisted head is first
+    /// advanced to it (acknowledging the previous batch); the method then returns up to
+    /// <see cref="ProcessQueueRequest.Count"/> entities in modified-timestamp order after the head,
+    /// plus the token the caller should pass next time. Not all data access layers support queues.
+    /// </summary>
+    Task<ProcessQueueResult> ProcessQueueAsync(
+        ProcessQueueRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This data access layer does not support queue processing.");
+
+    /// <summary>
+    /// Computes embedding vectors for the supplied entity snapshots using the configured embeddings
+    /// provider. Not all data access layers support embeddings.
+    /// </summary>
+    Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+        ComputeEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This data access layer does not support embedding computation.");
+
+    /// <summary>
+    /// Stores (or, when an update carries no values, clears) embedding vectors for entities, keyed
+    /// by entity id, so they are used by vector search. Not all data access layers support
+    /// embeddings.
+    /// </summary>
+    Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+        UpdateEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This data access layer does not support embedding updates.");
 }
 
 public sealed record UpdateRequest
@@ -376,6 +408,78 @@ public record EntitySnapshot
     [JsonPropertyName("relationships")]
     public required IReadOnlyCollection<EntitySnapshot> Relationships { get; init; }
 }
+
+public sealed record ProcessQueueRequest
+{
+    [JsonPropertyName("queue-name")]
+    public required string QueueName { get; init; }
+
+    [JsonPropertyName("token")]
+    public Timestamp? Token { get; init; }
+
+    [JsonPropertyName("count")]
+    public required int Count { get; init; }
+}
+
+public sealed record ProcessQueueResult
+{
+    [JsonPropertyName("entities")]
+    public required IReadOnlyList<EntitySnapshot> Entities { get; init; }
+
+    [JsonPropertyName("token")]
+    public Timestamp? Token { get; init; }
+}
+
+public sealed record ComputeEmbeddingsRequest
+{
+    [JsonPropertyName("entities")]
+    public required IReadOnlyList<EntitySnapshot> Entities { get; init; }
+}
+
+public sealed record ComputeEmbeddingsResult
+{
+    [JsonPropertyName("embeddings")]
+    public required IReadOnlyList<EntityEmbedding> Embeddings { get; init; }
+}
+
+/// <summary>An embedding vector associated with an entity.</summary>
+public sealed record EntityEmbedding
+{
+    [JsonPropertyName("entity-id")]
+    public required EntityId EntityId { get; init; }
+
+    [JsonPropertyName("values")]
+    public required IReadOnlyList<float> Values { get; init; }
+}
+
+public sealed record UpdateEmbeddingsRequest
+{
+    [JsonPropertyName("updates")]
+    public required IReadOnlyList<EmbeddingUpdate> Updates { get; init; }
+}
+
+/// <summary>
+/// A single embedding update. A <see langword="null"/> <see cref="Values"/> clears any stored
+/// embedding for the entity (for example, when the entity has been deleted).
+/// </summary>
+public sealed record EmbeddingUpdate
+{
+    [JsonPropertyName("entity-id")]
+    public required EntityId EntityId { get; init; }
+
+    [JsonPropertyName("concurrency-tag")]
+    public ConcurrencyTag? ConcurrencyTag { get; init; }
+
+    [JsonPropertyName("values")]
+    public IReadOnlyList<float>? Values { get; init; }
+}
+
+public sealed record UpdateEmbeddingsResult
+{
+    [JsonPropertyName("success")]
+    public required bool Success { get; init; }
+}
+
 
 public readonly record struct EntityId
 {

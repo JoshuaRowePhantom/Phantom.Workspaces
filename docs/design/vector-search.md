@@ -62,8 +62,17 @@ UpdateEmbeddingsAsync(request: [{ entityId, concurrencyToken, embedding }]) -> {
 - `ComputeEmbeddings` turns entity snapshots into embedding vectors via the configured
   **embeddings provider**. MIME / non-text content is handled specially by the provider; for now,
   non-text content is stripped before embedding.
-- `UpdateEmbeddings` stores the computed vectors in the MongoDB vector index, keyed by entity id,
-  and includes the `concurrencyToken` to ensure safe updates.
+- `UpdateEmbeddings` stores the computed vectors (keyed by entity id) so they drive vector search.
+  An update whose `embedding`/`values` is `null` **clears** the stored embedding — used when an
+  entity is deleted so deleted entities are not returned by vector search.
+
+> **Status: implemented** in both `InMemoryDataAccessLayer` (queue heads + stored embeddings held in
+> memory; the in-memory query evaluator prefers a stored embedding over computing one) and
+> `MongoDbEntityDataAccessLayer` (queue heads in a `{collection}_queue_heads` collection; entities
+> ordered by a `current.modified-time-utc`/`current.modified-version` projection; embeddings stored
+> on `current.embedding`). Deleting an entity clears its stored embedding in both. Other data access
+> layers throw `NotSupportedException` (the interface methods have throwing default implementations).
+> Covered by `DataAccessLayerQueueEmbeddingsContractTests` (in-memory fast + Atlas Local SlowDocker).
 
 ### Indexer flow
 

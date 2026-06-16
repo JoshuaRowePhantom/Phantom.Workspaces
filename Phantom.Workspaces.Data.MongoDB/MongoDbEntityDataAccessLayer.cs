@@ -14,6 +14,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     private static readonly TimeSpan VectorIndexRemovalPollInterval = TimeSpan.FromSeconds(2);
 
     private readonly IMongoCollection<MongoDbEntityDocument> _entityCollection;
+    private readonly IMongoCollection<MongoDbQueueHead> _queueHeadCollection;
     private readonly Phantom.Workspaces.Data.Vector.IEmbeddingsProvider _embeddingsProvider;
 
     public MongoDbEntityDataAccessLayer(
@@ -28,6 +29,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         _entityCollection = database.GetCollection<MongoDbEntityDocument>($"{collectionName}_entities");
+        _queueHeadCollection = database.GetCollection<MongoDbQueueHead>($"{collectionName}_queue_heads");
         _embeddingsProvider = embeddingsProvider ?? new Phantom.Workspaces.Data.Vector.DeterministicEmbeddingsProvider();
     }
 
@@ -153,6 +155,8 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 TypeNames = typeNames.ToArray(),
                 Embedding = embedding,
                 IsDeleted = nextDataJson is null,
+                ModifiedTimeUtc = nowUtc,
+                ModifiedVersion = nextVersionId.ToString(),
             };
 
             pendingWrites.Add(updatedDocument);
@@ -522,6 +526,147 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             Data = JsonDocument.Parse(dataJson).RootElement.Clone(),
             Relationships = [],
             MatchingClauseIdentifiers = [],
+        };
+    }
+
+    public async Task<ProcessQueueResult> ProcessQueueAsync(
+        ProcessQueueRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.Token is { } acknowledgedToken)
+        {
+            await _queueHeadCollection.ReplaceOneAsync(
+                Builders<MongoDbQueueHead>.Filter.Eq(head => head.Id, request.QueueName),
+                new MongoDbQueueHead
+                {
+                    Id = request.QueueName,
+                    ModifiedTimeUtc = acknowledgedToken.DateTime.UtcDateTime,
+                    ModifiedVersion = acknowledgedToken.ChangeId,
+                },
+                new ReplaceOptions { IsUpsert = true },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var persistedHead = await _queueHeadCollection
+            .Find(Builders<MongoDbQueueHead>.Filter.Eq(head => head.Id, request.QueueName))
+            .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+
+        var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
+            _entityCollection.CollectionNamespace.CollectionName);
+
+        var filter = Builders<BsonDocument>.Filter.Empty;
+        if (persistedHead is not null)
+        {
+            // Entities strictly after the head, ordered by (modified-time-utc, modified-version).
+            var headUtc = persistedHead.ModifiedTimeUtc;
+            var headVersion = persistedHead.ModifiedVersion;
+            filter = Builders<BsonDocument>.Filter.Or(
+                Builders<BsonDocument>.Filter.Gt("current.modified-time-utc", headUtc),
+                Builders<BsonDocument>.Filter.And(
+                    Builders<BsonDocument>.Filter.Eq("current.modified-time-utc", headUtc),
+                    Builders<BsonDocument>.Filter.Gt("current.modified-version", headVersion)));
+        }
+
+        var sort = Builders<BsonDocument>.Sort
+            .Ascending("current.modified-time-utc")
+            .Ascending("current.modified-version");
+
+        var documents = await bsonCollection
+            .Find(filter)
+            .Sort(sort)
+            .Limit(Math.Max(0, request.Count))
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        var entities = new List<EntitySnapshot>();
+        Timestamp? nextToken = persistedHead is null
+            ? null
+            : new Timestamp(new DateTimeOffset(persistedHead.ModifiedTimeUtc, TimeSpan.Zero), persistedHead.ModifiedVersion);
+        foreach (var document in documents)
+        {
+            var snapshot = BuildQueueSnapshot(document);
+            if (snapshot is null)
+            {
+                continue;
+            }
+
+            entities.Add(snapshot);
+            nextToken = snapshot.ModifiedTime;
+        }
+
+        return new ProcessQueueResult { Entities = entities, Token = nextToken };
+    }
+
+    public async Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+        ComputeEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var inputs = request.Entities
+            .Select(entity => new Phantom.Workspaces.Data.Vector.EmbeddingInput
+            {
+                EntityId = entity.EntityId,
+                Text = Phantom.Workspaces.Data.Vector.EntityTextProjection.ProjectText(entity.Data),
+            })
+            .ToArray();
+
+        var embeddings = await _embeddingsProvider.ComputeAsync(inputs, cancellationToken).ConfigureAwait(false);
+
+        return new ComputeEmbeddingsResult
+        {
+            Embeddings = embeddings
+                .Select(embedding => new EntityEmbedding { EntityId = embedding.EntityId, Values = embedding.Values })
+                .ToArray(),
+        };
+    }
+
+    public async Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+        UpdateEmbeddingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        foreach (var update in request.Updates)
+        {
+            var filter = Builders<MongoDbEntityDocument>.Filter.Eq(document => document.Id, update.EntityId.Value.ToString());
+            var embeddingUpdate = update.Values is null
+                ? Builders<MongoDbEntityDocument>.Update.Unset("current.embedding")
+                : Builders<MongoDbEntityDocument>.Update.Set("current.embedding", update.Values.ToArray());
+
+            await _entityCollection.UpdateOneAsync(filter, embeddingUpdate, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+
+        return new UpdateEmbeddingsResult { Success = true };
+    }
+
+    /// <summary>
+    /// Builds an entity snapshot for the queue, including tombstoned (deleted) entities with a null
+    /// <see cref="EntitySnapshot.Data"/> so the indexer can clear their embeddings.
+    /// </summary>
+    private static EntitySnapshot? BuildQueueSnapshot(BsonDocument document)
+    {
+        if (!document.TryGetValue("Versions", out var versionsValue) || versionsValue is not BsonArray { Count: > 0 } versions)
+        {
+            return null;
+        }
+
+        var latest = versions[^1].AsBsonDocument;
+        var dataJson = latest.TryGetValue("DataJson", out var dataJsonValue) && !dataJsonValue.IsBsonNull
+            ? dataJsonValue.AsString
+            : null;
+
+        var versionId = latest["VersionId"].AsObjectId;
+        var timestampUtc = latest["TimestampUtc"].ToUniversalTime();
+
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(document["_id"].AsString),
+            ConcurrencyTag = new ConcurrencyTag(versionId.ToString()),
+            ModifiedTime = new Timestamp(new DateTimeOffset(timestampUtc, TimeSpan.Zero), versionId.ToString()),
+            Data = dataJson is null ? null : JsonDocument.Parse(dataJson).RootElement.Clone(),
+            Relationships = [],
         };
     }
 
@@ -1005,6 +1150,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         [BsonElement("is-deleted")]
         public bool IsDeleted { get; init; }
+
+        [BsonElement("modified-time-utc")]
+        public DateTime ModifiedTimeUtc { get; init; }
+
+        [BsonElement("modified-version")]
+        public string ModifiedVersion { get; init; } = string.Empty;
     }
 
     private sealed class MongoDbEntityVersion
@@ -1018,5 +1169,17 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         public string[] Names { get; init; } = [];
 
         public string[] TypeNames { get; init; } = [];
+    }
+
+    private sealed class MongoDbQueueHead
+    {
+        [BsonId]
+        public string Id { get; init; } = string.Empty;
+
+        [BsonElement("modified-time-utc")]
+        public DateTime ModifiedTimeUtc { get; init; }
+
+        [BsonElement("modified-version")]
+        public string ModifiedVersion { get; init; } = string.Empty;
     }
 }

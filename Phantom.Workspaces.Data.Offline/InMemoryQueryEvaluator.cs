@@ -30,7 +30,7 @@ internal sealed class InMemoryQueryEvaluator
     }
 
     /// <summary>A candidate entity (its id and current data) for a single query timestamp.</summary>
-    public readonly record struct Candidate(EntityId Id, JsonElement? Data);
+    public readonly record struct Candidate(EntityId Id, JsonElement? Data, IReadOnlyList<float>? StoredEmbedding = null);
 
     /// <summary>An entity that matched at least one top-level clause, with its scores.</summary>
     public sealed record EvaluatedEntity(
@@ -152,23 +152,43 @@ internal sealed class InMemoryQueryEvaluator
     {
         var queryVector = await this.ResolveQueryVectorAsync(clause, cancellationToken).ConfigureAwait(false);
 
-        var inputs = this.candidates
-            .Select(candidate => new EmbeddingInput
+        // Candidates with a stored embedding (set via UpdateEmbeddings) use it directly; others have
+        // their embedding computed on the fly from their text projection.
+        var candidateEmbeddings = new List<(EntityId Id, IReadOnlyList<float> Values)>();
+        var toCompute = new List<EmbeddingInput>();
+        foreach (var candidate in this.candidates)
+        {
+            if (candidate.StoredEmbedding is { Count: > 0 } stored)
             {
-                EntityId = candidate.Id,
-                Text = EntityTextProjection.ProjectText(candidate.Data),
-            })
-            .ToArray();
-        var embeddings = await this.embeddingsProvider.ComputeAsync(inputs, cancellationToken).ConfigureAwait(false);
+                candidateEmbeddings.Add((candidate.Id, stored));
+            }
+            else
+            {
+                toCompute.Add(new EmbeddingInput
+                {
+                    EntityId = candidate.Id,
+                    Text = EntityTextProjection.ProjectText(candidate.Data),
+                });
+            }
+        }
+
+        if (toCompute.Count > 0)
+        {
+            var computed = await this.embeddingsProvider.ComputeAsync(toCompute, cancellationToken).ConfigureAwait(false);
+            foreach (var embedding in computed)
+            {
+                candidateEmbeddings.Add((embedding.EntityId, embedding.Values));
+            }
+        }
 
         var minimumScore = clause.MinimumQueryScore?.Value ?? double.NegativeInfinity;
         var scored = new List<(EntityId Id, double Score)>();
-        foreach (var embedding in embeddings)
+        foreach (var (id, values) in candidateEmbeddings)
         {
-            var score = CosineSimilarity(queryVector, embedding.Values);
+            var score = CosineSimilarity(queryVector, values);
             if (score >= minimumScore)
             {
-                scored.Add((embedding.EntityId, score));
+                scored.Add((id, score));
             }
         }
 
