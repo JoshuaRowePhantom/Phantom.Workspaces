@@ -121,6 +121,9 @@ internal sealed class InMemoryQueryEvaluator
             case EntityTypeQueryClause entityTypeClause:
                 return this.MatchEntityTypes(entityTypeClause);
 
+            case EntityFieldQueryClause fieldClause:
+                return this.MatchField(fieldClause);
+
             case EntityVectorQueryClause vectorClause:
                 return await this.MatchVectorAsync(vectorClause, cancellationToken).ConfigureAwait(false);
 
@@ -149,6 +152,136 @@ internal sealed class InMemoryQueryEvaluator
         }
 
         return result;
+    }
+
+    private HashSet<EntityId> MatchField(EntityFieldQueryClause clause)
+    {
+        var result = new HashSet<EntityId>();
+        foreach (var candidate in this.candidates)
+        {
+            if (candidate.Data is not { } data)
+            {
+                continue;
+            }
+
+            if (NavigateField(data, clause.FieldPath.Components) is { } fieldValue
+                && CompareField(fieldValue, clause.ComparisonOperator, clause.Value))
+            {
+                result.Add(candidate.Id);
+            }
+        }
+
+        return result;
+    }
+
+    private static JsonElement? NavigateField(JsonElement root, IReadOnlyList<string> components)
+    {
+        var current = root;
+        foreach (var component in components)
+        {
+            if (current.ValueKind == JsonValueKind.Object)
+            {
+                if (!current.TryGetProperty(component, out var next))
+                {
+                    return null;
+                }
+
+                current = next;
+            }
+            else if (current.ValueKind == JsonValueKind.Array
+                && int.TryParse(component, out var index)
+                && index >= 0
+                && index < current.GetArrayLength())
+            {
+                current = current[index];
+            }
+            else
+            {
+                return null;
+            }
+        }
+
+        return current;
+    }
+
+    private static bool CompareField(JsonElement fieldValue, FieldComparisonOperator comparisonOperator, JsonElement? clauseValue)
+    {
+        switch (comparisonOperator)
+        {
+            case FieldComparisonOperator.Equals:
+                return clauseValue is { } equalsValue && JsonElement.DeepEquals(fieldValue, equalsValue);
+
+            case FieldComparisonOperator.Contains:
+                return ContainsMatch(fieldValue, clauseValue);
+
+            case FieldComparisonOperator.RegularExpressionMatch:
+                return clauseValue is { ValueKind: JsonValueKind.String } pattern
+                    && fieldValue.ValueKind == JsonValueKind.String
+                    && System.Text.RegularExpressions.Regex.IsMatch(
+                        fieldValue.GetString() ?? string.Empty,
+                        pattern.GetString() ?? string.Empty);
+
+            case FieldComparisonOperator.GreaterThan:
+            case FieldComparisonOperator.LessThan:
+            case FieldComparisonOperator.GreaterThanOrEqualTo:
+            case FieldComparisonOperator.LessThanOrEqualTo:
+                return clauseValue is { } orderedValue && CompareOrdered(fieldValue, orderedValue, comparisonOperator);
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool ContainsMatch(JsonElement fieldValue, JsonElement? clauseValue)
+    {
+        if (clauseValue is not { } value)
+        {
+            return false;
+        }
+
+        if (fieldValue.ValueKind == JsonValueKind.String && value.ValueKind == JsonValueKind.String)
+        {
+            return (fieldValue.GetString() ?? string.Empty).Contains(value.GetString() ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        if (fieldValue.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in fieldValue.EnumerateArray())
+            {
+                if (JsonElement.DeepEquals(element, value))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CompareOrdered(JsonElement fieldValue, JsonElement clauseValue, FieldComparisonOperator comparisonOperator)
+    {
+        int comparison;
+        if (fieldValue.ValueKind == JsonValueKind.Number && clauseValue.ValueKind == JsonValueKind.Number)
+        {
+            comparison = fieldValue.GetDouble().CompareTo(clauseValue.GetDouble());
+        }
+        else if (fieldValue.ValueKind == JsonValueKind.String && clauseValue.ValueKind == JsonValueKind.String)
+        {
+            comparison = string.CompareOrdinal(fieldValue.GetString(), clauseValue.GetString());
+        }
+        else
+        {
+            return false;
+        }
+
+        return comparisonOperator switch
+        {
+            FieldComparisonOperator.GreaterThan => comparison > 0,
+            FieldComparisonOperator.LessThan => comparison < 0,
+            FieldComparisonOperator.GreaterThanOrEqualTo => comparison >= 0,
+            FieldComparisonOperator.LessThanOrEqualTo => comparison <= 0,
+            _ => false,
+        };
     }
 
     private async Task<HashSet<EntityId>> MatchParticipationAsync(
