@@ -26,10 +26,13 @@ public sealed class MongoDbContainerDefinitionGeneratorTests
         Assert.Equal("mongodb/mongodb-atlas-local:latest", containerDefinition.ImageName);
         Assert.Equal(ContainerNetworkType.Bridge, containerDefinition.NetworkType);
         Assert.Empty(containerDefinition.EnvironmentVariables);
-        Assert.Single(containerDefinition.Mounts);
+        Assert.Equal(2, containerDefinition.Mounts.Count);
         Assert.Equal("C:\\mongo-data", containerDefinition.Mounts[0].Source);
         Assert.Equal("/data/db", containerDefinition.Mounts[0].Target);
         Assert.False(containerDefinition.Mounts[0].ReadOnly);
+        Assert.Equal("C:\\mongo-data\\configdb", containerDefinition.Mounts[1].Source);
+        Assert.Equal("/data/configdb", containerDefinition.Mounts[1].Target);
+        Assert.False(containerDefinition.Mounts[1].ReadOnly);
         Assert.Single(containerDefinition.PortMappings);
         Assert.Equal(37017, containerDefinition.PortMappings[0].SourcePort);
         Assert.Equal(27017, containerDefinition.PortMappings[0].TargetPort);

@@ -36,6 +36,12 @@ public sealed class MongoDbContainerDefinitionGenerator
                     Target = MongoDataDirectory,
                     ReadOnly = false,
                 },
+                new ContainerMountDefinition
+                {
+                    Source = Path.Combine(connectionDefinition.DataDirectory, "configdb"),
+                    Target = "/data/configdb",
+                    ReadOnly = false,
+                },
             },
             PortMappings = new List<ContainerPortMappingDefinition>
             {
