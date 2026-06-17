@@ -43,14 +43,40 @@ public static class InterestBadgeProjector
         IReadOnlySet<string> entityTypeNames,
         EntityTypeCatalog entityTypeCatalog)
     {
-        // If interest type specifies display-entity-types (not null/empty), filter by that
-        if (interestType.DisplayEntityTypes.Count > 0)
+        // Handle display-entity-types from interest type definition
+        if (interestType.DisplayEntityTypes is { } displayEntityTypes)
         {
-            if (!entityTypeNames.Any(typeName => interestType.DisplayEntityTypes.Contains(typeName)))
+            if (displayEntityTypes.Count > 0)
             {
-                return false;
+                // Non-empty: only show on listed entity types
+                if (!entityTypeNames.Any(typeName => displayEntityTypes.Contains(typeName)))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                // Empty array: only show if entity type explicitly requests it
+                bool isRequestedByEntityType = false;
+                foreach (var entityTypeName in entityTypeNames)
+                {
+                    var entityTypeDefinition = entityTypeCatalog.EntityTypes
+                        .FirstOrDefault(et => et.Name == entityTypeName);
+
+                    if (entityTypeDefinition?.DisplayInterestTypes.Contains(interestType.Name) == true)
+                    {
+                        isRequestedByEntityType = true;
+                        break;
+                    }
+                }
+
+                if (!isRequestedByEntityType)
+                {
+                    return false;
+                }
             }
         }
+        // If null: no filtering from interest type side, continue to check entity type preferences
 
         // If any entity type specifies display-interest-types, filter by that
         foreach (var entityTypeName in entityTypeNames)

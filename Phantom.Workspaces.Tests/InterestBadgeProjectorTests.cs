@@ -9,8 +9,8 @@ public sealed class InterestBadgeProjectorTests
 {
     private static InterestCatalog InterestCatalog() => new(
     [
-        new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string>()),
-        new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", new HashSet<string>()),
+        new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", null),
+        new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", null),
     ]);
 
     private static EntityTypeCatalog EntityTypeCatalog() => new(
@@ -97,8 +97,8 @@ public sealed class InterestBadgeProjectorTests
     {
         var interestCatalog = new InterestCatalog(
         [
-            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string>()),
-            new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", new HashSet<string>()),
+            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", null),
+            new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", null),
         ]);
         var entityTypeCatalog = new EntityTypeCatalog(
         [
@@ -110,6 +110,69 @@ public sealed class InterestBadgeProjectorTests
         var badges = InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity);
 
         // Only actionable should be shown (task entity type specifies actionable)
+        var badge = Assert.Single(badges);
+        Assert.Equal("actionable", badge.InterestTypeName);
+    }
+
+    [Fact]
+    public void Project_NullDisplayEntityTypes_ShowsOnAllEntityTypes()
+    {
+        var interestCatalog = new InterestCatalog(
+        [
+            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", null),
+        ]);
+        var entityTypeCatalog = new EntityTypeCatalog(
+        [
+            new EntityTypeDefinition("task", new HashSet<string>()),
+            new EntityTypeDefinition("note", new HashSet<string>()),
+        ]);
+        var entityId = new EntityId(Guid.NewGuid());
+        var entity = Entity(entityId);
+
+        var badges = InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity);
+
+        // Null display-entity-types means show on all entity types
+        var badge = Assert.Single(badges);
+        Assert.Equal("actionable", badge.InterestTypeName);
+    }
+
+    [Fact]
+    public void Project_EmptyDisplayEntityTypes_OnlyShowsIfEntityTypeRequestsIt()
+    {
+        var interestCatalog = new InterestCatalog(
+        [
+            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string>()),
+        ]);
+        var entityTypeCatalog = new EntityTypeCatalog(
+        [
+            new EntityTypeDefinition("task", new HashSet<string>()), // Does NOT request actionable
+        ]);
+        var entityId = new EntityId(Guid.NewGuid());
+        var entity = Entity(entityId);
+
+        var badges = InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity);
+
+        // Empty display-entity-types means only show if entity type explicitly requests it
+        Assert.Empty(badges);
+    }
+
+    [Fact]
+    public void Project_EmptyDisplayEntityTypes_ShowsWhenEntityTypeRequestsIt()
+    {
+        var interestCatalog = new InterestCatalog(
+        [
+            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string>()),
+        ]);
+        var entityTypeCatalog = new EntityTypeCatalog(
+        [
+            new EntityTypeDefinition("task", new HashSet<string> { "actionable" }), // DOES request actionable
+        ]);
+        var entityId = new EntityId(Guid.NewGuid());
+        var entity = Entity(entityId);
+
+        var badges = InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity);
+
+        // Empty display-entity-types, but entity type requests it
         var badge = Assert.Single(badges);
         Assert.Equal("actionable", badge.InterestTypeName);
     }

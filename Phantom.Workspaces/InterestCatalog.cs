@@ -22,7 +22,7 @@ public sealed record InterestTypeDefinition(
     string NotAppliedDescription,
     string AppliedActionText,
     string NotAppliedActionText,
-    IReadOnlySet<string> DisplayEntityTypes);
+    IReadOnlySet<string>? DisplayEntityTypes);
 
 /// <summary>
 /// The set of interest types known to the workspace (actionable, blocked, assigned-to,
@@ -182,11 +182,16 @@ public sealed class InterestCatalog : IDisposable
             ? value.GetString()!
             : string.Empty;
 
-    private static IReadOnlySet<string> ReadEntityTypeIds(JsonElement data, string propertyName)
+    private static IReadOnlySet<string>? ReadEntityTypeIds(JsonElement data, string propertyName)
     {
-        if (!data.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        if (!data.TryGetProperty(propertyName, out var array))
         {
-            return new HashSet<string>();
+            return null; // Property not present - no filtering
+        }
+
+        if (array.ValueKind != JsonValueKind.Array)
+        {
+            return null;
         }
 
         var entityTypeIds = new HashSet<string>(StringComparer.Ordinal);
@@ -198,6 +203,6 @@ public sealed class InterestCatalog : IDisposable
             }
         }
 
-        return entityTypeIds;
+        return entityTypeIds; // May be empty array
     }
 }
