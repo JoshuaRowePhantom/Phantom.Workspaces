@@ -1,0 +1,37 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/shell.json",
+  "description": "Schema for shell entities that represent executable shell commands with working directory and arguments.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": {
+        "const": "shell"
+      }
+    },
+    "working-directory": {
+      "type": "string",
+      "description": "Working directory path where the command will be executed. If not specified, uses the host's default."
+    },
+    "command": {
+      "type": "string",
+      "description": "Shell command or executable to run (e.g., 'pwsh', 'bash', 'cmd')."
+    },
+    "command-arguments": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Command-line arguments passed to the shell command."
+    }
+  },
+  "required": [
+    "entity-types",
+    "command"
+  ]
+}

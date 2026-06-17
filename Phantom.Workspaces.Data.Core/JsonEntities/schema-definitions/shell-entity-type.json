@@ -1,0 +1,37 @@
+{
+  "entity-id": "aa71847a-4424-4a36-9013-8bf09319aaaf",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/shell.json"
+    ],
+    [
+      "entity-types",
+      "shell"
+    ]
+  ],
+  "display-name": {
+    "default": "Shell Schema"
+  },
+  "default-name-prefixes": [
+    [
+      "${USERPROFILE}",
+      "shells"
+    ]
+  ],
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Shell Entity Type\n\nRepresents an executable shell command with optional working directory and arguments.\n\n## Properties\n\n- **command** (required): Shell command or executable to run (e.g., 'pwsh', 'bash', 'cmd').\n- **working-directory** (optional): Working directory path where the command will be executed.\n- **command-arguments** (optional): Array of command-line arguments passed to the shell.\n\n## Usage\n\nShell entities are opened within their containing user-computer-profile, launching a PTY (pseudo-terminal) view that executes the specified command."
+      }
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/shell.json"
+  }
+}
