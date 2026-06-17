@@ -21,6 +21,7 @@ public sealed class BadgesModel
 }
 
 public sealed record BadgeModel(
-    string InterestTypeEntityType,
-    string Label,
-    bool IsActive = true);
+    string InterestTypeName,
+    string Glyph,
+    string Tooltip,
+    bool IsActive);

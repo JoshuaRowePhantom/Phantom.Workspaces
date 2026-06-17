@@ -509,6 +509,18 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
+    <Style Selector="Button.workspace-entity-badge-button">
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button.workspace-entity-badge-active">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="FontWeight" Value="Bold" />
+    </Style>
     <Style Selector="ItemsControl.workspace-field-editor-list">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>

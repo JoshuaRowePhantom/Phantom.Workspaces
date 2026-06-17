@@ -122,6 +122,12 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public RelayCommand? ActivateShortcutCommand { get; private set; }
 
+    public BadgesViewModel? Badges { get; private set; }
+
+    public RelayCommand? ToggleInterestCommand { get; private set; }
+
+    public bool HasBadges => this.Badges is { } badges && badges.Badges.Count > 0;
+
     public bool HasShortcuts => this.Shortcuts.Count > 0;
 
     public bool IsDeleted => this.entity?.Deleted ?? false;
@@ -287,6 +293,30 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
         this.RaisePropertyChanged(nameof(this.ShowJsonButton));
         this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+    }
+
+    /// <summary>
+    /// Sets the interest badges shown on the card and the command that toggles an interest on/off for
+    /// this entity when a badge glyph is clicked.
+    /// </summary>
+    public void SetBadges(
+        BadgesViewModel badges,
+        Func<SubscribedEntityViewModel, string, System.Threading.Tasks.Task> toggleInterestAsync)
+    {
+        this.Badges = badges;
+        this.ToggleInterestCommand = new RelayCommand(
+            async parameter =>
+            {
+                if (parameter is BadgeModel badge && this.entity is not null)
+                {
+                    await toggleInterestAsync(this.entity, badge.InterestTypeName);
+                }
+            },
+            _ => this.entity is not null);
+
+        this.RaisePropertyChanged(nameof(this.Badges));
+        this.RaisePropertyChanged(nameof(this.ToggleInterestCommand));
+        this.RaisePropertyChanged(nameof(this.HasBadges));
     }
 
     private void SetFieldEditorEditMode(

@@ -15,6 +15,24 @@
                     </StackPanel>
                     <StackPanel Grid.Column="1"
                                 Classes="workspace-entity-actions-row">
+                        <ItemsControl IsVisible="{Binding HasBadges}"
+                                      ItemsSource="{Binding Badges.Badges}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding Glyph}"
+                                            ToolTip.Tip="{Binding Tooltip}"
+                                            Classes="workspace-entity-badge-button"
+                                            Classes.workspace-entity-badge-active="{Binding IsActive}"
+                                            Command="{Binding $parent[ItemsControl].DataContext.ToggleInterestCommand}"
+                                            CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                         <Button Content="{Binding EditModeGlyph}"
                                 ToolTip.Tip="Toggle edit mode"
                                 Classes="workspace-entity-shortcut-button"

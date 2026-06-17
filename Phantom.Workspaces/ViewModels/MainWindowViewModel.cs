@@ -26,6 +26,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     };
     private readonly Task<EntityBroker> entityBrokerTask;
     private EntityBroker? entityBroker;
+    private InterestCatalog? interestCatalog;
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
@@ -193,6 +194,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         this.entityBroker = await this.entityBrokerTask;
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
+        this.interestCatalog = await InterestCatalog.LoadAsync(this.entityBroker);
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -555,6 +557,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var effectiveQuery = this.ShowHiddenItems
             ? queryRequest
             : NotInterestingQuery.ExcludingNotInteresting(queryRequest);
+
+        // Also fetch each matched entity's interest relationships so its badge glyphs can be rendered.
+        if (this.interestCatalog is { InterestTypeNames.Count: > 0 } catalog)
+        {
+            effectiveQuery = effectiveQuery with
+            {
+                RelationshipsToReturn =
+                [
+                    new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. catalog.InterestTypeNames]) },
+                ],
+            };
+        }
+
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
         this.selectedViewSubViewQuerySubscriptions.Add(subscribedQuery);
 
@@ -649,11 +664,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.ActivateEntityClickAsync(entity);
     }
 
+    /// <summary>
+    /// Toggles an interest on or off for an entity when its badge glyph is clicked: removes the
+    /// existing interest relationship of that type targeting the entity, or creates one (targeting the
+    /// entity, by the current user) when none exists.
+    /// </summary>
+    internal async Task ToggleInterestAsync(SubscribedEntityViewModel entity, string interestTypeName)
+    {
+        await InterestToggle.ToggleAsync(this.EntityBroker, entity.Snapshot, interestTypeName);
+        await this.ApplySelectedViewAsync();
+    }
+
     private ViewEntityViewModel CreateViewEntityViewModel(
         SubscribedEntityViewModel entity,
         int indentLevel,
         bool isParentContext = false)
     {
+        // Project the entity's interests (from its loaded relationships) into toggleable badge glyphs.
+        if (this.interestCatalog is { } catalog)
+        {
+            entity.Badges.SetBadges(InterestBadgeProjector.Project(catalog, entity.Snapshot));
+        }
+
         return new ViewEntityViewModel(
             entity,
             this,

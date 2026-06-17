@@ -27,6 +27,10 @@
           }
         ]
       }
+    },
+    "note": {
+      "description": "An optional human-readable reason explaining why this relationship was applied. Shown, for example, as the tooltip on an interest badge.",
+      "type": "string"
     }
   },
   "required": [
