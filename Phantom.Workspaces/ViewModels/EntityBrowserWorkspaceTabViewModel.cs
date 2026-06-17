@@ -104,6 +104,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         {
             var pathKey = pair.Key;
             var node = pair.Value;
+            
             this.EnsureChildSubscription(node.NameComponents, pathKey);
 
             if (!this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
@@ -112,7 +113,74 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 continue;
             }
 
-            node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+            // Only build grandchildren recursively if this node is expanded or is the root (which is expanded by default)
+            var isExpanded = expansionStateByPath.TryGetValue(pathKey, out var expanded)
+                ? expanded
+                : node.NameComponents.Count == 0;
+            
+            if (isExpanded)
+            {
+                // Node is expanded, recursively build all descendants
+                node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+            }
+            else
+            {
+                // Node is collapsed, only build immediate children (no grandchildren)
+                node.SetChildren(await this.BuildChildrenShallowAsync(node.NameComponents, childGet.Results));
+            }
+        }
+
+        return children
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => pair.Value)
+            .ToArray();
+    }
+
+    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenShallowAsync(
+        IReadOnlyCollection<string> parentPath,
+        IReadOnlyCollection<SubscribedEntityViewModel> entities)
+    {
+        var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
+        foreach (var entity in entities)
+        {
+            if (entity.Snapshot.Data is not JsonElement entityData
+                || !entityData.TryGetProperty("names", out var namesElement)
+                || namesElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var nameElement in namesElement.EnumerateArray())
+            {
+                var parsedName = nameElement.TryReadEntityName();
+                if (parsedName is null)
+                {
+                    continue;
+                }
+
+                var nameComponents = parsedName.Value.Components;
+                if (nameComponents.Length != parentPath.Count + 1
+                    || !nameComponents.Take(parentPath.Count).SequenceEqual(parentPath, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                var sortKey = JsonSerializer.Serialize(nameComponents);
+                if (children.ContainsKey(sortKey))
+                {
+                    continue;
+                }
+
+                var node = new EntityListNodeViewModel(
+                    entity,
+                    nameComponents,
+                    sortKey,
+                    await this.BuildFieldEditorsAsync(entity),
+                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
+                // Don't set children - leave them empty since we're not building recursively
+                node.SetChildren(Array.Empty<EntityListNodeViewModel>());
+                children.Add(sortKey, node);
+            }
         }
 
         return children
