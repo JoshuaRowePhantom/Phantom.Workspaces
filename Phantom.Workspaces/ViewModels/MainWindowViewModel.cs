@@ -855,47 +855,45 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return !string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal);
     }
 
-    private void OnCloseWorkspace(object? parameter)
+    private async void OnCloseWorkspace(object? parameter)
     {
-        if (parameter is not WorkspacePaneViewModel pane)
-        {
-            return;
-        }
+       if (parameter is not WorkspacePaneViewModel pane)
+       {
+           return;
+       }
 
-        // Don't allow closing the default placeholder
-        if (string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
-        {
-            return;
-        }
+       // Don't allow closing the default placeholder
+       if (string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+       {
+           return;
+       }
 
-        var paneIndex = this.WorkspacePanes.IndexOf(pane);
-        if (paneIndex < 0)
-        {
-            return;
-        }
+       var paneIndex = this.WorkspacePanes.IndexOf(pane);
+       if (paneIndex < 0)
+       {
+           return;
+       }
 
-        this.WorkspacePanes.RemoveAt(paneIndex);
+       this.WorkspacePanes.RemoveAt(paneIndex);
 
-        // If we just closed the selected workspace, select another one
-        if (this.SelectedWorkspacePane == pane)
-        {
-            // Try to select the workspace at the same index, or the last one
-            if (paneIndex < this.WorkspacePanes.Count)
-            {
-                this.SelectedWorkspacePane = this.WorkspacePanes[paneIndex];
-            }
-            else if (this.WorkspacePanes.Count > 0)
-            {
-                this.SelectedWorkspacePane = this.WorkspacePanes[this.WorkspacePanes.Count - 1];
-            }
-            else
-            {
-                // If no workspaces left, create the default placeholder
-                var placeholder = this.CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.", this.CloseWorkspaceCommand);
-                this.WorkspacePanes.Add(placeholder);
-                this.SelectedWorkspacePane = placeholder;
-            }
-        }
+       // If we just closed the selected workspace, select another one
+       if (this.SelectedWorkspacePane == pane)
+       {
+           // Try to select the workspace at the same index, or the last one
+           if (paneIndex < this.WorkspacePanes.Count)
+           {
+               this.SelectedWorkspacePane = this.WorkspacePanes[paneIndex];
+           }
+           else if (this.WorkspacePanes.Count > 0)
+           {
+               this.SelectedWorkspacePane = this.WorkspacePanes[this.WorkspacePanes.Count - 1];
+           }
+           else
+           {
+               // If no workspaces left, open the getting-started workspace
+               await this.OpenGettingStartedWorkspaceAsync();
+           }
+       }
     }
 
     private WorkspacePaneViewModel GetOrCreateLoadingWorkspacePane(
@@ -932,7 +930,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        this.AddOrSelectWorkspaceTab(
+        await this.AddOrSelectWorkspaceTabAsync(
             new EntityWorkspaceTabViewModel
             {
                 Id = subscribedEntity.EntityId.ToString(),
@@ -941,9 +939,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             });
     }
 
-    internal void AddOrSelectWorkspaceTab(
+    internal async Task AddOrSelectWorkspaceTabAsync(
         WorkspaceTabViewModel tab)
     {
+        // Ensure we have a real workspace loaded (not the placeholder)
+        await this.EnsureWorkspaceLoadedAsync();
+        
         var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
         var existingTab = selectedRegion.Tabs.FirstOrDefault(
             existingWorkspaceTab => string.Equals(existingWorkspaceTab.Id, tab.Id, StringComparison.Ordinal));
@@ -1258,6 +1259,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.SelectedWorkspacePane.SelectedRegion = this.SelectedWorkspacePane.Regions[0];
         return this.SelectedWorkspacePane.SelectedRegion;
+    }
+
+    private async Task EnsureWorkspaceLoadedAsync()
+    {
+        // If the current workspace is the placeholder, open the getting-started workspace
+        if (string.Equals(this.SelectedWorkspacePane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+        {
+            await this.OpenGettingStartedWorkspaceAsync();
+        }
+    }
+
+    private async Task OpenGettingStartedWorkspaceAsync()
+    {
+        await this.OpenWorkspaceAsync(
+            new GetEntityRequest
+            {
+                EntityName = new EntityName("workspaces", "getting-started-workspace"),
+            });
     }
 
 

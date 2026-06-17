@@ -74,7 +74,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             LoggerFactory = loggerFactory,
             Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, entityViewModel.DisplayName, loggerFactory),
         };
-        mainWindowViewModel.AddOrSelectWorkspaceTab(workspaceTab);
+        await mainWindowViewModel.AddOrSelectWorkspaceTabAsync(workspaceTab);
         return true;
     }
 }
