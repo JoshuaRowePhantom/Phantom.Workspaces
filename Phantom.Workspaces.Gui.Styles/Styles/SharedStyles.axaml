@@ -18,6 +18,7 @@
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#3A3A3A</SolidColorBrush>
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#303030</SolidColorBrush>
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#505050</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#2A2A2A</SolidColorBrush>
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#5EA0FF</SolidColorBrush>
 
@@ -106,7 +107,7 @@
     </Style>
     <Style Selector="Border.entity-card:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
     </Style>
     <Style Selector="Border.entity-card.selected">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
@@ -127,7 +128,7 @@
     </Style>
     <Style Selector="StackPanel.sticky-pinned > Border.entity-card">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
         <Setter Property="Opacity" Value="0.92" />
         <Setter Property="Transitions">
             <Transitions>
@@ -510,16 +511,37 @@
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
     <Style Selector="Button.workspace-entity-badge-button">
-        <Setter Property="MinWidth" Value="28" />
-        <Setter Property="MinHeight" Value="28" />
-        <Setter Property="Padding" Value="0" />
-        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="Margin" Value="0,0,4,4" />
+        <Setter Property="Opacity" Value="0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Background" Value="#40808080" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="#80808080" />
     </Style>
     <Style Selector="Button.workspace-entity-badge-button.workspace-entity-badge-active">
         <Setter Property="Opacity" Value="1" />
-        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="#60406040" />
+        <Setter Property="BorderBrush" Value="#A0A060A0" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-entity-badge-button">
+        <Setter Property="Opacity" Value="0.6" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-entity-badge-button.workspace-entity-badge-active">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button:pointerover">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Background" Value="#60808080" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button.workspace-entity-badge-active:pointerover">
+        <Setter Property="Background" Value="#80606080" />
     </Style>
     <Style Selector="ItemsControl.workspace-field-editor-list">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
