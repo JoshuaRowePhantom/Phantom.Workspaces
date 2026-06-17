@@ -5,6 +5,7 @@
 
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://Dock.Avalonia.Themes.Fluent/DockFluentTheme.axaml" />
         <StyleInclude Source="avares://Avalonia.Controls.RichTextEditor/Themes/Default.axaml" />
         <StyleInclude Source="avares://Avalonia.Controls.Markdown/Themes/Default.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />

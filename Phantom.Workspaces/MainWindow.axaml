@@ -131,26 +131,7 @@
                                 </TabControl.ItemTemplate>
                                 <TabControl.ContentTemplate>
                                     <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
-                                        <TabControl ItemsSource="{Binding Tabs}"
-                                                    SelectedItem="{Binding SelectedTab}">
-                                            <TabControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
-                                                        <Button Content="✕"
-                                                                Command="{Binding $parent[vm:WorkspaceRegionViewModel].CloseTabCommand}"
-                                                                CommandParameter="{Binding}"
-                                                                Classes="tab-close-button"
-                                                                ToolTip.Tip="Close tab" />
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </TabControl.ItemTemplate>
-                                            <TabControl.ContentTemplate>
-                                                <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
-                                                    <ContentControl Content="{Binding}" />
-                                                </DataTemplate>
-                                            </TabControl.ContentTemplate>
-                                        </TabControl>
+                                        <ContentControl Content="{Binding}" />
                                     </DataTemplate>
                                 </TabControl.ContentTemplate>
                             </TabControl>

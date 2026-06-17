@@ -3,7 +3,6 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
-
   <ItemGroup>
     <PackageVersion Include="AgentSchema" Version="1.0.0-beta.8" />
     <PackageVersion Include="Avalonia" Version="12.0.4" />
@@ -17,6 +16,9 @@
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.4" />
     <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.1" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Dock.Avalonia" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Avalonia.Themes.Fluent" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Model.Mvvm" Version="12.0.0.2" />
     <PackageVersion Include="JsonPatch.Net" Version="5.0.2" />
     <PackageVersion Include="JsonSchema.Net" Version="9.2.1" />
     <PackageVersion Include="LibGit2Sharp" Version="0.31.0" />

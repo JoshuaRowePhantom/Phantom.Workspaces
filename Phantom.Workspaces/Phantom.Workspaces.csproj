@@ -17,6 +17,9 @@
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Dock.Avalonia" />
+    <PackageReference Include="Dock.Avalonia.Themes.Fluent" />
+    <PackageReference Include="Dock.Model.Mvvm" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
