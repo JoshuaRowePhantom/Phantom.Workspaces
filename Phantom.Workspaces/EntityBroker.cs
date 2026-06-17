@@ -155,22 +155,27 @@ public sealed class EntityBroker
             foreach (var entityResult in updateResult.EntityResults)
             {
                 var entityId = entityResult.RequestedEntityId;
-                if (!this.subscribedEntitiesById.TryGetValue(entityId, out var weakRef)
-                    || !weakRef.TryGetTarget(out var entity))
-                {
-                    continue;
-                }
 
-                if (entityResult.CurrentEntity is EntitySnapshot currentEntity)
+                // Track all changed entities for subscription refresh,
+                // not just those that are currently subscribed
+                if (entityResult.UpdateState != UpdateState.Failed)
                 {
-                    entity.UpdateSnapshot(currentEntity);
-                    changedEntityIds.Add(currentEntity.EntityId);
-                }
-
-                if (entityResult.UpdateState == UpdateState.Removed)
-                {
-                    entity.MarkDeleted();
                     changedEntityIds.Add(entityId);
+                }
+
+                // Update subscribed entities if they exist
+                if (this.subscribedEntitiesById.TryGetValue(entityId, out var weakRef)
+                    && weakRef.TryGetTarget(out var entity))
+                {
+                    if (entityResult.CurrentEntity is EntitySnapshot currentEntity)
+                    {
+                        entity.UpdateSnapshot(currentEntity);
+                    }
+
+                    if (entityResult.UpdateState == UpdateState.Removed)
+                    {
+                        entity.MarkDeleted();
+                    }
                 }
             }
         }

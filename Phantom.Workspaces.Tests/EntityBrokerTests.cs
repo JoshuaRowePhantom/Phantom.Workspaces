@@ -549,7 +549,7 @@ public sealed class EntityBrokerTests
 
         // Create initial session entity via UpdateAsync so broker tracks changes
         var sessionId1 = new EntityId("e1e1e1e1-0000-0000-0000-000000000001");
-        await broker.UpdateAsync(
+        var updateResult1 = await broker.UpdateAsync(
             new UpdateRequest
             {
                 UpdateMetadata = new UpdateMetadata
@@ -569,14 +569,25 @@ public sealed class EntityBrokerTests
                             {
                               "entity-id": "e1e1e1e1-0000-0000-0000-000000000001",
                               "entity-types": ["agent-session"],
-                              "names": [["session-1"]],
-                              "display-name": { "default": "Session 1" }
+                              "names": [["test-sessions", "session-1"]],
+                              "agent-session-id": "session-1"
                             }
                             """).RootElement.Clone(),
                     },
                 ],
             },
             ct);
+
+        // Verify entity was created
+        var firstResult = updateResult1.EntityResults.FirstOrDefault(r => r.RequestedEntityId == sessionId1);
+        Assert.NotNull(firstResult);
+        if (firstResult.UpdateState == UpdateState.Failed)
+        {
+            Assert.Fail($"Entity creation failed. Errors: {string.Join("; ", firstResult.Errors.Select(e => e.Message))}");
+        }
+
+        Assert.Equal(UpdateState.Added, firstResult.UpdateState);
+        Assert.NotNull(firstResult.CurrentEntity);
 
         // Subscribe to agent-session entity-type query
         var subscribedQuery = await broker.SubscribeQueryAsync(
@@ -621,8 +632,8 @@ public sealed class EntityBrokerTests
                             {
                               "entity-id": "e2e2e2e2-0000-0000-0000-000000000002",
                               "entity-types": ["agent-session"],
-                              "names": [["session-2"]],
-                              "display-name": { "default": "Session 2" }
+                              "names": [["test-sessions", "session-2"]],
+                              "agent-session-id": "session-2"
                             }
                             """).RootElement.Clone(),
                     },
@@ -665,8 +676,8 @@ public sealed class EntityBrokerTests
                             {
                               "entity-id": "f1f1f1f1-0000-0000-0000-000000000001",
                               "entity-types": ["agent-session"],
-                              "names": [["session-1"]],
-                              "display-name": { "default": "Session 1" }
+                              "names": [["test-sessions", "session-1"]],
+                              "agent-session-id": "session-1"
                             }
                             """).RootElement.Clone(),
                     },
@@ -678,8 +689,8 @@ public sealed class EntityBrokerTests
                             {
                               "entity-id": "f2f2f2f2-0000-0000-0000-000000000002",
                               "entity-types": ["agent-session"],
-                              "names": [["session-2"]],
-                              "display-name": { "default": "Session 2" }
+                              "names": [["test-sessions", "session-2"]],
+                              "agent-session-id": "session-2"
                             }
                             """).RootElement.Clone(),
                     },
