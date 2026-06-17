@@ -21,20 +21,40 @@ public class WorkspaceDockFactory : Factory
     {
         var documentDock = new DocumentDock
         {
-            Id = "MainDocumentDock",
-            Title = "Documents",
+            Id = "WorkspaceDocumentDock",
+            Title = "Workspace",
             CanCreateDocument = false,
+            IsCollapsable = false,
             VisibleDockables = CreateList<IDockable>(),
         };
 
         var root = CreateRootDock();
         root.Id = "Root";
         root.Title = "Root";
+        root.IsCollapsable = false;
         root.VisibleDockables = CreateList<IDockable>(documentDock);
         root.DefaultDockable = documentDock;
         root.ActiveDockable = documentDock;
 
         return root;
+    }
+
+    public WorkspaceDocument CreateWorkspaceDocument(WorkspaceTabViewModel tabViewModel)
+    {
+        return new WorkspaceDocument(tabViewModel)
+        {
+            Id = tabViewModel.Id,
+            Title = tabViewModel.Title,
+            CanClose = true,
+        };
+    }
+
+    public void AddDocument(IDocumentDock dock, WorkspaceTabViewModel tabViewModel)
+    {
+        var document = CreateWorkspaceDocument(tabViewModel);
+        AddDockable(dock, document);
+        SetActiveDockable(document);
+        SetFocusedDockable(dock, document);
     }
 
     public override void InitLayout(IDockable layout)

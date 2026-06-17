@@ -9,6 +9,9 @@ using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Dock.Model.Controls;
+using Dock.Model.Core;
+using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
@@ -46,6 +49,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private string selectedThemeName = ProfileThemeSettings.Dark.Name;
     private bool suppressThemeSelectionChange;
     private bool showHiddenItems;
+    private readonly WorkspaceDockFactory dockFactory;
+    private IRootDock? layout;
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -61,6 +66,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.selectedWorkspacePane = CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.");
         this.WorkspacePanes.Add(this.selectedWorkspacePane);
+        
+        this.dockFactory = new WorkspaceDockFactory(this);
         
         this.ActivateShortcutCommand = new RelayCommand(async _ => await this.OnActivateShortcutAsync(_), this.CanActivateShortcut);
         this.SetDebuggingCommand = new RelayCommand(async parameter => await this.SetDebuggingAsync(ReadDebuggingParameter(parameter)));
@@ -100,6 +107,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand CloseWorkspaceCommand { get; }
 
     public ConnectionStatusViewModel? ConnectionStatus { get; private set; }
+
+    public IRootDock? Layout
+    {
+        get => this.layout;
+        private set => this.SetProperty(ref this.layout, value);
+    }
 
     public Profile CurrentProfile => this.currentProfile;
 
@@ -213,6 +226,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
         await this.InitializeProfileAsync();
+        this.InitializeDockLayout();
         await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
@@ -237,6 +251,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.configuration.RemoteHosting,
                 this.entityBroker.EntityRepository.DataAccessLayer);
         }
+    }
+
+    private void InitializeDockLayout()
+    {
+        var layout = this.dockFactory.CreateLayout();
+        this.dockFactory.InitLayout(layout);
+        this.Layout = layout;
     }
 
     private async Task InitializeProfileAsync()
@@ -944,22 +965,107 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
         
-        var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
-        var existingTab = selectedRegion.Tabs.FirstOrDefault(
-            existingWorkspaceTab => string.Equals(existingWorkspaceTab.Id, tab.Id, StringComparison.Ordinal));
-        if (existingTab is null)
+        if (this.Layout is null)
         {
-            selectedRegion.Tabs.Add(tab);
-            selectedRegion.SelectedTab = tab;
             return;
         }
 
-        if (!ReferenceEquals(existingTab, tab))
+        // Find the document dock
+        var documentDock = this.FindDocumentDock(this.Layout);
+        if (documentDock is null)
         {
-            DisposeWorkspaceTab(tab);
+            return;
         }
 
-        selectedRegion.SelectedTab = existingTab;
+        // Check if tab already exists
+        var existingDocument = documentDock.VisibleDockables
+            ?.OfType<WorkspaceDocument>()
+            .FirstOrDefault(doc => string.Equals(doc.Id, tab.Id, StringComparison.Ordinal));
+
+        if (existingDocument is not null)
+        {
+            // Already exists, just activate it
+            if (!ReferenceEquals(existingDocument.TabViewModel, tab))
+            {
+                DisposeWorkspaceTab(tab);
+            }
+            this.dockFactory.SetActiveDockable(existingDocument);
+            this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
+            this.SyncSelectedWorkspacePaneFromDock();
+            return;
+        }
+
+        // Create new document
+        this.dockFactory.AddDocument(documentDock, tab);
+        this.SyncSelectedWorkspacePaneFromDock();
+    }
+
+    private IDocumentDock? FindDocumentDock(IDockable dockable)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            return documentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                var result = this.FindDocumentDock(child);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private void SyncSelectedWorkspacePaneFromDock()
+    {
+        if (this.Layout is null)
+        {
+            return;
+        }
+
+        var documentDock = this.FindDocumentDock(this.Layout);
+        if (documentDock is null || documentDock.VisibleDockables is null)
+        {
+            return;
+        }
+
+        // Find the active document
+        var activeDocument = documentDock.ActiveDockable as WorkspaceDocument
+            ?? documentDock.VisibleDockables.OfType<WorkspaceDocument>().FirstOrDefault();
+
+        if (activeDocument is null)
+        {
+            return;
+        }
+
+        // Create a synthetic region view for backward compatibility with tests
+        var region = new WorkspaceRegionViewModel
+        {
+            Id = "center",
+            Title = "Center",
+            DockRegion = "center",
+            RelativeSize = 1.0,
+        };
+
+        // Populate the region with all documents
+        region.Tabs.Clear();
+        foreach (var doc in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
+        {
+            region.Tabs.Add(doc.TabViewModel);
+        }
+
+        region.SelectedTab = activeDocument.TabViewModel;
+
+        // Update the selected workspace pane
+        this.selectedWorkspacePane.Regions.Clear();
+        this.selectedWorkspacePane.Regions.Add(region);
+        this.selectedWorkspacePane.SelectedRegion = region;
     }
 
     private static void DisposeWorkspaceTab(
