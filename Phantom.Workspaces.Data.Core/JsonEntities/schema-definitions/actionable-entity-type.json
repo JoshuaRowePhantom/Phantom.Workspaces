@@ -29,14 +29,15 @@
     "$ref": "/JsonSchemas/actionable.json"
   },
   "applied": {
-    "indicator": "❗",
+    "indicator": "❗ Actionable",
     "description": "Actionable",
-    "actionText": "Mark actionable"
-  },
-  "notApplied": {
-    "indicator": "",
-    "description": "Not actionable",
     "actionText": "Clear actionable"
   },
+  "notApplied": {
+    "indicator": "○ Not Actionable",
+    "description": "Not actionable",
+    "actionText": "Make actionable"
+  },
+  "display-entity-types": [],
   "default-name-prefixes": []
 }

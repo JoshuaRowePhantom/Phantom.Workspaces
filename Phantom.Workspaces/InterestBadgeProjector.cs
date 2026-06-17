@@ -11,15 +11,21 @@ namespace Phantom.Workspaces;
 /// applied when the entity is the <c>target</c> of a relationship of that interest type (the relationships
 /// are loaded onto the entity snapshot); the applied badge's tooltip includes the relationship's
 /// reason <c>note</c> when present.
+/// Badges are filtered based on display-entity-types (from interest-type) and display-interest-types (from entity-type).
 /// </summary>
 public static class InterestBadgeProjector
 {
-    public static IReadOnlyList<BadgeModel> Project(InterestCatalog catalog, EntitySnapshot entity)
+    public static IReadOnlyList<BadgeModel> Project(
+        InterestCatalog interestCatalog, 
+        EntityTypeCatalog entityTypeCatalog,
+        EntitySnapshot entity)
     {
-        var interestTypeNames = catalog.InterestTypeNames;
+        var entityTypeNames = ReadEntityTypes(entity.Data ?? JsonDocument.Parse("{}").RootElement).ToHashSet();
+        var interestTypeNames = interestCatalog.InterestTypeNames;
         var appliedNotesByType = GetAppliedInterests(entity, interestTypeNames);
 
-        return catalog.InterestTypes
+        return interestCatalog.InterestTypes
+            .Where(interestType => ShouldShowBadge(interestType, entityTypeNames, entityTypeCatalog))
             .Select(interestType =>
             {
                 var applied = appliedNotesByType.TryGetValue(interestType.Name, out var note);
@@ -30,6 +36,38 @@ public static class InterestBadgeProjector
                     applied);
             })
             .ToList();
+    }
+
+    private static bool ShouldShowBadge(
+        InterestTypeDefinition interestType,
+        IReadOnlySet<string> entityTypeNames,
+        EntityTypeCatalog entityTypeCatalog)
+    {
+        // If interest type specifies display-entity-types (not null/empty), filter by that
+        if (interestType.DisplayEntityTypes.Count > 0)
+        {
+            if (!entityTypeNames.Any(typeName => interestType.DisplayEntityTypes.Contains(typeName)))
+            {
+                return false;
+            }
+        }
+
+        // If any entity type specifies display-interest-types, filter by that
+        foreach (var entityTypeName in entityTypeNames)
+        {
+            var entityTypeDefinition = entityTypeCatalog.EntityTypes
+                .FirstOrDefault(et => et.Name == entityTypeName);
+
+            if (entityTypeDefinition?.DisplayInterestTypes.Count > 0)
+            {
+                if (!entityTypeDefinition.DisplayInterestTypes.Contains(interestType.Name))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private static string BuildTooltip(InterestTypeDefinition interestType, bool applied, string? note)

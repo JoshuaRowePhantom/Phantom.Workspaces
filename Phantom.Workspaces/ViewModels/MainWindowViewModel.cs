@@ -31,6 +31,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private WorkspacesWebHost? webHost;
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
+    private EntityTypeCatalog? entityTypeCatalog;
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
@@ -204,6 +205,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
         this.interestCatalog = await InterestCatalog.CreateAsync(this.entityBroker);
         this.interestCatalog.Changed += this.OnInterestCatalogChanged;
+        this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
+        this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -712,9 +715,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         bool isParentContext = false)
     {
         // Project the entity's interests (from its loaded relationships) into toggleable badge glyphs.
-        if (this.interestCatalog is { } catalog)
+        if (this.interestCatalog is { } interestCatalog && this.entityTypeCatalog is { } entityTypeCatalog)
         {
-            entity.Badges.SetBadges(InterestBadgeProjector.Project(catalog, entity.Snapshot));
+            entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot));
         }
 
         return new ViewEntityViewModel(
@@ -776,6 +779,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private void OnInterestCatalogChanged(object? sender, EventArgs e)
     {
         // Interest types changed - refresh the current view to update badge glyphs
+        _ = this.ApplySelectedViewAsync();
+    }
+
+    private void OnEntityTypeCatalogChanged(object? sender, EventArgs e)
+    {
+        // Entity types changed - refresh the current view to update badge filtering
         _ = this.ApplySelectedViewAsync();
     }
 
@@ -1659,5 +1668,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.ConnectionStatus?.Dispose();
         this.interestCatalog?.Dispose();
+        this.entityTypeCatalog?.Dispose();
     }
 }

@@ -26,5 +26,10 @@
   "schema": {
     "$ref": "/JsonSchemas/task.json"
   },
-  "default-name-prefixes": []
+  "default-name-prefixes": [],
+  "display-interest-types": [
+    "assigned-to",
+    "actionable",
+    "blocked"
+  ]
 }

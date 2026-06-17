@@ -29,14 +29,14 @@
     "$ref": "/JsonSchemas/assigned-to.json"
   },
   "applied": {
-    "indicator": "👤",
+    "indicator": "👤 Assigned",
     "description": "Assigned to you",
-    "actionText": "Assign to user"
+    "actionText": "Unassign"
   },
   "notApplied": {
-    "indicator": "",
+    "indicator": "○ Not Assigned",
     "description": "Not assigned",
-    "actionText": "Clear assignment"
+    "actionText": "Assign"
   },
   "default-name-prefixes": []
 }

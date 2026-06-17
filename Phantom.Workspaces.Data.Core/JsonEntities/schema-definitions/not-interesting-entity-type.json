@@ -29,14 +29,14 @@
     "$ref": "/JsonSchemas/not-interesting.json"
   },
   "applied": {
-    "indicator": "🚫",
+    "indicator": "🚫 Not Interesting",
     "description": "Not interesting",
-    "actionText": "Mark not interesting"
+    "actionText": "Unhide"
   },
   "notApplied": {
-    "indicator": "",
-    "description": "Interesting",
-    "actionText": "Clear not-interesting"
+    "indicator": "○ Not Hidden",
+    "description": "Not hidden",
+    "actionText": "Make hidden"
   },
   "default-name-prefixes": []
 }

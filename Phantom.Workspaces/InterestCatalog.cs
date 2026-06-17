@@ -21,7 +21,8 @@ public sealed record InterestTypeDefinition(
     string AppliedDescription,
     string NotAppliedDescription,
     string AppliedActionText,
-    string NotAppliedActionText);
+    string NotAppliedActionText,
+    IReadOnlySet<string> DisplayEntityTypes);
 
 /// <summary>
 /// The set of interest types known to the workspace (actionable, blocked, assigned-to,
@@ -122,6 +123,7 @@ public sealed class InterestCatalog : IDisposable
 
         ReadIndicator(data, "applied", out var appliedGlyph, out var appliedDescription, out var appliedActionText);
         ReadIndicator(data, "notApplied", out var notAppliedGlyph, out var notAppliedDescription, out var notAppliedActionText);
+        var displayEntityTypes = ReadEntityTypeIds(data, "display-entity-types");
 
         interestType = new InterestTypeDefinition(
             name,
@@ -130,7 +132,8 @@ public sealed class InterestCatalog : IDisposable
             appliedDescription,
             notAppliedDescription,
             appliedActionText,
-            notAppliedActionText);
+            notAppliedActionText,
+            displayEntityTypes);
         return true;
     }
 
@@ -178,4 +181,23 @@ public sealed class InterestCatalog : IDisposable
         => element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()!
             : string.Empty;
+
+    private static IReadOnlySet<string> ReadEntityTypeIds(JsonElement data, string propertyName)
+    {
+        if (!data.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return new HashSet<string>();
+        }
+
+        var entityTypeIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entityTypeId in array.EnumerateArray())
+        {
+            if (entityTypeId.ValueKind == JsonValueKind.String && entityTypeId.GetString() is { } id)
+            {
+                entityTypeIds.Add(id);
+            }
+        }
+
+        return entityTypeIds;
+    }
 }

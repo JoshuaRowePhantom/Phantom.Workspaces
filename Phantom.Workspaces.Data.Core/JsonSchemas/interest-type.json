@@ -15,6 +15,13 @@
     "notApplied": {
       "$ref": "#/$defs/interest-state-content",
       "description": "Badge UX shown when the interest is not applied (the toggle-off state)."
+    },
+    "display-entity-types":  {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "description": "The entity types that this interest type is visible on globally. If absent, it is visible on every entity type. If empty, it is visible only on entity types that list this interest in their interest-types."
     }
   },
   "required": [

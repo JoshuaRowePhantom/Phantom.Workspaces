@@ -7,10 +7,15 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class InterestBadgeProjectorTests
 {
-    private static InterestCatalog Catalog() => new(
+    private static InterestCatalog InterestCatalog() => new(
     [
-        new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable"),
-        new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked"),
+        new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string>()),
+        new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", new HashSet<string>()),
+    ]);
+
+    private static EntityTypeCatalog EntityTypeCatalog() => new(
+    [
+        new EntityTypeDefinition("task", new HashSet<string>()),
     ]);
 
     private static EntitySnapshot Entity(EntityId entityId, params EntitySnapshot[] relationships) => new()
@@ -41,7 +46,7 @@ public sealed class InterestBadgeProjectorTests
         var entityId = new EntityId(Guid.NewGuid());
         var entity = Entity(entityId, Relationship("actionable", entityId, note: "Needs your review"));
 
-        var badges = InterestBadgeProjector.Project(Catalog(), entity);
+        var badges = InterestBadgeProjector.Project(InterestCatalog(), EntityTypeCatalog(), entity);
 
         var actionable = Assert.Single(badges, badge => badge.InterestTypeName == "actionable");
         Assert.True(actionable.IsActive);
@@ -60,8 +65,52 @@ public sealed class InterestBadgeProjectorTests
         var otherId = new EntityId(Guid.NewGuid());
         var entity = Entity(entityId, Relationship("actionable", otherId));
 
-        var badges = InterestBadgeProjector.Project(Catalog(), entity);
+        var badges = InterestBadgeProjector.Project(InterestCatalog(), EntityTypeCatalog(), entity);
 
         Assert.All(badges, badge => Assert.False(badge.IsActive));
+    }
+
+    [Fact]
+    public void Project_FiltersBasedOnDisplayEntityTypes()
+    {
+        var interestCatalog = new InterestCatalog(
+        [
+            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string> { "task" }),
+            new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", new HashSet<string> { "note" }),
+        ]);
+        var entityTypeCatalog = new EntityTypeCatalog(
+        [
+            new EntityTypeDefinition("task", new HashSet<string>()),
+        ]);
+        var entityId = new EntityId(Guid.NewGuid());
+        var entity = Entity(entityId);
+
+        var badges = InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity);
+
+        // Only actionable should be shown (task entity type, actionable allows task)
+        var badge = Assert.Single(badges);
+        Assert.Equal("actionable", badge.InterestTypeName);
+    }
+
+    [Fact]
+    public void Project_FiltersBasedOnDisplayInterestTypes()
+    {
+        var interestCatalog = new InterestCatalog(
+        [
+            new InterestTypeDefinition("actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", new HashSet<string>()),
+            new InterestTypeDefinition("blocked", "⛔", "○", "Blocked", "Not blocked", "Mark blocked", "Clear blocked", new HashSet<string>()),
+        ]);
+        var entityTypeCatalog = new EntityTypeCatalog(
+        [
+            new EntityTypeDefinition("task", new HashSet<string> { "actionable" }),
+        ]);
+        var entityId = new EntityId(Guid.NewGuid());
+        var entity = Entity(entityId);
+
+        var badges = InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity);
+
+        // Only actionable should be shown (task entity type specifies actionable)
+        var badge = Assert.Single(badges);
+        Assert.Equal("actionable", badge.InterestTypeName);
     }
 }

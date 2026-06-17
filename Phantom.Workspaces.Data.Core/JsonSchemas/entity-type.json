@@ -24,6 +24,13 @@
         },
         "minItems": 1
       }
+    },
+    "display-interest-types": {
+      "type": "array",
+      "description": "The interest types that should be displayed on entities of this entity type.",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      }
     }
   },
   "required": [

@@ -29,14 +29,15 @@
     "$ref": "/JsonSchemas/blocked.json"
   },
   "applied": {
-    "indicator": "⛔",
+    "indicator": "⛔ Blocked",
     "description": "Blocked",
-    "actionText": "Mark blocked"
-  },
-  "notApplied": {
-    "indicator": "",
-    "description": "Not blocked",
     "actionText": "Clear blocked"
   },
+  "notApplied": {
+    "indicator": "○ Not Blocked",
+    "description": "Not blocked",
+    "actionText": "Mark blocked"
+  },
+  "display-entity-types": [],
   "default-name-prefixes": []
 }
