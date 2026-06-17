@@ -12,5 +12,20 @@
   "title": {
     "default": "Workspaces"
   },
-  "sub-views": []
+  "sub-views": [
+    {
+      "disposition": "expanded",
+      "query": {
+        "clauses": [
+          {
+            "clause-identifier": { "value": "workspace-type" },
+            "clause": {
+              "clause-type": "entity-type",
+              "entity-type-names": { "values": ["workspace"] }
+            }
+          }
+        ]
+      }
+    }
+  ]
 }
