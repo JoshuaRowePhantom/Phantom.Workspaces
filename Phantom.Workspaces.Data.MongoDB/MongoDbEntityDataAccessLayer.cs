@@ -741,6 +741,85 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     }
 
     /// <summary>
+    /// Executes a transit clause: finds source entities matching the MatchClause, then traverses
+    /// relationships to find destination entities. Implemented as a single native MongoDB aggregation
+    /// with joins: source entities -> relationships carrying source -> destination entities.
+    /// </summary>
+    private async Task<List<BsonDocument>> ExecuteTransitClauseAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        MongoDbQueryTranslator translator,
+        TransitQueryClause clause,
+        CancellationToken cancellationToken)
+    {
+        var relationshipTypes = new BsonArray(clause.RelationshipTypeNames.Values ?? []);
+        var collectionName = bsonCollection.CollectionNamespace.CollectionName;
+
+        // Find source entities that match the MatchClause.
+        var sourceFilter = RenderFilter(translator.TranslateToFilter(clause.MatchClause));
+
+        var pipeline = new List<BsonDocument>
+        {
+            // Start with source entities matching the clause.
+            new("$match", sourceFilter),
+            // Join to relationships where this source entity participates in the source role(s).
+            new("$lookup", new BsonDocument
+            {
+                { "from", collectionName },
+                { "let", new BsonDocument("sourceEntityId", "$_id") },
+                {
+                    "pipeline", new BsonArray
+                    {
+                        // Relationship must be non-deleted and of the requested type.
+                        new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$and", new BsonArray
+                        {
+                            new BsonDocument("$ne", new BsonArray { "$" + MongoDbQueryTranslator.IsDeletedField, true }),
+                            new BsonDocument("$gt", new BsonArray
+                            {
+                                new BsonDocument("$size", new BsonDocument("$setIntersection", new BsonArray
+                                {
+                                    new BsonDocument("$ifNull", new BsonArray { "$" + MongoDbQueryTranslator.TypeNamesField, new BsonArray() }),
+                                    relationshipTypes,
+                                })),
+                                0,
+                            }),
+                            // Relationship must have the source entity in the source role(s).
+                            new BsonDocument("$in", new BsonArray { "$$sourceEntityId", BuildRoleIdsExpression(clause.SourceParticipationRoleNames?.Values) }),
+                        }))),
+                        // Project the destination participant ids.
+                        new BsonDocument("$project", new BsonDocument("destIds", BuildRoleIdsExpression(clause.DestinationParticipationRoleNames?.Values))),
+                    }
+                },
+                { "as", "relationships" },
+            }),
+            // Flatten relationships array and unwind destination ids.
+            new("$unwind", "$relationships"),
+            new("$project", new BsonDocument("destIds", "$relationships.destIds")),
+            new("$unwind", "$destIds"),
+            // Join to destination entities.
+            new("$lookup", new BsonDocument
+            {
+                { "from", collectionName },
+                { "localField", "destIds" },
+                { "foreignField", "_id" },
+                { "as", "destEntity" },
+            }),
+            new("$unwind", "$destEntity"),
+            new("$match", new BsonDocument("destEntity." + MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true))),
+            // Deduplicate destination entities (a shared destination referenced by several relationships).
+            new("$group", new BsonDocument
+            {
+                { "_id", "$destEntity._id" },
+                { "doc", new BsonDocument("$first", "$destEntity") },
+            }),
+            new("$replaceRoot", new BsonDocument("newRoot", "$doc")),
+        };
+
+        return await bsonCollection
+            .Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Resolves a non-vector top-level clause to its matching entity documents. Participation clauses
     /// — bare, or composed as <c>And(participation, Not(participation), ...)</c> — are evaluated as a
     /// single native aggregation join (the negated participations become exclusions); any other clause
@@ -752,6 +831,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         QueryClause clause,
         CancellationToken cancellationToken)
     {
+        if (clause is TransitQueryClause transitClause)
+        {
+            return await this.ExecuteTransitClauseAsync(
+                bsonCollection, translator, transitClause, cancellationToken).ConfigureAwait(false);
+        }
+
         if (TryDecomposeParticipation(clause, out var positiveParticipation, out var exclusions))
         {
             return await this.ExecuteParticipationClauseAsync(

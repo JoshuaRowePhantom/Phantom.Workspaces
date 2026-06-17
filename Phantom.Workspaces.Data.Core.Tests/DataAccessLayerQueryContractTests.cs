@@ -133,6 +133,37 @@ public abstract class DataAccessLayerQueryContractTests
     }
 
     [Fact]
+    public async Task Query_Transit_TraversesRelationshipsToFindMembers()
+    {
+        var dataAccessLayer = this.CreateDataAccessLayer();
+        var workstream = await AddEntityAsync(dataAccessLayer, ["workstream"], new EntityName("workstreams", "project"));
+        var taskA = await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "a"));
+        var taskB = await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "b"));
+        var unrelated = await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "unrelated"));
+        await AddRelationshipAsync(dataAccessLayer, ["member-of"], new EntityName("relationships", "ma"), $$"""{ "member": "{{taskA.Value}}", "container": "{{workstream.Value}}" }""");
+        await AddRelationshipAsync(dataAccessLayer, ["member-of"], new EntityName("relationships", "mb"), $$"""{ "member": "{{taskB.Value}}", "container": "{{workstream.Value}}" }""");
+
+        var ids = await QueryIdsAsync(dataAccessLayer, new TransitQueryClause
+        {
+            SourceClauseIdentifier = new QueryClauseIdentifier("workstream-source"),
+            RelationshipTypeNames = new RelationshipTypeNameSet(["member-of"]),
+            SourceParticipationRoleNames = new RoleNameSet(["container"]),
+            DestinationParticipationRoleNames = new RoleNameSet(["member"]),
+            MatchClause = new EntityFieldQueryClause
+            {
+                FieldPath = new FieldPath("entity-id"),
+                ComparisonOperator = FieldComparisonOperator.Equals,
+                Value = JsonSerializer.SerializeToElement(workstream.Value.ToString()),
+            },
+        });
+
+        Assert.Contains(taskA, ids);
+        Assert.Contains(taskB, ids);
+        Assert.DoesNotContain(unrelated, ids);
+        Assert.DoesNotContain(workstream, ids);
+    }
+
+    [Fact]
     public async Task Query_Vector_RanksBySemanticSimilarityAndReportsScore()
     {
         var dataAccessLayer = this.CreateDataAccessLayer();

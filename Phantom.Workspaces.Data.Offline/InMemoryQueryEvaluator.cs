@@ -130,6 +130,9 @@ internal sealed class InMemoryQueryEvaluator
             case EntityParticipationQueryClause participationClause:
                 return await this.MatchParticipationAsync(participationClause, cancellationToken).ConfigureAwait(false);
 
+            case TransitQueryClause transitClause:
+                return await this.MatchTransitAsync(transitClause, cancellationToken).ConfigureAwait(false);
+
             default:
                 throw new NotSupportedException(
                     $"In-memory query evaluation does not support the '{clause.GetType().Name}' clause.");
@@ -337,6 +340,88 @@ internal sealed class InMemoryQueryEvaluator
             foreach (var participant in participants.EnumerateObject())
             {
                 if (resultRoleNames is not null && !resultRoleNames.Contains(participant.Name))
+                {
+                    continue;
+                }
+
+                foreach (var id in ReadParticipantIds(participant.Value))
+                {
+                    result.Add(id);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<HashSet<EntityId>> MatchTransitAsync(TransitQueryClause clause, CancellationToken cancellationToken)
+    {
+        // Find the source entities that match the MatchClause.
+        var sourceMatches = await this.EvaluateClauseAsync(clause.MatchClause, cancellationToken).ConfigureAwait(false);
+
+        var relationshipTypeNames = clause.RelationshipTypeNames.Values is { Length: > 0 } typeNames
+            ? new HashSet<string>(typeNames, StringComparer.Ordinal)
+            : null;
+        var sourceRoleNames = clause.SourceParticipationRoleNames?.Values is { Length: > 0 } sourceRoles
+            ? new HashSet<string>(sourceRoles, StringComparer.Ordinal)
+            : null;
+        var destRoleNames = clause.DestinationParticipationRoleNames?.Values is { Length: > 0 } destRoles
+            ? new HashSet<string>(destRoles, StringComparer.Ordinal)
+            : null;
+
+        var result = new HashSet<EntityId>();
+        foreach (var candidate in this.candidates)
+        {
+            if (candidate.Data is not { } data)
+            {
+                continue;
+            }
+
+            // Only relationships of the requested type(s) participate.
+            if (relationshipTypeNames is not null && !relationshipTypeNames.Overlaps(ReadEntityTypes(data)))
+            {
+                continue;
+            }
+
+            if (!data.TryGetProperty("participants", out var participants)
+                || participants.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            // Check if this relationship has a source participant that matched the source clause.
+            var hasSourceMatch = false;
+            foreach (var participant in participants.EnumerateObject())
+            {
+                if (sourceRoleNames is not null && !sourceRoleNames.Contains(participant.Name))
+                {
+                    continue;
+                }
+
+                foreach (var id in ReadParticipantIds(participant.Value))
+                {
+                    if (sourceMatches.Contains(id))
+                    {
+                        hasSourceMatch = true;
+                        break;
+                    }
+                }
+
+                if (hasSourceMatch)
+                {
+                    break;
+                }
+            }
+
+            if (!hasSourceMatch)
+            {
+                continue;
+            }
+
+            // Collect destination participants from this relationship.
+            foreach (var participant in participants.EnumerateObject())
+            {
+                if (destRoleNames is not null && !destRoleNames.Contains(participant.Name))
                 {
                     continue;
                 }
