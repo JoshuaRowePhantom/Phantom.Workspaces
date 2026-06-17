@@ -226,7 +226,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
         await this.InitializeProfileAsync();
-        this.InitializeDockLayout();
+        // InitializeDockLayout(); // Not needed - each workspace has its own ContentLayout
         await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
@@ -851,7 +851,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var workspacePane = this.CreateWorkspacePane(workspaceEntity, workspaceData);
+        var workspacePane = await this.CreateWorkspacePaneAsync(workspaceEntity, workspaceData);
         var loadingPaneIndex = this.WorkspacePanes.IndexOf(loadingWorkspacePane);
         if (loadingPaneIndex >= 0)
         {
@@ -965,13 +965,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
         
-        if (this.Layout is null)
+        if (this.selectedWorkspacePane?.ContentLayout is null)
         {
             return;
         }
 
-        // Find the document dock
-        var documentDock = this.FindDocumentDock(this.Layout);
+        // Find the document dock in the selected workspace's ContentLayout
+        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
         if (documentDock is null)
         {
             return;
@@ -996,7 +996,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Create new document
-        this.dockFactory.AddDocument(documentDock, tab);
+        this.dockFactory.AddWorkspaceTab(documentDock, tab);
         this.SyncSelectedWorkspacePaneFromDock();
     }
 
@@ -1024,12 +1024,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void SyncSelectedWorkspacePaneFromDock()
     {
-        if (this.Layout is null)
+        if (this.selectedWorkspacePane is not null)
+        {
+            this.SyncWorkspacePaneFromDock(this.selectedWorkspacePane);
+        }
+    }
+
+    private void SyncWorkspacePaneFromDock(WorkspacePaneViewModel workspacePane)
+    {
+        if (workspacePane.ContentLayout is null)
         {
             return;
         }
 
-        var documentDock = this.FindDocumentDock(this.Layout);
+        var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
         if (documentDock is null || documentDock.VisibleDockables is null)
         {
             return;
@@ -1062,10 +1070,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         region.SelectedTab = activeDocument.TabViewModel;
 
-        // Update the selected workspace pane
-        this.selectedWorkspacePane.Regions.Clear();
-        this.selectedWorkspacePane.Regions.Add(region);
-        this.selectedWorkspacePane.SelectedRegion = region;
+        // Update the workspace pane
+        workspacePane.Regions.Clear();
+        workspacePane.Regions.Add(region);
+        workspacePane.SelectedRegion = region;
     }
 
     private static void DisposeWorkspaceTab(
@@ -1169,12 +1177,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return requests;
     }
 
-    private WorkspacePaneViewModel CreateWorkspacePane(
+    private async Task<WorkspacePaneViewModel> CreateWorkspacePaneAsync(
         SubscribedEntityViewModel workspaceEntity,
         JsonElement workspaceData)
     {
         var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
-        var regions = new List<WorkspaceRegionViewModel>();
+        
+        // Create this workspace's own dock layout for its content tabs
+        workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
+        
+        var tabs = new List<WorkspaceTabViewModel>();
 
         if (workspaceData.TryGetProperty("regions", out var workspaceRegions)
             && workspaceRegions.ValueKind == JsonValueKind.Array)
@@ -1186,63 +1198,52 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     continue;
                 }
 
-                var workspaceRegion = this.CreateWorkspaceRegion(region, workspaceEntity);
-                regions.Add(workspaceRegion);
+                // Extract all tabs from this region
+                if (region.TryGetProperty("tabs", out var regionTabs)
+                    && regionTabs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var tab in regionTabs.EnumerateArray())
+                    {
+                        if (tab.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        if (this.TryReadWorkspaceTabContent(tab, out var workspaceTab))
+                        {
+                            tabs.Add(workspaceTab);
+                        }
+                    }
+                }
             }
         }
 
-        workspacePane.SetRegions(regions);
-        if (workspacePane.SelectedRegion is not null)
+        // If no tabs found, create a default tab for the workspace entity
+        if (tabs.Count == 0)
         {
-            workspacePane.SelectedRegion.SelectedTab ??= workspacePane.SelectedRegion.Tabs.FirstOrDefault();
+            tabs.Add(new EntityWorkspaceTabViewModel
+            {
+                Id = workspaceEntity.EntityId.ToString(),
+                Title = workspaceEntity.DisplayName,
+                Entity = workspaceEntity,
+                DockRegion = "full",
+            });
         }
+
+        // Add all tabs to this workspace's ContentLayout
+        var contentDock = FindDocumentDock(workspacePane.ContentLayout);
+        if (contentDock is not null)
+        {
+            foreach (var tab in tabs)
+            {
+                this.dockFactory.AddWorkspaceTab(contentDock, tab);
+            }
+        }
+
+        // Sync the workspace pane with its ContentLayout for backward compatibility
+        this.SyncWorkspacePaneFromDock(workspacePane);
 
         return workspacePane;
-    }
-
-    private WorkspaceRegionViewModel CreateWorkspaceRegion(
-        JsonElement region,
-        SubscribedEntityViewModel workspaceEntity)
-    {
-        var workspaceRegion = new WorkspaceRegionViewModel
-        {
-            Id = ReadString(region, "region-id") ?? "region",
-            Title = ReadString(region, "title") ?? "Region",
-            DockRegion = ReadString(region, "dock") ?? "center",
-            RelativeSize = ReadDouble(region, "size") ?? 1,
-        };
-
-        if (region.TryGetProperty("tabs", out var tabs)
-            && tabs.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var tab in tabs.EnumerateArray())
-            {
-                if (tab.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                if (this.TryReadWorkspaceTabContent(tab, out var workspaceTab))
-                {
-                    workspaceRegion.Tabs.Add(workspaceTab);
-                }
-            }
-        }
-
-        if (workspaceRegion.Tabs.Count == 0)
-        {
-            workspaceRegion.Tabs.Add(
-                new EntityWorkspaceTabViewModel
-                {
-                    Id = workspaceEntity.EntityId.ToString(),
-                    Title = workspaceEntity.DisplayName,
-                    Entity = workspaceEntity,
-                    DockRegion = "full",
-                });
-        }
-
-        workspaceRegion.SelectedTab = workspaceRegion.Tabs[0];
-        return workspaceRegion;
     }
 
     private bool TryReadWorkspaceTabContent(

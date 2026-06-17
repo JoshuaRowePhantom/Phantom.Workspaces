@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Linq;
+using Dock.Model.Controls;
+using Dock.Model.Core;
+using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -10,6 +13,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 {
     private string title;
     private WorkspaceRegionViewModel? selectedRegion;
+    private IRootDock? contentLayout;
 
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
@@ -46,6 +50,15 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     {
         get => this.selectedRegion;
         set => this.SetProperty(ref this.selectedRegion, value);
+    }
+
+    /// <summary>
+    /// Dock layout for this workspace's content tabs (entity tabs, agent sessions, etc.)
+    /// </summary>
+    public IRootDock? ContentLayout
+    {
+        get => this.contentLayout;
+        set => this.SetProperty(ref this.contentLayout, value);
     }
 
     public void SetRegions(

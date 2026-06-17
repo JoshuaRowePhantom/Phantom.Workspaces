@@ -95,7 +95,7 @@
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />
 
-            <dock:DockControl Grid.Column="2" Layout="{Binding Layout}">
+            <dock:DockControl Grid.Column="2" Layout="{Binding SelectedWorkspacePane.ContentLayout}">
                 <dock:DockControl.DataTemplates>
                     <DataTemplate DataType="vm:WorkspaceDocument">
                         <ContentControl Content="{Binding TabViewModel}" />

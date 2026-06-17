@@ -120,9 +120,11 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void CreateWorkspacePane_DoesNotInjectFallbackCenterRegion_WhenWorkspaceHasNoRegions()
+    public async Task CreateWorkspacePane_DoesNotInjectFallbackCenterRegion_WhenWorkspaceHasNoRegions()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+        
         using var workspaceDocument = JsonDocument.Parse(
             """
             {
@@ -150,17 +152,23 @@ public sealed class MainWindowIntegrationTests
             });
 
         var createWorkspacePane = typeof(MainWindowViewModel).GetMethod(
-            "CreateWorkspacePane",
+            "CreateWorkspacePaneAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(createWorkspacePane);
 
-        var workspacePane = (WorkspacePaneViewModel?)createWorkspacePane!.Invoke(
+        var task = (Task<WorkspacePaneViewModel>?)createWorkspacePane!.Invoke(
             viewModel,
             [workspaceEntity, workspaceDocument.RootElement.Clone()]);
-
+        Assert.NotNull(task);
+        
+        var workspacePane = await task!;
         Assert.NotNull(workspacePane);
-        Assert.Empty(workspacePane!.Regions);
-        Assert.Null(workspacePane.SelectedRegion);
+        
+        // With Dock integration, regions are synthetic (created via SyncSelectedWorkspacePaneFromDock)
+        // When workspace has no regions in JSON, we create a default tab for the workspace entity
+        // The synthetic region should exist after the tab is added
+        Assert.NotNull(workspacePane!.SelectedRegion);
+        Assert.Single(workspacePane.SelectedRegion!.Tabs);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

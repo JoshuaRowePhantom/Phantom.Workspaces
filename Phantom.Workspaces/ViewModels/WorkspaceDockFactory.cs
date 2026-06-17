@@ -17,12 +17,16 @@ public class WorkspaceDockFactory : Factory
         this.mainWindowViewModel = mainWindowViewModel;
     }
 
+    /// <summary>
+    /// Creates the root layout with a DocumentDock for workspace-level tabs.
+    /// Each workspace tab contains its own nested ContentLayout for workspace content.
+    /// </summary>
     public override IRootDock CreateLayout()
     {
-        var documentDock = new DocumentDock
+        var workspacesDock = new DocumentDock
         {
-            Id = "WorkspaceDocumentDock",
-            Title = "Workspace",
+            Id = "WorkspacesDock",
+            Title = "Workspaces",
             CanCreateDocument = false,
             IsCollapsable = false,
             VisibleDockables = CreateList<IDockable>(),
@@ -32,14 +36,41 @@ public class WorkspaceDockFactory : Factory
         root.Id = "Root";
         root.Title = "Root";
         root.IsCollapsable = false;
-        root.VisibleDockables = CreateList<IDockable>(documentDock);
-        root.DefaultDockable = documentDock;
-        root.ActiveDockable = documentDock;
+        root.VisibleDockables = CreateList<IDockable>(workspacesDock);
+        root.DefaultDockable = workspacesDock;
+        root.ActiveDockable = workspacesDock;
 
         return root;
     }
 
-    public WorkspaceDocument CreateWorkspaceDocument(WorkspaceTabViewModel tabViewModel)
+    /// <summary>
+    /// Creates a dock layout for workspace content (entity tabs, agent sessions, etc.)
+    /// </summary>
+    public IRootDock CreateWorkspaceContentLayout(WorkspacePaneViewModel workspacePane)
+    {
+        var contentDock = new DocumentDock
+        {
+            Id = $"WorkspaceContent_{workspacePane.Id}",
+            Title = workspacePane.Title,
+            CanCreateDocument = false,
+            IsCollapsable = false,
+            VisibleDockables = CreateList<IDockable>(),
+        };
+
+        var root = CreateRootDock();
+        root.Id = $"WorkspaceContentRoot_{workspacePane.Id}";
+        root.Title = workspacePane.Title;
+        root.IsCollapsable = false;
+        root.VisibleDockables = CreateList<IDockable>(contentDock);
+        root.DefaultDockable = contentDock;
+        root.ActiveDockable = contentDock;
+
+        InitLayout(root);
+
+        return root;
+    }
+
+    public WorkspaceDocument CreateWorkspaceTabDocument(WorkspaceTabViewModel tabViewModel)
     {
         return new WorkspaceDocument(tabViewModel)
         {
@@ -49,9 +80,9 @@ public class WorkspaceDockFactory : Factory
         };
     }
 
-    public void AddDocument(IDocumentDock dock, WorkspaceTabViewModel tabViewModel)
+    public void AddWorkspaceTab(IDocumentDock dock, WorkspaceTabViewModel tabViewModel)
     {
-        var document = CreateWorkspaceDocument(tabViewModel);
+        var document = CreateWorkspaceTabDocument(tabViewModel);
         AddDockable(dock, document);
         SetActiveDockable(document);
         SetFocusedDockable(dock, document);
