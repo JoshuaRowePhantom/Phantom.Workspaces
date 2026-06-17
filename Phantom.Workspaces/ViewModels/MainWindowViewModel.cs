@@ -930,7 +930,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        await this.AddOrSelectWorkspaceTabAsync(
+        await this.OpenWorkspaceTab(
             new EntityWorkspaceTabViewModel
             {
                 Id = subscribedEntity.EntityId.ToString(),
@@ -939,8 +939,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             });
     }
 
-    internal async Task AddOrSelectWorkspaceTabAsync(
-        WorkspaceTabViewModel tab)
+    public async Task OpenWorkspaceTab(WorkspaceTabViewModel tab)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
@@ -981,19 +980,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         const string entityBrowserTabId = "entity-browser-tab";
         
-        // Ensure workspace is loaded first
-        await this.EnsureWorkspaceLoadedAsync();
-        
-        var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
-        var existingTab = selectedRegion.Tabs
-            .OfType<EntityBrowserWorkspaceTabViewModel>()
-            .FirstOrDefault(tab => string.Equals(tab.Id, entityBrowserTabId, StringComparison.Ordinal));
-        if (existingTab is not null)
-        {
-            selectedRegion.SelectedTab = existingTab;
-            return;
-        }
-
         var subscribedGet = await this.EntityBroker.SubscribeGetAsync(
             new GetRequest
             {
@@ -1020,8 +1006,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             DockRegion = "full",
         };
 
-        selectedRegion.Tabs.Add(entityBrowserTab);
-        selectedRegion.SelectedTab = entityBrowserTab;
+        await this.OpenWorkspaceTab(entityBrowserTab);
     }
 
     private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(
