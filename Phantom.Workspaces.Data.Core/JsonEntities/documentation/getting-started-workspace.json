@@ -30,6 +30,18 @@
             ]
           },
           "dock": "full"
+        },
+        {
+          "tab-id": "github-repository-tab",
+          "title": "GitHub Repository",
+          "kind": "entity-view",
+          "content": {
+            "target-entity-name": [
+              "external",
+              "github-phantom-workspaces"
+            ]
+          },
+          "dock": "full"
         }
       ]
     }

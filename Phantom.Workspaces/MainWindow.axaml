@@ -95,10 +95,18 @@
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />
 
-            <dock:DockControl Grid.Column="2" Layout="{Binding SelectedWorkspacePane.ContentLayout}">
+            <dock:DockControl Grid.Column="2" Layout="{Binding Layout}">
                 <dock:DockControl.DataTemplates>
-                    <DataTemplate DataType="vm:WorkspaceDocument">
-                        <ContentControl Content="{Binding TabViewModel}" />
+                    <!-- Workspace-level tab: shows the workspace's ContentLayout -->
+                    <DataTemplate DataType="vm:WorkspacePaneDocument">
+                        <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}">
+                            <dock:DockControl.DataTemplates>
+                                <!-- Content-level tab: shows the tab's ViewModel -->
+                                <DataTemplate DataType="vm:WorkspaceDocument">
+                                    <ContentControl Content="{Binding TabViewModel}" />
+                                </DataTemplate>
+                            </dock:DockControl.DataTemplates>
+                        </dock:DockControl>
                     </DataTemplate>
                 </dock:DockControl.DataTemplates>
             </dock:DockControl>

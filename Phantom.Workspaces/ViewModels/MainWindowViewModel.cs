@@ -78,6 +78,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(openAgentSessionShortcutHandler);
+        this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new ToggleJsonEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
@@ -226,7 +227,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
         await this.InitializeProfileAsync();
-        // InitializeDockLayout(); // Not needed - each workspace has its own ContentLayout
+        this.InitializeDockLayout(); // Initialize workspace-level dock
         await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
@@ -258,6 +259,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var layout = this.dockFactory.CreateLayout();
         this.dockFactory.InitLayout(layout);
         this.Layout = layout;
+
+        // Monitor workspace dock for closes
+        var workspacesDock = FindDocumentDock(layout);
+        if (workspacesDock?.VisibleDockables is System.Collections.Specialized.INotifyCollectionChanged collection)
+        {
+            collection.CollectionChanged += this.OnWorkspacesDockCollectionChanged;
+        }
+    }
+
+    private async void OnWorkspacesDockCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // Handle removed workspace documents
+        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        {
+            foreach (var item in e.OldItems)
+            {
+                if (item is WorkspacePaneDocument workspacePaneDoc)
+                {
+                    await this.RemoveWorkspacePaneAsync(workspacePaneDoc.WorkspacePane);
+                }
+            }
+        }
     }
 
     private async Task InitializeProfileAsync()
@@ -824,6 +847,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        // Check if workspace is already open
         var existingWorkspace = this.WorkspacePanes.FirstOrDefault(
             pane => string.Equals(pane.Id, workspaceSnapshot.EntityId.ToString(), StringComparison.Ordinal));
         if (existingWorkspace is not null)
@@ -834,6 +858,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             this.SelectedWorkspacePane = existingWorkspace;
+            // Activate the workspace document in the dock
+            if (this.Layout is not null)
+            {
+                var workspacesDock = FindDocumentDock(this.Layout);
+                var existingDocument = workspacesDock?.VisibleDockables
+                    ?.OfType<WorkspacePaneDocument>()
+                    .FirstOrDefault(doc => doc.WorkspacePane == existingWorkspace);
+                if (existingDocument is not null)
+                {
+                    this.dockFactory.SetActiveDockable(existingDocument);
+                }
+            }
             return;
         }
 
@@ -862,7 +898,37 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.WorkspacePanes.Add(workspacePane);
         }
 
+        // Add workspace pane to the dock layout
+        this.AddWorkspacePaneToDock(workspacePane);
+
         this.SelectedWorkspacePane = workspacePane;
+    }
+
+    private void AddWorkspacePaneToDock(WorkspacePaneViewModel workspacePane)
+    {
+        if (this.Layout is null)
+        {
+            return;
+        }
+
+        var workspacesDock = FindDocumentDock(this.Layout);
+        if (workspacesDock is not null)
+        {
+            // Check if already in dock
+            var existingDocument = workspacesDock.VisibleDockables
+                ?.OfType<WorkspacePaneDocument>()
+                .FirstOrDefault(doc => doc.WorkspacePane == workspacePane);
+            
+            if (existingDocument is null)
+            {
+                this.dockFactory.AddWorkspacePane(workspacesDock, workspacePane);
+            }
+            else
+            {
+                // Already in dock, just activate it
+                this.dockFactory.SetActiveDockable(existingDocument);
+            }
+        }
     }
 
     private bool CanCloseWorkspace(object? parameter)
@@ -883,6 +949,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
            return;
        }
 
+       await this.RemoveWorkspacePaneAsync(pane);
+    }
+
+    internal async Task RemoveWorkspacePaneAsync(WorkspacePaneViewModel pane)
+    {
        // Don't allow closing the default placeholder
        if (string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
        {
@@ -1261,6 +1332,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (this.entityBroker?.TryGetReferencedEntity(content, "target-entity-name", out var targetEntity) == true
             && targetEntity is not null)
         {
+            // For external entities, create WebViewModel with embedded browser
+            if (targetEntity.IsEntityType("external"))
+            {
+                var urls = OpenExternalEntityShortcutHandler.ParseUrls(targetEntity);
+                if (urls.Count > 0)
+                {
+                    // Use the first URL (or "default" URL if available)
+                    var entityUrl = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
+
+                    workspaceTab = new WebViewModel(entityUrl)
+                    {
+                        Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
+                        Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                        DockRegion = ReadString(tab, "dock") ?? "full",
+                    };
+                    return true;
+                }
+            }
+
+            // Default entity view
             workspaceTab = new EntityWorkspaceTabViewModel
             {
                 Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),

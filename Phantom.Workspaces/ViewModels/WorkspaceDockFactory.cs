@@ -70,6 +70,24 @@ public class WorkspaceDockFactory : Factory
         return root;
     }
 
+    public WorkspacePaneDocument CreateWorkspacePaneDocument(WorkspacePaneViewModel workspacePane)
+    {
+        return new WorkspacePaneDocument(workspacePane)
+        {
+            Id = workspacePane.Id,
+            Title = workspacePane.Title,
+            CanClose = true,
+        };
+    }
+
+    public void AddWorkspacePane(IDocumentDock dock, WorkspacePaneViewModel workspacePane)
+    {
+        var document = CreateWorkspacePaneDocument(workspacePane);
+        AddDockable(dock, document);
+        SetActiveDockable(document);
+        SetFocusedDockable(dock, document);
+    }
+
     public WorkspaceDocument CreateWorkspaceTabDocument(WorkspaceTabViewModel tabViewModel)
     {
         return new WorkspaceDocument(tabViewModel)

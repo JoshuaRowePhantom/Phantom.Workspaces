@@ -17,12 +17,71 @@
     <DataTemplate DataType="vm:EntityListItemViewModel">
         <StackPanel Margin="{Binding IndentMargin}" Classes="workspace-entity-node-root"
                    controls:StickyItem.Row="{Binding StickyRow}">
-            <entityControls:EntityCardControl />
+            <entityControls:EntityCardControl DataContext="{Binding Node}" />
         </StackPanel>
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityWorkspaceTabViewModel">
         <ContentControl Content="{Binding EntityCardNode}" />
+    </DataTemplate>
+
+    <!-- DataTemplate for WebViewModel: embedded web browser with navigation -->
+    <DataTemplate DataType="vm:WebViewModel">
+        <Grid RowDefinitions="Auto,*">
+            <!-- Navigation toolbar -->
+            <Border Grid.Row="0" Classes="workspace-field-row" Padding="8">
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                    <!-- Back/Forward buttons -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" Margin="0,0,8,0">
+                        <Button Command="{Binding GoBackCommand}" 
+                                Content="←"
+                                ToolTip.Tip="Go back"
+                                Width="32" />
+                        <Button Command="{Binding GoForwardCommand}" 
+                                Content="→"
+                                ToolTip.Tip="Go forward"
+                                Width="32" />
+                    </StackPanel>
+                    
+                    <!-- Address bar -->
+                    <TextBox Grid.Column="2" 
+                             Text="{Binding AddressBarUrl}"
+                             PlaceholderText="Enter URL..."
+                             VerticalAlignment="Center">
+                        <TextBox.KeyBindings>
+                            <KeyBinding Gesture="Enter" Command="{Binding NavigateCommand}" />
+                        </TextBox.KeyBindings>
+                    </TextBox>
+                    
+                    <!-- Open in browser button -->
+                    <Button Grid.Column="3" 
+                            Command="{Binding OpenInExternalBrowserCommand}" 
+                            Content="Open in browser"
+                            ToolTip.Tip="Open in external browser"
+                            Margin="8,0,0,0" />
+                </Grid>
+            </Border>
+            
+            <!-- WebView control -->
+            <entityControls:ConfiguredWebView 
+                Grid.Row="1"
+                Source="{Binding SourceUri}"
+                ViewModel="{Binding}"
+                IsVisible="{Binding !HasError}" />
+            
+            <!-- Error state -->
+            <Border Grid.Row="1" 
+                    IsVisible="{Binding HasError}"
+                    Classes="entity-card"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Failed to load browser" Classes="heading" />
+                    <TextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+                    <Button Command="{Binding OpenInExternalBrowserCommand}" 
+                            Content="Open in external browser" />
+                </StackPanel>
+            </Border>
+        </Grid>
     </DataTemplate>
 
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">

@@ -58,6 +58,16 @@ public sealed class ConfigurationPersistenceService
     }
 
     /// <summary>
+    /// Computes the WebView user data folder path next to the configuration file.
+    /// </summary>
+    public static string GetWebViewDataFolderPath(string? configurationPath = null)
+    {
+        var configPath = configurationPath ?? GetDefaultConfigurationPath();
+        var configDirectory = Path.GetDirectoryName(configPath) ?? throw new InvalidOperationException("Configuration path has no directory");
+        return Path.Combine(configDirectory, "WebViewData");
+    }
+
+    /// <summary>
     /// Determines whether a configuration file exists at the given (or default) path.
     /// </summary>
     public bool ConfigurationExists(string? path = null)
