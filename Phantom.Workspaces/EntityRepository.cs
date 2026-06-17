@@ -42,7 +42,7 @@ public sealed class EntityRepository
     public static async Task<EntityRepository> CreateAsync(
         RepositorySource repositorySource)
     {
-        var underlyingDataAccessLayer = CreateUnderlyingDataAccessLayer(repositorySource);
+        var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource).ConfigureAwait(false);
         var isWebSource = repositorySource is WebRepositorySource;
         var coreDataAccessLayer = isWebSource
             ? underlyingDataAccessLayer
@@ -51,10 +51,10 @@ public sealed class EntityRepository
                     new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
         if (!isWebSource)
         {
-            await EnsureSeedDataIfNeededAsync(coreDataAccessLayer);
+            await EnsureSeedDataIfNeededAsync(coreDataAccessLayer).ConfigureAwait(false);
         }
 
-        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer);
+        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer).ConfigureAwait(false);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
     }
@@ -99,14 +99,14 @@ public sealed class EntityRepository
         return null;
     }
 
-    private static IDataAccessLayer CreateUnderlyingDataAccessLayer(
+    private static async Task<IDataAccessLayer> CreateUnderlyingDataAccessLayerAsync(
         RepositorySource repositorySource)
     {
         return repositorySource switch
         {
             WebRepositorySource web => CreateWebDataAccessLayer(web),
             LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
-            MongoDbRepositorySource mongo => CreateMongoDbDataAccessLayer(mongo),
+            MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo).ConfigureAwait(false),
             _ => new InMemoryDataAccessLayer(),
         };
     }
@@ -127,7 +127,7 @@ public sealed class EntityRepository
         return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken);
     }
 
-    private static IDataAccessLayer CreateMongoDbDataAccessLayer(
+    private static async Task<IDataAccessLayer> CreateMongoDbDataAccessLayerAsync(
         MongoDbRepositorySource repositorySource)
     {
         if (string.IsNullOrWhiteSpace(repositorySource.ContainerName))
@@ -152,7 +152,7 @@ public sealed class EntityRepository
             repositorySource.RootCollectionName,
             repositorySource.HostPort);
         var mongoDbConnectionBroker = new MongoDbConnectionBroker();
-        var mongoDbClient = mongoDbConnectionBroker.GetClientAsync(connectionDefinition).AsTask().GetAwaiter().GetResult();
+        var mongoDbClient = await mongoDbConnectionBroker.GetClientAsync(connectionDefinition).ConfigureAwait(false);
         var mongoDbDatabase = mongoDbClient.GetDatabase(mongoDbDatabaseName);
         return new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.RootCollectionName);
     }
