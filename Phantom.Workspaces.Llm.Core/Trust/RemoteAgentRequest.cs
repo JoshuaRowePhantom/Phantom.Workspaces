@@ -14,6 +14,14 @@ public sealed record RemoteAgentRequest
     /// <summary>Optional remote agent session id.</summary>
     public string? AgentSessionId { get; init; }
 
+    /// <summary>
+    /// Optional target client instance (a <c>user-computer-profile</c> entity id). When set to a
+    /// non-local instance that is currently connected to this host over a reverse tunnel, the host
+    /// relays the turn back to that connected instance instead of running the agent locally.
+    /// <c>null</c>, empty, or <see cref="TrustProfile.LocalClientInstance"/> mean run locally.
+    /// </summary>
+    public string? TargetClientInstance { get; init; }
+
     /// <summary>The conversation messages for this turn.</summary>
     public required IReadOnlyList<ChatMessage> Messages { get; init; }
 

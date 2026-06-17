@@ -14,13 +14,30 @@ namespace Phantom.Workspaces.Web.Server;
 public static class AgentRespondHandler
 {
     /// <summary>
-    /// Runs a single agent turn for the supplied request and returns the chat response.
+    /// Runs a single agent turn for the supplied request and returns the chat response. When the
+    /// request targets a non-local client instance that is currently connected to this host over a
+    /// reverse tunnel, the turn is relayed to that connected instance; otherwise the agent runs
+    /// locally and (when supplied) the caller's trust profile tool-call policy is enforced.
     /// </summary>
     public static async Task<ChatResponse> RespondAsync(
         RemoteAgentRequest request,
+        ReverseExecutionRegistry? reverseExecutionRegistry = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (TryGetConnectedReverseTarget(request, reverseExecutionRegistry, out var targetClientInstance))
+        {
+            var reverseClient = new ReverseRemoteChatClient(
+                reverseExecutionRegistry!,
+                targetClientInstance,
+                request.AgentDefinitionJson,
+                request.AgentSessionId);
+
+            return await reverseClient
+                .GetResponseAsync(request.Messages, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var agentDefinition = AgentDefinition.FromJson(request.AgentDefinitionJson);
         var (chatClient, _) = AgentFactory.CreateChatClient(agentDefinition);
@@ -40,5 +57,17 @@ public static class AgentRespondHandler
         return await chatClient
             .GetResponseAsync(request.Messages, chatOptions, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private static bool TryGetConnectedReverseTarget(
+        RemoteAgentRequest request,
+        ReverseExecutionRegistry? reverseExecutionRegistry,
+        out string targetClientInstance)
+    {
+        targetClientInstance = request.TargetClientInstance ?? string.Empty;
+        return reverseExecutionRegistry is not null
+            && !string.IsNullOrWhiteSpace(targetClientInstance)
+            && !string.Equals(targetClientInstance, TrustProfile.LocalClientInstance, StringComparison.Ordinal)
+            && reverseExecutionRegistry.IsConnected(targetClientInstance);
     }
 }
