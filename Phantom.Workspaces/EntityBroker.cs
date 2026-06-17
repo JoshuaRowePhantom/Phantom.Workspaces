@@ -116,16 +116,6 @@ public sealed class EntityBroker
         return await this.entityRepository.ExportEntitySnapshotsAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// Runs a one-shot query and returns the matching entities as subscribed view models, without
-    /// registering a persistent <see cref="SubscribedQuery"/>. Used for view hierarchy traversal.
-    /// </summary>
-    public Task<IReadOnlyCollection<SubscribedEntityViewModel>> QueryEntitiesAsync(
-        QueryRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return this.GetSubscribedEntitiesForQueryRequestAsync(request, changedEntityIds: null, cancellationToken);
-    }
 
     public bool TryGetReferencedEntity(
         JsonElement element,

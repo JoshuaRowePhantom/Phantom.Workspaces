@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -24,26 +26,42 @@ public sealed record InterestTypeDefinition(
 /// <summary>
 /// The set of interest types known to the workspace (actionable, blocked, assigned-to,
 /// not-interesting, ...), loaded from the interest-type definition entities. Used to project an
-/// entity's applied interests into toggleable badge glyphs.
+/// entity's applied interests into toggleable badge glyphs. Dynamically updates when interest-type
+/// entities are added, removed, or changed.
 /// </summary>
-public sealed class InterestCatalog
+public sealed class InterestCatalog : IDisposable
 {
     private const string InterestTypeEntityType = "interest-type";
+    private readonly SubscribedQuery? subscribedQuery;
+    private IReadOnlyList<InterestTypeDefinition> interestTypes;
 
-    public InterestCatalog(IReadOnlyList<InterestTypeDefinition> interestTypes)
+    private InterestCatalog(SubscribedQuery subscribedQuery)
     {
-        this.InterestTypes = interestTypes;
+        this.subscribedQuery = subscribedQuery;
+        this.interestTypes = [];
+        this.subscribedQuery.Results.CollectionChanged += this.OnQueryResultsChanged;
+        this.RefreshInterestTypes();
     }
 
-    public IReadOnlyList<InterestTypeDefinition> InterestTypes { get; }
+    /// <summary>Creates a static catalog for testing purposes.</summary>
+    public InterestCatalog(IReadOnlyList<InterestTypeDefinition> interestTypes)
+    {
+        this.subscribedQuery = null;
+        this.interestTypes = interestTypes;
+    }
+
+    public IReadOnlyList<InterestTypeDefinition> InterestTypes => this.interestTypes;
 
     /// <summary>The set of interest-type names, for filtering an entity's relationships.</summary>
     public IReadOnlySet<string> InterestTypeNames => this.InterestTypes.Select(static type => type.Name).ToHashSet();
 
-    /// <summary>Loads the interest catalog by querying the interest-type definition entities.</summary>
-    public static async Task<InterestCatalog> LoadAsync(EntityBroker entityBroker, CancellationToken cancellationToken = default)
+    /// <summary>Raised when interest types are added, removed, or changed.</summary>
+    public event EventHandler? Changed;
+
+    /// <summary>Creates a dynamic interest catalog that observes interest-type definition entities.</summary>
+    public static async Task<InterestCatalog> CreateAsync(EntityBroker entityBroker, CancellationToken cancellationToken = default)
     {
-        var definitions = await entityBroker.QueryEntitiesAsync(
+        var query = await entityBroker.SubscribeQueryAsync(
             new QueryRequest
             {
                 Clauses =
@@ -57,16 +75,40 @@ public sealed class InterestCatalog
             },
             cancellationToken).ConfigureAwait(false);
 
-        var interestTypes = new List<InterestTypeDefinition>();
-        foreach (var definition in definitions)
+        return new InterestCatalog(query);
+    }
+
+    public void Dispose()
+    {
+        if (this.subscribedQuery is not null)
+        {
+            this.subscribedQuery.Results.CollectionChanged -= this.OnQueryResultsChanged;
+        }
+    }
+
+    private void OnQueryResultsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        this.RefreshInterestTypes();
+        this.Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void RefreshInterestTypes()
+    {
+        if (this.subscribedQuery is null)
+        {
+            return;
+        }
+
+        var types = new List<InterestTypeDefinition>();
+        foreach (var definition in this.subscribedQuery.Results)
         {
             if (TryReadInterestType(definition.Snapshot, out var interestType))
             {
-                interestTypes.Add(interestType);
+                types.Add(interestType);
             }
         }
 
-        return new InterestCatalog(interestTypes);
+        this.interestTypes = types;
     }
 
     private static bool TryReadInterestType(EntitySnapshot snapshot, out InterestTypeDefinition interestType)

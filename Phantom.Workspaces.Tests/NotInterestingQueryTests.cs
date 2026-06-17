@@ -52,12 +52,13 @@ public sealed class NotInterestingQueryTests
             ],
         };
 
-        var unfiltered = (await broker.QueryEntitiesAsync(inboxQuery, ct)).Select(entity => entity.EntityId).ToHashSet();
+        var unfilteredQuery = await broker.SubscribeQueryAsync(inboxQuery, ct);
+        var unfiltered = unfilteredQuery.Results.Select(entity => entity.EntityId).ToHashSet();
         Assert.Contains(visibleId, unfiltered);
         Assert.Contains(hiddenId, unfiltered);
 
-        var filtered = (await broker.QueryEntitiesAsync(NotInterestingQuery.ExcludingNotInteresting(inboxQuery), ct))
-            .Select(entity => entity.EntityId).ToHashSet();
+        var filteredQuery = await broker.SubscribeQueryAsync(NotInterestingQuery.ExcludingNotInteresting(inboxQuery), ct);
+        var filtered = filteredQuery.Results.Select(entity => entity.EntityId).ToHashSet();
         Assert.Contains(visibleId, filtered);
         Assert.DoesNotContain(hiddenId, filtered);
     }

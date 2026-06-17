@@ -202,7 +202,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         this.entityBroker = await this.entityBrokerTask;
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
-        this.interestCatalog = await InterestCatalog.LoadAsync(this.entityBroker);
+        this.interestCatalog = await InterestCatalog.CreateAsync(this.entityBroker);
+        this.interestCatalog.Changed += this.OnInterestCatalogChanged;
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -769,6 +770,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.InitializeTopLevelViews();
         }
 
+        _ = this.ApplySelectedViewAsync();
+    }
+
+    private void OnInterestCatalogChanged(object? sender, EventArgs e)
+    {
+        // Interest types changed - refresh the current view to update badge glyphs
         _ = this.ApplySelectedViewAsync();
     }
 
@@ -1651,5 +1658,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         this.ConnectionStatus?.Dispose();
+        this.interestCatalog?.Dispose();
     }
 }
