@@ -133,6 +133,36 @@ public abstract class DataAccessLayerQueryContractTests
     }
 
     [Fact]
+    public async Task Query_EntityTypeAndNotParticipation_FiltersAndExcludesByJoin()
+    {
+        var dataAccessLayer = this.CreateDataAccessLayer();
+        var visibleTask = await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "visible"));
+        var hiddenTask = await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "hidden"));
+        var visibleNote = await AddEntityAsync(dataAccessLayer, ["note"], new EntityName("notes", "visible"));
+        await AddRelationshipAsync(dataAccessLayer, ["not-interesting"], new EntityName("relationships", "nih"), $$"""{ "target": "{{hiddenTask.Value}}" }""");
+
+        var ids = await QueryIdsAsync(dataAccessLayer, new AndQueryClause
+        {
+            Clauses =
+            [
+                new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["task"]) },
+                new NotQueryClause
+                {
+                    Clause = new EntityParticipationQueryClause
+                    {
+                        RelationshipTypeNames = new RelationshipTypeNameSet(["not-interesting"]),
+                        ParticipationRoleNames = new RoleNameSet(["target"]),
+                    },
+                },
+            ],
+        });
+
+        Assert.Contains(visibleTask, ids);
+        Assert.DoesNotContain(hiddenTask, ids);
+        Assert.DoesNotContain(visibleNote, ids);
+    }
+
+    [Fact]
     public async Task Query_Transit_TraversesRelationshipsToFindMembers()
     {
         var dataAccessLayer = this.CreateDataAccessLayer();

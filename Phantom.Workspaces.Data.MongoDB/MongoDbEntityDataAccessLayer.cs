@@ -822,8 +822,9 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// <summary>
     /// Resolves a non-vector top-level clause to its matching entity documents. Participation clauses
     /// — bare, or composed as <c>And(participation, Not(participation), ...)</c> — are evaluated as a
-    /// single native aggregation join (the negated participations become exclusions); any other clause
-    /// is translated to a find filter.
+    /// single native aggregation join (the negated participations become exclusions). Filter clauses
+    /// (entity-type, field) composed with <c>Not(participation)</c> exclusions are executed as a filter
+    /// followed by participation-based anti-joins. Any other clause is translated to a find filter.
     /// </summary>
     private async Task<List<BsonDocument>> ExecuteEntityClauseAsync(
         IMongoCollection<BsonDocument> bsonCollection,
@@ -841,6 +842,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             return await this.ExecuteParticipationClauseAsync(
                 bsonCollection, translator, positiveParticipation, exclusions, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (TryDecomposeFilterWithParticipationExclusions(clause, out var filterClause, out var participationExclusions))
+        {
+            return await this.ExecuteFilterWithParticipationExclusionsAsync(
+                bsonCollection, translator, filterClause, participationExclusions, cancellationToken).ConfigureAwait(false);
         }
 
         var filter = translator.TranslateToFilter(clause);
@@ -901,6 +908,131 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Recognizes <c>And(filter-clause, Not(participation), ...)</c> where the filter clause is translatable
+    /// (entity-type, field, and/or, etc.) and one or more <c>Not(participation)</c> exclusions follow.
+    /// Returns <see langword="true"/> if the pattern matches so the caller can execute the filter and apply
+    /// participation-based anti-joins.
+    /// </summary>
+    private static bool TryDecomposeFilterWithParticipationExclusions(
+        QueryClause clause,
+        out QueryClause filterClause,
+        out IReadOnlyList<EntityParticipationQueryClause> exclusions)
+    {
+        filterClause = null!;
+        exclusions = [];
+
+        if (clause is not AndQueryClause andClause)
+        {
+            return false;
+        }
+
+        var negated = new List<EntityParticipationQueryClause>();
+        var filterClauses = new List<QueryClause>();
+
+        foreach (var subClause in andClause.Clauses)
+        {
+            if (subClause is NotQueryClause { Clause: EntityParticipationQueryClause negatedParticipation })
+            {
+                negated.Add(negatedParticipation);
+            }
+            else
+            {
+                filterClauses.Add(subClause);
+            }
+        }
+
+        // Must have at least one participation exclusion and at least one filter clause.
+        if (negated.Count == 0 || filterClauses.Count == 0)
+        {
+            return false;
+        }
+
+        // Combine filter clauses into a single clause (unwrap if only one).
+        filterClause = filterClauses.Count == 1
+            ? filterClauses[0]
+            : new AndQueryClause { Clauses = filterClauses };
+        exclusions = negated;
+        return true;
+    }
+
+    /// <summary>
+    /// Executes a filter clause (entity-type, field, etc.) to find matching entities, then applies
+    /// participation-based anti-joins to exclude entities that participate in the specified relationships.
+    /// This handles the <c>And(filter-clause, Not(participation), ...)</c> pattern commonly produced by
+    /// <see cref="NotInterestingQuery"/> wrapping view queries.
+    /// </summary>
+    private async Task<List<BsonDocument>> ExecuteFilterWithParticipationExclusionsAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        MongoDbQueryTranslator translator,
+        QueryClause filterClause,
+        IReadOnlyList<EntityParticipationQueryClause> exclusions,
+        CancellationToken cancellationToken)
+    {
+        // Execute the filter to get matching entity documents.
+        var filter = translator.TranslateToFilter(filterClause);
+        var find = bsonCollection.Find(filter);
+        if (MongoDbQueryTranslator.GetResultLimit(filterClause) is { } limit && limit >= 0)
+        {
+            find = find.Limit(limit);
+        }
+
+        var matchedDocuments = await find.ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        // Apply participation exclusions as anti-joins: for each exclusion, remove entities that
+        // participate in the specified relationship/roles.
+        foreach (var exclusion in exclusions)
+        {
+            var excludedIds = await this.GetParticipatingEntityIdsAsync(
+                bsonCollection, exclusion, cancellationToken).ConfigureAwait(false);
+
+            matchedDocuments.RemoveAll(doc => excludedIds.Contains(doc["_id"].AsString));
+        }
+
+        return matchedDocuments;
+    }
+
+    /// <summary>
+    /// Returns the entity IDs that participate in the specified relationship types and roles.
+    /// Used for anti-join exclusions.
+    /// </summary>
+    private async Task<HashSet<string>> GetParticipatingEntityIdsAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        EntityParticipationQueryClause clause,
+        CancellationToken cancellationToken)
+    {
+        var relationshipTypes = new BsonArray(clause.RelationshipTypeNames.Values ?? []);
+        var roleNames = clause.ParticipationRoleNames?.Values ?? [];
+
+        // Match relationship documents of the requested types.
+        var pipeline = new List<BsonDocument>
+        {
+            new("$match", new BsonDocument
+            {
+                { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
+                { MongoDbQueryTranslator.TypeNamesField, new BsonDocument("$in", relationshipTypes) },
+            }),
+        };
+
+        // Collect participant IDs from the specified roles (or all roles if none specified).
+        var participantIdsExpression = BuildRoleIdsExpression(roleNames);
+        pipeline.Add(new BsonDocument("$project", new BsonDocument("participantIds", participantIdsExpression)));
+        pipeline.Add(new BsonDocument("$unwind", "$participantIds"));
+        pipeline.Add(new BsonDocument("$group", new BsonDocument("_id", "$participantIds")));
+
+        var result = await bsonCollection.AggregateAsync<BsonDocument>(pipeline, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var participantIds = new HashSet<string>(StringComparer.Ordinal);
+        while (await result.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var doc in result.Current)
+            {
+                participantIds.Add(doc["_id"].AsString);
+            }
+        }
+
+        return participantIds;
     }
 
     private static BsonDocument RenderFilter(FilterDefinition<BsonDocument> filter)
