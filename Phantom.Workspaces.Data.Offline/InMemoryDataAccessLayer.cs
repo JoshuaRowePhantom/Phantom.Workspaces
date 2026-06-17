@@ -929,7 +929,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
                             ConcurrencyTag = version.ConcurrencyTag,
                             ModifiedTime = version.Timestamp,
                             Data = version.Data?.RootElement,
-                            Relationships = Array.Empty<EntitySnapshot>(),
+                            Relationships = this.GetRelationshipsForEntity(entity.Id, timestamp, request.RelationshipsToReturn),
                             MatchingClauseIdentifiers = entity.MatchingClauseIdentifiers,
                             VectorQueryScores = entity.VectorScores,
                         };

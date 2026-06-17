@@ -280,6 +280,37 @@ public abstract class DataAccessLayerQueryContractTests
         Assert.Equal(2, matches.Count);
     }
 
+    [Fact]
+    public async Task Query_WithRelationshipsToReturn_PopulatesMatchedEntityRelationships()
+    {
+        var dataAccessLayer = this.CreateDataAccessLayer();
+        var task = await AddEntityAsync(dataAccessLayer, ["task"], new EntityName("tasks", "withrel"));
+        var user = await AddEntityAsync(dataAccessLayer, ["user"], new EntityName("users", "withrel"));
+        var relationship = await AddRelationshipAsync(
+            dataAccessLayer,
+            ["assigned-to"],
+            new EntityName("relationships", "withrel"),
+            $$"""{ "target": "{{task.Value}}", "user": "{{user.Value}}" }""");
+
+        var result = await dataAccessLayer.QueryAsync(new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("by-type"),
+                    Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["task"]) },
+                },
+            ],
+            RelationshipsToReturn = [new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["assigned-to"]) }],
+        });
+
+        var taskEntity = Assert.Single(
+            Assert.Single(result.Batches).Entities,
+            entity => entity.EntityId == task);
+        Assert.Contains(relationship, taskEntity.Relationships.Select(static relationshipSnapshot => relationshipSnapshot.EntityId));
+    }
+
     protected static async Task<EntityId> AddEntityAsync(
         IDataAccessLayer dataAccessLayer,
         IReadOnlyList<string> entityTypes,

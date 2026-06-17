@@ -319,26 +319,155 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 }
             }
 
+            // When relationships are requested, resolve them for all matched entities in a single
+            // native join (a $lookup of the relationship documents that reference each matched entity).
+            var relationshipsByEntityId = request.RelationshipsToReturn is null
+                ? null
+                : await this.ResolveRelationshipsByEntityAsync(
+                    bsonCollection, matchedClauses.Keys, request.RelationshipsToReturn, cancellationToken).ConfigureAwait(false);
+
             var entities = new List<QueryEntitySnapshot>();
             foreach (var (id, identifiers) in matchedClauses)
             {
+                QueryEntitySnapshot? resultEntity = null;
                 if (vectorScoredEntities.TryGetValue(id, out var vectorEntity))
                 {
-                    entities.Add(vectorEntity with { MatchingClauseIdentifiers = identifiers.ToArray() });
+                    resultEntity = vectorEntity with { MatchingClauseIdentifiers = identifiers.ToArray() };
+                }
+                else if (BuildCurrentSnapshot(documentsById[id]) is { } snapshot)
+                {
+                    resultEntity = snapshot with { MatchingClauseIdentifiers = identifiers.ToArray() };
+                }
+
+                if (resultEntity is null)
+                {
                     continue;
                 }
 
-                var snapshot = BuildCurrentSnapshot(documentsById[id]);
-                if (snapshot is not null)
+                if (relationshipsByEntityId is not null)
                 {
-                    entities.Add(snapshot with { MatchingClauseIdentifiers = identifiers.ToArray() });
+                    resultEntity = resultEntity with
+                    {
+                        Relationships = relationshipsByEntityId.TryGetValue(id, out var entityRelationships)
+                            ? entityRelationships
+                            : [],
+                    };
                 }
+
+                entities.Add(resultEntity);
             }
 
             batches.Add(new TimestampedQueryBatch { Timestamp = timestamp, Entities = entities });
         }
 
         return new QueryResult { Batches = batches };
+    }
+
+    /// <summary>
+    /// Resolves, in a single native aggregation join, the relationships that reference each of the
+    /// given entity ids (the entity appears among the relationship's participant ids), filtered by the
+    /// requested relationship types. Returns a map from entity id to its matching relationship snapshots.
+    /// </summary>
+    private async Task<Dictionary<string, IReadOnlyCollection<EntitySnapshot>>> ResolveRelationshipsByEntityAsync(
+        IMongoCollection<BsonDocument> bsonCollection,
+        IReadOnlyCollection<string> entityIds,
+        IReadOnlyCollection<GetRelationshipRequest> relationshipRequests,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<string, IReadOnlyCollection<EntitySnapshot>>(StringComparer.Ordinal);
+        if (entityIds.Count == 0)
+        {
+            return result;
+        }
+
+        var entityIdArray = new BsonArray(entityIds);
+
+        var pipeline = new List<BsonDocument>
+        {
+            // Non-deleted relationship documents (those carrying a participants object).
+            new("$match", new BsonDocument
+            {
+                { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
+                { "current.data.participants", new BsonDocument("$exists", true) },
+            }),
+        };
+
+        // Restrict to the requested relationship types (unless any request omits a type filter).
+        if (TryResolveRequestedRelationshipTypes(relationshipRequests, out var requestedTypes))
+        {
+            pipeline.Add(new BsonDocument("$match", new BsonDocument(
+                MongoDbQueryTranslator.TypeNamesField, new BsonDocument("$in", new BsonArray(requestedTypes)))));
+        }
+
+        // Keep only relationships referencing one of the requested entities, and emit one row per
+        // (referenced entity id, relationship document).
+        pipeline.Add(new BsonDocument("$project", new BsonDocument
+        {
+            { "owners", new BsonDocument("$setIntersection", new BsonArray { BuildRoleIdsExpression(null), entityIdArray }) },
+            { "doc", "$$ROOT" },
+        }));
+        pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$gt", new BsonArray
+        {
+            new BsonDocument("$size", "$owners"),
+            0,
+        }))));
+        pipeline.Add(new BsonDocument("$unwind", "$owners"));
+
+        var rows = await bsonCollection
+            .Aggregate<BsonDocument>(pipeline, cancellationToken: cancellationToken)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+        var relationshipsByOwner = new Dictionary<string, List<EntitySnapshot>>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var owner = row["owners"].AsString;
+            if (BuildCurrentSnapshot(row["doc"].AsBsonDocument) is not { } relationshipSnapshot)
+            {
+                continue;
+            }
+
+            if (!relationshipsByOwner.TryGetValue(owner, out var ownerRelationships))
+            {
+                relationshipsByOwner[owner] = ownerRelationships = [];
+            }
+
+            ownerRelationships.Add(relationshipSnapshot);
+        }
+
+        foreach (var (owner, ownerRelationships) in relationshipsByOwner)
+        {
+            result[owner] = ownerRelationships;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Resolves the union of relationship type names requested across the filters; returns
+    /// <see langword="false"/> when any filter omits a type restriction (so all types match).
+    /// </summary>
+    private static bool TryResolveRequestedRelationshipTypes(
+        IReadOnlyCollection<GetRelationshipRequest> relationshipRequests,
+        out string[] requestedTypes)
+    {
+        var types = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var request in relationshipRequests)
+        {
+            var typeFilter = request.RelationshipTypeNames?.Values;
+            if (typeFilter is null || typeFilter.Length == 0)
+            {
+                requestedTypes = [];
+                return false;
+            }
+
+            foreach (var typeName in typeFilter)
+            {
+                types.Add(typeName);
+            }
+        }
+
+        requestedTypes = [.. types];
+        return true;
     }
 
     /// <summary>
@@ -1306,25 +1435,36 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     {
         participantIds = [];
         if (!relationshipData.TryGetProperty("participants", out var participants)
-            || participants.ValueKind != JsonValueKind.Object
-            || !participants.TryGetProperty("entities", out var entities)
-            || entities.ValueKind != JsonValueKind.Array)
+            || participants.ValueKind != JsonValueKind.Object)
         {
             return false;
         }
 
-        foreach (var entity in entities.EnumerateArray())
+        // Participants are role-keyed (e.g. { "target": id, "user": id } or { "entities": [id, ...] });
+        // each role value is a single entity id or an array of ids. Collect every referenced id.
+        foreach (var role in participants.EnumerateObject())
         {
-            if (entity.ValueKind != JsonValueKind.String
-                || !Guid.TryParse(entity.GetString(), out var guid))
-            {
-                continue;
-            }
-
-            participantIds.Add(new EntityId(guid));
+            CollectParticipantIds(role.Value, participantIds);
         }
 
         return participantIds.Count > 0;
+    }
+
+    private static void CollectParticipantIds(JsonElement value, HashSet<EntityId> participantIds)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String when Guid.TryParse(value.GetString(), out var guid):
+                participantIds.Add(new EntityId(guid));
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in value.EnumerateArray())
+                {
+                    CollectParticipantIds(item, participantIds);
+                }
+
+                break;
+        }
     }
 
     private static EntityUpdateResult CreateFailedResult(

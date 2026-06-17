@@ -240,6 +240,14 @@ public sealed record QueryRequest
 
     [JsonPropertyName("timestamps")]
     public IReadOnlyCollection<Timestamp?>? Timestamps { get; init; }
+
+    /// <summary>
+    /// Optional relationship filters; when set, each matched entity's <see cref="EntitySnapshot.Relationships"/>
+    /// is populated with the relationships it participates in that match these filters (an empty filter
+    /// matches all). Used, for example, so views can render an entity's interest badges from its relationships.
+    /// </summary>
+    [JsonPropertyName("relationships-to-return")]
+    public IReadOnlyCollection<GetRelationshipRequest>? RelationshipsToReturn { get; init; }
 }
 
 public sealed record QueryResult
