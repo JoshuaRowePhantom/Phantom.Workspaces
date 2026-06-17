@@ -99,9 +99,54 @@
                         SelectedItem="{Binding SelectedWorkspacePane}">
                 <TabControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:WorkspacePaneViewModel">
-                        <TextBlock Text="{Binding Title}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                            <Button Content="✕"
+                                    Command="{Binding CloseCommand}"
+                                    CommandParameter="{Binding}"
+                                    Classes="tab-close-button"
+                                    IsVisible="{Binding CloseCommand, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                    ToolTip.Tip="Close workspace" />
+                        </StackPanel>
                     </DataTemplate>
                 </TabControl.ItemTemplate>
+                <TabControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:WorkspacePaneViewModel">
+                        <Grid RowDefinitions="Auto,*">
+                            <!-- Region tabs within workspace -->
+                            <TabControl Grid.Row="0"
+                                        ItemsSource="{Binding Regions}"
+                                        SelectedItem="{Binding SelectedRegion}"
+                                        IsVisible="{Binding HasRegions}">
+                                <TabControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                                            <Button Content="✕"
+                                                    Command="{Binding CloseTabCommand}"
+                                                    Classes="tab-close-button"
+                                                    ToolTip.Tip="Close tab" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </TabControl.ItemTemplate>
+                                <TabControl.ContentTemplate>
+                                    <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
+                                        <ContentControl Content="{Binding}" />
+                                    </DataTemplate>
+                                </TabControl.ContentTemplate>
+                            </TabControl>
+                            
+                            <!-- Message when no regions -->
+                            <Border Grid.Row="0"
+                                    IsVisible="{Binding HasNoRegions}"
+                                    Padding="16">
+                                <TextBlock Text="No tabs open in this workspace"
+                                           Classes="muted"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                    </DataTemplate>
+                </TabControl.ContentTemplate>
             </TabControl>
         </Grid>
     </Grid>

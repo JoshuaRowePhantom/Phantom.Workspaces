@@ -57,14 +57,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.profileStore = ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
-        this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>
-        {
-            CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected."),
-        };
+        this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>();
 
-        this.selectedWorkspacePane = this.WorkspacePanes[0];
+        this.selectedWorkspacePane = CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.");
+        this.WorkspacePanes.Add(this.selectedWorkspacePane);
+        
         this.ActivateShortcutCommand = new RelayCommand(async _ => await this.OnActivateShortcutAsync(_), this.CanActivateShortcut);
         this.SetDebuggingCommand = new RelayCommand(async parameter => await this.SetDebuggingAsync(ReadDebuggingParameter(parameter)));
+        this.CloseWorkspaceCommand = new RelayCommand(this.OnCloseWorkspace, this.CanCloseWorkspace);
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
@@ -96,6 +96,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand ActivateEntityClickCommand { get; }
 
     public RelayCommand SetDebuggingCommand { get; }
+
+    public RelayCommand CloseWorkspaceCommand { get; }
 
     public ConnectionStatusViewModel? ConnectionStatus { get; private set; }
 
@@ -381,9 +383,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         };
     }
 
-    private static WorkspacePaneViewModel CreatePlaceholderWorkspacePane(
+    private WorkspacePaneViewModel CreatePlaceholderWorkspacePane(
         string paneId,
-        string displayName)
+        string displayName,
+        RelayCommand? closeCommand = null)
     {
         using var document = JsonDocument.Parse(
             $$"""
@@ -402,7 +405,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 Data = document.RootElement.Clone(),
                 Relationships = Array.Empty<EntitySnapshot>(),
             });
-        return new WorkspacePaneViewModel(entity, paneId);
+        return new WorkspacePaneViewModel(entity, paneId, closeCommand);
     }
 
     private void InitializeTopLevelViews()
@@ -841,6 +844,60 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.SelectedWorkspacePane = workspacePane;
     }
 
+    private bool CanCloseWorkspace(object? parameter)
+    {
+        if (parameter is not WorkspacePaneViewModel pane)
+        {
+            return false;
+        }
+
+        // Can't close the default placeholder workspace
+        return !string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal);
+    }
+
+    private void OnCloseWorkspace(object? parameter)
+    {
+        if (parameter is not WorkspacePaneViewModel pane)
+        {
+            return;
+        }
+
+        // Don't allow closing the default placeholder
+        if (string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var paneIndex = this.WorkspacePanes.IndexOf(pane);
+        if (paneIndex < 0)
+        {
+            return;
+        }
+
+        this.WorkspacePanes.RemoveAt(paneIndex);
+
+        // If we just closed the selected workspace, select another one
+        if (this.SelectedWorkspacePane == pane)
+        {
+            // Try to select the workspace at the same index, or the last one
+            if (paneIndex < this.WorkspacePanes.Count)
+            {
+                this.SelectedWorkspacePane = this.WorkspacePanes[paneIndex];
+            }
+            else if (this.WorkspacePanes.Count > 0)
+            {
+                this.SelectedWorkspacePane = this.WorkspacePanes[this.WorkspacePanes.Count - 1];
+            }
+            else
+            {
+                // If no workspaces left, create the default placeholder
+                var placeholder = this.CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.", this.CloseWorkspaceCommand);
+                this.WorkspacePanes.Add(placeholder);
+                this.SelectedWorkspacePane = placeholder;
+            }
+        }
+    }
+
     private WorkspacePaneViewModel GetOrCreateLoadingWorkspacePane(
         GetEntityRequest workspaceRequest)
     {
@@ -860,7 +917,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var displayName = $"Loading {GetWorkspaceRequestDisplayText(workspaceRequest)}...";
-        var loadingPane = CreatePlaceholderWorkspacePane(paneId, displayName);
+        var loadingPane = this.CreatePlaceholderWorkspacePane(paneId, displayName, this.CloseWorkspaceCommand);
         this.WorkspacePanes.Add(loadingPane);
         return loadingPane;
     }
@@ -1020,7 +1077,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SubscribedEntityViewModel workspaceEntity,
         JsonElement workspaceData)
     {
-        var workspacePane = new WorkspacePaneViewModel(workspaceEntity);
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
         var regions = new List<WorkspaceRegionViewModel>();
 
         if (workspaceData.TryGetProperty("regions", out var workspaceRegions)

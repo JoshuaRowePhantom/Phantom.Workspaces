@@ -13,11 +13,13 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
-        string? id = null)
+        string? id = null,
+        RelayCommand? closeCommand = null)
     {
         this.Entity = entity;
         this.title = entity.DisplayName;
         this.Id = id ?? entity.EntityId.ToString();
+        this.CloseCommand = closeCommand;
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.Regions.CollectionChanged += this.OnRegionsCollectionChanged;
     }
@@ -31,6 +33,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     }
 
     public SubscribedEntityViewModel Entity { get; }
+
+    public RelayCommand? CloseCommand { get; }
 
     public ObservableCollection<WorkspaceRegionViewModel> Regions { get; } = [];
 
