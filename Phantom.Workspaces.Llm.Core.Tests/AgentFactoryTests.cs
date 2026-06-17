@@ -714,6 +714,7 @@ public class AgentFactoryTests
     }
 
     [Fact]
+    [Trait("Category", "SlowDocker")]
     public async Task CreateAgentChat_UsesAgentDefinitionChatHistoryTool()
     {
         var mongoConfig = new MongoDbChatHistoryProviderDefinition
