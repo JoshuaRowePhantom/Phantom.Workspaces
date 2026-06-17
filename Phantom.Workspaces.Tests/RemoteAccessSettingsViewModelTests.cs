@@ -45,12 +45,26 @@ public sealed class RemoteAccessSettingsViewModelTests
         {
             HostingEnabled = true,
             ListenUrl = "http://localhost:6001",
+            AcceptReverseExecution = true,
         };
 
         var settings = viewModel.ToRemoteHostingSettings();
 
         Assert.True(settings.Enabled);
         Assert.Equal("http://localhost:6001", settings.ListenUrl);
+        Assert.True(settings.AcceptReverseExecution);
+    }
+
+    [AvaloniaFact]
+    public void AcceptReverseExecution_DefaultsOff_AndRoundTripsFromSettings()
+    {
+        Assert.False(new RemoteAccessSettingsViewModel().AcceptReverseExecution);
+
+        var viewModel = new RemoteAccessSettingsViewModel(
+            new RemoteHostingSettings { AcceptReverseExecution = true },
+            new DevTunnelConfiguration());
+
+        Assert.True(viewModel.AcceptReverseExecution);
     }
 
     [AvaloniaFact]

@@ -84,6 +84,12 @@ public sealed record RemoteHostingSettings
 
     /// <summary>The URL the web server binds to when hosting is enabled.</summary>
     public string ListenUrl { get; init; } = "http://localhost:5280";
+
+    /// <summary>
+    /// Whether this instance accepts reverse-direction trusted execution from instances it connects
+    /// out to (any authenticated peer over the established tunnel). Off by default; opt-in.
+    /// </summary>
+    public bool AcceptReverseExecution { get; init; }
 }
 
 /// <summary>

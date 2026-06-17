@@ -10,6 +10,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
 {
     private bool hostingEnabled;
     private string listenUrl;
+    private bool acceptReverseExecution;
     private DevTunnelAccessMode devTunnelAccessMode;
     private string? devTunnelAccessTokenSource;
     private string? tunnelName;
@@ -29,6 +30,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         ArgumentNullException.ThrowIfNull(devTunnel);
         this.hostingEnabled = remoteHosting.Enabled;
         this.listenUrl = remoteHosting.ListenUrl;
+        this.acceptReverseExecution = remoteHosting.AcceptReverseExecution;
         this.devTunnelAccessMode = devTunnel.AccessMode;
         this.devTunnelAccessTokenSource = devTunnel.AccessTokenSource;
         this.tunnelName = devTunnel.TunnelName;
@@ -54,6 +56,16 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     {
         get => this.listenUrl;
         set => this.SetValidatedProperty(ref this.listenUrl, value);
+    }
+
+    /// <summary>
+    /// Whether this instance accepts reverse-direction trusted execution from connected peers
+    /// (any authenticated peer over the tunnel once enabled).
+    /// </summary>
+    public bool AcceptReverseExecution
+    {
+        get => this.acceptReverseExecution;
+        set => this.SetValidatedProperty(ref this.acceptReverseExecution, value);
     }
 
     /// <summary>The dev tunnel access mode.</summary>
@@ -108,6 +120,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     {
         Enabled = this.HostingEnabled,
         ListenUrl = this.ListenUrl,
+        AcceptReverseExecution = this.AcceptReverseExecution,
     };
 
     /// <summary>Projects the current settings into a <see cref="DevTunnelConfiguration"/>.</summary>

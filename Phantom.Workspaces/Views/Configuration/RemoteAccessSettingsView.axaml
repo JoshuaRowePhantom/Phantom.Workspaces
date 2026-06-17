@@ -12,6 +12,9 @@
         <CheckBox Content="Host the web data-access endpoint from this instance"
                   IsChecked="{Binding HostingEnabled}" />
 
+        <CheckBox Content="Accept reverse execution from connected peers"
+                  IsChecked="{Binding AcceptReverseExecution}" />
+
         <StackPanel Spacing="4">
             <TextBlock Text="Listen URL" />
             <TextBox PlaceholderText="http://localhost:5280" Text="{Binding ListenUrl}" />

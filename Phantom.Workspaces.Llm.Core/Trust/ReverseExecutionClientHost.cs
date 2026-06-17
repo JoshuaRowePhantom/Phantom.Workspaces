@@ -28,7 +28,7 @@ public sealed class ReverseExecutionClientHost
     /// <summary>
     /// Creates a host with an injectable channel factory (production passes a WebSocket factory; tests
     /// pass an in-memory channel). The optional <paramref name="backoffDelay"/> lets tests make
-    /// reconnection deterministic; production uses exponential backoff capped at 30 seconds.
+    /// reconnection deterministic; production uses exponential backoff capped at a 2-minute poll interval.
     /// </summary>
     public ReverseExecutionClientHost(
         string clientInstanceId,
@@ -153,7 +153,8 @@ public sealed class ReverseExecutionClientHost
 
     private static async Task DefaultBackoffDelay(int attempt, CancellationToken cancellationToken)
     {
-        var seconds = Math.Min(30, Math.Pow(2, Math.Min(attempt, 5)));
+        // Exponential backoff capped at a 2-minute poll interval.
+        var seconds = Math.Min(120, Math.Pow(2, Math.Min(attempt, 7)));
         await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
     }
 }
