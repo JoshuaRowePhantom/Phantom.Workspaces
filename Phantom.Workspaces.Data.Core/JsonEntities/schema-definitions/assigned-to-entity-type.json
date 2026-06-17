@@ -38,5 +38,6 @@
     "description": "Not assigned",
     "actionText": "Assign"
   },
+  "display-entity-types": [],
   "default-name-prefixes": []
 }
