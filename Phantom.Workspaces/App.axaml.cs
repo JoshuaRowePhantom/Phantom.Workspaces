@@ -45,7 +45,18 @@ public partial class App : Application
             base.OnFrameworkInitializationCompleted();
 
             loadingViewModel.StatusText = "Reading startup configuration.";
-            var repositorySource = await ResolveStartupRepositorySourceAsync(desktop, loadingWindow);
+            var persistenceService = CommandLineOptions.TryGetConfigurationFilePath(Program.StartupArguments, out var configurationFilePath)
+                ? new ConfigurationPersistenceService(configurationFilePath!)
+                : new ConfigurationPersistenceService();
+            
+            var configuration = persistenceService.ConfigurationExists()
+                ? await persistenceService.LoadAsync()
+                : null;
+            
+            var repositorySource = configuration is not null
+                ? configuration.ToRepositorySource()
+                : await ResolveStartupRepositorySourceAsync(desktop, loadingWindow, persistenceService);
+                
             if (repositorySource is null)
             {
                 desktop.Shutdown();
@@ -54,7 +65,7 @@ public partial class App : Application
 
             loadingWindow.Show();
             loadingViewModel.StatusText = "Initializing main workspace view model.";
-            var viewModel = new MainWindowViewModel(repositorySource);
+            var viewModel = new MainWindowViewModel(repositorySource, configuration);
 
             loadingViewModel.StatusText = "Loading repository data and profile.";
             await viewModel.InitializeAsync();
@@ -78,12 +89,9 @@ public partial class App : Application
     /// </summary>
     private static async System.Threading.Tasks.Task<RepositorySource?> ResolveStartupRepositorySourceAsync(
         IClassicDesktopStyleApplicationLifetime desktop,
-        Window loadingWindow)
+        Window loadingWindow,
+        ConfigurationPersistenceService persistenceService)
     {
-        var persistenceService = CommandLineOptions.TryGetConfigurationFilePath(Program.StartupArguments, out var configurationFilePath)
-            ? new ConfigurationPersistenceService(configurationFilePath!)
-            : new ConfigurationPersistenceService();
-
         if (persistenceService.ConfigurationExists())
         {
             var configuration = await persistenceService.LoadAsync();

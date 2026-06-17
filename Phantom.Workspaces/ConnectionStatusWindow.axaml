@@ -1,0 +1,46 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        x:Class="Phantom.Workspaces.ConnectionStatusWindow"
+        x:DataType="vm:ConnectionStatusViewModel"
+        Width="600"
+        Height="400"
+        MinWidth="400"
+        MinHeight="300"
+        WindowStartupLocation="CenterScreen"
+        Title="Network Connection Status">
+    <Grid RowDefinitions="Auto,*,Auto"
+          Margin="16">
+        <TextBlock Grid.Row="0"
+                   Text="Inbound Connections (instances connected to us)"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,8" />
+        <Border Grid.Row="1" Classes="pane-container" Margin="0,0,0,16">
+            <ScrollViewer>
+                <ItemsControl ItemsSource="{Binding Inbound}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:InboundConnectionViewModel">
+                            <StackPanel Margin="8">
+                                <TextBlock Text="{Binding ClientInstanceId}"
+                                           FontWeight="SemiBold" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Connected:" Classes="muted" />
+                                    <TextBlock Text="{Binding ConnectedAt}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="In-flight:" Classes="muted" />
+                                    <TextBlock Text="{Binding InFlightCount}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Border>
+        
+        <Button Grid.Row="2"
+                Content="Close"
+                HorizontalAlignment="Right"
+                Click="OnCloseClick" />
+    </Grid>
+</Window>

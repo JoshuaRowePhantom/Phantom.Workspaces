@@ -24,7 +24,9 @@
     <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Offline\Phantom.Workspaces.Data.Offline.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Client\Phantom.Workspaces.Data.Web.Client.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Server\Phantom.Workspaces.Data.Web.Server.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Styles\Phantom.Workspaces.Gui.Styles.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Tools\Phantom.Workspaces.Tools.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Web.Server\Phantom.Workspaces.Web.Server.csproj" />
   </ItemGroup>
 </Project>

@@ -9,11 +9,13 @@ using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IAsyncDisposable
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -25,6 +27,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         IconGlyph = "◻",
     };
     private readonly Task<EntityBroker> entityBrokerTask;
+    private readonly WorkspacesConfiguration? configuration;
+    private WorkspacesWebHost? webHost;
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private SubscribedEntityViewModel? mainNavigationView;
@@ -43,9 +47,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private bool showHiddenItems;
 
     public MainWindowViewModel(
-        RepositorySource repositorySource)
+        RepositorySource repositorySource,
+        WorkspacesConfiguration? configuration = null)
     {
         this.RepositorySource = repositorySource;
+        this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(repositorySource);
         this.profileStore = ProfileStore.ForCurrentUser();
 
@@ -89,6 +95,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand ActivateEntityClickCommand { get; }
 
     public RelayCommand SetDebuggingCommand { get; }
+
+    public ConnectionStatusViewModel? ConnectionStatus { get; private set; }
 
     public Profile CurrentProfile => this.currentProfile;
 
@@ -201,6 +209,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.InitializeProfileAsync();
         await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
+        await this.InitializeWebHostAsync();
+    }
+
+    private async Task InitializeWebHostAsync()
+    {
+        if (this.configuration is null)
+        {
+            return;
+        }
+
+        var reverseExecutionRegistry = new Llm.Trust.ReverseExecutionRegistry();
+        this.webHost = new WorkspacesWebHost(reverseExecutionRegistry);
+        this.ConnectionStatus = new ConnectionStatusViewModel(
+            reverseExecutionRegistry,
+            action => Dispatcher.UIThread.Post(action));
+
+        if (this.configuration.RemoteHosting.Enabled && this.entityBroker is not null)
+        {
+            await this.webHost.StartAsync(
+                this.configuration.RemoteHosting,
+                this.entityBroker.EntityRepository.DataAccessLayer);
+        }
     }
 
     private async Task InitializeProfileAsync()
@@ -1613,4 +1643,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return null;
     }
 
+    public async ValueTask DisposeAsync()
+    {
+        if (this.webHost is not null)
+        {
+            await this.webHost.DisposeAsync();
+        }
+
+        this.ConnectionStatus?.Dispose();
+    }
 }

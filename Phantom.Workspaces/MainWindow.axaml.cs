@@ -44,4 +44,17 @@ public partial class MainWindow : Window
 
         await settingsWindow.ShowDialog(this);
     }
+
+    private void OnOpenConnectionStatusClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel || viewModel.ConnectionStatus is null)
+        {
+            return;
+        }
+
+        var statusWindow = new ConnectionStatusWindow(viewModel.ConnectionStatus);
+        statusWindow.ShowDialog(this);
+    }
 }
