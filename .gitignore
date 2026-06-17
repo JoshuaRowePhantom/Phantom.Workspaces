@@ -489,7 +489,11 @@ docs/nuget/research/
 # Local launch profiles
 **/Properties/launchSettings.json
 
+# Local playspace configuration
+playspace-config.json
+
 # mongo data started from the examples
 mongo-data
+mongo-data-playspace
 /build-output.txt
 Avalonia.Licensing.Local.props
