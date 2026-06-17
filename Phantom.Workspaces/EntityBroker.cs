@@ -183,6 +183,9 @@ public sealed class EntityBroker
                 {
                     ChangedEntityIds = changedEntityIds.ToArray(),
                 });
+
+            await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
+            await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
         }
 
         return updateResult;

@@ -541,6 +541,203 @@ public sealed class EntityBrokerTests
         Assert.Equal(taskId, Assert.Single(subscribedQuery.Results).EntityId);
     }
 
+    [AvaloniaFact]
+    public async Task SubscribeQueryAsync_RefreshesAutomaticallyWhenMatchingEntityAdded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        // Create initial session entity via UpdateAsync so broker tracks changes
+        var sessionId1 = new EntityId("e1e1e1e1-0000-0000-0000-000000000001");
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Add first session.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = sessionId1,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonDocument.Parse("""
+                            {
+                              "entity-id": "e1e1e1e1-0000-0000-0000-000000000001",
+                              "entity-types": ["agent-session"],
+                              "names": [["session-1"]],
+                              "display-name": { "default": "Session 1" }
+                            }
+                            """).RootElement.Clone(),
+                    },
+                ],
+            },
+            ct);
+
+        // Subscribe to agent-session entity-type query
+        var subscribedQuery = await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("sessions"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                        },
+                    },
+                ],
+            },
+            ct);
+
+        // Should have 1 result initially
+        Assert.Single(subscribedQuery.Results);
+
+        // Add a second matching entity via UpdateAsync
+        var sessionId2 = new EntityId("e2e2e2e2-0000-0000-0000-000000000002");
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Add second session.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = sessionId2,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonDocument.Parse("""
+                            {
+                              "entity-id": "e2e2e2e2-0000-0000-0000-000000000002",
+                              "entity-types": ["agent-session"],
+                              "names": [["session-2"]],
+                              "display-name": { "default": "Session 2" }
+                            }
+                            """).RootElement.Clone(),
+                    },
+                ],
+            },
+            ct);
+
+        // Query should now have 2 results after automatic refresh
+        Assert.Equal(2, subscribedQuery.Results.Count);
+        Assert.Contains(subscribedQuery.Results, e => e.EntityId == sessionId1);
+        Assert.Contains(subscribedQuery.Results, e => e.EntityId == sessionId2);
+    }
+
+    [AvaloniaFact]
+    public async Task SubscribeQueryAsync_RefreshesAutomaticallyWhenMatchingEntityDeleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        // Create two session entities via UpdateAsync
+        var sessionId1 = new EntityId("f1f1f1f1-0000-0000-0000-000000000001");
+        var sessionId2 = new EntityId("f2f2f2f2-0000-0000-0000-000000000002");
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Add sessions.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = sessionId1,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonDocument.Parse("""
+                            {
+                              "entity-id": "f1f1f1f1-0000-0000-0000-000000000001",
+                              "entity-types": ["agent-session"],
+                              "names": [["session-1"]],
+                              "display-name": { "default": "Session 1" }
+                            }
+                            """).RootElement.Clone(),
+                    },
+                    new EntityChange
+                    {
+                        EntityId = sessionId2,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = JsonDocument.Parse("""
+                            {
+                              "entity-id": "f2f2f2f2-0000-0000-0000-000000000002",
+                              "entity-types": ["agent-session"],
+                              "names": [["session-2"]],
+                              "display-name": { "default": "Session 2" }
+                            }
+                            """).RootElement.Clone(),
+                    },
+                ],
+            },
+            ct);
+
+        // Subscribe to agent-session entity-type query
+        var subscribedQuery = await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("sessions"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["agent-session"]),
+                        },
+                    },
+                ],
+            },
+            ct);
+
+        // Should have 2 results initially
+        Assert.Equal(2, subscribedQuery.Results.Count);
+
+        // Delete one entity via UpdateAsync
+        var entity1 = subscribedQuery.Results.First(e => e.EntityId == sessionId1);
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Delete session 1.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = sessionId1,
+                        ConcurrencyTag = entity1.Snapshot.ConcurrencyTag,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = null,
+                    },
+                ],
+            },
+            ct);
+
+        // Query should now have 1 result after automatic refresh
+        var remaining = Assert.Single(subscribedQuery.Results);
+        Assert.Equal(sessionId2, remaining.EntityId);
+    }
+
     private static Task<EntityBroker> CreateBrokerAsync(CancellationToken cancellationToken)
     {
         return EntityBroker.CreateInitializedAsync(
