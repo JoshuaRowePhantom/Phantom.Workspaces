@@ -980,6 +980,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task OpenEntityBrowserTabAsync()
     {
         const string entityBrowserTabId = "entity-browser-tab";
+        
+        // Ensure workspace is loaded first
+        await this.EnsureWorkspaceLoadedAsync();
+        
         var selectedRegion = this.GetOrCreateSelectedWorkspaceRegion();
         var existingTab = selectedRegion.Tabs
             .OfType<EntityBrowserWorkspaceTabViewModel>()
