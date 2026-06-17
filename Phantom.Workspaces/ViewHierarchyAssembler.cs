@@ -139,6 +139,9 @@ public sealed class ViewHierarchyAssembler
         return traversals;
     }
 
+    // TODO: This method creates a subscription but only takes a snapshot, making hierarchy static.
+    // To make hierarchies dynamic: maintain all subscriptions, observe Results.CollectionChanged,
+    // rebuild hierarchy when any subscription changes, dispose all on view disposal.
     private async Task<IReadOnlyCollection<SubscribedEntityViewModel>> QueryParticipantsAsync(
         JsonElement traversal,
         EntityId targetEntityId,
