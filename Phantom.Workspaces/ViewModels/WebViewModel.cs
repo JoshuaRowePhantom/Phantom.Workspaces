@@ -43,9 +43,11 @@ public class WebViewModel : WorkspaceTabViewModel
         get => this.canGoBack;
         set
         {
+            System.Diagnostics.Debug.WriteLine($"[WebViewModel] CanGoBack set to {value}");
             if (this.SetProperty(ref this.canGoBack, value))
             {
                 (this.GoBackCommand as RelayCommand)?.RaiseCanExecuteChanged();
+                System.Diagnostics.Debug.WriteLine($"[WebViewModel] Raised CanExecuteChanged for GoBackCommand");
             }
         }
     }
@@ -55,9 +57,11 @@ public class WebViewModel : WorkspaceTabViewModel
         get => this.canGoForward;
         set
         {
+            System.Diagnostics.Debug.WriteLine($"[WebViewModel] CanGoForward set to {value}");
             if (this.SetProperty(ref this.canGoForward, value))
             {
                 (this.GoForwardCommand as RelayCommand)?.RaiseCanExecuteChanged();
+                System.Diagnostics.Debug.WriteLine($"[WebViewModel] Raised CanExecuteChanged for GoForwardCommand");
             }
         }
     }
@@ -95,12 +99,14 @@ public class WebViewModel : WorkspaceTabViewModel
 
     private void GoBack()
     {
+        System.Diagnostics.Debug.WriteLine($"[WebViewModel] GoBack called, CanGoBack={this.CanGoBack}");
         // WebView control should handle this via binding
         this.RaiseNavigationRequested(NavigationDirection.Back);
     }
 
     private void GoForward()
     {
+        System.Diagnostics.Debug.WriteLine($"[WebViewModel] GoForward called, CanGoForward={this.CanGoForward}");
         // WebView control should handle this via binding
         this.RaiseNavigationRequested(NavigationDirection.Forward);
     }

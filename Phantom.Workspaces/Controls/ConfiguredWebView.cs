@@ -79,6 +79,8 @@ public class ConfiguredWebView : NativeWebView
 
     public ConfiguredWebView()
     {
+        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Constructor called");
+        
         // Subscribe to EnvironmentRequested if the event exists
         this.Initialized += OnInitialized;
         
@@ -86,10 +88,14 @@ public class ConfiguredWebView : NativeWebView
         this.PropertyChanged += OnPropertyChanged;
         
         // Subscribe to WebView navigation events directly
+        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NavigationCompleted");
         this.NavigationCompleted += OnWebViewNavigationCompleted;
+        
+        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NewWindowRequested");
         this.NewWindowRequested += OnNewWindowRequested;
         
         // DocumentTitleChanged doesn't exist - we'll track title via property changes
+        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Constructor completed");
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -129,12 +135,16 @@ public class ConfiguredWebView : NativeWebView
 
     private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
     {
+        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NavigationCompleted: Source={this.Source}, CanGoBack={this.CanGoBack}, CanGoForward={this.CanGoForward}");
+        
         // Update the ViewModel with the current URL after navigation completes
         if (this.ViewModel != null && this.Source != null)
         {
             this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
             this.ViewModel.CanGoBack = this.CanGoBack;
             this.ViewModel.CanGoForward = this.CanGoForward;
+            
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Updated ViewModel: CanGoBack={this.ViewModel.CanGoBack}, CanGoForward={this.ViewModel.CanGoForward}");
             
             // Update title by executing JavaScript to get document.title
             _ = UpdateTitleAsync();
@@ -169,9 +179,12 @@ public class ConfiguredWebView : NativeWebView
 
     private void OnNewWindowRequested(object? sender, object? e)
     {
+        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NewWindowRequested event fired! EventArgs type: {e?.GetType().FullName}");
+        
         // Handle new window requests (e.g., Ctrl+click, window.open())
         if (this.ViewModel == null || e == null)
         {
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] ViewModel or EventArgs is null, skipping");
             return;
         }
 
@@ -179,11 +192,13 @@ public class ConfiguredWebView : NativeWebView
         {
             var argsType = e.GetType();
             
-            // Get the URI property
+            // Get the Uri property
             var uriProperty = argsType.GetProperty("Uri");
             if (uriProperty != null)
             {
                 var uri = uriProperty.GetValue(e) as Uri;
+                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Extracted Uri: {uri}");
+                
                 if (uri != null)
                 {
                     // Set Handled to true to prevent default behavior
@@ -191,17 +206,26 @@ public class ConfiguredWebView : NativeWebView
                     if (handledProperty != null && handledProperty.CanWrite)
                     {
                         handledProperty.SetValue(e, true);
+                        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Set Handled=true");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Handled property not found or not writable!");
                     }
 
                     // Notify the ViewModel to open a new tab
                     this.ViewModel.RaiseOpenNewWindow(uri.ToString());
-                    System.Diagnostics.Debug.WriteLine($"New window requested: {uri}");
+                    System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Raised OpenNewWindow event: {uri}");
                 }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Uri property not found on event args!");
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to handle NewWindowRequested: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to handle NewWindowRequested: {ex.Message}");
         }
     }
 

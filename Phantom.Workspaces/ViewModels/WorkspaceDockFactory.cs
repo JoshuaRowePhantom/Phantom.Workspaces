@@ -29,6 +29,8 @@ public class WorkspaceDockFactory : Factory
             Title = "Workspaces",
             CanCreateDocument = false,
             IsCollapsable = false,
+            CanFloat = false,
+            CanPin = false,
             VisibleDockables = CreateList<IDockable>(),
         };
 
@@ -36,6 +38,8 @@ public class WorkspaceDockFactory : Factory
         root.Id = "Root";
         root.Title = "Root";
         root.IsCollapsable = false;
+        root.CanFloat = false;
+        root.CanPin = false;
         root.VisibleDockables = CreateList<IDockable>(workspacesDock);
         root.DefaultDockable = workspacesDock;
         root.ActiveDockable = workspacesDock;
@@ -77,6 +81,8 @@ public class WorkspaceDockFactory : Factory
             Id = workspacePane.Id,
             Title = workspacePane.Title,
             CanClose = true,
+            CanFloat = false,
+            CanPin = false,
         };
     }
 
