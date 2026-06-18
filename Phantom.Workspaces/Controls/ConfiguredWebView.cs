@@ -83,6 +83,43 @@ public class ConfiguredWebView : NativeWebView
         
         // Listen for navigation requests from the view model
         this.PropertyChanged += OnPropertyChanged;
+        
+        // Subscribe to WebView navigation events if they exist
+        TrySubscribeToNavigationEvents();
+    }
+    
+    private void TrySubscribeToNavigationEvents()
+    {
+        try
+        {
+            // Try to subscribe to NavigationCompleted event
+            var navCompletedEvent = this.GetType().GetEvent("NavigationCompleted");
+            if (navCompletedEvent != null)
+            {
+                var handler = Delegate.CreateDelegate(
+                    navCompletedEvent.EventHandlerType!,
+                    this,
+                    nameof(OnWebViewNavigationCompleted));
+                navCompletedEvent.AddEventHandler(this, handler);
+                System.Diagnostics.Debug.WriteLine("Subscribed to NavigationCompleted");
+            }
+
+            // Try to subscribe to DocumentTitleChanged event
+            var titleChangedEvent = this.GetType().GetEvent("DocumentTitleChanged");
+            if (titleChangedEvent != null)
+            {
+                var handler = Delegate.CreateDelegate(
+                    titleChangedEvent.EventHandlerType!,
+                    this,
+                    nameof(OnDocumentTitleChanged));
+                titleChangedEvent.AddEventHandler(this, handler);
+                System.Diagnostics.Debug.WriteLine("Subscribed to DocumentTitleChanged");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to subscribe to navigation events: {ex.Message}");
+        }
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -117,6 +154,42 @@ public class ConfiguredWebView : NativeWebView
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Navigation failed: {ex.Message}");
+        }
+    }
+
+    private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
+    {
+        // Update the ViewModel with the current URL after navigation completes
+        if (this.ViewModel != null && this.Source != null)
+        {
+            this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
+            this.ViewModel.CanGoBack = this.CanGoBack;
+            this.ViewModel.CanGoForward = this.CanGoForward;
+        }
+    }
+
+    private void OnDocumentTitleChanged(object? sender, EventArgs e)
+    {
+        // Update the tab title with the page title
+        if (this.ViewModel != null)
+        {
+            // Try to get DocumentTitle property via reflection
+            try
+            {
+                var titleProperty = this.GetType().GetProperty("DocumentTitle");
+                if (titleProperty != null)
+                {
+                    var title = titleProperty.GetValue(this) as string;
+                    if (!string.IsNullOrEmpty(title))
+                    {
+                        this.ViewModel.Title = title;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to get DocumentTitle: {ex.Message}");
+            }
         }
     }
 
