@@ -100,6 +100,25 @@ public class ConfiguredWebView : NativeWebView
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
+        // Handle Source property changes (for navigation tracking)
+        if (e.Property.Name == "Source" && this.ViewModel != null)
+        {
+            var newSource = e.NewValue as Uri;
+            if (newSource != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Source changed to: {newSource}");
+                this.ViewModel.UpdateCurrentUrl(newSource.ToString());
+                this.ViewModel.CanGoBack = this.CanGoBack;
+                this.ViewModel.CanGoForward = this.CanGoForward;
+                
+                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Updated ViewModel from Source change: CanGoBack={this.ViewModel.CanGoBack}, CanGoForward={this.ViewModel.CanGoForward}");
+                
+                // Update title
+                _ = UpdateTitleAsync();
+            }
+        }
+        
+        // Handle ViewModel property changes
         if (e.Property == ViewModelProperty)
         {
             if (e.OldValue is WebViewModel oldViewModel)
@@ -192,14 +211,29 @@ public class ConfiguredWebView : NativeWebView
         {
             var argsType = e.GetType();
             
-            // Get the Uri property
-            var uriProperty = argsType.GetProperty("Uri");
-            if (uriProperty != null)
+            // Log all properties
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Event args properties:");
+            foreach (var prop in argsType.GetProperties())
             {
-                var uri = uriProperty.GetValue(e) as Uri;
-                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Extracted Uri: {uri}");
+                try
+                {
+                    var value = prop.GetValue(e);
+                    System.Diagnostics.Debug.WriteLine($"  {prop.Name} ({prop.PropertyType.Name}): {value}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"  {prop.Name}: Error reading - {ex.Message}");
+                }
+            }
+            
+            // Try to get Request property (which is a Uri)
+            var requestProperty = argsType.GetProperty("Request");
+            if (requestProperty != null)
+            {
+                var url = requestProperty.GetValue(e);
+                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Extracted Request: {url}");
                 
-                if (uri != null)
+                if (url != null)
                 {
                     // Set Handled to true to prevent default behavior
                     var handledProperty = argsType.GetProperty("Handled");
@@ -213,19 +247,23 @@ public class ConfiguredWebView : NativeWebView
                         System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Handled property not found or not writable!");
                     }
 
+                    // Convert to string
+                    string urlString = url.ToString() ?? string.Empty;
+
                     // Notify the ViewModel to open a new tab
-                    this.ViewModel.RaiseOpenNewWindow(uri.ToString());
-                    System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Raised OpenNewWindow event: {uri}");
+                    this.ViewModel.RaiseOpenNewWindow(urlString);
+                    System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Raised OpenNewWindow event: {urlString}");
                 }
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Uri property not found on event args!");
+                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Request property not found on event args!");
             }
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to handle NewWindowRequested: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Stack trace: {ex.StackTrace}");
         }
     }
 
