@@ -1,6 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/relationship-type.json",
-  "description": "Schema for relationship type entities that define roles and validation for relationship instances.",
+  "description": "Schema for relationship type entities that define roles and validation for relationship instances. The referenced schema must include relationship.json in its composition to ensure instances have 'relationship' in entity-types.",
   "allOf": [
     {
       "$ref": "entity-type.json"
@@ -10,6 +10,7 @@
   "properties": {
     "schema": {
       "type": "object",
+      "description": "Relationship type schemas should reference a schema that includes relationship.json",
       "properties": {
         "properties": {
           "type": "object",

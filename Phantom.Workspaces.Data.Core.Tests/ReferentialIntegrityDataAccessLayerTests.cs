@@ -554,7 +554,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "related"],
-              "names": [["relationship-with-reference-field"]],
+              "names": [["relationship", "{{relationshipEntityId}}"]],
               "participants": {
                 "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
               },
@@ -689,7 +689,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "entity-id": "{{relationshipEntityId}}",
               "entity-types": ["relationship", "related"],
-              "names": [["source-to-destination"]],
+              "names": [["relationship", "{{relationshipEntityId}}"]],
               "participants": {
                 "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
               }

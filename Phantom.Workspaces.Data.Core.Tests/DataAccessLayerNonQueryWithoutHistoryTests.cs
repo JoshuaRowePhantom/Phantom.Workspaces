@@ -493,7 +493,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             {
               "entity-id": "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69",
               "entity-types": ["relationship", "related"],
-              "names": [["one-related"]],
+              "names": [["relationship", "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69"]],
               "participants": {
                 "entities": ["{{SampleEntityId}}", "{{additionalParticipantId}}"]
               }

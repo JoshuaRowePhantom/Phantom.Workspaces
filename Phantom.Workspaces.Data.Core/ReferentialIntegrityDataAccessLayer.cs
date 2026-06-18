@@ -116,17 +116,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 Changes = changesByEntityId.Values.ToArray(),
             });
 
-        // TODO: Relationship-type validation disabled - existing seed data doesn't conform
-        // var relationshipTypeValidationFailures = this.ValidateRelationshipTypeNames(changesByEntityId);
-        // if (relationshipTypeValidationFailures.Count > 0)
-        // {
-        //     return new RewriteState
-        //     {
-        //         Changes = Array.Empty<EntityChange>(),
-        //         Failures = relationshipTypeValidationFailures,
-        //     };
-        // }
-
         var validationFailures = await this.ValidateReferencesAsync(
             changesByEntityId,
             requestSchemasByName,
@@ -461,6 +450,13 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 for (var componentCount = 1; componentCount < name.Components.Length; componentCount++)
                 {
                     var prefixName = new EntityName(name.Components[..componentCount]);
+                    
+                    // Skip "relationship" prefix - relationship entities use this prefix for their entity-id naming convention
+                    if (prefixName.Components.Length == 1 && prefixName.Components[0] == "relationship")
+                    {
+                        continue;
+                    }
+                    
                     requiredFolderNames[SerializeEntityName(prefixName)] = prefixName;
                 }
             }
@@ -498,84 +494,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         }
 
         return nextOrder;
-    }
-
-    private IReadOnlyCollection<EntityUpdateResult> ValidateRelationshipTypeNames(
-        IReadOnlyDictionary<EntityId, EntityChange> changesByEntityId)
-    {
-        var failures = new List<EntityUpdateResult>();
-
-        foreach (var (entityId, change) in changesByEntityId)
-        {
-            if (change.Data is null)
-            {
-                continue;
-            }
-
-            var entityData = change.Data.Value;
-            var entityTypes = this.GetEntityTypeNames(entityData);
-            
-            // Check if this is a relationship-type entity
-            if (!entityTypes.Contains("relationship-type"))
-            {
-                continue;
-            }
-
-            string? errorMessage = null;
-
-            // Validate that names contains exactly one entry of ["relationship", <entity-id>]
-            if (!entityData.TryGetProperty("names", out var namesElement) || namesElement.ValueKind != JsonValueKind.Array)
-            {
-                errorMessage = "Relationship types must have a 'names' array property.";
-            }
-            else
-            {
-                var namesList = namesElement.EnumerateArray().ToList();
-                if (namesList.Count != 1)
-                {
-                    errorMessage = $"Relationship types must have exactly one name entry, but found {namesList.Count}.";
-                }
-                else
-                {
-                    var nameEntry = namesList[0];
-                    if (nameEntry.ValueKind != JsonValueKind.Array)
-                    {
-                        errorMessage = "Relationship type name must be an array.";
-                    }
-                    else
-                    {
-                        var nameComponents = nameEntry.EnumerateArray().ToList();
-                        if (nameComponents.Count != 2)
-                        {
-                            errorMessage = $"Relationship type name must have exactly 2 components ['relationship', <entity-id>], but found {nameComponents.Count}.";
-                        }
-                        else if (nameComponents[0].ValueKind != JsonValueKind.String || nameComponents[0].GetString() != "relationship")
-                        {
-                            errorMessage = "Relationship type name must start with 'relationship'.";
-                        }
-                        else if (nameComponents[1].ValueKind != JsonValueKind.String || !Guid.TryParse(nameComponents[1].GetString(), out _))
-                        {
-                            errorMessage = "Relationship type name must have an entity-id as the second component.";
-                        }
-                    }
-                }
-            }
-
-            if (errorMessage is not null)
-            {
-                failures.Add(new EntityUpdateResult
-                {
-                    UpdateState = UpdateState.Failed,
-                    RequestedEntityId = entityId,
-                    ResultingEntityId = entityId,
-                    ConcurrencyTag = change.ConcurrencyTag,
-                    ConcurrencyMatchState = ConcurrencyMatchState.Matched,
-                    Errors = new[] { new UpdateError { Message = errorMessage } },
-                });
-            }
-        }
-
-        return failures;
     }
 
     private async Task<IReadOnlyCollection<EntityUpdateResult>> ValidateReferencesAsync(
