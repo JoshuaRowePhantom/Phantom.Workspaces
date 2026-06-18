@@ -84,9 +84,15 @@ public sealed class BadgeToggleIntegrationTests
         // Toggle interest on
         await subscribedEntity.ToggleInterestAsync("actionable");
 
-        // Refresh - get the updated entity
-        entities = await broker.GetEntitiesAsync(new[] { taskId }, ct);
-        subscribedEntity = entities.Single();
+        // Refresh - get the updated entity WITH relationships so toggle knows about the existing interest
+        var withInterestSnapshot = await GetEntityWithRelationshipsAsync(broker, taskId, ct);
+        
+        // Create a new SubscribedEntityViewModel with the relationship-aware snapshot
+        var toggleFunc = async (SubscribedEntityViewModel entity, string interestTypeName) =>
+        {
+            await InterestToggle.ToggleAsync(broker, entity.Snapshot, interestTypeName, ct);
+        };
+        subscribedEntity = new SubscribedEntityViewModel(withInterestSnapshot, null, toggleFunc);
 
         // Toggle interest off
         await subscribedEntity.ToggleInterestAsync("actionable");
@@ -197,7 +203,7 @@ public sealed class BadgeToggleIntegrationTests
                     new GetEntityRequest
                     {
                         EntityId = entityId,
-                        RelationshipsToReturn = [new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(null) }],
+                        RelationshipsToReturn = [new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([]) }],
                     },
                 ],
             },

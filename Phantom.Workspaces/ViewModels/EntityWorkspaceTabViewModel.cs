@@ -33,8 +33,21 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
                 return this.entityCardNode;
             }
 
-            // Start building in background if not already started and we have a factory
-            if (this.buildTask is null && this.fieldEditorFactory is not null)
+            // If no field editor factory, create synchronously (original behavior)
+            if (this.fieldEditorFactory is null)
+            {
+                var nameComponents = ResolveNameComponents(this.Entity);
+                var cardViewName = this.entityCardViewResolver.ResolveViewName(this.Entity);
+                this.entityCardNode = new EntityListNodeViewModel(
+                    this.Entity,
+                    nameComponents,
+                    JsonSerializer.Serialize(nameComponents),
+                    cardViewName: cardViewName);
+                return this.entityCardNode;
+            }
+
+            // Start building in background if not already started
+            if (this.buildTask is null)
             {
                 this.buildTask = this.BuildEntityCardNodeAsync();
             }
@@ -52,7 +65,7 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
 
     private async Task<EntityListNodeViewModel?> BuildEntityCardNodeAsync()
     {
-        if (this.Entity is null || this.fieldEditorFactory is null)
+        if (this.Entity is null)
         {
             return null;
         }
@@ -60,6 +73,7 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
         var nameComponents = ResolveNameComponents(this.Entity);
         var cardViewName = this.entityCardViewResolver.ResolveViewName(this.Entity);
         
+        // If no entity data, create simple card without field editors
         if (this.Entity.Data is not JsonElement entityData)
         {
             this.entityCardNode = new EntityListNodeViewModel(
@@ -71,7 +85,7 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
         }
         else
         {
-            var fieldEditors = await this.fieldEditorFactory.BuildFieldEditorsAsync(
+            var fieldEditors = await this.fieldEditorFactory!.BuildFieldEditorsAsync(
                 entityData,
                 this.Entity.EntityType).ConfigureAwait(false);
 

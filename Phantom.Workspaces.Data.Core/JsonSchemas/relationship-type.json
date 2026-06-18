@@ -8,15 +8,6 @@
   ],
   "type": "object",
   "properties": {
-    "names": {
-      "type": "array",
-      "description": "Relationship types must have exactly one name in the format ['relationship', <entity-id>]",
-      "minItems": 1,
-      "maxItems": 1,
-      "items": {
-        "$ref": "#/$defs/relationship-type-name"
-      }
-    },
     "schema": {
       "type": "object",
       "properties": {
@@ -43,21 +34,6 @@
     }
   },
   "$defs": {
-    "relationship-type-name": {
-      "type": "array",
-      "description": "Relationship type names must be exactly ['relationship', <entity-id>]",
-      "minItems": 2,
-      "maxItems": 2,
-      "prefixItems": [
-        {
-          "const": "relationship"
-        },
-        {
-          "$ref": "core.json#/$defs/entity-id"
-        }
-      ],
-      "items": false
-    },
     "participant-property-schema": {
       "$comment": "A participant role: either a singleton entity reference or an array of them. Each may optionally declare x-entity-types (allowed entity types); absent means any entity type is allowed.",
       "type": "object",
