@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Phantom.Workspaces.Configuration;
@@ -84,54 +85,11 @@ public class ConfiguredWebView : NativeWebView
         // Listen for navigation requests from the view model
         this.PropertyChanged += OnPropertyChanged;
         
-        // Subscribe to WebView navigation events if they exist
-        TrySubscribeToNavigationEvents();
-    }
-    
-    private void TrySubscribeToNavigationEvents()
-    {
-        try
-        {
-            // Try to subscribe to NavigationCompleted event
-            var navCompletedEvent = this.GetType().GetEvent("NavigationCompleted");
-            if (navCompletedEvent != null)
-            {
-                var handler = Delegate.CreateDelegate(
-                    navCompletedEvent.EventHandlerType!,
-                    this,
-                    nameof(OnWebViewNavigationCompleted));
-                navCompletedEvent.AddEventHandler(this, handler);
-                System.Diagnostics.Debug.WriteLine("Subscribed to NavigationCompleted");
-            }
-
-            // Try to subscribe to DocumentTitleChanged event
-            var titleChangedEvent = this.GetType().GetEvent("DocumentTitleChanged");
-            if (titleChangedEvent != null)
-            {
-                var handler = Delegate.CreateDelegate(
-                    titleChangedEvent.EventHandlerType!,
-                    this,
-                    nameof(OnDocumentTitleChanged));
-                titleChangedEvent.AddEventHandler(this, handler);
-                System.Diagnostics.Debug.WriteLine("Subscribed to DocumentTitleChanged");
-            }
-
-            // Try to subscribe to NewWindowRequested event
-            var newWindowEvent = this.GetType().GetEvent("NewWindowRequested");
-            if (newWindowEvent != null)
-            {
-                var handler = Delegate.CreateDelegate(
-                    newWindowEvent.EventHandlerType!,
-                    this,
-                    nameof(OnNewWindowRequested));
-                newWindowEvent.AddEventHandler(this, handler);
-                System.Diagnostics.Debug.WriteLine("Subscribed to NewWindowRequested");
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Failed to subscribe to navigation events: {ex.Message}");
-        }
+        // Subscribe to WebView navigation events directly
+        this.NavigationCompleted += OnWebViewNavigationCompleted;
+        this.NewWindowRequested += OnNewWindowRequested;
+        
+        // DocumentTitleChanged doesn't exist - we'll track title via property changes
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -177,32 +135,36 @@ public class ConfiguredWebView : NativeWebView
             this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
             this.ViewModel.CanGoBack = this.CanGoBack;
             this.ViewModel.CanGoForward = this.CanGoForward;
+            
+            // Update title by executing JavaScript to get document.title
+            _ = UpdateTitleAsync();
+        }
+    }
+
+    private async Task UpdateTitleAsync()
+    {
+        if (this.ViewModel == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var title = await this.InvokeScript("document.title");
+            if (!string.IsNullOrEmpty(title))
+            {
+                this.ViewModel.Title = title;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to get document title: {ex.Message}");
         }
     }
 
     private void OnDocumentTitleChanged(object? sender, EventArgs e)
     {
-        // Update the tab title with the page title
-        if (this.ViewModel != null)
-        {
-            // Try to get DocumentTitle property via reflection
-            try
-            {
-                var titleProperty = this.GetType().GetProperty("DocumentTitle");
-                if (titleProperty != null)
-                {
-                    var title = titleProperty.GetValue(this) as string;
-                    if (!string.IsNullOrEmpty(title))
-                    {
-                        this.ViewModel.Title = title;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Failed to get DocumentTitle: {ex.Message}");
-            }
-        }
+        // This method is no longer needed - title is updated in OnWebViewNavigationCompleted
     }
 
     private void OnNewWindowRequested(object? sender, object? e)
