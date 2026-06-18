@@ -300,8 +300,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     /// this entity when a badge glyph is clicked.
     /// </summary>
     public void SetBadges(
-        BadgesViewModel badges,
-        Func<SubscribedEntityViewModel, string, System.Threading.Tasks.Task> toggleInterestAsync)
+        BadgesViewModel badges)
     {
         this.Badges = badges;
         this.ToggleInterestCommand = new RelayCommand(
@@ -309,7 +308,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
             {
                 if (parameter is BadgeModel badge && this.entity is not null)
                 {
-                    await toggleInterestAsync(this.entity, badge.InterestTypeName);
+                    await this.entity.ToggleInterestAsync(badge.InterestTypeName);
                 }
             },
             _ => this.entity is not null);

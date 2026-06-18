@@ -393,7 +393,10 @@ public sealed class EntityBroker
             return entity;
         }
 
-        var newEntity = new SubscribedEntityViewModel(snapshot, this.DeleteSubscribedEntityAsync);
+        var newEntity = new SubscribedEntityViewModel(
+            snapshot,
+            this.DeleteSubscribedEntityAsync,
+            this.ToggleInterestAsync);
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(newEntity);
         return newEntity;
     }
@@ -414,10 +417,20 @@ public sealed class EntityBroker
             return existing;
         }
 
-        var created = new SubscribedEntityViewModel(snapshot, this.DeleteSubscribedEntityAsync);
+        var created = new SubscribedEntityViewModel(
+            snapshot,
+            this.DeleteSubscribedEntityAsync,
+            this.ToggleInterestAsync);
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(created);
         changedEntityIds?.Add(snapshot.EntityId);
         return created;
+    }
+
+    private async Task ToggleInterestAsync(
+        SubscribedEntityViewModel entity,
+        string interestTypeName)
+    {
+        await InterestToggle.ToggleAsync(this, entity.Snapshot, interestTypeName);
     }
 
     private async Task DeleteSubscribedEntityAsync(

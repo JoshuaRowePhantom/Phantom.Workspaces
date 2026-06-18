@@ -13,15 +13,18 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     private bool isRawJsonVisible;
     private bool deleted;
     private readonly Func<SubscribedEntityViewModel, Task>? deleteEntityAsync;
+    private readonly Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync;
     private readonly List<EntityDisplayItemViewModel> displayItems = [];
 
     public SubscribedEntityViewModel(
         EntitySnapshot snapshot,
-        Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
+        Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null,
+        Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync = null)
     {
         this.snapshot = snapshot;
         this.deleted = snapshot.Data is null;
         this.deleteEntityAsync = deleteEntityAsync;
+        this.toggleInterestAsync = toggleInterestAsync;
         this.displayItems.AddRange(EntityPresentation.GetDisplayItems(snapshot));
         this.DeleteEntityCommand = new RelayCommand(
             async _ => await this.DeleteEntityAsync(),
@@ -32,6 +35,14 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     }
 
     public BadgesModel Badges { get; } = new();
+    
+    public async Task ToggleInterestAsync(string interestTypeName)
+    {
+        if (this.toggleInterestAsync is not null)
+        {
+            await this.toggleInterestAsync(this, interestTypeName);
+        }
+    }
 
     public EntityId EntityId => this.snapshot.EntityId;
 

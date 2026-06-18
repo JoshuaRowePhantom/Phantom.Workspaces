@@ -1,0 +1,21 @@
+{
+  "entity-id": "a3f2e9d1-8c7b-4a5e-9f3d-2e1c4b6a8d7f",
+  "entity-types": ["entity-type-view"],
+  "names": [["entity-type-views", "note"]],
+  "display-name": {
+    "default": "Note View"
+  },
+  "fields": [
+    {
+      "field-path": ["content"],
+      "display-format": "inline"
+    }
+  ],
+  "parent-hierarchy-relationships": [
+    {
+      "relationship-type-ids": ["reference"],
+      "relationship-role-names": ["target"],
+      "max-depth": 1
+    }
+  ]
+}

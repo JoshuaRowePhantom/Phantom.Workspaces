@@ -35,6 +35,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
+    private EntityTypeViewCatalog? entityTypeViewCatalog;
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
@@ -223,6 +224,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.interestCatalog.Changed += this.OnInterestCatalogChanged;
         this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
         this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
+        this.entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(this.entityBroker);
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -750,12 +752,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// existing interest relationship of that type targeting the entity, or creates one (targeting the
     /// entity, by the current user) when none exists.
     /// </summary>
-    internal async Task ToggleInterestAsync(SubscribedEntityViewModel entity, string interestTypeName)
-    {
-        await InterestToggle.ToggleAsync(this.EntityBroker, entity.Snapshot, interestTypeName);
-        await this.ApplySelectedViewAsync();
-    }
-
     private ViewEntityViewModel CreateViewEntityViewModel(
         SubscribedEntityViewModel entity,
         int indentLevel,
@@ -1023,7 +1019,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         await this.OpenTabAsync(
-            new EntityWorkspaceTabViewModel
+            new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
             {
                 Id = subscribedEntity.EntityId.ToString(),
                 Title = subscribedEntity.DisplayName,
@@ -1292,7 +1288,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // If no tabs found, create a default tab for the workspace entity
         if (tabs.Count == 0)
         {
-            tabs.Add(new EntityWorkspaceTabViewModel
+            tabs.Add(new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
             {
                 Id = workspaceEntity.EntityId.ToString(),
                 Title = workspaceEntity.DisplayName,
@@ -1352,7 +1348,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             // Default entity view
-            workspaceTab = new EntityWorkspaceTabViewModel
+            workspaceTab = new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
             {
                 Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
                 Title = ReadString(tab, "title") ?? targetEntity.DisplayName,

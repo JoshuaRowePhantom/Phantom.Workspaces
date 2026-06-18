@@ -30,7 +30,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
             cardViewName: EntityCardViewResolver.RawViewName);
         EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
         this.entityCardNode.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
-        this.entityCardNode.SetBadges(this.Badges, mainWindowViewModel.ToggleInterestAsync);
+        this.entityCardNode.SetBadges(this.Badges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.RefreshCollections();
     }
