@@ -115,6 +115,18 @@ public class ConfiguredWebView : NativeWebView
                 titleChangedEvent.AddEventHandler(this, handler);
                 System.Diagnostics.Debug.WriteLine("Subscribed to DocumentTitleChanged");
             }
+
+            // Try to subscribe to NewWindowRequested event
+            var newWindowEvent = this.GetType().GetEvent("NewWindowRequested");
+            if (newWindowEvent != null)
+            {
+                var handler = Delegate.CreateDelegate(
+                    newWindowEvent.EventHandlerType!,
+                    this,
+                    nameof(OnNewWindowRequested));
+                newWindowEvent.AddEventHandler(this, handler);
+                System.Diagnostics.Debug.WriteLine("Subscribed to NewWindowRequested");
+            }
         }
         catch (Exception ex)
         {
@@ -190,6 +202,44 @@ public class ConfiguredWebView : NativeWebView
             {
                 System.Diagnostics.Debug.WriteLine($"Failed to get DocumentTitle: {ex.Message}");
             }
+        }
+    }
+
+    private void OnNewWindowRequested(object? sender, object? e)
+    {
+        // Handle new window requests (e.g., Ctrl+click, window.open())
+        if (this.ViewModel == null || e == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var argsType = e.GetType();
+            
+            // Get the URI property
+            var uriProperty = argsType.GetProperty("Uri");
+            if (uriProperty != null)
+            {
+                var uri = uriProperty.GetValue(e) as Uri;
+                if (uri != null)
+                {
+                    // Set Handled to true to prevent default behavior
+                    var handledProperty = argsType.GetProperty("Handled");
+                    if (handledProperty != null && handledProperty.CanWrite)
+                    {
+                        handledProperty.SetValue(e, true);
+                    }
+
+                    // Notify the ViewModel to open a new tab
+                    this.ViewModel.RaiseOpenNewWindow(uri.ToString());
+                    System.Diagnostics.Debug.WriteLine($"New window requested: {uri}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to handle NewWindowRequested: {ex.Message}");
         }
     }
 

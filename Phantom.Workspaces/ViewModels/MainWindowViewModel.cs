@@ -1041,6 +1041,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        // Subscribe to OpenNewWindow event for WebViewModel tabs
+        if (tab is WebViewModel webViewModel)
+        {
+            webViewModel.OpenNewWindow += OnWebViewModelOpenNewWindow;
+        }
+
         // Find the document dock in the selected workspace's ContentLayout
         var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
         if (documentDock is null)
@@ -1920,6 +1926,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return null;
+    }
+
+    private void OnWebViewModelOpenNewWindow(object? sender, string url)
+    {
+        // Create a new WebViewModel for the requested URL
+        var newTab = new WebViewModel(url)
+        {
+            Id = $"web-{Guid.NewGuid()}",
+            Title = url, // Will be updated when page loads
+        };
+
+        // Open the new tab
+        _ = OpenWorkspaceTab(newTab);
     }
 
     public async ValueTask DisposeAsync()

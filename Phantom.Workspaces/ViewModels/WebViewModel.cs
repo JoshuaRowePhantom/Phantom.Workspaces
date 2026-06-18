@@ -123,10 +123,16 @@ public class WebViewModel : WorkspaceTabViewModel
     }
 
     public event EventHandler<NavigationDirection>? NavigationRequested;
+    public event EventHandler<string>? OpenNewWindow;
 
     private void RaiseNavigationRequested(NavigationDirection direction)
     {
         this.NavigationRequested?.Invoke(this, direction);
+    }
+
+    public void RaiseOpenNewWindow(string url)
+    {
+        this.OpenNewWindow?.Invoke(this, url);
     }
 
     public void UpdateCurrentUrl(string url)
