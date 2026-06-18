@@ -84,41 +84,25 @@ public class ConfiguredWebView : NativeWebView
         // Subscribe to EnvironmentRequested if the event exists
         this.Initialized += OnInitialized;
         
-        // Listen for navigation requests from the view model
+        // Listen for ViewModel changes
         this.PropertyChanged += OnPropertyChanged;
         
         // Subscribe to WebView navigation events directly
+        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NavigationStarted");
+        this.NavigationStarted += OnWebViewNavigationStarted;
+        
         System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NavigationCompleted");
         this.NavigationCompleted += OnWebViewNavigationCompleted;
         
         System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NewWindowRequested");
         this.NewWindowRequested += OnNewWindowRequested;
         
-        // DocumentTitleChanged doesn't exist - we'll track title via property changes
         System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Constructor completed");
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
-        // Handle Source property changes (for navigation tracking)
-        if (e.Property.Name == "Source" && this.ViewModel != null)
-        {
-            var newSource = e.NewValue as Uri;
-            if (newSource != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Source changed to: {newSource}");
-                this.ViewModel.UpdateCurrentUrl(newSource.ToString());
-                this.ViewModel.CanGoBack = this.CanGoBack;
-                this.ViewModel.CanGoForward = this.CanGoForward;
-                
-                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Updated ViewModel from Source change: CanGoBack={this.ViewModel.CanGoBack}, CanGoForward={this.ViewModel.CanGoForward}");
-                
-                // Update title
-                _ = UpdateTitleAsync();
-            }
-        }
-        
-        // Handle ViewModel property changes
+        // Handle ViewModel property changes (for subscribing to NavigationRequested)
         if (e.Property == ViewModelProperty)
         {
             if (e.OldValue is WebViewModel oldViewModel)
@@ -152,6 +136,20 @@ public class ConfiguredWebView : NativeWebView
         }
     }
 
+    private void OnWebViewNavigationStarted(object? sender, EventArgs e)
+    {
+        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NavigationStarted event fired!");
+        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Current Source: {this.Source}");
+        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] EventArgs type: {e?.GetType().FullName}");
+        
+        // Update the ViewModel with the URL as soon as navigation starts
+        if (this.ViewModel != null && this.Source != null)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Updating URL to: {this.Source}");
+            this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
+        }
+    }
+
     private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
     {
         System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NavigationCompleted: Source={this.Source}, CanGoBack={this.CanGoBack}, CanGoForward={this.CanGoForward}");
@@ -172,7 +170,8 @@ public class ConfiguredWebView : NativeWebView
 
     private async Task UpdateTitleAsync()
     {
-        if (this.ViewModel == null)
+        var viewModel = this.ViewModel;
+        if (viewModel == null)
         {
             return;
         }
@@ -180,14 +179,14 @@ public class ConfiguredWebView : NativeWebView
         try
         {
             var title = await this.InvokeScript("document.title");
-            if (!string.IsNullOrEmpty(title))
+            if (!string.IsNullOrEmpty(title) && viewModel == this.ViewModel)
             {
-                this.ViewModel.Title = title;
+                viewModel.SetPageTitle(title);
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to get document title: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to get document title: {ex.Message}");
         }
     }
 
@@ -294,6 +293,8 @@ public class ConfiguredWebView : NativeWebView
 
     private void OnInitialized(object? sender, EventArgs e)
     {
+        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Initialized event fired");
+        
         // Try to set environment properties if they're available
         TrySetUserDataFolder();
     }

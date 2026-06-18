@@ -35,19 +35,20 @@ public sealed class OpenExternalEntityShortcutHandler : ShortcutHandler
 
         // Open the first/default URL in a web view
         var url = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
-        var tab = CreateWebTab(entityViewModel, url);
+        var tab = CreateWebTab(mainWindowViewModel, entityViewModel, url);
 
         // Open tab
-        await mainWindowViewModel.OpenWorkspaceTab(tab);
+        await mainWindowViewModel.OpenTabAsync(tab);
 
         return true;
     }
 
     private static WebViewModel CreateWebTab(
+        IWorkspaceTabService tabService,
         SubscribedEntityViewModel entity,
         string url)
     {
-        return new WebViewModel(url)
+        return new WebViewModel(url, tabService)
         {
             Id = $"web-{entity.EntityId}",
             Title = entity.DisplayName,
@@ -81,3 +82,4 @@ public sealed class OpenExternalEntityShortcutHandler : ShortcutHandler
         return urls;
     }
 }
+

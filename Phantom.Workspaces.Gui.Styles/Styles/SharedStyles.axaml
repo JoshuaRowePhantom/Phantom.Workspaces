@@ -852,4 +852,9 @@
     <Style Selector="Button.copyable-text-button:pressed">
         <Setter Property="Foreground" Value="#6EC06E" />
     </Style>
+    
+    <!-- Dock tab tooltips binding -->
+    <Style Selector="TabStripItem">
+        <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
+    </Style>
 </Styles>

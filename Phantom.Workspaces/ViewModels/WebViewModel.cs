@@ -14,16 +14,24 @@ public class WebViewModel : WorkspaceTabViewModel
     private bool canGoForward;
     private bool isLoading;
     private string? errorMessage;
+    private string fullTitle = string.Empty;
+    private string currentUrl = string.Empty;
 
-    public WebViewModel(string initialUrl)
+    private readonly IWorkspaceTabService? tabService;
+
+    public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null)
     {
         this.addressBarUrl = initialUrl;
+        this.currentUrl = initialUrl;
         this.sourceUri = Uri.TryCreate(initialUrl, UriKind.Absolute, out var uri) ? uri : null;
+        this.tabService = tabService;
 
         this.NavigateCommand = new RelayCommand(_ => this.Navigate());
         this.GoBackCommand = new RelayCommand(_ => this.GoBack(), _ => this.CanGoBack);
         this.GoForwardCommand = new RelayCommand(_ => this.GoForward(), _ => this.CanGoForward);
         this.OpenInExternalBrowserCommand = new RelayCommand(_ => this.OpenInExternalBrowser());
+        
+        UpdateTooltip();
     }
 
     public string AddressBarUrl
@@ -129,21 +137,60 @@ public class WebViewModel : WorkspaceTabViewModel
     }
 
     public event EventHandler<NavigationDirection>? NavigationRequested;
-    public event EventHandler<string>? OpenNewWindow;
 
     private void RaiseNavigationRequested(NavigationDirection direction)
     {
         this.NavigationRequested?.Invoke(this, direction);
     }
 
-    public void RaiseOpenNewWindow(string url)
+    public async void RaiseOpenNewWindow(string url)
     {
-        this.OpenNewWindow?.Invoke(this, url);
+        System.Diagnostics.Debug.WriteLine($"[WebViewModel] RaiseOpenNewWindow: {url}");
+        
+        if (this.tabService == null)
+        {
+            System.Diagnostics.Debug.WriteLine($"[WebViewModel] No tab service available");
+            return;
+        }
+        
+        // Create a new WebViewModel for the requested URL
+        var newTab = new WebViewModel(url, this.tabService)
+        {
+            Id = $"web-{Guid.NewGuid()}",
+            Title = url, // Will be updated when page loads
+            DockRegion = this.DockRegion, // Open in same region
+        };
+
+        System.Diagnostics.Debug.WriteLine($"[WebViewModel] Opening new tab via service: {newTab.Id}");
+        await this.tabService.OpenTabAsync(newTab);
     }
 
     public void UpdateCurrentUrl(string url)
     {
+        System.Diagnostics.Debug.WriteLine($"[WebViewModel] UpdateCurrentUrl called: {url}");
         this.AddressBarUrl = url;
+        this.currentUrl = url;
+        UpdateTooltip();
+    }
+    
+    public void SetPageTitle(string pageTitle)
+    {
+        System.Diagnostics.Debug.WriteLine($"[WebViewModel] SetPageTitle called: {pageTitle}");
+        this.fullTitle = pageTitle;
+        this.Title = pageTitle; // Don't truncate here - let WorkspaceDocument handle it
+        UpdateTooltip();
+    }
+    
+    private void UpdateTooltip()
+    {
+        if (!string.IsNullOrEmpty(this.fullTitle))
+        {
+            this.TabTooltip = $"{this.fullTitle}\n{this.currentUrl}";
+        }
+        else
+        {
+            this.TabTooltip = this.currentUrl;
+        }
     }
 }
 

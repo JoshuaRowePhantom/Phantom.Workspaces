@@ -18,7 +18,7 @@ using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IAsyncDisposable
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -1022,7 +1022,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        await this.OpenWorkspaceTab(
+        await this.OpenTabAsync(
             new EntityWorkspaceTabViewModel
             {
                 Id = subscribedEntity.EntityId.ToString(),
@@ -1031,7 +1031,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             });
     }
 
-    public async Task OpenWorkspaceTab(WorkspaceTabViewModel tab)
+    public async Task OpenTabAsync(WorkspaceTabViewModel tab)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
@@ -1039,12 +1039,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (this.selectedWorkspacePane?.ContentLayout is null)
         {
             return;
-        }
-
-        // Subscribe to OpenNewWindow event for WebViewModel tabs
-        if (tab is WebViewModel webViewModel)
-        {
-            webViewModel.OpenNewWindow += OnWebViewModelOpenNewWindow;
         }
 
         // Find the document dock in the selected workspace's ContentLayout
@@ -1197,7 +1191,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             DockRegion = "full",
         };
 
-        await this.OpenWorkspaceTab(entityBrowserTab);
+        await this.OpenTabAsync(entityBrowserTab);
     }
 
     private async Task<EntitySnapshot?> LoadSingleEntitySnapshotAsync(
@@ -1347,7 +1341,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     // Use the first URL (or "default" URL if available)
                     var entityUrl = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
 
-                    workspaceTab = new WebViewModel(entityUrl)
+                    workspaceTab = new WebViewModel(entityUrl, this)
                     {
                         Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
                         Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
@@ -1928,19 +1922,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return null;
     }
 
-    private void OnWebViewModelOpenNewWindow(object? sender, string url)
-    {
-        // Create a new WebViewModel for the requested URL
-        var newTab = new WebViewModel(url)
-        {
-            Id = $"web-{Guid.NewGuid()}",
-            Title = url, // Will be updated when page loads
-        };
-
-        // Open the new tab
-        _ = OpenWorkspaceTab(newTab);
-    }
-
     public async ValueTask DisposeAsync()
     {
         if (this.webHost is not null)
@@ -1953,3 +1934,4 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityTypeCatalog?.Dispose();
     }
 }
+
