@@ -15,6 +15,8 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public static Shortcut Open { get; } = new("Open", "↗");
     public static Shortcut Json { get; } = new("Json", "{}");
     public static Shortcut Delete { get; } = new("Delete", "🗑");
+    public static Shortcut StartAgentSession { get; } = new("StartAgentSession", "🤖");
+    public static Shortcut StartShell { get; } = new("StartShell", "💻");
 
     public string Name { get; }
 
@@ -25,6 +27,8 @@ public sealed class Shortcut : IEquatable<Shortcut>
         "Open" => "Open entity",
         "Json" => "Toggle raw JSON view",
         "Delete" => "Delete entity",
+        "StartAgentSession" => "Start agent session",
+        "StartShell" => "Start shell",
         _ => this.Name,
     };
 

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class ShortcutManager
 {
     private readonly List<ShortcutHandler> shortcutHandlers = [];
-    private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.Json, Shortcut.Delete];
+    private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.Json, Shortcut.Delete, Shortcut.StartAgentSession, Shortcut.StartShell];
 
     public IEnumerable<Shortcut> GetShortcutsFor(
         MainWindowViewModel mainWindowViewModel,

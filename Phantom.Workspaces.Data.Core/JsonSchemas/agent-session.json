@@ -17,6 +17,11 @@
     "agent-session-id": {
       "type": "string",
       "description": "Agent session identifier used by IAgentPersistenceStore."
+    },
+    "host-profile-entity-id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Entity ID of the user-computer-profile hosting this agent session."
     }
   },
   "required": [
