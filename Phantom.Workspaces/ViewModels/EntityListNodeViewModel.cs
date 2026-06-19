@@ -43,6 +43,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
+        this.Badges = new BadgesViewModel(new BadgesModel());
         this.ToggleExpandCommand = new RelayCommand(
             _ => this.IsExpanded = !this.IsExpanded,
             _ => this.HasChildren);
@@ -77,6 +78,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.SetFieldEditorEditMode(false);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
+        this.Badges = new BadgesViewModel(new BadgesModel());
         this.ToggleExpandCommand = new RelayCommand(
             _ => this.IsExpanded = !this.IsExpanded,
             _ => this.HasChildren);
@@ -122,11 +124,11 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public RelayCommand? ActivateShortcutCommand { get; private set; }
 
-    public BadgesViewModel? Badges { get; private set; }
+    public BadgesViewModel Badges { get; private set; }
 
     public RelayCommand? ToggleInterestCommand { get; private set; }
 
-    public bool HasBadges => this.Badges is { } badges && badges.Badges.Count > 0;
+    public bool HasBadges => this.Badges.Badges.Count > 0;
 
     public bool HasShortcuts => this.Shortcuts.Count > 0;
 

@@ -15,7 +15,7 @@ public sealed class BadgesViewModel : ViewModelBase
         if (badgesModel.Badges is INotifyCollectionChanged notifyCollectionChanged)
         {
             notifyCollectionChanged.CollectionChanged += this.OnBadgesChanged;
-        }
+    }
     }
 
     public ObservableCollection<BadgeModel> Badges { get; }
