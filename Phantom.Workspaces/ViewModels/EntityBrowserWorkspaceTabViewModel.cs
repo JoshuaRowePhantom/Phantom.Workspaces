@@ -191,7 +191,93 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
                 // Set expansion callback
                 node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
-                // Don't set children - leave them empty since we're not building recursively
+                
+                // Subscribe to this node's children so we can determine HasChildren (for expander arrows)
+                var childPathKey = JsonSerializer.Serialize(nameComponents);
+                this.EnsureChildSubscription(nameComponents, childPathKey);
+                
+                // Don't set children yet - we'll populate after subscriptions complete
+                children.Add(sortKey, node);
+            }
+        }
+
+        // Wait for pending subscriptions to complete and populate children
+        foreach (var pair in children)
+        {
+            var childPathKey = pair.Key;
+            var childNode = pair.Value;
+            
+            // Wait briefly for pending subscription
+            var waitCount = 0;
+            while (this.pendingSubscriptions.Contains(childPathKey) && waitCount < 50)
+            {
+                await Task.Delay(10);
+                waitCount++;
+            }
+            
+            // If subscription exists, build shallow children to populate HasChildren
+            if (this.subscribedGetsByPath.TryGetValue(childPathKey, out var grandchildGet))
+            {
+                var grandchildren = await this.BuildGrandchildrenForCollapsedNodeAsync(childNode.NameComponents, grandchildGet.Results);
+                childNode.SetChildren(grandchildren);
+            }
+            else
+            {
+                childNode.SetChildren(Array.Empty<EntityListNodeViewModel>());
+            }
+        }
+
+        return children
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static pair => pair.Value)
+            .ToArray();
+    }
+
+    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildGrandchildrenForCollapsedNodeAsync(
+        IReadOnlyCollection<string> parentPath,
+        IReadOnlyCollection<SubscribedEntityViewModel> entities)
+    {
+        // Build very shallow grandchildren - just enough to determine HasChildren
+        var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
+        foreach (var entity in entities)
+        {
+            if (entity.Snapshot.Data is not JsonElement entityData
+                || !entityData.TryGetProperty("names", out var namesElement)
+                || namesElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var nameElement in namesElement.EnumerateArray())
+            {
+                var parsedName = nameElement.TryReadEntityName();
+                if (parsedName is null)
+                {
+                    continue;
+                }
+
+                var nameComponents = parsedName.Value.Components;
+                if (nameComponents.Length != parentPath.Count + 1
+                    || !nameComponents.Take(parentPath.Count).SequenceEqual(parentPath, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                var sortKey = JsonSerializer.Serialize(nameComponents);
+                if (children.ContainsKey(sortKey))
+                {
+                    continue;
+                }
+
+                var node = new EntityListNodeViewModel(
+                    entity,
+                    nameComponents,
+                    sortKey,
+                    await this.BuildFieldEditorsAsync(entity),
+                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
+                // Set expansion callback
+                node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
+                // Don't populate further - these are just placeholders
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
                 children.Add(sortKey, node);
             }
