@@ -98,48 +98,7 @@ This document details the design for creating tool entities, their JSON schema, 
 }
 ```
 
-### scheduled-tool.json Relationship Type Schema
-
-**Location**: `Phantom.Workspaces.Data.Core/JsonSchemas/scheduled-tool.json`
-
-```json
-{
-  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/scheduled-tool.json",
-  "description": "Schema for scheduled-tool relationship entities connecting user-computer-profiles to tools.",
-  "allOf": [
-    {
-      "$ref": "relationship.json"
-    }
-  ],
-  "type": "object",
-  "properties": {
-    "entity-types": {
-      "type": "array",
-      "contains": {
-        "const": "scheduled-tool"
-      },
-      "description": "Must contain 'relationship' and 'scheduled-tool'."
-    },
-    "schedule": {
-      "$ref": "tool.json#/$defs/schedule-definition",
-      "description": "Schedule override for this specific tool on this profile."
-    },
-    "last-run": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Timestamp of last successful execution."
-    },
-    "last-result": {
-      "type": "string",
-      "enum": ["success", "failure", "skipped"],
-      "description": "Result of last execution."
-    }
-  },
-  "required": [
-    "entity-types"
-  ]
-}
-```
+**Note**: Tools are scheduled by creating `tool-relationship` entities that link a tool, schedule(s), and target entity. The existing `tool-relationship.json` schema (already in codebase) defines this relationship.
 
 ## 2. Tool Entity Definitions (define-tool-entities)
 
@@ -331,7 +290,7 @@ Create four tool entities for existing scheduled tools.
               "participation-mode": "target",
               "relationship-type-names": {
                 "values": [
-                  ["entity-types", "scheduled-tool"]
+                  ["entity-types", "tool-relationship"]
                 ]
               },
               "participants": {
@@ -370,7 +329,7 @@ The "scheduled-on-my-profiles" sub-view uses a nested query:
 
 1. **Inner query**: Find all user entities (current user via `${USER}` token)
 2. **Middle query**: Find user-computer-profiles owned by those users
-3. **Outer query**: Find tools that are the target of "scheduled-tool" relationships from those profiles
+3. **Outer query**: Find tools that are the target of "tool-relationship" relationships from those profiles
 
 This retrieves all tools scheduled on the current user's profiles.
 
@@ -385,10 +344,10 @@ The view should show:
 - "Schedule on Profile" shortcut button
 
 **Scheduled Tools Tab:**
-- List all scheduled-tool relationships for current user's profiles
+- List all tool-relationship entities for current user's profiles
 - Tool name and description
 - Host profile name
-- Schedule configuration (enabled, interval, run-on-startup)
+- Schedule configuration (from linked schedule entities)
 - Last run timestamp
 - Last result status (success/failure/skipped)
 - "Edit Schedule" shortcut button
@@ -589,9 +548,10 @@ This returns tool-relationship entities. Extract `participants.tool` and `partic
 3. User selects a tool (e.g., "Git Workspace Scan Tool")
 4. User clicks "Schedule on Profile" shortcut
 5. UI prompts for target user-computer-profile
-6. UI shows schedule configuration dialog
-7. User configures schedule (enabled: true, interval: "5m", run-on-startup: true)
-8. System creates scheduled-tool relationship entity linking profile → tool
+6. UI shows schedule selection dialog (choose from existing schedule entities)
+7. User selects or creates a schedule entity
+
+8. System creates tool-relationship entity linking tool + schedule + target profile
 9. ScheduledToolHost discovers the new relationship and begins executing tool per schedule
 
 ### 5.2 Viewing Scheduled Tools
@@ -608,13 +568,12 @@ This returns tool-relationship entities. Extract `participants.tool` and `partic
 
 ### 5.3 Monitoring Tool Execution
 
-1. ScheduledToolHost discovers scheduled-tool relationships targeting user-computer-profiles
-2. For each relationship, host evaluates schedule via ScheduleEvaluator
+1. ScheduledToolHost discovers tool-relationship entities targeting user-computer-profiles
+2. For each relationship, host evaluates the linked schedule entity via ScheduleEvaluator
 3. When tool is due, host:
    - Resolves the tool via `ScheduledToolRegistry.GetTool(tool-type)`
    - Calls `IWorkspaceTool.ExecuteAsync()`
    - Writes result entity via `ToolExecutionResultWriter`
-   - Updates scheduled-tool relationship with last-run and last-result
 4. Tools view auto-refreshes to show updated execution status
 
 ## 6. Testing Strategy
@@ -625,21 +584,20 @@ This returns tool-relationship entities. Extract `participants.tool` and `partic
 
 - Validate tool.json schema against JSON Schema Draft 2020-12
 - Validate all tool entity definitions against tool.json schema
-- Validate scheduled-tool.json schema
-- Verify schedule-definition regex patterns (interval format)
+- Verify tool-relationship.json schema correctly defines tool, schedule, and target participants
 
 ### 6.2 Entity Naming Tests
 
 **Location**: `Phantom.Workspaces.Data.Core.Tests/ToolEntityNamingTests.cs`
 
 - Verify tool entities have correct name prefixes (["tools", ...])
-- Verify scheduled-tool relationships have correct name format (["relationship", <entity-id>])
+- Verify tool-relationship entities have correct name format (["relationship", <entity-id>])
 
 ### 6.3 View Query Tests
 
 **Location**: `Phantom.Workspaces.Tests/ToolsViewQueryTests.cs`
 
-- Create test user, user-computer-profile, tool, and scheduled-tool relationship
+- Create test user, user-computer-profile, tool, schedule, and tool-relationship entity
 - Execute tools-view.json query
 - Verify query returns correct scheduled tools for current user's profiles
 - Verify query excludes tools scheduled on other users' profiles
@@ -665,8 +623,7 @@ Comprehensive documentation for tool entities including:
 - Property descriptions
 - Tool-type registry
 - Configuration examples
-- Schedule definition format
-- Relationship patterns (scheduled-tool)
+- Relationship patterns (tool-relationship with schedule entities)
 - LLM configuration guidance
 
 ### 7.2 User Documentation
