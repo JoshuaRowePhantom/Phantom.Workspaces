@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Collections.Specialized;
 using System.Linq;
@@ -118,24 +119,29 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
             
             // Always subscribe to this node's children so we can determine HasChildren
-            // (This is the original eager behavior - needed for UI to show expand arrows)
             this.EnsureChildSubscription(node.NameComponents, pathKey);
             
-            // Only build grandchildren recursively if this node is expanded or is the root (which is expanded by default)
-            var isExpanded = expansionStateByPath.TryGetValue(pathKey, out var expanded)
-                ? expanded
-                : node.NameComponents.Count == 0;
-            
-            if (isExpanded && this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
+            // If subscription results are available, populate children based on expansion state
+            if (this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
             {
-                // Node is expanded, recursively build all descendants
-                node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+                // Check if this node should be expanded
+                var isExpanded = expansionStateByPath.TryGetValue(pathKey, out var expanded)
+                    ? expanded
+                    : node.NameComponents.Count == 0; // Root is expanded by default
+                
+                if (isExpanded)
+                {
+                    // Node is expanded, recursively build all descendants
+                    node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+                }
+                else
+                {
+                    // Node is collapsed, build immediate children as simple leaf nodes (no recursion)
+                    node.SetChildren(await this.BuildChildrenNonRecursiveAsync(node.NameComponents, childGet.Results));
+                }
             }
-            else if (this.subscribedGetsByPath.TryGetValue(pathKey, out var shallowGet))
-            {
-                // Node is collapsed, only build immediate children (no grandchildren)
-                node.SetChildren(await this.BuildChildrenShallowAsync(node.NameComponents, shallowGet.Results));
-            }
+            // If subscription isn't ready yet, leave children empty
+            // The subscription's Results.CollectionChanged event will trigger a rebuild when ready
             else
             {
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
@@ -148,10 +154,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             .ToArray();
     }
 
-    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenShallowAsync(
+    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenNonRecursiveAsync(
         IReadOnlyCollection<string> parentPath,
         IReadOnlyCollection<SubscribedEntityViewModel> entities)
     {
+        // Build immediate children as leaf nodes without any recursion
+        // This is used for collapsed nodes where we just need to show the immediate children
         var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
         foreach (var entity in entities)
         {
@@ -189,96 +197,19 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     sortKey,
                     await this.BuildFieldEditorsAsync(entity),
                     cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
-                // Set expansion callback
+                
+                // Set expansion callback so user can expand this node later
                 node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
                 
-                // Subscribe to this node's children so we can determine HasChildren (for expander arrows)
-                var childPathKey = JsonSerializer.Serialize(nameComponents);
-                this.EnsureChildSubscription(nameComponents, childPathKey);
+                // Subscribe to this node's children so we can determine HasChildren for the expander arrow
+                // When the subscription completes, it will set Children to the results automatically
+                this.EnsureChildSubscription(nameComponents, sortKey);
                 
-                // Don't set children yet - we'll populate after subscriptions complete
-                children.Add(sortKey, node);
-            }
-        }
-
-        // Wait for pending subscriptions to complete and populate children
-        foreach (var pair in children)
-        {
-            var childPathKey = pair.Key;
-            var childNode = pair.Value;
-            
-            // Wait briefly for pending subscription
-            var waitCount = 0;
-            while (this.pendingSubscriptions.Contains(childPathKey) && waitCount < 50)
-            {
-                await Task.Delay(10);
-                waitCount++;
-            }
-            
-            // If subscription exists, build shallow children to populate HasChildren
-            if (this.subscribedGetsByPath.TryGetValue(childPathKey, out var grandchildGet))
-            {
-                var grandchildren = await this.BuildGrandchildrenForCollapsedNodeAsync(childNode.NameComponents, grandchildGet.Results);
-                childNode.SetChildren(grandchildren);
-            }
-            else
-            {
-                childNode.SetChildren(Array.Empty<EntityListNodeViewModel>());
-            }
-        }
-
-        return children
-            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
-            .Select(static pair => pair.Value)
-            .ToArray();
-    }
-
-    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildGrandchildrenForCollapsedNodeAsync(
-        IReadOnlyCollection<string> parentPath,
-        IReadOnlyCollection<SubscribedEntityViewModel> entities)
-    {
-        // Build very shallow grandchildren - just enough to determine HasChildren
-        var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
-        foreach (var entity in entities)
-        {
-            if (entity.Snapshot.Data is not JsonElement entityData
-                || !entityData.TryGetProperty("names", out var namesElement)
-                || namesElement.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            foreach (var nameElement in namesElement.EnumerateArray())
-            {
-                var parsedName = nameElement.TryReadEntityName();
-                if (parsedName is null)
-                {
-                    continue;
-                }
-
-                var nameComponents = parsedName.Value.Components;
-                if (nameComponents.Length != parentPath.Count + 1
-                    || !nameComponents.Take(parentPath.Count).SequenceEqual(parentPath, StringComparer.Ordinal))
-                {
-                    continue;
-                }
-
-                var sortKey = JsonSerializer.Serialize(nameComponents);
-                if (children.ContainsKey(sortKey))
-                {
-                    continue;
-                }
-
-                var node = new EntityListNodeViewModel(
-                    entity,
-                    nameComponents,
-                    sortKey,
-                    await this.BuildFieldEditorsAsync(entity),
-                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
-                // Set expansion callback
-                node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
-                // Don't populate further - these are just placeholders
+                // Don't populate children yet - just mark as empty for now
+                // Once the subscription completes, CollectionChanged will trigger a rebuild
+                // At that point, HasChildren will be true and the expander will appear
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
+                
                 children.Add(sortKey, node);
             }
         }
