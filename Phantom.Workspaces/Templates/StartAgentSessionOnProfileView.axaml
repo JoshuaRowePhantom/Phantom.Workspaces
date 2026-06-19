@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Templates.StartAgentSessionOnProfileView"
+             x:DataType="vm:StartAgentSessionOnProfileViewModel">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+    
+    <!-- Header -->
+    <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,20">
+      <TextBlock Text="Start Agent Session" 
+                 FontSize="24" 
+                 FontWeight="Bold"/>
+      <TextBlock Text="Select an agent definition to start a new session" 
+                 FontSize="14" 
+                 Opacity="0.7"/>
+    </StackPanel>
+    
+    <!-- Agent Definitions List -->
+    <ScrollViewer Grid.Row="1">
+      <ItemsControl ItemsSource="{Binding AgentDefinitions}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate DataType="vm:StartAgentSessionOnProfileViewModel+AgentDefinitionItem">
+            <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                    BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="16"
+                    Margin="0,0,0,10">
+              <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="8">
+                  <TextBlock Text="{Binding DisplayName}" 
+                             FontWeight="SemiBold"
+                             FontSize="16"/>
+                  <TextBlock Text="{Binding Definition.Name}" 
+                             FontSize="12"
+                             Opacity="0.6"/>
+                </StackPanel>
+                <RadioButton Grid.Column="1"
+                             GroupName="AgentDefinitions"
+                             IsChecked="{Binding $parent[ItemsControl].((vm:StartAgentSessionOnProfileViewModel)DataContext).SelectedAgentDefinition, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"/>
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+    
+    <!-- Footer -->
+    <StackPanel Grid.Row="2" 
+                Orientation="Horizontal" 
+                HorizontalAlignment="Right"
+                Spacing="10"
+                Margin="0,20,0,0">
+      <Button Command="{Binding CreateSessionCommand}"
+              Classes="accent"
+              IsEnabled="{Binding !IsCreatingSession}">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="🚀" IsVisible="{Binding !IsCreatingSession}"/>
+          <TextBlock Text="⏳" IsVisible="{Binding IsCreatingSession}"/>
+          <TextBlock Text="Create Session" IsVisible="{Binding !IsCreatingSession}"/>
+          <TextBlock Text="Creating..." IsVisible="{Binding IsCreatingSession}"/>
+        </StackPanel>
+      </Button>
+    </StackPanel>
+    
+  </Grid>
+</UserControl>

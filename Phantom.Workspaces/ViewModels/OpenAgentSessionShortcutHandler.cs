@@ -6,6 +6,7 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -66,16 +67,33 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 AgentServices = agentServices,
             });
 
-        var workspaceTab = new AgentSessionWorkspaceTabViewModel
-        {
-            Id = entityViewModel.EntityId.ToString(),
-            Title = entityViewModel.DisplayName,
-            Entity = entityViewModel,
-            LoggerFactory = loggerFactory,
-            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, entityViewModel.DisplayName, loggerFactory),
-        };
+        var workspaceTab = CreateAgentSessionTab(entityViewModel, loggerFactory, agentChat);
         await mainWindowViewModel.OpenTabAsync(workspaceTab);
         return true;
+    }
+
+    public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AgentChat agentChat)
+    {
+        var loggerFactory = new ObservableLoggerFactory();
+        return CreateAgentSessionTab(agentSessionEntity, loggerFactory, agentChat);
+    }
+
+    private static AgentSessionWorkspaceTabViewModel CreateAgentSessionTab(
+        SubscribedEntityViewModel agentSessionEntity,
+        ObservableLoggerFactory loggerFactory,
+        AgentChat agentChat)
+    {
+        return new AgentSessionWorkspaceTabViewModel
+        {
+            Id = agentSessionEntity.EntityId.ToString(),
+            Title = agentSessionEntity.DisplayName,
+            Entity = agentSessionEntity,
+            LoggerFactory = loggerFactory,
+            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, agentSessionEntity.DisplayName, loggerFactory),
+        };
     }
 }
 

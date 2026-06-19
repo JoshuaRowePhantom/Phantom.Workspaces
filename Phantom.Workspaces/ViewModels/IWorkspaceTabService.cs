@@ -11,4 +11,9 @@ public interface IWorkspaceTabService
     /// Opens a new workspace tab.
     /// </summary>
     Task OpenTabAsync(WorkspaceTabViewModel tab);
+
+    /// <summary>
+    /// Replaces an existing workspace tab with a new one.
+    /// </summary>
+    Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab);
 }

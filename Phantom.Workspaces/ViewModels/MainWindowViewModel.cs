@@ -1069,6 +1069,74 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.SyncSelectedWorkspacePaneFromDock();
     }
 
+    public async Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab)
+    {
+        // Ensure we have a real workspace loaded (not the placeholder)
+        await this.EnsureWorkspaceLoadedAsync();
+        
+        if (this.selectedWorkspacePane?.ContentLayout is null)
+        {
+            return;
+        }
+
+        // Find the document dock in the selected workspace's ContentLayout
+        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
+        if (documentDock is null)
+        {
+            return;
+        }
+
+        // Find the existing document
+        var visibleDockables = documentDock.VisibleDockables;
+        if (visibleDockables is null)
+        {
+            // No visible dockables, just open the new tab
+            await this.OpenTabAsync(newTab);
+            return;
+        }
+
+        var existingDocument = visibleDockables
+            .OfType<WorkspaceDocument>()
+            .FirstOrDefault(doc => string.Equals(doc.Id, oldTab.Id, StringComparison.Ordinal));
+
+        if (existingDocument is null)
+        {
+            // Old tab doesn't exist, just open the new one
+            await this.OpenTabAsync(newTab);
+            return;
+        }
+
+        // Remember position and active state
+        var documentIndex = visibleDockables.IndexOf(existingDocument);
+        var wasActive = ReferenceEquals(documentDock.ActiveDockable, existingDocument);
+        
+        // Remove the old document
+        visibleDockables.Remove(existingDocument);
+
+        // Create new document with the new tab
+        var newDocument = new WorkspaceDocument(newTab);
+        
+        // Insert at the same position
+        if (documentIndex >= 0 && documentIndex < visibleDockables.Count)
+        {
+            visibleDockables.Insert(documentIndex, newDocument);
+        }
+        else
+        {
+            visibleDockables.Add(newDocument);
+        }
+
+        // Set as active if it was before
+        if (wasActive)
+        {
+            this.dockFactory?.SetActiveDockable(newDocument);
+            this.dockFactory?.SetFocusedDockable(documentDock, newDocument);
+        }
+        
+        // Dispose the old tab
+        DisposeWorkspaceTab(oldTab);
+    }
+
     private IDocumentDock? FindDocumentDock(IDockable dockable)
     {
         if (dockable is IDocumentDock documentDock)

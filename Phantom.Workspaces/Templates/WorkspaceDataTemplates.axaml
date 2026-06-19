@@ -84,6 +84,10 @@
         </Grid>
     </DataTemplate>
 
+    <DataTemplate DataType="vm:StartAgentSessionOnProfileViewModel">
+        <templates:StartAgentSessionOnProfileView />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">
         <agentControls:AgentChatEditorControl DataContext="{Binding Agent}" />
     </DataTemplate>
