@@ -1,0 +1,48 @@
+{
+  "entity-id": "e5f6a7b8-c9d0-4e5f-2a3b-4c5d6e7f8a9b",
+  "entity-types": ["view"],
+  "names": [
+    ["views", "tools"]
+  ],
+  "title": {
+    "default": "Tools"
+  },
+  "sub-views": [
+    {
+      "disposition": "expanded",
+      "query": {
+        "clauses": [
+          {
+            "clause-identifier": { "value": "tools" },
+            "clause": {
+              "clause-type": "entity-type",
+              "entity-type-names": {
+                "values": [
+                  "tool"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "disposition": "expanded",
+      "query": {
+        "clauses": [
+          {
+            "clause-identifier": { "value": "tool-relationships" },
+            "clause": {
+              "clause-type": "entity-type",
+              "entity-type-names": {
+                "values": [
+                  "tool-relationship"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

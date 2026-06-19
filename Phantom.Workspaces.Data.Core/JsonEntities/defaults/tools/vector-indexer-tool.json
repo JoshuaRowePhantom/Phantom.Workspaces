@@ -1,0 +1,9 @@
+{
+  "entity-id": "b9c0d1e2-f3a4-4b5c-8d9e-0f1a2b3c4d5e",
+  "entity-types": ["tool"],
+  "names": [
+    ["tools", "vector-indexer"]
+  ],
+  "display-name": "Vector Indexer",
+  "tool-type": "vector-indexer"
+}
