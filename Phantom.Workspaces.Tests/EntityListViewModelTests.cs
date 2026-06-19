@@ -61,4 +61,78 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▴", parent.ExpandArrow);
     }
 
+    [AvaloniaFact]
+    public void EntityListNodeViewModel_ToggleExpandCommand_TogglesExpansionState()
+    {
+        var parent = new EntityListNodeViewModel(
+            displayName: "Parent",
+            entityType: "folder",
+            nameComponents: ["parent"],
+            sortKey: "[\"parent\"]");
+        var child = new EntityListNodeViewModel(
+            displayName: "Child",
+            entityType: "entity",
+            nameComponents: ["parent", "child"],
+            sortKey: "[\"parent\",\"child\"]");
+        parent.SetChildren([child]);
+
+        // Initially collapsed
+        Assert.False(parent.IsExpanded);
+        Assert.Empty(parent.VisibleChildren);
+        Assert.Equal("▾", parent.ExpandArrow);
+        Assert.True(parent.ToggleExpandCommand.CanExecute(null));
+
+        // Execute command to expand
+        parent.ToggleExpandCommand.Execute(null);
+        Assert.True(parent.IsExpanded);
+        Assert.Single(parent.VisibleChildren);
+        Assert.Same(child, parent.VisibleChildren[0]);
+        Assert.Equal("▴", parent.ExpandArrow);
+
+        // Execute command to collapse
+        parent.ToggleExpandCommand.Execute(null);
+        Assert.False(parent.IsExpanded);
+        Assert.Empty(parent.VisibleChildren);
+        Assert.Equal("▾", parent.ExpandArrow);
+    }
+
+    [AvaloniaFact]
+    public void EntityListNodeViewModel_ToggleExpandCommand_DisabledWhenNoChildren()
+    {
+        var node = new EntityListNodeViewModel(
+            displayName: "Leaf",
+            entityType: "entity",
+            nameComponents: ["leaf"],
+            sortKey: "[\"leaf\"]");
+
+        Assert.False(node.HasChildren);
+        Assert.False(node.ToggleExpandCommand.CanExecute(null));
+    }
+
+    [AvaloniaFact]
+    public void EntityListNodeViewModel_SetChildren_EnablesToggleExpandCommand()
+    {
+        var parent = new EntityListNodeViewModel(
+            displayName: "Parent",
+            entityType: "folder",
+            nameComponents: ["parent"],
+            sortKey: "[\"parent\"]");
+
+        // Initially no children
+        Assert.False(parent.HasChildren);
+        Assert.False(parent.ToggleExpandCommand.CanExecute(null));
+
+        // Add child
+        var child = new EntityListNodeViewModel(
+            displayName: "Child",
+            entityType: "entity",
+            nameComponents: ["parent", "child"],
+            sortKey: "[\"parent\",\"child\"]");
+        parent.SetChildren([child]);
+
+        // Now has children and command is enabled
+        Assert.True(parent.HasChildren);
+        Assert.True(parent.ToggleExpandCommand.CanExecute(null));
+    }
+
 }

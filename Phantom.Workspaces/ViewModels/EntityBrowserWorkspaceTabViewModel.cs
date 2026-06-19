@@ -19,6 +19,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingSubscriptions = new(StringComparer.Ordinal);
+    private bool isRebuilding;
 
     public EntityBrowserWorkspaceTabViewModel(
         EntityBroker entityBroker,
@@ -43,15 +44,23 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 
     private async Task RebuildTreeAsync()
     {
-        var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var item in this.entityList.Items)
+        this.isRebuilding = true;
+        try
         {
-            expansionStateByPath[item.ItemKey] = item.IsExpanded;
-        }
+            var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
+            foreach (var item in this.entityList.Items)
+            {
+                expansionStateByPath[item.ItemKey] = item.IsExpanded;
+            }
 
-        var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
-        var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
-        this.entityList.SetItems(items);
+            var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
+            var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
+            this.entityList.SetItems(items);
+        }
+        finally
+        {
+            this.isRebuilding = false;
+        }
     }
 
     private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenAsync(
@@ -105,14 +114,9 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             var pathKey = pair.Key;
             var node = pair.Value;
             
-            this.EnsureChildSubscription(node.NameComponents, pathKey);
-
-            if (!this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
-            {
-                node.SetChildren(Array.Empty<EntityListNodeViewModel>());
-                continue;
-            }
-
+            // Set the expansion callback so we can manage subscriptions
+            node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
+            
             // Only build grandchildren recursively if this node is expanded or is the root (which is expanded by default)
             var isExpanded = expansionStateByPath.TryGetValue(pathKey, out var expanded)
                 ? expanded
@@ -120,13 +124,22 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             
             if (isExpanded)
             {
-                // Node is expanded, recursively build all descendants
-                node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+                // Node is expanded, ensure subscription and build all descendants
+                this.EnsureChildSubscription(node.NameComponents, pathKey);
+                
+                if (this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
+                {
+                    node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+                }
+                else
+                {
+                    node.SetChildren(Array.Empty<EntityListNodeViewModel>());
+                }
             }
             else
             {
-                // Node is collapsed, only build immediate children (no grandchildren)
-                node.SetChildren(await this.BuildChildrenShallowAsync(node.NameComponents, childGet.Results));
+                // Node is collapsed, don't subscribe yet - will subscribe when expanded
+                node.SetChildren(Array.Empty<EntityListNodeViewModel>());
             }
         }
 
@@ -177,6 +190,8 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     sortKey,
                     await this.BuildFieldEditorsAsync(entity),
                     cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
+                // Set expansion callback
+                node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
                 // Don't set children - leave them empty since we're not building recursively
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
                 children.Add(sortKey, node);
@@ -203,6 +218,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 Array.Empty<string>(),
                 "[]",
                 cardViewName: this.entityCardViewResolver.ResolveViewName(rootEntity, EntityCardViewResolver.RawViewName));
+            rootNode.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
             rootNode.SetChildren(rootChildren);
             this.AddItemsDepthFirst(
                 rootNode,
@@ -324,12 +340,49 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 });
             subscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
             this.subscribedGetsByPath[pathKey] = subscribedGet;
-            await this.RebuildTreeAsync();
+            // The subscription's CollectionChanged handler will trigger a rebuild when results arrive
         }
         finally
         {
             this.pendingSubscriptions.Remove(pathKey);
         }
+    }
+
+    private void OnNodeExpansionChanged(
+        EntityListNodeViewModel node,
+        bool isExpanded)
+    {
+        // Don't manage subscriptions during tree rebuild - the rebuild handles that
+        if (this.isRebuilding)
+        {
+            return;
+        }
+        
+        var pathKey = JsonSerializer.Serialize(node.NameComponents);
+        
+        if (isExpanded)
+        {
+            // Node expanded: ensure subscription exists
+            // The subscription's CollectionChanged handler will trigger a rebuild
+            this.EnsureChildSubscription(node.NameComponents, pathKey);
+        }
+        else
+        {
+            // Node collapsed: dispose subscription to save resources
+            this.DisposeChildSubscription(pathKey);
+        }
+    }
+
+    private void DisposeChildSubscription(string pathKey)
+    {
+        if (!this.subscribedGetsByPath.TryGetValue(pathKey, out var subscribedGet))
+        {
+            return;
+        }
+
+        subscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
+        this.subscribedGetsByPath.Remove(pathKey);
+        // The SubscribedGet will be garbage collected and EntityBroker will clean up the WeakReference
     }
 
     private bool TryFindEntityForPath(

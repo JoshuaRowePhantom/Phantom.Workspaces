@@ -25,6 +25,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     private readonly string entityType;
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
     private string rawJsonText;
+    private Action<EntityListNodeViewModel, bool>? onExpansionChanged;
 
     public EntityListNodeViewModel(
         SubscribedEntityViewModel entity,
@@ -232,6 +233,9 @@ public sealed class EntityListNodeViewModel : ViewModelBase
             }
 
             this.RaisePropertyChanged(nameof(this.ExpandArrow));
+            
+            // Notify parent that expansion state changed so it can manage subscriptions
+            this.onExpansionChanged?.Invoke(this, value);
         }
     }
 
@@ -269,6 +273,12 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         {
             this.VisibleChildren.Add(child);
         }
+    }
+
+    public void SetExpansionChangedCallback(
+        Action<EntityListNodeViewModel, bool> callback)
+    {
+        this.onExpansionChanged = callback;
     }
 
     public void SetFieldEditors(
