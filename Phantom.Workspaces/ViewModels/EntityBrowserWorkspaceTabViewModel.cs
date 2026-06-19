@@ -114,31 +114,30 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             var pathKey = pair.Key;
             var node = pair.Value;
             
-            // Set the expansion callback so we can manage subscriptions
+            // Set the expansion callback so we can manage subscriptions during user interaction
             node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
+            
+            // Always subscribe to this node's children so we can determine HasChildren
+            // (This is the original eager behavior - needed for UI to show expand arrows)
+            this.EnsureChildSubscription(node.NameComponents, pathKey);
             
             // Only build grandchildren recursively if this node is expanded or is the root (which is expanded by default)
             var isExpanded = expansionStateByPath.TryGetValue(pathKey, out var expanded)
                 ? expanded
                 : node.NameComponents.Count == 0;
             
-            if (isExpanded)
+            if (isExpanded && this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
             {
-                // Node is expanded, ensure subscription and build all descendants
-                this.EnsureChildSubscription(node.NameComponents, pathKey);
-                
-                if (this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
-                {
-                    node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
-                }
-                else
-                {
-                    node.SetChildren(Array.Empty<EntityListNodeViewModel>());
-                }
+                // Node is expanded, recursively build all descendants
+                node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+            }
+            else if (this.subscribedGetsByPath.TryGetValue(pathKey, out var shallowGet))
+            {
+                // Node is collapsed, only build immediate children (no grandchildren)
+                node.SetChildren(await this.BuildChildrenShallowAsync(node.NameComponents, shallowGet.Results));
             }
             else
             {
-                // Node is collapsed, don't subscribe yet - will subscribe when expanded
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
             }
         }
@@ -352,24 +351,30 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         EntityListNodeViewModel node,
         bool isExpanded)
     {
-        // Don't manage subscriptions during tree rebuild - the rebuild handles that
+        // Don't trigger rebuild during tree rebuild
         if (this.isRebuilding)
         {
             return;
         }
         
-        var pathKey = JsonSerializer.Serialize(node.NameComponents);
-        
-        if (isExpanded)
+        if (!isExpanded)
         {
-            // Node expanded: ensure subscription exists
-            // The subscription's CollectionChanged handler will trigger a rebuild
-            this.EnsureChildSubscription(node.NameComponents, pathKey);
+            // Node collapsed: dispose subscriptions for all descendants to save resources
+            this.DisposeDescendantSubscriptions(node);
         }
-        else
+        
+        // Expansion state changed - rebuild tree to reflect new state
+        _ = this.RebuildTreeAsync();
+    }
+
+    private void DisposeDescendantSubscriptions(EntityListNodeViewModel node)
+    {
+        // Recursively dispose subscriptions for all descendants
+        foreach (var child in node.Children)
         {
-            // Node collapsed: dispose subscription to save resources
-            this.DisposeChildSubscription(pathKey);
+            var childKey = JsonSerializer.Serialize(child.NameComponents);
+            this.DisposeChildSubscription(childKey);
+            this.DisposeDescendantSubscriptions(child);
         }
     }
 
