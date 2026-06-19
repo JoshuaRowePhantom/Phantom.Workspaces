@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
-using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -42,17 +42,10 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         return sessionId;
     }
 
-    private ScheduledToolContext Context(IDataAccessLayer dataAccessLayer)
-    {
-        using var toolEntity = JsonDocument.Parse(
-            $$"""{ "type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}} }""");
-        return new ScheduledToolContext
-        {
-            ToolEntity = toolEntity.RootElement.Clone(),
-            TargetEntityIds = [],
-            DataAccessLayer = dataAccessLayer,
-        };
-    }
+    private WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
+        WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}} }""");
 
     private static async Task<JsonElement?> GetEntityAsync(IDataAccessLayer dataAccessLayer, Guid entityId)
     {
@@ -71,7 +64,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         var second = this.AddSession();
         var dataAccessLayer = new InMemoryDataAccessLayer();
 
-        await new CopilotSessionDiscoveryTool().RunAsync(this.Context(dataAccessLayer), default);
+        await new CopilotSessionDiscoveryTool().ExecuteAsync(this.Context(dataAccessLayer));
 
         foreach (var sessionId in new[] { first, second })
         {
@@ -93,8 +86,8 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new CopilotSessionDiscoveryTool();
 
-        await tool.RunAsync(this.Context(dataAccessLayer), default);
-        await tool.RunAsync(this.Context(dataAccessLayer), default);
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
         var export = await dataAccessLayer.ExportAsync(new ExportRequest());
         var agentDefinitions = export.ChangeBatches
@@ -111,7 +104,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         Directory.CreateDirectory(Path.Combine(this.sessionStateRoot, "not-a-session"));
         var dataAccessLayer = new InMemoryDataAccessLayer();
 
-        await new CopilotSessionDiscoveryTool().RunAsync(this.Context(dataAccessLayer), default);
+        await new CopilotSessionDiscoveryTool().ExecuteAsync(this.Context(dataAccessLayer));
 
         var export = await dataAccessLayer.ExportAsync(new ExportRequest());
         Assert.Empty(export.ChangeBatches.SelectMany(b => b.Entities));
@@ -126,7 +119,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         // schemas, so a produced agent-definition that does not conform would fail the update.
         var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());
 
-        await new CopilotSessionDiscoveryTool().RunAsync(this.Context(repository.DataAccessLayer), default);
+        await new CopilotSessionDiscoveryTool().ExecuteAsync(this.Context(repository.DataAccessLayer));
 
         var entity = await GetEntityAsync(repository.DataAccessLayer, sessionId);
         Assert.NotNull(entity);

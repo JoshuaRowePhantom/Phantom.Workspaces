@@ -1,6 +1,6 @@
 using System;
 using System.Text.Json;
-using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;

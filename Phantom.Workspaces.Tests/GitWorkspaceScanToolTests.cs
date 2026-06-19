@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
-using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -41,17 +41,10 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         return Path.GetFullPath(repoPath);
     }
 
-    private ScheduledToolContext Context(IDataAccessLayer dataAccessLayer)
-    {
-        using var toolEntity = JsonDocument.Parse(
-            $$"""{ "type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(this.scanRoot)}} }""");
-        return new ScheduledToolContext
-        {
-            ToolEntity = toolEntity.RootElement.Clone(),
-            TargetEntityIds = [],
-            DataAccessLayer = dataAccessLayer,
-        };
-    }
+    private WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
+        WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["tool"], "tool-type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(this.scanRoot)}} }""");
 
     private static async Task<JsonElement[]> GitEntitiesAsync(IDataAccessLayer dataAccessLayer)
     {
@@ -76,7 +69,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var repoB = this.MakeRepo("nested", "project-b");
         var dataAccessLayer = new InMemoryDataAccessLayer();
 
-        await new GitWorkspaceScanTool().RunAsync(this.Context(dataAccessLayer), default);
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
 
         var entities = await GitEntitiesAsync(dataAccessLayer);
         var paths = entities.Select(e => e.GetProperty("path").GetString()).ToHashSet();
@@ -93,7 +86,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Directory.CreateDirectory(Path.Combine(outer, "vendored", ".git"));
         var dataAccessLayer = new InMemoryDataAccessLayer();
 
-        await new GitWorkspaceScanTool().RunAsync(this.Context(dataAccessLayer), default);
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
 
         var entities = await GitEntitiesAsync(dataAccessLayer);
         var single = Assert.Single(entities);
@@ -107,8 +100,8 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new GitWorkspaceScanTool();
 
-        await tool.RunAsync(this.Context(dataAccessLayer), default);
-        await tool.RunAsync(this.Context(dataAccessLayer), default);
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
         Assert.Single(await GitEntitiesAsync(dataAccessLayer));
     }
@@ -119,7 +112,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Directory.CreateDirectory(Path.Combine(this.scanRoot, "just-a-folder"));
         var dataAccessLayer = new InMemoryDataAccessLayer();
 
-        await new GitWorkspaceScanTool().RunAsync(this.Context(dataAccessLayer), default);
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
 
         Assert.Empty(await GitEntitiesAsync(dataAccessLayer));
     }

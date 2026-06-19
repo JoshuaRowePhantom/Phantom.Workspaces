@@ -2,7 +2,7 @@
 
 ## Projects
 
-- `Phantom.Workspaces.Tools` contains workspace tool contracts and the runtime executable host.
+- `Phantom.Workspaces/Tools` contains workspace tool contracts and implementations in the main application assembly.
 - `Phantom.Workspaces.Tools.Test` is an executable for tool integration and diagnostics scenarios.
 
 ## Core contract

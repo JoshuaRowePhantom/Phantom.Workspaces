@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
-using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -42,12 +42,10 @@ public sealed class VectorIndexerToolTests
         return new EntityId(guid);
     }
 
-    private static ScheduledToolContext Context(IDataAccessLayer dataAccessLayer) => new()
-    {
-        ToolEntity = JsonDocument.Parse("""{ "type": "vector-indexer" }""").RootElement.Clone(),
-        TargetEntityIds = [],
-        DataAccessLayer = dataAccessLayer,
-    };
+    private static WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
+        WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            """{ "entity-types": ["tool"], "tool-type": "vector-indexer" }""");
 
     [Fact]
     public async Task Run_DrainsTheVectorIndexQueue()
@@ -58,7 +56,7 @@ public sealed class VectorIndexerToolTests
         await AddEntityAsync(dataAccessLayer, "c", "gamma");
 
         var tool = new VectorIndexerTool(batchSize: 2);
-        await tool.RunAsync(Context(dataAccessLayer), default);
+        await tool.ExecuteAsync(Context(dataAccessLayer));
 
         // After indexing, the queue head has advanced past every entity, so a fresh read is empty.
         var drained = await dataAccessLayer.ProcessQueueAsync(new ProcessQueueRequest
@@ -77,7 +75,7 @@ public sealed class VectorIndexerToolTests
         await AddEntityAsync(dataAccessLayer, "ocean", "blue ocean water");
 
         var tool = new VectorIndexerTool(batchSize: 10);
-        await tool.RunAsync(Context(dataAccessLayer), default);
+        await tool.ExecuteAsync(Context(dataAccessLayer));
 
         var query = new QueryRequest
         {
@@ -107,10 +105,10 @@ public sealed class VectorIndexerToolTests
         await AddEntityAsync(dataAccessLayer, "a", "alpha");
 
         var tool = new VectorIndexerTool(batchSize: 10);
-        await tool.RunAsync(Context(dataAccessLayer), default);
+        await tool.ExecuteAsync(Context(dataAccessLayer));
 
         // A second run finds nothing new to index and completes without error.
-        await tool.RunAsync(Context(dataAccessLayer), default);
+        await tool.ExecuteAsync(Context(dataAccessLayer));
 
         var drained = await dataAccessLayer.ProcessQueueAsync(new ProcessQueueRequest
         {

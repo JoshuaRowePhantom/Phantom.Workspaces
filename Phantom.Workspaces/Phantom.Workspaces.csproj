@@ -13,6 +13,7 @@
     <PackageReference Include="Avalonia.Controls.Markdown" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="LibGit2Sharp" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
@@ -30,7 +31,10 @@
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Client\Phantom.Workspaces.Data.Web.Client.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Server\Phantom.Workspaces.Data.Web.Server.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Styles\Phantom.Workspaces.Gui.Styles.csproj" />
-    <ProjectReference Include="..\Phantom.Workspaces.Tools\Phantom.Workspaces.Tools.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Web.Server\Phantom.Workspaces.Web.Server.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="Tools\*.cs" />
+    <Compile Include="Tools\*.cs" />
   </ItemGroup>
 </Project>

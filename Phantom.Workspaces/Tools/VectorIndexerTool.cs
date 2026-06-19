@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
-namespace Phantom.Workspaces.ScheduledTools;
+namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// A built-in scheduled tool that keeps the vector index up to date. It pulls batches of
@@ -14,7 +14,7 @@ namespace Phantom.Workspaces.ScheduledTools;
 /// resumes where this one stopped. See <c>docs/design/vector-search.md</c> and
 /// <c>docs/design/scheduled-tools.md</c>.
 /// </summary>
-public sealed class VectorIndexerTool : IScheduledTool
+public sealed class VectorIndexerTool : IWorkspaceTool
 {
     /// <summary>The default queue name used for vector indexing.</summary>
     public const string QueueName = "vector-index";
@@ -33,7 +33,7 @@ public sealed class VectorIndexerTool : IScheduledTool
 
     public string ToolType => "vector-indexer";
 
-    public async Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken)
+    public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         var dataAccessLayer = context.DataAccessLayer;
@@ -41,11 +41,11 @@ public sealed class VectorIndexerTool : IScheduledTool
         Timestamp? token = null;
         while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            context.CancellationToken.ThrowIfCancellationRequested();
 
             var batch = await dataAccessLayer.ProcessQueueAsync(
                 new ProcessQueueRequest { QueueName = QueueName, Token = token, Count = this.batchSize },
-                cancellationToken).ConfigureAwait(false);
+                context.CancellationToken).ConfigureAwait(false);
 
             if (batch.Entities.Count == 0)
             {
@@ -59,7 +59,7 @@ public sealed class VectorIndexerTool : IScheduledTool
             {
                 var computed = await dataAccessLayer.ComputeEmbeddingsAsync(
                     new ComputeEmbeddingsRequest { Entities = liveEntities },
-                    cancellationToken).ConfigureAwait(false);
+                    context.CancellationToken).ConfigureAwait(false);
                 updates.AddRange(computed.Embeddings.Select(embedding => new EmbeddingUpdate
                 {
                     EntityId = embedding.EntityId,
@@ -77,10 +77,12 @@ public sealed class VectorIndexerTool : IScheduledTool
             {
                 await dataAccessLayer.UpdateEmbeddingsAsync(
                     new UpdateEmbeddingsRequest { Updates = updates },
-                    cancellationToken).ConfigureAwait(false);
+                    context.CancellationToken).ConfigureAwait(false);
             }
 
             token = batch.Token;
         }
+
+        return new WorkspaceToolExecutionResult();
     }
 }

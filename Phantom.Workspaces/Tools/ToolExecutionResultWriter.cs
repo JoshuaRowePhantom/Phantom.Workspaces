@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
-namespace Phantom.Workspaces.ScheduledTools;
+namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// Creates and updates <c>tool-execution-result</c> entities for scheduled tool runs (see

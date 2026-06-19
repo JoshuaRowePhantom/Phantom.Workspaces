@@ -1,18 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
-using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class ScheduledToolRegistryTests
 {
-    private sealed class StubScheduledTool : IScheduledTool
+    private sealed class StubScheduledTool : IWorkspaceTool
     {
         public StubScheduledTool(string toolType)
         {
@@ -21,7 +17,8 @@ public sealed class ScheduledToolRegistryTests
 
         public string ToolType { get; }
 
-        public Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context) =>
+            Task.FromResult(new WorkspaceToolExecutionResult());
     }
 
     [Fact]

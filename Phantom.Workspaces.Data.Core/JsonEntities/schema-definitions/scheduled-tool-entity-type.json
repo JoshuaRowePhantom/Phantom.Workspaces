@@ -1,0 +1,30 @@
+{
+  "entity-id": "c9e4d8f5-0b32-5f67-c9e4-d8f50b325f67",
+  "entity-types": [
+    "entity-type",
+    "relationship-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/scheduled-tool.json"
+    ],
+    [
+      "entity-types",
+      "scheduled-tool"
+    ]
+  ],
+  "display-name": {
+    "default": "Scheduled Tool Relationship Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/scheduled-tool-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/scheduled-tool.json"
+  }
+}

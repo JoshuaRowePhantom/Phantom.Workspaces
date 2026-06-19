@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
-namespace Phantom.Workspaces.ScheduledTools;
+namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// A built-in scheduled tool that discovers local GitHub Copilot CLI sessions on the host and
@@ -18,27 +18,27 @@ namespace Phantom.Workspaces.ScheduledTools;
 /// id (a GUID); the agent-definition entity uses that GUID as its entity id, so re-running the tool
 /// updates rather than duplicates.
 /// </summary>
-public sealed class CopilotSessionDiscoveryTool : IScheduledTool
+public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
 {
     /// <summary>The optional tool-entity property overriding the Copilot session-state root directory.</summary>
     public const string SessionStateRootProperty = "session-state-root";
 
     public string ToolType => "copilot-session-discovery";
 
-    public async Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken)
+    public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var root = ResolveSessionStateRoot(context.ToolEntity);
+        var root = ResolveSessionStateRoot(context.Tool.Data);
         if (!Directory.Exists(root))
         {
-            return;
+            return new WorkspaceToolExecutionResult();
         }
 
         var changes = new List<EntityChange>();
         foreach (var sessionDirectory in Directory.EnumerateDirectories(root))
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            context.CancellationToken.ThrowIfCancellationRequested();
 
             var sessionId = Path.GetFileName(sessionDirectory);
             if (!Guid.TryParse(sessionId, out var sessionGuid))
@@ -58,7 +58,7 @@ public sealed class CopilotSessionDiscoveryTool : IScheduledTool
 
         if (changes.Count == 0)
         {
-            return;
+            return new WorkspaceToolExecutionResult();
         }
 
         await context.DataAccessLayer.UpdateAsync(
@@ -67,7 +67,9 @@ public sealed class CopilotSessionDiscoveryTool : IScheduledTool
                 UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Discover local GitHub Copilot CLI sessions." } },
                 Changes = changes,
             },
-            cancellationToken).ConfigureAwait(false);
+            context.CancellationToken).ConfigureAwait(false);
+
+        return new WorkspaceToolExecutionResult();
     }
 
     /// <summary>
@@ -86,10 +88,11 @@ public sealed class CopilotSessionDiscoveryTool : IScheduledTool
         return Path.Combine(home, ".copilot", "session-state");
     }
 
-    private static string ResolveSessionStateRoot(JsonElement toolEntity)
+    private static string ResolveSessionStateRoot(JsonElement? toolEntity)
     {
-        if (toolEntity.ValueKind == JsonValueKind.Object
-            && toolEntity.TryGetProperty(SessionStateRootProperty, out var rootElement)
+        if (toolEntity is JsonElement toolEntityValue
+            && toolEntityValue.ValueKind == JsonValueKind.Object
+            && toolEntityValue.TryGetProperty(SessionStateRootProperty, out var rootElement)
             && rootElement.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(rootElement.GetString()))
         {

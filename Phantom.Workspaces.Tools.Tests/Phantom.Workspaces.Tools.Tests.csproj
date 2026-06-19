@@ -18,6 +18,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Offline\Phantom.Workspaces.Data.Offline.csproj" />
-    <ProjectReference Include="..\Phantom.Workspaces.Tools\Phantom.Workspaces.Tools.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />
   </ItemGroup>
 </Project>

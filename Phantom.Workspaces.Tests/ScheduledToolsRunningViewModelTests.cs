@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -18,17 +19,18 @@ public sealed class ScheduledToolsRunningViewModelTests
         public override DateTimeOffset GetUtcNow() => new(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
     }
 
-    private sealed class GatedTool : IScheduledTool
+    private sealed class GatedTool : IWorkspaceTool
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public string ToolType => "stub";
 
-        public async Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken)
+        public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
         {
             this.Started.TrySetResult();
             await this.Release.Task;
+            return new WorkspaceToolExecutionResult();
         }
     }
 
@@ -49,13 +51,17 @@ public sealed class ScheduledToolsRunningViewModelTests
     public async Task RunningTools_ReflectsInFlightExecution_AndClearsOnCompletion()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
         var hostId = Guid.NewGuid();
         var toolId = Guid.NewGuid();
         var scheduleId = Guid.NewGuid();
         var relationshipId = Guid.NewGuid();
 
-        await AddEntityAsync(dataAccessLayer, hostId, $$"""{ "entity-id": "{{hostId}}", "entity-types": ["computer"], "names": [["computer","this-machine"]] }""");
-        await AddEntityAsync(dataAccessLayer, toolId, $$"""{ "entity-id": "{{toolId}}", "entity-types": ["tool"], "names": [["tools","stub"]], "type": "stub" }""");
+        await AddEntityAsync(dataAccessLayer, userId, $$"""{ "entity-id": "{{userId}}", "entity-types": ["user"], "names": [["users","username","test-user"]] }""");
+        await AddEntityAsync(dataAccessLayer, computerId, $$"""{ "entity-id": "{{computerId}}", "entity-types": ["computer"], "names": [["computers","hostname","this-machine"]] }""");
+        await AddEntityAsync(dataAccessLayer, hostId, $$"""{ "entity-id": "{{hostId}}", "entity-types": ["user-computer-profile"], "names": [["computer-user-profiles","users","username","test-user","computers","hostname","this-machine"]], "user-reference": ["users","username","test-user"], "computer-reference": ["computers","hostname","this-machine"] }""");
+        await AddEntityAsync(dataAccessLayer, toolId, $$"""{ "entity-id": "{{toolId}}", "entity-types": ["tool"], "names": [["tools","stub"]], "tool-type": "stub" }""");
         await AddEntityAsync(dataAccessLayer, scheduleId, $$"""{ "entity-id": "{{scheduleId}}", "entity-types": ["schedule"], "names": [["schedule","s"]], "repeat": { "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] } }""");
         await AddEntityAsync(dataAccessLayer, relationshipId, $$"""{ "entity-id": "{{relationshipId}}", "entity-types": ["tool-relationship"], "names": [["tool-relationships","r"]], "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] } }""");
 

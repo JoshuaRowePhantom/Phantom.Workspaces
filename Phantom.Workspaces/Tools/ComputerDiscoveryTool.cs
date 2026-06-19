@@ -8,6 +8,8 @@ public sealed class ComputerDiscoveryTool(
 {
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
 
+    public string ToolType => "computer-discovery";
+
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         var computerName = this.currentExecutionContextProvider.ComputerName;

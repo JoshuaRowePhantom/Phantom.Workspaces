@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 
-namespace Phantom.Workspaces.ScheduledTools;
+namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// The parsed recurrence model of a <c>schedule</c> entity's <c>repeat</c> block (see

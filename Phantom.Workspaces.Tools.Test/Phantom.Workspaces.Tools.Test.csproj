@@ -6,7 +6,4 @@
     <Nullable>enable</Nullable>
     <UseAppHost>true</UseAppHost>
   </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\Phantom.Workspaces.Tools\Phantom.Workspaces.Tools.csproj" />
-  </ItemGroup>
 </Project>

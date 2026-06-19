@@ -3,7 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
-using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 

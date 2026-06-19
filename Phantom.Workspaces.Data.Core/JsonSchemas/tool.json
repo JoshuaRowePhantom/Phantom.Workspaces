@@ -1,0 +1,32 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/tool.json",
+  "description": "Schema for tool entities that represent scheduled background tasks and their configuration.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": {
+        "const": "tool"
+      },
+      "description": "Must contain 'tool'."
+    },
+    "tool-type": {
+      "type": "string",
+      "description": "Identifies the implementation class (e.g., 'GitWorkspaceScanTool', 'VectorIndexerTool')."
+    },
+    "configuration": {
+      "type": "object",
+      "description": "Tool-specific configuration settings.",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "entity-types",
+    "tool-type"
+  ]
+}

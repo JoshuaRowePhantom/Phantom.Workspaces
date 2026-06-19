@@ -8,6 +8,8 @@ public sealed class UserDiscoveryTool(
 {
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
 
+    public string ToolType => "user-discovery";
+
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         var userName = this.currentExecutionContextProvider.UserName;

@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
-using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -90,13 +90,10 @@ public sealed class EntityClassifierToolTests
         });
     }
 
-    private static ScheduledToolContext Context(IDataAccessLayer dataAccessLayer, string prompt = "Classify this entity.") =>
-        new()
-        {
-            ToolEntity = JsonDocument.Parse($$"""{ "type": "entity-classifier", "classifier-prompt": {{JsonSerializer.Serialize(prompt)}} }""").RootElement.Clone(),
-            TargetEntityIds = [],
-            DataAccessLayer = dataAccessLayer,
-        };
+    private static WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer, string prompt = "Classify this entity.") =>
+        WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["tool"], "tool-type": "entity-classifier", "classifier-prompt": {{JsonSerializer.Serialize(prompt)}} }""");
 
     [Fact]
     public async Task Run_InvokesRunnerOncePerEntity_AndDrainsQueue()
@@ -106,7 +103,7 @@ public sealed class EntityClassifierToolTests
         await AddEntityAsync(dataAccessLayer, "b", "beta");
         var runner = new RecordingRunner();
 
-        await new EntityClassifierTool(runner, batchSize: 1).RunAsync(Context(dataAccessLayer), default);
+        await new EntityClassifierTool(runner, batchSize: 1).ExecuteAsync(Context(dataAccessLayer));
 
         Assert.Equal(2, runner.Requests.Count);
         var drained = await dataAccessLayer.ProcessQueueAsync(new ProcessQueueRequest { QueueName = EntityClassifierTool.QueueName, Count = 10 });
@@ -136,7 +133,7 @@ public sealed class EntityClassifierToolTests
         await AddEntityAsync(dataAccessLayer, "target", "the entity body text");
         var runner = new RecordingRunner();
 
-        await new EntityClassifierTool(runner).RunAsync(Context(dataAccessLayer, "PROMPT-HEADER"), default);
+        await new EntityClassifierTool(runner).ExecuteAsync(Context(dataAccessLayer, "PROMPT-HEADER"));
 
         var prompt = runner.Requests
             .Select(r => r.Prompt)
@@ -186,7 +183,7 @@ public sealed class EntityClassifierToolTests
         await AddEntityAsync(dataAccessLayer, "target", "the entity body text");
         var runner = new RecordingRunner();
 
-        await new EntityClassifierTool(runner).RunAsync(Context(dataAccessLayer), default);
+        await new EntityClassifierTool(runner).ExecuteAsync(Context(dataAccessLayer));
 
         var prompt = runner.Requests
             .Select(r => r.Prompt)
@@ -221,7 +218,7 @@ public sealed class EntityClassifierToolTests
             }
         });
 
-        await new EntityClassifierTool(runner).RunAsync(Context(dataAccessLayer), default);
+        await new EntityClassifierTool(runner).ExecuteAsync(Context(dataAccessLayer));
 
         var classification = Assert.Single(runner.Classifications);
         Assert.Equal("before-text", classification.BeforeText);

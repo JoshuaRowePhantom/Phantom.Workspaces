@@ -1,0 +1,36 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/scheduled-tool.json",
+  "description": "Schema for scheduled-tool relationship entities connecting user-computer-profiles to tools.",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": {
+        "const": "scheduled-tool"
+      },
+      "description": "Must contain 'relationship' and 'scheduled-tool'."
+    },
+    "schedule": {
+      "$ref": "tool.json#/$defs/schedule-definition",
+      "description": "Schedule override for this specific tool on this profile."
+    },
+    "last-run": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of last successful execution."
+    },
+    "last-result": {
+      "type": "string",
+      "enum": ["success", "failure", "skipped"],
+      "description": "Result of last execution."
+    }
+  },
+  "required": [
+    "entity-types"
+  ]
+}

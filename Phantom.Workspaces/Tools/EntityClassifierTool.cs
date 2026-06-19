@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
-namespace Phantom.Workspaces.ScheduledTools;
+namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// Runs the per-entity classification agent for a single entity. Implementations drive an agent
@@ -57,7 +57,7 @@ public sealed record EntityClassificationRequest
 /// 1. the classifier prompt, 2. the set of all entity-type names, 3. the entity's own types,
 /// 4. the entity content, 5. the relationships the entity currently has.
 /// </remarks>
-public sealed class EntityClassifierTool : IScheduledTool
+public sealed class EntityClassifierTool : IWorkspaceTool
 {
     /// <summary>The default queue name used for classification.</summary>
     public const string QueueName = "entity-classification";
@@ -81,24 +81,24 @@ public sealed class EntityClassifierTool : IScheduledTool
 
     public string ToolType => "entity-classifier";
 
-    public async Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken)
+    public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         var dataAccessLayer = context.DataAccessLayer;
 
-        var classifierPrompt = ReadString(context.ToolEntity, ClassifierPromptProperty) ?? string.Empty;
-        var allEntityTypeNames = await ReadAllEntityTypeNamesAsync(dataAccessLayer, cancellationToken).ConfigureAwait(false);
-        var interestInstructions = await ReadInterestInstructionsAsync(dataAccessLayer, cancellationToken).ConfigureAwait(false);
+        var classifierPrompt = ReadString(context.Tool.Data, ClassifierPromptProperty) ?? string.Empty;
+        var allEntityTypeNames = await ReadAllEntityTypeNamesAsync(dataAccessLayer, context.CancellationToken).ConfigureAwait(false);
+        var interestInstructions = await ReadInterestInstructionsAsync(dataAccessLayer, context.CancellationToken).ConfigureAwait(false);
 
         Timestamp? token = null;
         var processedEntityIds = new HashSet<EntityId>();
         while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            context.CancellationToken.ThrowIfCancellationRequested();
 
             var batch = await dataAccessLayer.ProcessQueueAsync(
                 new ProcessQueueRequest { QueueName = QueueName, Token = token, Count = this.batchSize },
-                cancellationToken).ConfigureAwait(false);
+                context.CancellationToken).ConfigureAwait(false);
 
             if (batch.Entities.Count == 0)
             {
@@ -107,7 +107,7 @@ public sealed class EntityClassifierTool : IScheduledTool
 
             foreach (var entity in batch.Entities)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                context.CancellationToken.ThrowIfCancellationRequested();
 
                 // Skip tombstoned (deleted) entities, and any entity already processed this run -
                 // classifying an entity may modify it, which re-enqueues it; process it only once.
@@ -116,7 +116,7 @@ public sealed class EntityClassifierTool : IScheduledTool
                     continue;
                 }
 
-                var beforeSnapshot = await ReadSnapshotAsync(dataAccessLayer, entity.EntityId, cancellationToken).ConfigureAwait(false)
+                var beforeSnapshot = await ReadSnapshotAsync(dataAccessLayer, entity.EntityId, context.CancellationToken).ConfigureAwait(false)
                     ?? entity;
 
                 var prompt = AssemblePrompt(classifierPrompt, allEntityTypeNames, interestInstructions, beforeSnapshot);
@@ -129,15 +129,17 @@ public sealed class EntityClassifierTool : IScheduledTool
                         BeforeSnapshot = beforeSnapshot,
                         DataAccessLayer = dataAccessLayer,
                     },
-                    cancellationToken).ConfigureAwait(false);
+                    context.CancellationToken).ConfigureAwait(false);
 
                 // Retrieve the after snapshot so the classification can reason about what changed.
-                var afterSnapshot = await ReadSnapshotAsync(dataAccessLayer, entity.EntityId, cancellationToken).ConfigureAwait(false);
-                await this.agentRunner.OnClassifiedAsync(entity.EntityId, beforeSnapshot, afterSnapshot, cancellationToken).ConfigureAwait(false);
+                var afterSnapshot = await ReadSnapshotAsync(dataAccessLayer, entity.EntityId, context.CancellationToken).ConfigureAwait(false);
+                await this.agentRunner.OnClassifiedAsync(entity.EntityId, beforeSnapshot, afterSnapshot, context.CancellationToken).ConfigureAwait(false);
             }
 
             token = batch.Token;
         }
+
+        return new WorkspaceToolExecutionResult();
     }
 
     private static string AssemblePrompt(
@@ -389,10 +391,11 @@ public sealed class EntityClassifierTool : IScheduledTool
         return string.Empty;
     }
 
-    private static string? ReadString(JsonElement toolEntity, string propertyName)
+    private static string? ReadString(JsonElement? toolEntity, string propertyName)
     {
-        if (toolEntity.ValueKind == JsonValueKind.Object
-            && toolEntity.TryGetProperty(propertyName, out var element)
+        if (toolEntity is JsonElement toolEntityValue
+            && toolEntityValue.ValueKind == JsonValueKind.Object
+            && toolEntityValue.TryGetProperty(propertyName, out var element)
             && element.ValueKind == JsonValueKind.String)
         {
             return element.GetString();

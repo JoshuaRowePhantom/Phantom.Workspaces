@@ -41,9 +41,10 @@ Child results (sub-tasks / progress) are nested beneath their parent result enti
 
 ## Host runtime
 
-> **Status:** the host runtime is implemented in `Phantom.Workspaces/ScheduledTools/`:
-> `ScheduleEvaluator` (+ `ScheduleDefinition`) decides whether a schedule is due; `IScheduledTool` /
-> `ScheduledToolRegistry` dispatch by `tool.type`; `ToolExecutionResultWriter` records runs as
+> **Status:** the host runtime is implemented in `Phantom.Workspaces/ScheduledTools/` and
+> `Phantom.Workspaces.Tools/`: `ScheduleEvaluator` (+ `ScheduleDefinition`) decides whether a
+> schedule is due; `IWorkspaceTool` / `ScheduledToolRegistry` dispatch by `tool.type`;
+> `ToolExecutionResultWriter` records runs as
 > `tool-execution-result` entities; and `ScheduledToolHost.RunDueToolsAsync` discovers
 > tool-relationships targeting the host, evaluates schedules against the last recorded execution, and
 > runs due tools (no double-start). The built-in tools are implemented — `VectorIndexerTool`,
@@ -147,9 +148,10 @@ resumes where the previous run stopped.
 
 1. `ScheduledToolHost`
    - Host-side service that discovers due `tool-relationship`s for the host and drives runs.
-2. `IScheduledTool` / `ScheduledToolRegistry`
-   - Abstraction for a runnable tool keyed by `tool.type`, plus a registry mapping types to
-     implementations (`VectorIndexerTool`, `EntityClassifierTool`, `GitWorkspaceScanTool`).
+2. `IWorkspaceTool` / `ScheduledToolRegistry`
+   - Shared abstraction for runnable tools keyed by `tool.type`, plus a registry mapping types to
+     scheduled implementations (`VectorIndexerTool`, `EntityClassifierTool`, `GitWorkspaceScanTool`,
+     `CopilotSessionDiscoveryTool`).
 3. `ScheduleEvaluator`
    - Decides whether a `schedule` is due given the last execution time and the current time.
 4. `ToolExecutionResultWriter`

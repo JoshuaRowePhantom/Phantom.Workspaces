@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
-namespace Phantom.Workspaces.ScheduledTools;
+namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// A built-in scheduled tool that scans a directory tree for Git repositories (directories
@@ -18,7 +18,7 @@ namespace Phantom.Workspaces.ScheduledTools;
 /// tool updates rather than duplicates. The scan does not descend into a repository once found, nor
 /// into <c>.git</c> directories.
 /// </summary>
-public sealed class GitWorkspaceScanTool : IScheduledTool
+public sealed class GitWorkspaceScanTool : IWorkspaceTool
 {
     /// <summary>The tool-entity property naming the root directory to scan.</summary>
     public const string ScanRootProperty = "scan-root";
@@ -30,20 +30,20 @@ public sealed class GitWorkspaceScanTool : IScheduledTool
 
     public string ToolType => "git-workspace-scan";
 
-    public async Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken)
+    public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var scanRoot = ReadStringProperty(context.ToolEntity, ScanRootProperty);
+        var scanRoot = ReadStringProperty(context.Tool.Data, ScanRootProperty);
         if (string.IsNullOrWhiteSpace(scanRoot) || !Directory.Exists(scanRoot))
         {
-            return;
+            return new WorkspaceToolExecutionResult();
         }
 
-        var maxDepth = ReadIntProperty(context.ToolEntity, MaxDepthProperty) ?? DefaultMaxDepth;
+        var maxDepth = ReadIntProperty(context.Tool.Data, MaxDepthProperty) ?? DefaultMaxDepth;
 
         var changes = new List<EntityChange>();
-        foreach (var repositoryPath in EnumerateGitRepositories(scanRoot, maxDepth, cancellationToken))
+        foreach (var repositoryPath in EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
         {
             using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
             changes.Add(new EntityChange
@@ -57,7 +57,7 @@ public sealed class GitWorkspaceScanTool : IScheduledTool
 
         if (changes.Count == 0)
         {
-            return;
+            return new WorkspaceToolExecutionResult();
         }
 
         await context.DataAccessLayer.UpdateAsync(
@@ -66,7 +66,9 @@ public sealed class GitWorkspaceScanTool : IScheduledTool
                 UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Scan for Git repositories." } },
                 Changes = changes,
             },
-            cancellationToken).ConfigureAwait(false);
+            context.CancellationToken).ConfigureAwait(false);
+
+        return new WorkspaceToolExecutionResult();
     }
 
     private static IEnumerable<string> EnumerateGitRepositories(string root, int maxDepth, CancellationToken cancellationToken)
@@ -164,10 +166,11 @@ public sealed class GitWorkspaceScanTool : IScheduledTool
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private static string? ReadStringProperty(JsonElement toolEntity, string propertyName)
+    private static string? ReadStringProperty(JsonElement? toolEntity, string propertyName)
     {
-        if (toolEntity.ValueKind == JsonValueKind.Object
-            && toolEntity.TryGetProperty(propertyName, out var element)
+        if (toolEntity is JsonElement toolEntityValue
+            && toolEntityValue.ValueKind == JsonValueKind.Object
+            && toolEntityValue.TryGetProperty(propertyName, out var element)
             && element.ValueKind == JsonValueKind.String)
         {
             return element.GetString();
@@ -176,10 +179,11 @@ public sealed class GitWorkspaceScanTool : IScheduledTool
         return null;
     }
 
-    private static int? ReadIntProperty(JsonElement toolEntity, string propertyName)
+    private static int? ReadIntProperty(JsonElement? toolEntity, string propertyName)
     {
-        if (toolEntity.ValueKind == JsonValueKind.Object
-            && toolEntity.TryGetProperty(propertyName, out var element)
+        if (toolEntity is JsonElement toolEntityValue
+            && toolEntityValue.ValueKind == JsonValueKind.Object
+            && toolEntityValue.TryGetProperty(propertyName, out var element)
             && element.ValueKind == JsonValueKind.Number
             && element.TryGetInt32(out var value))
         {

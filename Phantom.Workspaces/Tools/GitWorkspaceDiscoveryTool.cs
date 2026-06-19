@@ -14,6 +14,8 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         this.localDriveRootProvider = localDriveRootProvider ?? new LocalDriveRootProvider();
     }
 
+    public string ToolType => "git-workspace-discovery";
+
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         var currentProfileNames = WorkspaceEntitySnapshotReader.GetEntityNames(context.CurrentComputerUserProfileEntity)

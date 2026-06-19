@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -20,19 +21,28 @@ public sealed class ScheduledToolHostTests
         public override DateTimeOffset GetUtcNow() => this.Now;
     }
 
-    private sealed class RecordingTool : IScheduledTool
+    private sealed class RecordingTool : IWorkspaceTool
     {
         public int RunCount { get; private set; }
 
-        public IReadOnlyList<EntityId> LastTargets { get; private set; } = [];
+        public IReadOnlyList<EntitySnapshot> LastParticipants { get; private set; } = [];
+
+        public EntityId CurrentComputerEntityId { get; private set; }
+
+        public EntityId CurrentUserEntityId { get; private set; }
+
+        public EntityId CurrentProfileEntityId { get; private set; }
 
         public string ToolType => "stub";
 
-        public Task RunAsync(ScheduledToolContext context, CancellationToken cancellationToken)
+        public Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
         {
             this.RunCount++;
-            this.LastTargets = context.TargetEntityIds;
-            return Task.CompletedTask;
+            this.LastParticipants = context.Participants;
+            this.CurrentComputerEntityId = context.CurrentComputerEntity.EntityId;
+            this.CurrentUserEntityId = context.CurrentUserEntity.EntityId;
+            this.CurrentProfileEntityId = context.CurrentComputerUserProfileEntity.EntityId;
+            return Task.FromResult(new WorkspaceToolExecutionResult());
         }
     }
 
@@ -61,15 +71,21 @@ public sealed class ScheduledToolHostTests
     private static async Task SeedScenarioAsync(
         IDataAccessLayer dataAccessLayer,
         Guid hostId,
+        Guid userId,
+        Guid computerId,
         Guid toolId,
         Guid scheduleId,
         Guid relationshipId,
         string scheduleRepeatJson)
     {
+        await AddEntityAsync(dataAccessLayer, userId,
+            $$"""{ "entity-id": "{{userId}}", "entity-types": ["user"], "names": [["users","username","test-user"]] }""");
+        await AddEntityAsync(dataAccessLayer, computerId,
+            $$"""{ "entity-id": "{{computerId}}", "entity-types": ["computer"], "names": [["computers","hostname","this-machine"]] }""");
         await AddEntityAsync(dataAccessLayer, hostId,
-            $$"""{ "entity-id": "{{hostId}}", "entity-types": ["computer"], "names": [["computer","this-machine"]] }""");
+            $$"""{ "entity-id": "{{hostId}}", "entity-types": ["user-computer-profile"], "names": [["computer-user-profiles","users","username","test-user","computers","hostname","this-machine"]], "user-reference": ["users","username","test-user"], "computer-reference": ["computers","hostname","this-machine"] }""");
         await AddEntityAsync(dataAccessLayer, toolId,
-            $$"""{ "entity-id": "{{toolId}}", "entity-types": ["tool"], "names": [["tools","stub"]], "type": "stub" }""");
+            $$"""{ "entity-id": "{{toolId}}", "entity-types": ["tool"], "names": [["tools","stub"]], "tool-type": "stub" }""");
         await AddEntityAsync(dataAccessLayer, scheduleId,
             $$"""{ "entity-id": "{{scheduleId}}", "entity-types": ["schedule"], "names": [["schedule","test"]], "repeat": {{scheduleRepeatJson}} }""");
         await AddEntityAsync(dataAccessLayer, relationshipId,
@@ -88,12 +104,14 @@ public sealed class ScheduledToolHostTests
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
         var toolId = Guid.NewGuid();
         var scheduleId = Guid.NewGuid();
         var relationshipId = Guid.NewGuid();
 
         // Interval schedule that has never run -> due.
-        await SeedScenarioAsync(dataAccessLayer, hostId, toolId, scheduleId, relationshipId,
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
             """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
 
         var tool = new RecordingTool();
@@ -103,7 +121,10 @@ public sealed class ScheduledToolHostTests
 
         Assert.Equal(1, ranCount);
         Assert.Equal(1, tool.RunCount);
-        Assert.Equal(new EntityId(hostId), Assert.Single(tool.LastTargets));
+        Assert.Contains(tool.LastParticipants, participant => participant.EntityId == new EntityId(hostId));
+        Assert.Equal(new EntityId(computerId), tool.CurrentComputerEntityId);
+        Assert.Equal(new EntityId(userId), tool.CurrentUserEntityId);
+        Assert.Equal(new EntityId(hostId), tool.CurrentProfileEntityId);
 
         // A succeeded tool-execution-result was recorded under the host.
         var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
@@ -117,12 +138,14 @@ public sealed class ScheduledToolHostTests
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
         var toolId = Guid.NewGuid();
         var scheduleId = Guid.NewGuid();
         var relationshipId = Guid.NewGuid();
 
         // Interval schedule restricted to Mondays; "now" is a Wednesday -> not an allowed day.
-        await SeedScenarioAsync(dataAccessLayer, hostId, toolId, scheduleId, relationshipId,
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
             """{ "frequency": "00:00:01Z", "days-of-week": ["monday"], "start-at": [] }""");
 
         var tool = new RecordingTool();
@@ -140,11 +163,13 @@ public sealed class ScheduledToolHostTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var hostId = Guid.NewGuid();
         var otherHostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
         var toolId = Guid.NewGuid();
         var scheduleId = Guid.NewGuid();
         var relationshipId = Guid.NewGuid();
 
-        await SeedScenarioAsync(dataAccessLayer, otherHostId, toolId, scheduleId, relationshipId,
+        await SeedScenarioAsync(dataAccessLayer, otherHostId, userId, computerId, toolId, scheduleId, relationshipId,
             """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
 
         var tool = new RecordingTool();
@@ -162,12 +187,14 @@ public sealed class ScheduledToolHostTests
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
         var toolId = Guid.NewGuid();
         var scheduleId = Guid.NewGuid();
         var relationshipId = Guid.NewGuid();
 
         // Hourly interval; the fixed clock does not advance between runs.
-        await SeedScenarioAsync(dataAccessLayer, hostId, toolId, scheduleId, relationshipId,
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
             """{ "frequency": "01:00:00Z", "days-of-week": [], "start-at": [] }""");
 
         var tool = new RecordingTool();

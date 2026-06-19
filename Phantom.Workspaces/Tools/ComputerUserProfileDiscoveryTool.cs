@@ -8,6 +8,8 @@ public sealed class ComputerUserProfileDiscoveryTool(
 {
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
 
+    public string ToolType => "computer-user-profile-discovery";
+
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         var computerEntityName = new EntityName("computers", "hostname", this.currentExecutionContextProvider.ComputerName);

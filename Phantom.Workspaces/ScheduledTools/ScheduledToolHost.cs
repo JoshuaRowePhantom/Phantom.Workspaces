@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.ScheduledTools;
 
@@ -81,7 +82,7 @@ public sealed class ScheduledToolHost
                     continue;
                 }
 
-                if (await this.RunToolAsync(relationship, hostNameComponents, cancellationToken).ConfigureAwait(false))
+                if (await this.RunToolAsync(relationship, hostEntityId, hostNameComponents, cancellationToken).ConfigureAwait(false))
                 {
                     ranCount++;
                 }
@@ -145,7 +146,7 @@ public sealed class ScheduledToolHost
 
         foreach (var scheduleEntityId in relationship.ScheduleEntityIds)
         {
-            var scheduleData = await this.ReadEntityDataAsync(scheduleEntityId, cancellationToken).ConfigureAwait(false);
+            var scheduleData = (await this.ReadEntitySnapshotAsync(scheduleEntityId, cancellationToken).ConfigureAwait(false))?.Data;
             if (scheduleData is not { } data)
             {
                 continue;
@@ -172,11 +173,12 @@ public sealed class ScheduledToolHost
 
     private async Task<bool> RunToolAsync(
         ToolRelationship relationship,
+        EntityId hostEntityId,
         IReadOnlyList<string> hostNameComponents,
         CancellationToken cancellationToken)
     {
-        var toolData = await this.ReadEntityDataAsync(relationship.ToolEntityId, cancellationToken).ConfigureAwait(false);
-        if (toolData is not { } data || !TryReadToolType(data, out var toolType))
+        var toolEntity = await this.ReadEntitySnapshotAsync(relationship.ToolEntityId, cancellationToken).ConfigureAwait(false);
+        if (toolEntity?.Data is not { } toolData || !TryReadToolType(toolData, out var toolType))
         {
             return false;
         }
@@ -186,18 +188,17 @@ public sealed class ScheduledToolHost
             return false;
         }
 
+        var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, cancellationToken).ConfigureAwait(false);
+        if (executionContext is null)
+        {
+            return false;
+        }
+
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
         this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents);
         try
         {
-            await tool.RunAsync(
-                new ScheduledToolContext
-                {
-                    ToolEntity = data,
-                    TargetEntityIds = relationship.TargetEntityIds,
-                    DataAccessLayer = this.dataAccessLayer,
-                },
-                cancellationToken).ConfigureAwait(false);
+            await tool.ExecuteAsync(executionContext).ConfigureAwait(false);
 
             await this.resultWriter.CompleteAsync(handle, success: true, content: null, cancellationToken).ConfigureAwait(false);
             return true;
@@ -243,7 +244,7 @@ public sealed class ScheduledToolHost
 
     private async Task<string> ResolveToolNameAsync(EntityId toolEntityId, CancellationToken cancellationToken)
     {
-        var data = await this.ReadEntityDataAsync(toolEntityId, cancellationToken).ConfigureAwait(false);
+        var data = (await this.ReadEntitySnapshotAsync(toolEntityId, cancellationToken).ConfigureAwait(false))?.Data;
         return data is { } toolData && TryReadToolType(toolData, out var toolType) ? toolType : "tool";
     }
 
@@ -295,7 +296,83 @@ public sealed class ScheduledToolHost
         return latest;
     }
 
-    private async Task<JsonElement?> ReadEntityDataAsync(EntityId entityId, CancellationToken cancellationToken)
+    private async Task<WorkspaceToolExecutionContext?> CreateExecutionContextAsync(
+        ToolRelationship relationship,
+        EntityId hostEntityId,
+        CancellationToken cancellationToken)
+    {
+        var currentProfileEntity = await this.ReadEntitySnapshotAsync(hostEntityId, cancellationToken).ConfigureAwait(false);
+        var toolRelationshipEntity = await this.ReadEntitySnapshotAsync(relationship.RelationshipId, cancellationToken).ConfigureAwait(false);
+        var toolEntity = await this.ReadEntitySnapshotAsync(relationship.ToolEntityId, cancellationToken).ConfigureAwait(false);
+        var scheduleEntity = await this.ReadEntitySnapshotAsync(relationship.ScheduleEntityIds[0], cancellationToken).ConfigureAwait(false);
+        if (currentProfileEntity is null || toolRelationshipEntity is null || toolEntity is null || scheduleEntity is null)
+        {
+            return null;
+        }
+
+        var currentUserEntity = await this.ReadReferencedEntityAsync(currentProfileEntity, "user-reference", cancellationToken).ConfigureAwait(false)
+            ?? CreatePlaceholderEntitySnapshot();
+        var currentComputerEntity = await this.ReadReferencedEntityAsync(currentProfileEntity, "computer-reference", cancellationToken).ConfigureAwait(false)
+            ?? CreatePlaceholderEntitySnapshot();
+        var participants = await this.ReadEntitySnapshotsAsync(relationship.TargetEntityIds, cancellationToken).ConfigureAwait(false);
+        if (!participants.Any(participant => participant.EntityId == currentProfileEntity.EntityId))
+        {
+            participants = [.. participants, currentProfileEntity];
+        }
+
+        return new WorkspaceToolExecutionContext
+        {
+            DataAccessLayer = this.dataAccessLayer,
+            CancellationToken = cancellationToken,
+            CurrentComputerEntity = currentComputerEntity,
+            CurrentUserEntity = currentUserEntity,
+            CurrentComputerUserProfileEntity = currentProfileEntity,
+            ToolRelationship = toolRelationshipEntity,
+            Participants = participants.ToArray(),
+            Tool = toolEntity,
+            Schedule = scheduleEntity,
+        };
+    }
+
+    private async Task<EntitySnapshot?> ReadReferencedEntityAsync(
+        EntitySnapshot sourceEntity,
+        string propertyName,
+        CancellationToken cancellationToken)
+    {
+        if (sourceEntity.Data is not { } data
+            || !TryReadEntityName(data, propertyName, out var entityName))
+        {
+            return null;
+        }
+
+        var getResult = await this.dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityName = entityName }],
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return getResult.Batches.SelectMany(batch => batch.Entities).FirstOrDefault();
+    }
+
+    private async Task<IReadOnlyList<EntitySnapshot>> ReadEntitySnapshotsAsync(
+        IReadOnlyList<EntityId> entityIds,
+        CancellationToken cancellationToken)
+    {
+        var snapshots = new List<EntitySnapshot>(entityIds.Count);
+        foreach (var entityId in entityIds.Distinct())
+        {
+            var snapshot = await this.ReadEntitySnapshotAsync(entityId, cancellationToken).ConfigureAwait(false);
+            if (snapshot is not null)
+            {
+                snapshots.Add(snapshot);
+            }
+        }
+
+        return snapshots;
+    }
+
+    private async Task<EntitySnapshot?> ReadEntitySnapshotAsync(EntityId entityId, CancellationToken cancellationToken)
     {
         var getResult = await this.dataAccessLayer.GetAsync(
             new GetRequest
@@ -304,11 +381,9 @@ public sealed class ScheduledToolHost
                 Timestamps = [null],
             },
             cancellationToken).ConfigureAwait(false);
-
         return getResult.Batches
             .SelectMany(batch => batch.Entities)
-            .FirstOrDefault(snapshot => snapshot.EntityId == entityId)
-            ?.Data;
+            .FirstOrDefault(snapshot => snapshot.EntityId == entityId);
     }
 
     private static bool HasNamePrefix(JsonElement entity, IReadOnlyList<string> prefix)
@@ -339,7 +414,7 @@ public sealed class ScheduledToolHost
     private static bool TryReadToolType(JsonElement toolEntity, out string toolType)
     {
         toolType = string.Empty;
-        if (toolEntity.TryGetProperty("type", out var typeElement) && typeElement.ValueKind == JsonValueKind.String)
+        if (toolEntity.TryGetProperty("tool-type", out var typeElement) && typeElement.ValueKind == JsonValueKind.String)
         {
             toolType = typeElement.GetString() ?? string.Empty;
         }
@@ -400,6 +475,48 @@ public sealed class ScheduledToolHost
         }
 
         return result;
+    }
+
+    private static bool TryReadEntityName(JsonElement parent, string propertyName, out EntityName entityName)
+    {
+        entityName = default!;
+        if (!parent.TryGetProperty(propertyName, out var element) || element.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var components = element.EnumerateArray()
+            .Where(component => component.ValueKind == JsonValueKind.String)
+            .Select(component => component.GetString())
+            .Where(component => !string.IsNullOrWhiteSpace(component))
+            .Cast<string>()
+            .ToArray();
+        if (components.Length == 0)
+        {
+            return false;
+        }
+
+        entityName = new EntityName(components);
+        return true;
+    }
+
+    private static EntitySnapshot CreatePlaceholderEntitySnapshot()
+    {
+        using var placeholderDocument = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "00000000-0000-0000-0000-000000000000",
+              "entity-types": ["entity"],
+              "names": [["placeholder"]]
+            }
+            """);
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(Guid.Empty),
+            ModifiedTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
+            Data = placeholderDocument.RootElement.Clone(),
+            Relationships = [],
+        };
     }
 
     private sealed record ToolRelationship(
