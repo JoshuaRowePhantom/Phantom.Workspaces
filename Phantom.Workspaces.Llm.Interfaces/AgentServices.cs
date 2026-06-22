@@ -28,4 +28,11 @@ public sealed record AgentServices
     /// Overrides toolset factory resolution for custom tool kinds.
     /// </summary>
     public IToolsetFactory? ToolsetFactory { get; init; }
+
+    /// <summary>
+    /// Factory used to resolve the tool resources referenced by an agent manifest into concrete
+    /// tools. Used when a <see cref="CreateAgentChatRequest"/> supplies an agent manifest without
+    /// its own tool resource factory.
+    /// </summary>
+    public IToolResourceFactory? ToolResourceFactory { get; init; }
 }

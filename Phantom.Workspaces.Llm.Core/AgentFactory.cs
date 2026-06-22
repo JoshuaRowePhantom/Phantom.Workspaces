@@ -273,7 +273,8 @@ public static class AgentFactory
                 new CreateAgentDefinitionRequest
                 {
                     AgentManifest = agentManifest,
-                    ToolResourceFactory = createAgentChatRequest.ToolResourceFactory!,
+                    ToolResourceFactory = createAgentChatRequest.ToolResourceFactory
+                        ?? services?.ToolResourceFactory!,
                 }).ConfigureAwait(false)
             : createAgentChatRequest.AgentDefinition;
 

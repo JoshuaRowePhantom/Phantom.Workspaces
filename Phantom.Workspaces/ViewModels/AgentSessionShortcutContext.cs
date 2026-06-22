@@ -9,6 +9,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -30,15 +31,41 @@ public sealed class AgentSessionShortcutContext
         ObservableLoggerFactory? loggerFactory = null)
     {
         var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
+        var dataAccessLayer = mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
         var workspaceEntityToolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
-            mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer,
+            dataAccessLayer,
             ToolsetFactory.CreateDefaultToolsetFactory());
         return new AgentServices
         {
             AgentPersistenceStoreOverride = agentPersistenceStore,
             LoggerFactory = loggerFactory,
             ToolsetFactory = workspaceEntityToolsetFactory,
+            ToolResourceFactory = CreateToolResourceFactory(dataAccessLayer),
         };
+    }
+
+    private static IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)
+    {
+        var executionContext = new CurrentExecutionContextProvider();
+        var machineProfilePrefix = new EntityName(
+            "computer-user-profiles",
+            "users",
+            "username",
+            executionContext.UserName,
+            "computers",
+            "hostname",
+            executionContext.ComputerName,
+            "copilot",
+            "mcp-servers");
+
+        return new ComposingToolResourceFactory(
+            new FixedToolResourceFactory(),
+            new McpServerToolResourceFactory(
+                dataAccessLayer,
+                [
+                    machineProfilePrefix,
+                    new EntityName("defaults", "mcp-servers"),
+                ]));
     }
 
     public async Task<SubscribedEntityViewModel?> CreateAgentSessionEntityAsync(
