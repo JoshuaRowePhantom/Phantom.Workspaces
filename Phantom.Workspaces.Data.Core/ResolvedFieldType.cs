@@ -11,5 +11,24 @@ public sealed class ResolvedFieldType
     public IReadOnlyCollection<string> EntityTypes { get; init; } = Array.Empty<string>();
 
     public JsonElement? SchemaNode { get; init; }
+
+    /// <summary>
+    /// Optional custom field-editor selector read from the schema's <c>x-field-editor</c>
+    /// keyword. May be a registered short name or an assembly-qualified type name.
+    /// </summary>
+    public string? FieldEditorTypeName { get; init; }
+
+    /// <summary>
+    /// Optional absolute display order read from the schema's
+    /// <c>x-absolute-entity-display-order</c> keyword. Absolute-ordered fields sort strictly
+    /// by this value and render before all other fields and entities.
+    /// </summary>
+    public double? AbsoluteEntityDisplayOrder { get; init; }
+
+    /// <summary>
+    /// Relative display order within the field's own entity type group, read from the schema's
+    /// <c>x-relative-entity-display-order</c> keyword. Defaults to 0 when absent.
+    /// </summary>
+    public double RelativeEntityDisplayOrder { get; init; }
 }
 

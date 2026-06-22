@@ -37,6 +37,9 @@ public sealed class FieldTypeResolver
             DefaultMimeType = ReadDefaultMimeType(schemaNode.Value),
             EntityTypes = ReadEntityTypes(schemaNode.Value),
             SchemaNode = schemaNode,
+            FieldEditorTypeName = ReadFieldEditorTypeName(schemaNode.Value),
+            AbsoluteEntityDisplayOrder = ReadDoubleKeyword(schemaNode.Value, "x-absolute-entity-display-order"),
+            RelativeEntityDisplayOrder = ReadDoubleKeyword(schemaNode.Value, "x-relative-entity-display-order") ?? 0,
         };
     }
 
@@ -443,6 +446,26 @@ public sealed class FieldTypeResolver
         return schemaNode.TryGetProperty("x-default-mime-type", out var defaultMimeType)
                && defaultMimeType.ValueKind == JsonValueKind.String
             ? defaultMimeType.GetString()
+            : null;
+    }
+
+    private static string? ReadFieldEditorTypeName(
+        JsonElement schemaNode)
+    {
+        return schemaNode.TryGetProperty("x-field-editor", out var fieldEditor)
+               && fieldEditor.ValueKind == JsonValueKind.String
+               && !string.IsNullOrWhiteSpace(fieldEditor.GetString())
+            ? fieldEditor.GetString()
+            : null;
+    }
+
+    private static double? ReadDoubleKeyword(
+        JsonElement schemaNode,
+        string keyword)
+    {
+        return schemaNode.TryGetProperty(keyword, out var value)
+               && value.ValueKind == JsonValueKind.Number
+            ? value.GetDouble()
             : null;
     }
 
