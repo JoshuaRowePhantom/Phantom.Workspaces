@@ -201,6 +201,62 @@ public static class AgentFactory
     }
 
     /// <summary>
+    /// Projects an <see cref="AgentManifest"/> into a concrete <see cref="AgentDefinition"/> by
+    /// cloning the manifest's template and resolving each tool resource into a concrete tool.
+    /// </summary>
+    /// <param name="request">The manifest and the tool resource factory used to resolve resources.</param>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The projected agent definition with resolved tools appended.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// If the manifest has no template, the template cannot be cloned, the tool resource factory is
+    /// missing, or a tool resource cannot be resolved.
+    /// </exception>
+    public static async Task<AgentDefinition> CreateAgentDefinitionAsync(
+        CreateAgentDefinitionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var manifest = request.AgentManifest
+            ?? throw new InvalidOperationException("Create agent definition request does not specify a manifest.");
+
+        var template = manifest.Template
+            ?? throw new InvalidOperationException("Agent manifest does not specify a template agent definition.");
+
+        // Clone the template so projecting the manifest does not mutate the manifest's template.
+        var definition = AgentDefinition.FromJson(template.ToJson())
+            ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
+
+        var toolResources = manifest.Resources?.OfType<ToolResource>().ToArray() ?? [];
+        if (toolResources.Length == 0)
+        {
+            return definition;
+        }
+
+        var toolResourceFactory = request.ToolResourceFactory
+            ?? throw new InvalidOperationException(
+                "Create agent definition request does not specify a tool resource factory but the manifest references tool resources.");
+
+        if (definition is not PromptAgent promptAgent)
+        {
+            throw new InvalidOperationException(
+                "Agent manifest template must be a prompt agent to resolve tool resources.");
+        }
+
+        promptAgent.Tools ??= [];
+        foreach (var toolResource in toolResources)
+        {
+            var tool = await toolResourceFactory
+                .ResolveToolResourceAsync(toolResource, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"Tool resource '{toolResource.Id}:{toolResource.Name}' could not be resolved.");
+
+            promptAgent.Tools.Add(tool);
+        }
+
+        return definition;
+    }
+
+    /// <summary>
     /// Creates an initialized <see cref="AgentChat"/> session from an agent definition,
     /// including configured tool initialization before returning.
     /// </summary>
@@ -212,7 +268,14 @@ public static class AgentFactory
         var services = createAgentChatRequest.AgentServices;
         ValidateServices(services);
 
-        var requestedAgentDefinition = createAgentChatRequest.AgentDefinition;
+        var requestedAgentDefinition = createAgentChatRequest.AgentManifest is { } agentManifest
+            ? await CreateAgentDefinitionAsync(
+                new CreateAgentDefinitionRequest
+                {
+                    AgentManifest = agentManifest,
+                    ToolResourceFactory = createAgentChatRequest.ToolResourceFactory!,
+                }).ConfigureAwait(false)
+            : createAgentChatRequest.AgentDefinition;
 
         await EnforceTrustProfileAsync(
             requestedAgentDefinition,
