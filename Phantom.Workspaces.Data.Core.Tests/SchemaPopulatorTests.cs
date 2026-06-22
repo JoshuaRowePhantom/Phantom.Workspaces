@@ -133,11 +133,15 @@ public sealed class SchemaPopulatorTests
               "names": [ [ "test", "agent-manifests", "example" ] ],
               "display-name": { "default": "Example Manifest" },
               "manifest": {
-                "kind": "prompt",
                 "name": "example",
-                "model": { "id": "gpt-4.1-mini", "provider": "github-models" },
-                "toolResources": [
-                  { "type": "mcp-server-entity", "name": "github" }
+                "displayName": "Example Manifest",
+                "template": {
+                  "kind": "prompt",
+                  "name": "example",
+                  "model": { "id": "gpt-4.1-mini", "provider": "github-models" }
+                },
+                "resources": [
+                  { "kind": "tool", "id": "mcp-server-entity", "name": "github" }
                 ]
               }
             }
@@ -183,8 +187,8 @@ public sealed class SchemaPopulatorTests
               "names": [ [ "test", "agent-manifests", "invalid" ] ],
               "display-name": { "default": "Invalid Manifest" },
               "manifest": {
-                "kind": "prompt",
-                "name": "invalid"
+                "name": "invalid",
+                "displayName": "Invalid Manifest"
               }
             }
             """).RootElement.Clone();

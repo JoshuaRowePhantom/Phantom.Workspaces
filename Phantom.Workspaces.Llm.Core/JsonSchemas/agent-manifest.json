@@ -2,173 +2,115 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://phantom-workspaces/schemas/agent-manifest.json",
   "title": "Agent Manifest",
-  "description": "A declarative agent configuration with tool resource references that are resolved at runtime. Tool resources enable machine-specific and user-specific tool configurations, such as MCP servers.",
+  "description": "A declarative agent manifest that projects into an executable agent. The manifest carries a base 'template' agent definition plus a list of resources (tools and models) that are resolved at runtime. Tool resources enable machine-specific and user-specific tool configurations, such as MCP servers, to be referenced by name and resolved against the current execution context.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "kind",
     "name",
-    "model"
+    "displayName",
+    "template"
   ],
   "properties": {
-    "kind": {
-      "const": "prompt",
-      "description": "The kind of agent. Currently only 'prompt' agents are supported."
-    },
     "name": {
       "type": "string",
       "minLength": 1,
-      "description": "Unique identifier for the agent. Used in agent selection and resolution."
+      "description": "Unique identifier for the manifest. Used in manifest selection and resolution."
     },
     "displayName": {
       "type": "string",
-      "description": "Human-readable name displayed in UI. If not provided, 'name' is used."
+      "description": "Human-readable name of the manifest, displayed in UI."
     },
     "description": {
       "type": "string",
-      "description": "Description of the agent's capabilities and purpose. Shown in agent selection UI."
-    },
-    "instructions": {
-      "type": "string",
-      "description": "System instructions or prompt template for the agent. Defines the agent's behavior and capabilities."
-    },
-    "additionalInstructions": {
-      "type": "string",
-      "description": "Additional instructions appended to the main instructions. Useful for runtime-specific guidance."
-    },
-    "model": {
-      "type": "object",
-      "description": "Model configuration specifying which LLM to use and how to connect to it.",
-      "additionalProperties": false,
-      "required": [
-        "id"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Model identifier (e.g., 'gpt-4', 'claude-3-sonnet', 'llama-3')."
-        },
-        "provider": {
-          "type": "string",
-          "enum": [
-            "echo",
-            "github-models",
-            "github-copilot",
-            "ollama",
-            "openai",
-            "azure"
-          ],
-          "description": "LLM provider. Determines which client implementation is used to communicate with the model."
-        },
-        "apiType": {
-          "type": "string",
-          "minLength": 1,
-          "description": "API type for providers that support multiple API formats (e.g., 'chat', 'completion')."
-        },
-        "connection": {
-          "type": "object",
-          "description": "Connection details for the LLM provider (endpoint, credentials).",
-          "additionalProperties": false,
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Connection type (e.g., 'api-key', 'oauth', 'anonymous')."
-            },
-            "endpoint": {
-              "type": "string",
-              "minLength": 1,
-              "description": "API endpoint URL for the LLM provider."
-            },
-            "key": {
-              "type": "string",
-              "description": "API key or authentication token. Prefer storing secrets outside the manifest."
-            },
-            "apiKey": {
-              "type": "string",
-              "description": "Alternative property name for API key. Prefer storing secrets outside the manifest."
-            }
-          }
-        },
-        "options": {
-          "type": "object",
-          "description": "Model-specific options (temperature, top_p, max_tokens, etc.).",
-          "additionalProperties": true,
-          "properties": {
-            "temperature": {
-              "type": "number",
-              "description": "Sampling temperature (0.0 to 2.0). Higher values make output more random."
-            },
-            "topP": {
-              "type": "number",
-              "description": "Nucleus sampling threshold (0.0 to 1.0). Alternative to temperature."
-            },
-            "topK": {
-              "type": "integer",
-              "description": "Top-k sampling. Limits selection to k most likely tokens."
-            },
-            "frequencyPenalty": {
-              "type": "number",
-              "description": "Frequency penalty (-2.0 to 2.0). Reduces repetition of frequent tokens."
-            },
-            "presencePenalty": {
-              "type": "number",
-              "description": "Presence penalty (-2.0 to 2.0). Reduces repetition of any tokens that appear."
-            },
-            "maxOutputTokens": {
-              "type": "integer",
-              "description": "Maximum number of tokens to generate in the response."
-            },
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": true,
-              "description": "Additional provider-specific options."
-            }
-          }
-        }
-      }
-    },
-    "toolResources": {
-      "type": "array",
-      "description": "Tool resource references. Tools are resolved at runtime based on the execution context (user, machine, workspace).",
-      "items": {
-        "$ref": "#/$defs/toolResource"
-      }
+      "description": "Description of the agent's capabilities and purpose. Shown in selection UI."
     },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
       "description": "Additional metadata including authors, tags, version, and other arbitrary properties."
+    },
+    "template": {
+      "$ref": "https://phantom-workspaces/schemas/agent-definition.json",
+      "description": "The base agent definition that this manifest projects into. Tool resources listed in 'resources' are resolved and appended to the template's tools when the agent is created."
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Parameter schema for configuring the agent's behavior. Parameters may be referenced within the manifest using {{paramName}} notation."
+    },
+    "resources": {
+      "type": "array",
+      "description": "Resources required by the agent, such as tools and models. Tool resources are resolved at runtime based on the execution context (user, machine, workspace).",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/toolResource"
+          },
+          {
+            "$ref": "#/$defs/modelResource"
+          }
+        ]
+      }
     }
   },
   "$defs": {
     "toolResource": {
       "type": "object",
-      "description": "A reference to a tool that will be resolved at runtime. The 'type' determines how the tool is resolved.",
-      "additionalProperties": false,
+      "description": "A reference to a tool that is resolved at runtime. 'id' selects the resolution strategy and 'name' identifies the specific resource.",
+      "additionalProperties": true,
       "required": [
-        "type",
+        "kind",
+        "id",
         "name"
       ],
       "properties": {
-        "type": {
+        "kind": {
+          "const": "tool",
+          "description": "Resource kind discriminator. Always 'tool' for tool resources."
+        },
+        "id": {
           "type": "string",
           "minLength": 1,
-          "description": "Tool resource type. Common types: 'mcp-server-entity' (MCP server entity), 'fixed' (built-in tool), 'workspace-entity' (workspace entity toolset), 'filesystem' (filesystem toolset)."
+          "description": "Tool resource type that selects how the tool is resolved. Common values: 'mcp-server-entity' (resolve an mcp-server entity by name), 'fixed' (resolve a built-in toolset by name)."
         },
         "name": {
           "type": "string",
           "minLength": 1,
-          "description": "Tool resource name. For 'mcp-server-entity' type, this is the mcp-server entity name (e.g., 'github'). For 'fixed' type, this is the built-in tool name (e.g., 'workspace-entity', 'filesystem')."
+          "description": "Tool resource name. For 'mcp-server-entity' type, this is the mcp-server entity name (e.g., 'github'). For 'fixed' type, this is the built-in toolset name (e.g., 'workspace-entity', 'filesystem')."
         },
         "options": {
           "type": "object",
           "additionalProperties": true,
           "description": "Tool-specific configuration options. The structure depends on the tool type."
+        }
+      }
+    },
+    "modelResource": {
+      "type": "object",
+      "description": "A reference to a model resource required by the agent.",
+      "additionalProperties": true,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "const": "model",
+          "description": "Resource kind discriminator. Always 'model' for model resources."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model identifier (e.g., 'gpt-4', 'claude-3-sonnet')."
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional human-readable name for the model resource."
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Model-specific configuration options."
         }
       }
     }
