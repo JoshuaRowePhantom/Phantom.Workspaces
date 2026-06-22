@@ -232,6 +232,51 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentManifestShortcutHandler_LocalEchoManifest_CreatesAgentSessionTab()
+    {
+        var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentManifestEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("a1b2c3d4-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "a1b2c3d4-0000-4000-8000-000000000001",
+              "entity-types": ["agent-manifest"],
+              "names": [["tests", "agent-manifests", "local-echo"]],
+              "display-name": { "default": "Local Echo Manifest" },
+              "manifest": {
+                "name": "local-echo",
+                "displayName": "Local Echo Manifest",
+                "template": {
+                  "kind": "prompt",
+                  "name": "local-echo",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                },
+                "resources": [
+                  { "kind": "tool", "id": "fixed", "name": "workspace-entity" }
+                ]
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+
+        var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
+
+        Assert.True(handled);
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        Assert.NotNull(selectedTab.Agent);
+        Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());

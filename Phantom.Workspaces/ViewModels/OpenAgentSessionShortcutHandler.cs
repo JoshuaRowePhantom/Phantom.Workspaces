@@ -50,22 +50,40 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         var agentDefinitionEntityId = new EntityId(agentDefinitionEntityIdValue);
         var agentDefinitionEntity = (await mainWindowViewModel.EntityBroker.GetEntitiesAsync([agentDefinitionEntityId]))
             .FirstOrDefault();
-        if (agentDefinitionEntity?.Data is not JsonElement agentDefinitionEntityData
-            || !agentDefinitionEntityData.TryGetProperty("definition", out var definitionElement))
+        if (agentDefinitionEntity?.Data is not JsonElement agentSourceEntityData)
         {
             return false;
         }
 
-        var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
         var loggerFactory = new ObservableLoggerFactory();
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
-        var agentChat = await AgentFactory.CreateAgentChatAsync(
-            new CreateAgentChatRequest
+
+        CreateAgentChatRequest createAgentChatRequest;
+        if (agentSourceEntityData.TryGetProperty("definition", out var definitionElement))
+        {
+            createAgentChatRequest = new CreateAgentChatRequest
             {
-                AgentDefinition = agentDefinition,
+                AgentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText()),
                 AgentSessionId = agentSessionId,
                 AgentServices = agentServices,
-            });
+            };
+        }
+        else if (agentSourceEntityData.TryGetProperty("manifest", out var manifestElement))
+        {
+            createAgentChatRequest = new CreateAgentChatRequest
+            {
+                AgentManifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText()),
+                ToolResourceFactory = agentServices.ToolResourceFactory,
+                AgentSessionId = agentSessionId,
+                AgentServices = agentServices,
+            };
+        }
+        else
+        {
+            return false;
+        }
+
+        var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
 
         var workspaceTab = CreateAgentSessionTab(entityViewModel, loggerFactory, agentChat);
         await mainWindowViewModel.OpenTabAsync(workspaceTab);
