@@ -1,0 +1,66 @@
+{
+  "entity-id": "f7a8b9c0-4d5e-4f6a-9b0c-3d4e5f6a7b8c",
+  "entity-types": [
+    "agent-manifest"
+  ],
+  "names": [
+    [
+      "defaults",
+      "agent-manifests",
+      "workspaces"
+    ]
+  ],
+  "display-name": {
+    "default": "Workspaces Assistant"
+  },
+  "manifest": {
+    "name": "workspaces",
+    "displayName": "Workspaces Assistant",
+    "description": "Default local Qwen agent for workspace entity operations.",
+    "template": {
+      "kind": "prompt",
+      "name": "workspaces",
+      "displayName": "Workspaces Assistant",
+      "description": "Default local Qwen agent for workspace entity operations.",
+      "model": {
+        "id": "qwen3.6",
+        "provider": "ollama",
+        "apiType": "Ollama",
+        "connection": {
+          "kind": "Anonymous",
+          "endpoint": "http://localhost:11434"
+        },
+        "options": {
+          "temperature": 0.7,
+          "topP": 0.9,
+          "frequencyPenalty": 0.0,
+          "presencePenalty": 0.0,
+          "maxOutputTokens": 2048,
+          "topK": 40,
+          "additionalProperties": {
+            "thinking": false,
+            "num_ctx": 32768,
+            "keep_alive": "15m"
+          }
+        }
+      },
+      "instructions": "You are a helpful AI assistant powered by Qwen 3.6.\nRespond clearly and concisely.\nUse workspace entity tools to inspect and modify workspace data safely.",
+      "metadata": {
+        "version": "1.0",
+        "author": "Phantom Workspaces",
+        "tags": [
+          "local",
+          "ollama",
+          "workspace"
+        ]
+      }
+    },
+    "resources": [
+      {
+        "kind": "tool",
+        "id": "fixed",
+        "name": "workspace-entity"
+      }
+    ]
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "entity-id": "a8b9c0d1-5e6f-4a7b-8c9d-4e5f6a7b8c9d",
+  "entity-types": [
+    "agent-manifest"
+  ],
+  "names": [
+    [
+      "defaults",
+      "agent-manifests",
+      "github-models"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Models Workspace Assistant"
+  },
+  "manifest": {
+    "name": "github-models",
+    "displayName": "GitHub Models Workspace Assistant",
+    "description": "Default GitHub Models agent for workspace entity operations.",
+    "template": {
+      "kind": "prompt",
+      "name": "github-models",
+      "displayName": "GitHub Models Workspace Assistant",
+      "description": "Default GitHub Models agent for workspace entity operations.",
+      "model": {
+        "id": "gpt-4.1-mini",
+        "provider": "github-models",
+        "apiType": "OpenAI",
+        "connection": {
+          "kind": "key",
+          "endpoint": "https://models.github.ai/inference",
+          "apiKey": "${GITHUB_TOKEN}"
+        },
+        "options": {
+          "temperature": 0.2,
+          "maxOutputTokens": 2048
+        }
+      },
+      "instructions": "You are a helpful AI assistant powered by GitHub Models.\nRespond clearly and concisely.\nUse workspace entity tools to inspect and modify workspace data safely.",
+      "metadata": {
+        "version": "1.0",
+        "author": "Phantom Workspaces",
+        "tags": [
+          "github-models",
+          "workspace"
+        ],
+        "prerequisites": [
+          "Set GITHUB_TOKEN in your environment with access to GitHub Models."
+        ]
+      }
+    },
+    "resources": [
+      {
+        "kind": "tool",
+        "id": "fixed",
+        "name": "workspace-entity"
+      }
+    ]
+  }
+}

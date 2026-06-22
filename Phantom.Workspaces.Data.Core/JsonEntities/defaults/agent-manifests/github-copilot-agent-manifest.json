@@ -1,0 +1,64 @@
+{
+  "entity-id": "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0e",
+  "entity-types": [
+    "agent-manifest"
+  ],
+  "names": [
+    [
+      "defaults",
+      "agent-manifests",
+      "github-copilot"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Copilot Workspace Assistant"
+  },
+  "manifest": {
+    "name": "github-copilot",
+    "displayName": "GitHub Copilot Workspace Assistant",
+    "description": "Default GitHub Copilot SDK agent for workspace entity operations.",
+    "template": {
+      "kind": "prompt",
+      "name": "github-copilot",
+      "displayName": "GitHub Copilot Workspace Assistant",
+      "description": "Default GitHub Copilot SDK agent for workspace entity operations.",
+      "model": {
+        "id": "auto",
+        "provider": "github-copilot",
+        "apiType": "OpenAI",
+        "connection": {
+          "kind": "key",
+          "apiKey": "${GITHUB_TOKEN}"
+        },
+        "options": {
+          "temperature": 0.2,
+          "maxOutputTokens": 2048
+        }
+      },
+      "instructions": "You are a helpful AI assistant powered by the GitHub Copilot SDK.\nRespond clearly and concisely.\nUse workspace entity tools to inspect and modify workspace data safely.\nUse the GitHub tools to read and manage repositories, issues, and pull requests when asked.",
+      "metadata": {
+        "version": "1.0",
+        "author": "Phantom Workspaces",
+        "tags": [
+          "github-copilot",
+          "workspace"
+        ],
+        "prerequisites": [
+          "Sign in to the GitHub Copilot CLI, or set GITHUB_TOKEN in your environment with Copilot access."
+        ]
+      }
+    },
+    "resources": [
+      {
+        "kind": "tool",
+        "id": "fixed",
+        "name": "workspace-entity"
+      },
+      {
+        "kind": "tool",
+        "id": "mcp-server-entity",
+        "name": "github"
+      }
+    ]
+  }
+}
