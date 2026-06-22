@@ -16,7 +16,7 @@ namespace Phantom.Workspaces.Tools;
 /// represents each as an <c>agent-definition</c> entity, so the sessions surface as agents in the
 /// workspace. Each session directory under the Copilot session-state root is named by its session
 /// id (a GUID); the agent-definition entity uses that GUID as its entity id, so re-running the tool
-/// updates rather than duplicates.
+/// updates rather than duplicates. Sessions are named under the <c>copilot/sessions</c> namespace.
 /// </summary>
 public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
 {
@@ -121,7 +121,8 @@ public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
             writer.WritePropertyName("names");
             writer.WriteStartArray();
             writer.WriteStartArray();
-            writer.WriteStringValue("copilot-sessions");
+            writer.WriteStringValue("copilot");
+            writer.WriteStringValue("sessions");
             writer.WriteStringValue(sessionId);
             writer.WriteEndArray();
             writer.WriteEndArray();

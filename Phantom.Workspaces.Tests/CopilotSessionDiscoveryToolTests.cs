@@ -72,8 +72,9 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
             Assert.NotNull(entity);
             Assert.Equal("agent-definition", entity!.Value.GetProperty("entity-types")[0].GetString());
             var name = entity.Value.GetProperty("names")[0].EnumerateArray().Select(c => c.GetString()).ToArray();
-            Assert.Equal("copilot-sessions", name[0]);
-            Assert.Equal(sessionId.ToString(), name[1]);
+            Assert.Equal("copilot", name[0]);
+            Assert.Equal("sessions", name[1]);
+            Assert.Equal(sessionId.ToString(), name[2]);
             Assert.Equal("github-copilot", entity.Value.GetProperty("definition").GetProperty("model").GetProperty("provider").GetString());
             Assert.Equal(sessionId.ToString(), entity.Value.GetProperty("definition").GetProperty("metadata").GetProperty("copilot-session-id").GetString());
         }
