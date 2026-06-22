@@ -16,16 +16,22 @@ internal sealed class FieldEditorFactory
     private readonly FieldTypeResolver fieldTypeResolver;
     private readonly EntityTypeViewCatalog entityTypeViewCatalog;
     private readonly IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews;
+    private readonly IEntityReferenceSearch? entityReferenceSearch;
+    private readonly CustomFieldEditorActivator customFieldEditorActivator;
 
     public FieldEditorFactory(
         EntityBroker entityBroker,
         EntityTypeViewCatalog entityTypeViewCatalog,
-        IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews = null)
+        IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews = null,
+        IEntityReferenceSearch? entityReferenceSearch = null)
     {
         this.schemaAccessor = new SchemaAccessor(entityBroker.EntityRepository.DataAccessLayer);
         this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
         this.entityTypeViewCatalog = entityTypeViewCatalog;
         this.viewSpecificEntityTypeViews = viewSpecificEntityTypeViews;
+        this.entityReferenceSearch = entityReferenceSearch;
+        this.customFieldEditorActivator = new CustomFieldEditorActivator(
+            message => System.Diagnostics.Debug.WriteLine(message));
     }
 
     public async Task<IReadOnlyCollection<EntityFieldEditorViewModel>> BuildFieldEditorsAsync(
@@ -91,6 +97,27 @@ internal sealed class FieldEditorFactory
         }
 
         var resolvedType = await Task.Run(() => this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue));
+
+        // 1. Custom editor selected by x-field-editor on the field/type schema.
+        if (this.customFieldEditorActivator.TryCreate(
+                resolvedType.FieldEditorTypeName,
+                new FieldEditorContext(fieldName, fieldValue, resolvedType, this.entityReferenceSearch),
+                out var customEditor)
+            && customEditor is not null)
+        {
+            return customEditor;
+        }
+
+        // 2. Entity-reference editor when the field's schema declares allowed entity types.
+        if (resolvedType.EntityTypes.Count > 0)
+        {
+            var entityId = fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() : null;
+            return new EntityReferenceFieldEditorViewModel(
+                fieldName,
+                entityId,
+                resolvedType.EntityTypes,
+                this.entityReferenceSearch);
+        }
 
         switch (resolvedType.TypeName)
         {
