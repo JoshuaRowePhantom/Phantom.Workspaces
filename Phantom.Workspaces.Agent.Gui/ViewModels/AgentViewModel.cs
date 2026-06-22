@@ -167,8 +167,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        this.historyDocumentModel?.Refresh();
-        this.runningDocumentModel?.Refresh();
+        // For now, the document model isn't used because
+        // of bugs in the FlowDocument rendering.
+        // https://github.com/AvaloniaUI/AvaloniaPro/issues/126
+        //this.historyDocumentModel?.Refresh();
+        //this.runningDocumentModel?.Refresh();
         this.selectableTextBlockOutputModel?.Refresh();
     }
 
@@ -291,8 +294,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         this.OutputDocument.Blocks.Add(this.outputHistoryRootSection);
         this.OutputDocument.Blocks.Add(this.outputRunningRootSection);
-        this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
-        this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
+        // For now, the document model isn't used because
+        // of bugs in the FlowDocument rendering.
+        // https://github.com/AvaloniaUI/AvaloniaPro/issues/126
+        //this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
+        //this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
     }
 
     private void AttachSelectableOutputModel()
