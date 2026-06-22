@@ -31,6 +31,10 @@
       "items": {
         "$ref": "core.json#/$defs/entity-type-id"
       }
+    },
+    "entity-display-order": {
+      "type": "number",
+      "description": "Optional float that orders this entity type's contributed fields relative to other entity types when an entity is rendered or edited. Lower values are rendered first. When absent, the type sorts after all types that specify a value, then by type name."
     }
   },
   "required": [

@@ -1,5 +1,6 @@
 {
   "entity-id": "e6a8c0d2-3f4b-4c5d-9e7f-8a0b1c2d3e4f",
+  "entity-display-order": 140,
   "entity-types": [
     "interest-type",
     "relationship-type",

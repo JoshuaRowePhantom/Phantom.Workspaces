@@ -1,5 +1,6 @@
 {
   "entity-id": "14c6ce53-f19f-4745-ad4f-31fc9e80fb57",
+  "entity-display-order": 150,
   "entity-types": [
     "entity-type",
     "note"
