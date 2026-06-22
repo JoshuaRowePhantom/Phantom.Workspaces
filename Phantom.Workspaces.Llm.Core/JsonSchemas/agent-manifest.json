@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phantom-workspaces/schemas/agent-manifest.json",
+  "title": "Agent Manifest",
+  "description": "A declarative agent configuration with tool resource references that are resolved at runtime. Tool resources enable machine-specific and user-specific tool configurations, such as MCP servers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "name",
+    "model"
+  ],
+  "properties": {
+    "kind": {
+      "const": "prompt",
+      "description": "The kind of agent. Currently only 'prompt' agents are supported."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier for the agent. Used in agent selection and resolution."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Human-readable name displayed in UI. If not provided, 'name' is used."
+    },
+    "description": {
+      "type": "string",
+      "description": "Description of the agent's capabilities and purpose. Shown in agent selection UI."
+    },
+    "instructions": {
+      "type": "string",
+      "description": "System instructions or prompt template for the agent. Defines the agent's behavior and capabilities."
+    },
+    "additionalInstructions": {
+      "type": "string",
+      "description": "Additional instructions appended to the main instructions. Useful for runtime-specific guidance."
+    },
+    "model": {
+      "type": "object",
+      "description": "Model configuration specifying which LLM to use and how to connect to it.",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model identifier (e.g., 'gpt-4', 'claude-3-sonnet', 'llama-3')."
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "echo",
+            "github-models",
+            "github-copilot",
+            "ollama",
+            "openai",
+            "azure"
+          ],
+          "description": "LLM provider. Determines which client implementation is used to communicate with the model."
+        },
+        "apiType": {
+          "type": "string",
+          "minLength": 1,
+          "description": "API type for providers that support multiple API formats (e.g., 'chat', 'completion')."
+        },
+        "connection": {
+          "type": "object",
+          "description": "Connection details for the LLM provider (endpoint, credentials).",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Connection type (e.g., 'api-key', 'oauth', 'anonymous')."
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1,
+              "description": "API endpoint URL for the LLM provider."
+            },
+            "key": {
+              "type": "string",
+              "description": "API key or authentication token. Prefer storing secrets outside the manifest."
+            },
+            "apiKey": {
+              "type": "string",
+              "description": "Alternative property name for API key. Prefer storing secrets outside the manifest."
+            }
+          }
+        },
+        "options": {
+          "type": "object",
+          "description": "Model-specific options (temperature, top_p, max_tokens, etc.).",
+          "additionalProperties": true,
+          "properties": {
+            "temperature": {
+              "type": "number",
+              "description": "Sampling temperature (0.0 to 2.0). Higher values make output more random."
+            },
+            "topP": {
+              "type": "number",
+              "description": "Nucleus sampling threshold (0.0 to 1.0). Alternative to temperature."
+            },
+            "topK": {
+              "type": "integer",
+              "description": "Top-k sampling. Limits selection to k most likely tokens."
+            },
+            "frequencyPenalty": {
+              "type": "number",
+              "description": "Frequency penalty (-2.0 to 2.0). Reduces repetition of frequent tokens."
+            },
+            "presencePenalty": {
+              "type": "number",
+              "description": "Presence penalty (-2.0 to 2.0). Reduces repetition of any tokens that appear."
+            },
+            "maxOutputTokens": {
+              "type": "integer",
+              "description": "Maximum number of tokens to generate in the response."
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Additional provider-specific options."
+            }
+          }
+        }
+      }
+    },
+    "toolResources": {
+      "type": "array",
+      "description": "Tool resource references. Tools are resolved at runtime based on the execution context (user, machine, workspace).",
+      "items": {
+        "$ref": "#/$defs/toolResource"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Additional metadata including authors, tags, version, and other arbitrary properties."
+    }
+  },
+  "$defs": {
+    "toolResource": {
+      "type": "object",
+      "description": "A reference to a tool that will be resolved at runtime. The 'type' determines how the tool is resolved.",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "name"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool resource type. Common types: 'mcp-server-entity' (MCP server entity), 'fixed' (built-in tool), 'workspace-entity' (workspace entity toolset), 'filesystem' (filesystem toolset)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool resource name. For 'mcp-server-entity' type, this is the mcp-server entity name (e.g., 'github'). For 'fixed' type, this is the built-in tool name (e.g., 'workspace-entity', 'filesystem')."
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Tool-specific configuration options. The structure depends on the tool type."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "entity-id": "a8b9c7de-1234-5678-90ab-cdef12345678",
+  "entity-types": [
+    "entity-type",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/agent-manifest.json"
+    ],
+    [
+      "entity-types",
+      "agent-manifest"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Manifest Entity Type"
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "agent-manifests"
+    ]
+  ],
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-manifest-entity-type-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/agent-manifest.json"
+  }
+}

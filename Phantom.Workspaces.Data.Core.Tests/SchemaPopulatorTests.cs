@@ -78,6 +78,139 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
+    public async Task Populate_SeedsAgentManifestEntityTypeAndSchema()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var seededNames = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .Where(static data => data.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
+            .SelectMany(static data => data.GetProperty("names").EnumerateArray())
+            .Select(static name => name.TryReadEntityName())
+            .Where(static name => name is not null)
+            .Select(static name => name!.Value.Components)
+            .ToArray();
+
+        string[][] expected =
+        [
+            ["entity-types", "agent-manifest"],
+            ["entity-types", "agent-manifest-json-schema"],
+        ];
+
+        foreach (var expectedName in expected)
+        {
+            Assert.Contains(
+                seededNames,
+                components => components.SequenceEqual(expectedName, StringComparer.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task Populate_ThenWritingValidAgentManifestEntity_Succeeds()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        await schemaPopulator.Populate();
+
+        var validManifestEntity = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "11111111-2222-3333-4444-555555555555",
+              "entity-types": [ "agent-manifest" ],
+              "names": [ [ "test", "agent-manifests", "example" ] ],
+              "display-name": { "default": "Example Manifest" },
+              "manifest": {
+                "kind": "prompt",
+                "name": "example",
+                "model": { "id": "gpt-4.1-mini", "provider": "github-models" },
+                "toolResources": [
+                  { "type": "mcp-server-entity", "name": "github" }
+                ]
+              }
+            }
+            """).RootElement.Clone();
+
+        var updateResult = await validatedDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Write valid agent-manifest entity." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId("11111111-2222-3333-4444-555555555555"),
+                        Data = validManifestEntity,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+
+        var failures = updateResult.EntityResults.SelectMany(static result => result.Errors).ToArray();
+        Assert.True(
+            failures.Length == 0,
+            string.Join(Environment.NewLine, failures.Select(error => error.Message)));
+    }
+
+    [Fact]
+    public async Task Populate_ThenWritingInvalidAgentManifestEntity_Fails()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        await schemaPopulator.Populate();
+
+        var invalidManifestEntity = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "66666666-7777-8888-9999-000000000000",
+              "entity-types": [ "agent-manifest" ],
+              "names": [ [ "test", "agent-manifests", "invalid" ] ],
+              "display-name": { "default": "Invalid Manifest" },
+              "manifest": {
+                "kind": "prompt",
+                "name": "invalid"
+              }
+            }
+            """).RootElement.Clone();
+
+        var updateResult = await validatedDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Write invalid agent-manifest entity." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId("66666666-7777-8888-9999-000000000000"),
+                        Data = invalidManifestEntity,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+
+        Assert.Contains(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
     public async Task Populate_SeedsDefaultTrustProfiles()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();

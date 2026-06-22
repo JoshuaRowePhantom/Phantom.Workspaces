@@ -1,0 +1,29 @@
+{
+  "entity-id": "b6c0d2e1-3f4a-4b5c-8d6e-7a8b9c0d1e2f",
+  "entity-types": [
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/llm/agent-manifest.json"
+    ],
+    [
+      "entity-types",
+      "agent-manifest-json-schema"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Manifest Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-manifest-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/llm/agent-manifest.json"
+  }
+}
