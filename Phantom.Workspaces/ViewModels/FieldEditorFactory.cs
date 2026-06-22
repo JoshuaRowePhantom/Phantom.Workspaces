@@ -36,12 +36,14 @@ internal sealed class FieldEditorFactory
 
     public async Task<IReadOnlyCollection<EntityFieldEditorViewModel>> BuildFieldEditorsAsync(
         JsonElement entityData,
-        string? entityTypeName = null)
+        string? entityTypeName = null,
+        bool expandAll = false)
     {
         // Check if there's an entity-type-view that specifies which fields to show
-        // Priority: view-specific > catalog > all fields
+        // Priority: view-specific > catalog > all fields. When expandAll is set, always use all
+        // fields (the entity-browser rendering) rather than the curated view.
         EntityTypeViewDefinition? entityTypeView = null;
-        if (entityTypeName is not null)
+        if (!expandAll && entityTypeName is not null)
         {
             // Check view-specific entity-type-views first
             if (this.viewSpecificEntityTypeViews?.TryGetValue(entityTypeName, out entityTypeView) != true)
@@ -65,7 +67,7 @@ internal sealed class FieldEditorFactory
         }
         else
         {
-            // Fall back to enumerating all fields from schema
+            // Fall back to enumerating all fields (union across the entity's entity types) from schema
             var fieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
                 entityData,
                 Array.Empty<string>(),
@@ -73,12 +75,81 @@ internal sealed class FieldEditorFactory
             fieldPaths = fieldNames.Select(name => (IReadOnlyList<string>)[name]).ToArray();
         }
 
+        fieldPaths = await this.OrderFieldPathsAsync(entityData, fieldPaths).ConfigureAwait(false);
+
         var fieldEditorTasks = fieldPaths
             .Select(fieldPath => this.CreateFieldEditorAsync(entityData, fieldPath, displayFormats))
             .ToArray();
 
         var fieldEditors = await Task.WhenAll(fieldEditorTasks).ConfigureAwait(false);
         return fieldEditors;
+    }
+
+    /// <summary>
+    /// Orders the supplied field paths by the entity-editor field ordering: absolute-ordered fields
+    /// (schema <c>x-absolute-entity-display-order</c>) first, then the remaining fields by relative
+    /// order and name. The contributing entity type name is taken from the entity's primary type.
+    /// </summary>
+    private async Task<IReadOnlyList<IReadOnlyList<string>>> OrderFieldPathsAsync(
+        JsonElement entityData,
+        IReadOnlyList<IReadOnlyList<string>> fieldPaths)
+    {
+        var primaryEntityTypeName = ReadPrimaryEntityTypeName(entityData);
+        var keyed = new List<(IReadOnlyList<string> FieldPath, FieldOrderingKey Key)>(fieldPaths.Count);
+        foreach (var fieldPath in fieldPaths)
+        {
+            var fieldName = fieldPath[^1];
+            var fieldValue = ResolveFieldValue(entityData, fieldPath);
+            var resolvedType = await this.fieldTypeResolver
+                .ResolveFieldTypeAsync(entityData, fieldPath, fieldValue)
+                .ConfigureAwait(false);
+            var key = FieldOrdering.ComputeKey(
+                string.Join(".", fieldPath),
+                resolvedType.AbsoluteEntityDisplayOrder,
+                resolvedType.RelativeEntityDisplayOrder,
+                primaryEntityTypeName,
+                entityTypeDisplayOrder: null);
+            keyed.Add((fieldPath, key));
+        }
+
+        return keyed.OrderBy(static item => item.Key).Select(static item => item.FieldPath).ToArray();
+    }
+
+    private static string ReadPrimaryEntityTypeName(JsonElement entityData)
+    {
+        if (entityData.ValueKind == JsonValueKind.Object
+            && entityData.TryGetProperty("entity-types", out var types)
+            && types.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var type in types.EnumerateArray())
+            {
+                if (type.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(type.GetString()))
+                {
+                    return type.GetString()!;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static JsonElement ResolveFieldValue(JsonElement rootEntity, IReadOnlyList<string> fieldPath)
+    {
+        var current = rootEntity;
+        foreach (var component in fieldPath)
+        {
+            if (current.ValueKind == JsonValueKind.Object && current.TryGetProperty(component, out var next))
+            {
+                current = next;
+            }
+            else
+            {
+                using var nullDocument = JsonDocument.Parse("null");
+                return nullDocument.RootElement.Clone();
+            }
+        }
+
+        return current;
     }
 
     private async Task<EntityFieldEditorViewModel> CreateFieldEditorAsync(
