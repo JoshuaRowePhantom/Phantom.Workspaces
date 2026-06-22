@@ -5,7 +5,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Tests;
 
-public sealed class McpServerToolResourceRepositoryTests
+public sealed class McpServerEntityToolResourceRepositoryTests
 {
     [AvaloniaFact]
     public async Task ToolResources_ReflectExistingMcpServerEntities()
@@ -14,11 +14,11 @@ public sealed class McpServerToolResourceRepositoryTests
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
         await AddMcpServerAsync(broker, "a0a0a0a0-0000-0000-0000-000000000001", ["defaults", "mcp-servers", "github"], "github", ct);
 
-        var repository = await McpServerToolResourceRepository.CreateAsync(broker, ct);
+        var repository = await McpServerEntityToolResourceRepository.CreateAsync(broker, ct);
 
         var resource = Assert.Single(repository.ToolResources);
         Assert.Equal("github", resource.Name);
-        Assert.Equal(McpServerToolResourceFactory.McpServerEntityToolResourceId, resource.Id);
+        Assert.Equal(McpServerEntityToolResourceFactory.McpServerEntityToolResourceId, resource.Id);
     }
 
     [AvaloniaFact]
@@ -26,7 +26,7 @@ public sealed class McpServerToolResourceRepositoryTests
     {
         var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
-        var repository = await McpServerToolResourceRepository.CreateAsync(broker, ct);
+        var repository = await McpServerEntityToolResourceRepository.CreateAsync(broker, ct);
         Assert.DoesNotContain(repository.ToolResources, static resource => resource.Name == "custom");
 
         await AddMcpServerAsync(broker, "a0a0a0a0-0000-0000-0000-000000000002", ["defaults", "mcp-servers", "custom"], "custom", ct);
@@ -42,7 +42,7 @@ public sealed class McpServerToolResourceRepositoryTests
         await AddMcpServerAsync(broker, "a0a0a0a0-0000-0000-0000-000000000003", ["defaults", "mcp-servers", "github"], "github", ct);
         await AddMcpServerAsync(broker, "a0a0a0a0-0000-0000-0000-000000000004", ["user-computer-profiles", "this-machine", "copilot", "mcp-servers", "github"], "github", ct);
 
-        var repository = await McpServerToolResourceRepository.CreateAsync(broker, ct);
+        var repository = await McpServerEntityToolResourceRepository.CreateAsync(broker, ct);
 
         Assert.Single(repository.ToolResources);
         Assert.Equal("github", repository.ToolResources[0].Name);

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Globalization;
+using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
@@ -59,13 +60,20 @@ public sealed class AgentSessionShortcutContext
             "mcp-servers");
 
         return new ComposingToolResourceFactory(
-            new FixedToolResourceFactory(),
-            new McpServerToolResourceFactory(
+            new FixedToolResourceFactory(CreateFixedToolMapping()),
+            new McpServerEntityToolResourceFactory(
                 dataAccessLayer,
                 [
                     machineProfilePrefix,
                     new EntityName("defaults", "mcp-servers"),
                 ]));
+    }
+
+    private static IReadOnlyDictionary<(string Id, string Name), Tool> CreateFixedToolMapping()
+    {
+        return FixedToolResources.DefaultNames.ToDictionary(
+            name => (FixedToolResources.FixedToolResourceId, name),
+            name => (Tool)new CustomTool { Kind = name, Name = name });
     }
 
     public async Task<SubscribedEntityViewModel?> CreateAgentSessionEntityAsync(

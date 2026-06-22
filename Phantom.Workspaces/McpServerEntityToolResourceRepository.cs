@@ -16,14 +16,14 @@ namespace Phantom.Workspaces;
 /// workspace as an mcp-server-entity tool resource. The collection updates reactively as
 /// mcp-server entities are added, removed, or changed.
 /// </summary>
-public sealed class McpServerToolResourceRepository : IToolResourceRepository, IDisposable
+public sealed class McpServerEntityToolResourceRepository : IToolResourceRepository, IDisposable
 {
     private const string McpServerEntityType = "mcp-server";
 
     private readonly SubscribedQuery subscribedQuery;
     private readonly ObservableCollection<ToolResource> toolResources = [];
 
-    private McpServerToolResourceRepository(SubscribedQuery subscribedQuery)
+    private McpServerEntityToolResourceRepository(SubscribedQuery subscribedQuery)
     {
         this.subscribedQuery = subscribedQuery;
         this.ToolResources = new ReadOnlyObservableCollection<ToolResource>(this.toolResources);
@@ -36,7 +36,7 @@ public sealed class McpServerToolResourceRepository : IToolResourceRepository, I
     /// <summary>
     /// Creates a repository that observes all mcp-server entities via the supplied entity broker.
     /// </summary>
-    public static async Task<McpServerToolResourceRepository> CreateAsync(
+    public static async Task<McpServerEntityToolResourceRepository> CreateAsync(
         EntityBroker entityBroker,
         CancellationToken cancellationToken = default)
     {
@@ -57,7 +57,7 @@ public sealed class McpServerToolResourceRepository : IToolResourceRepository, I
             },
             cancellationToken).ConfigureAwait(false);
 
-        return new McpServerToolResourceRepository(query);
+        return new McpServerEntityToolResourceRepository(query);
     }
 
     public void Dispose()
@@ -83,7 +83,7 @@ public sealed class McpServerToolResourceRepository : IToolResourceRepository, I
                 resources.Add(new ToolResource
                 {
                     Kind = "tool",
-                    Id = McpServerToolResourceFactory.McpServerEntityToolResourceId,
+                    Id = McpServerEntityToolResourceFactory.McpServerEntityToolResourceId,
                     Name = serverName,
                 });
             }

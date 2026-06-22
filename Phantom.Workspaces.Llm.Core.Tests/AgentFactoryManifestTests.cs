@@ -4,6 +4,16 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class AgentFactoryManifestTests
 {
+    private static FixedToolResourceFactory CreateFixedFactory()
+    {
+        return new FixedToolResourceFactory(
+            new Dictionary<(string Id, string Name), Tool>
+            {
+                [("fixed", "workspace-entity")] = new CustomTool { Kind = "workspace-entity", Name = "workspace-entity" },
+                [("fixed", "filesystem")] = new CustomTool { Kind = "filesystem", Name = "filesystem" },
+            });
+    }
+
     private const string ManifestJson = """
     {
       "name": "example",
@@ -29,7 +39,7 @@ public sealed class AgentFactoryManifestTests
             new CreateAgentDefinitionRequest
             {
                 AgentManifest = manifest,
-                ToolResourceFactory = new FixedToolResourceFactory(),
+                ToolResourceFactory = CreateFixedFactory(),
             });
 
         var promptAgent = Assert.IsType<PromptAgent>(definition);
@@ -46,7 +56,7 @@ public sealed class AgentFactoryManifestTests
             new CreateAgentDefinitionRequest
             {
                 AgentManifest = manifest,
-                ToolResourceFactory = new FixedToolResourceFactory(),
+                ToolResourceFactory = CreateFixedFactory(),
             });
 
         var templateAgent = Assert.IsType<PromptAgent>(manifest.Template);
@@ -76,7 +86,7 @@ public sealed class AgentFactoryManifestTests
                 new CreateAgentDefinitionRequest
                 {
                     AgentManifest = manifest,
-                    ToolResourceFactory = new FixedToolResourceFactory(),
+                    ToolResourceFactory = CreateFixedFactory(),
                 }));
 
         Assert.Contains("mcp-server-entity:github", exception.Message, StringComparison.Ordinal);
@@ -101,7 +111,7 @@ public sealed class AgentFactoryManifestTests
             new CreateAgentDefinitionRequest
             {
                 AgentManifest = manifest,
-                ToolResourceFactory = new FixedToolResourceFactory(),
+                ToolResourceFactory = CreateFixedFactory(),
             });
 
         var promptAgent = Assert.IsType<PromptAgent>(definition);

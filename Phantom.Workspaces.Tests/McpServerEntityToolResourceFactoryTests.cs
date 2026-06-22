@@ -3,9 +3,9 @@ using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 
-namespace Phantom.Workspaces.Llm.Core.Tests;
+namespace Phantom.Workspaces.Tests;
 
-public sealed class McpServerToolResourceFactoryTests
+public sealed class McpServerEntityToolResourceFactoryTests
 {
     private static readonly EntityName LocalPrefix =
         new("user-computer-profiles", "this-machine", "copilot", "mcp-servers");
@@ -16,7 +16,7 @@ public sealed class McpServerToolResourceFactoryTests
     private static ToolResource McpServerResource(string name) => new()
     {
         Kind = "tool",
-        Id = McpServerToolResourceFactory.McpServerEntityToolResourceId,
+        Id = McpServerEntityToolResourceFactory.McpServerEntityToolResourceId,
         Name = name,
     };
 
@@ -29,7 +29,7 @@ public sealed class McpServerToolResourceFactoryTests
             [.. GlobalPrefix.Components, "github"],
             serverName: "github",
             endpoint: "https://api.githubcopilot.com/mcp/");
-        var factory = new McpServerToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
 
         var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"));
 
@@ -53,7 +53,7 @@ public sealed class McpServerToolResourceFactoryTests
             [.. LocalPrefix.Components, "github"],
             serverName: "github",
             endpoint: "https://local.example/mcp/");
-        var factory = new McpServerToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
 
         var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"));
 
@@ -66,7 +66,7 @@ public sealed class McpServerToolResourceFactoryTests
     public async Task ResolveToolResourceAsync_WhenEntityMissing_ReturnsNull()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var factory = new McpServerToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
 
         var tool = await factory.ResolveToolResourceAsync(McpServerResource("nonexistent"));
 
@@ -77,7 +77,7 @@ public sealed class McpServerToolResourceFactoryTests
     public async Task ResolveToolResourceAsync_WhenIdIsNotMcpServerEntity_ReturnsNull()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var factory = new McpServerToolResourceFactory(dataAccessLayer, [GlobalPrefix]);
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [GlobalPrefix]);
 
         var tool = await factory.ResolveToolResourceAsync(new ToolResource
         {

@@ -1,15 +1,24 @@
+using System;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Collections.Generic;
 using AgentSchema;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
 
-namespace Phantom.Workspaces.Llm;
+namespace Phantom.Workspaces;
 
 /// <summary>
-/// The <see cref="ToolResource.Id"/> value used by tool resources that reference an
-/// mcp-server entity by name.
+/// Resolves <c>mcp-server-entity</c> tool resources by looking up <c>mcp-server</c> entities and
+/// projecting their configuration into an <see cref="McpTool"/>. Each search prefix is tried in
+/// order; the resource name is appended to the prefix to form the candidate entity name, so
+/// machine-specific registrations (earlier prefixes) take precedence over global registrations
+/// (later prefixes).
 /// </summary>
-public sealed class McpServerToolResourceFactory : IToolResourceFactory
+public sealed class McpServerEntityToolResourceFactory : IToolResourceFactory
 {
     /// <summary>
     /// The tool resource <c>id</c> value handled by this factory.
@@ -20,14 +29,12 @@ public sealed class McpServerToolResourceFactory : IToolResourceFactory
     private readonly IReadOnlyList<EntityName> searchPrefixes;
 
     /// <summary>
-    /// Creates a factory that resolves mcp-server-entity tool resources by looking up
-    /// mcp-server entities. Each search prefix is tried in order; the resource name is appended
-    /// to the prefix to form the candidate entity name. This lets machine-specific registrations
-    /// (earlier prefixes) take precedence over global registrations (later prefixes).
+    /// Creates a factory that resolves mcp-server-entity tool resources against the supplied
+    /// ordered search prefixes.
     /// </summary>
     /// <param name="dataAccessLayer">The data access layer used to look up mcp-server entities.</param>
     /// <param name="searchPrefixes">Ordered entity-name prefixes to search, highest priority first.</param>
-    public McpServerToolResourceFactory(
+    public McpServerEntityToolResourceFactory(
         IDataAccessLayer dataAccessLayer,
         IReadOnlyList<EntityName> searchPrefixes)
     {
