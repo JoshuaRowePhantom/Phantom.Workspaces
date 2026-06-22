@@ -19,6 +19,11 @@ public static class AgentManifestJsonSchema
 
     private static JsonSchema LoadFromEmbeddedResource()
     {
+        // The agent-manifest schema's "template" property references the agent-definition
+        // schema by its $id. Register the agent-definition schema in the global registry so
+        // that reference resolves during standalone evaluation.
+        SchemaRegistry.Global.Register(AgentDefinitionJsonSchema.Value);
+
         var assembly = Assembly.GetExecutingAssembly();
         using var stream = assembly.GetManifestResourceStream(ResourceName)
                            ?? throw new InvalidOperationException($"Embedded schema resource '{ResourceName}' was not found.");
