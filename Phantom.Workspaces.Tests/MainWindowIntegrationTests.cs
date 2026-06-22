@@ -32,7 +32,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task InMemoryRepository_SeedsGithubModelsAgentDefinition()
+    public async Task InMemoryRepository_SeedsGithubModelsAgentManifest()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
@@ -41,13 +41,13 @@ public sealed class MainWindowIntegrationTests
             snapshot => ReadEntityNames(snapshot.Value.Data).Any(
                 static entityName => entityName.Components.Length == 3
                     && string.Equals(entityName.Components[0], "defaults", StringComparison.Ordinal)
-                    && string.Equals(entityName.Components[1], "agent-definitions", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "agent-manifests", StringComparison.Ordinal)
                     && string.Equals(entityName.Components[2], "github-models", StringComparison.Ordinal)));
         Assert.Equal("GitHub Models Workspace Assistant", ReadDefaultDisplayName(githubModelsSnapshot.Value.Data));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task InMemoryRepository_SeedsWorkspacesAgentDefinitionDisplayName()
+    public async Task InMemoryRepository_SeedsWorkspacesAgentManifestDisplayName()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
@@ -56,7 +56,7 @@ public sealed class MainWindowIntegrationTests
             snapshot => ReadEntityNames(snapshot.Value.Data).Any(
                 static entityName => entityName.Components.Length == 3
                     && string.Equals(entityName.Components[0], "defaults", StringComparison.Ordinal)
-                    && string.Equals(entityName.Components[1], "agent-definitions", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "agent-manifests", StringComparison.Ordinal)
                     && string.Equals(entityName.Components[2], "workspaces", StringComparison.Ordinal)));
         Assert.Equal("Workspaces Assistant", ReadDefaultDisplayName(workspacesSnapshot.Value.Data));
     }
@@ -85,7 +85,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentDefinitionEntities()
+    public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -103,7 +103,7 @@ public sealed class MainWindowIntegrationTests
 
         Assert.Contains(
             sessionsView.Entities,
-            static entity => string.Equals(entity.EntityType, "agent-definition", StringComparison.Ordinal));
+            static entity => string.Equals(entity.EntityType, "agent-manifest", StringComparison.Ordinal));
         Assert.DoesNotContain(
             sessionsView.Entities,
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));

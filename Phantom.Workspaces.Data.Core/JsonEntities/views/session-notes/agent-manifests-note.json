@@ -1,0 +1,25 @@
+{
+  "entity-id": "c0d1e2f3-7a8b-4c9d-9e0f-6a7b8c9d0e1f",
+  "entity-types": [
+    "note"
+  ],
+  "names": [
+    [
+      "views",
+      "sessions",
+      "notes",
+      "agent-manifests"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Manifests"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Agent Manifests\n\nAgent manifests are declarative agent configurations. Each manifest carries a base agent template plus tool resources that are resolved at runtime against the current user, machine, and workspace. Start a session from a manifest to get an agent with its tools resolved for this machine (for example, machine-specific MCP servers)."
+      }
+    }
+  }
+}

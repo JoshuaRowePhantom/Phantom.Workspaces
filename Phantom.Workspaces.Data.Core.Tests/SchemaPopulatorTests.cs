@@ -121,7 +121,7 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
-    public async Task Populate_SeedsDefaultAgentDefinitionsScheduleAndProfile()
+    public async Task Populate_SeedsDefaultAgentManifestsScheduleAndProfile()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
         var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
@@ -148,9 +148,9 @@ public sealed class SchemaPopulatorTests
 
         string[][] expectedDefaults =
         [
-            ["defaults", "agent-definitions", "workspaces"],
-            ["defaults", "agent-definitions", "github-copilot"],
-            ["defaults", "agent-definitions", "github-models"],
+            ["defaults", "agent-manifests", "workspaces"],
+            ["defaults", "agent-manifests", "github-copilot"],
+            ["defaults", "agent-manifests", "github-models"],
             ["defaults", "profiles", "default"],
             ["schedule", "every-day-at-09"],
         ];

@@ -78,6 +78,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler());

@@ -17,8 +17,57 @@
       "disposition": "expanded",
       "get-entity": [
         {
+          "entity-name": [
+            "views",
+            "sessions",
+            "notes",
+            "agent-manifests"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-type-names": [
+            "agent-manifest"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-name": [
+            "views",
+            "sessions",
+            "notes",
+            "agent-definitions"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
           "entity-type-names": [
             "agent-definition"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-name": [
+            "views",
+            "sessions",
+            "notes",
+            "agent-sessions"
           ]
         }
       ]
