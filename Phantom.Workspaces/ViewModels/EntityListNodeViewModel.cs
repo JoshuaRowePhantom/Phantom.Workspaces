@@ -25,6 +25,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     private readonly string entityType;
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
     private string rawJsonText;
+    private readonly JsonValidationViewModel validation;
     private Action<EntityListNodeViewModel, bool>? onExpansionChanged;
 
     public EntityListNodeViewModel(
@@ -32,7 +33,8 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         IReadOnlyList<string> nameComponents,
         string sortKey,
         IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
-        string? cardViewName = null)
+        string? cardViewName = null,
+        IEntitySchemaComposer? schemaComposer = null)
     {
         this.entity = entity;
         this.cardViewName = cardViewName ?? EntityCardViewResolver.RawViewName;
@@ -40,6 +42,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.entityType = entity.EntityType;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
         this.rawJsonText = BuildRawJsonText(entity.Data);
+        this.validation = new JsonValidationViewModel(schemaComposer);
         this.SetFieldEditorEditMode(false);
         entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.NameComponents = nameComponents;
@@ -50,10 +53,10 @@ public sealed class EntityListNodeViewModel : ViewModelBase
             _ => this.HasChildren);
         this.ToggleEditModeCommand = new RelayCommand(
             _ => this.EnterEditMode(),
-            _ => !this.IsEditMode && this.FieldEditors.Count > 0);
+            _ => !this.IsEditMode && (entity.CanEditEntity || this.FieldEditors.Count > 0));
         this.SaveEditModeCommand = new RelayCommand(
             _ => this.SaveEditMode(),
-            _ => this.IsEditMode);
+            _ => this.IsEditMode && this.Validation.IsValid);
         this.DiscardEditModeCommand = new RelayCommand(
             _ => this.DiscardEditMode(),
             _ => this.IsEditMode);
@@ -76,6 +79,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.cardViewName = cardViewName ?? EntityCardViewResolver.RawViewName;
         this.fieldEditors = fieldEditors ?? Array.Empty<EntityFieldEditorViewModel>();
         this.rawJsonText = string.Empty;
+        this.validation = new JsonValidationViewModel();
         this.SetFieldEditorEditMode(false);
         this.NameComponents = nameComponents;
         this.SortKey = sortKey;
@@ -88,7 +92,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
             _ => !this.IsEditMode && this.FieldEditors.Count > 0);
         this.SaveEditModeCommand = new RelayCommand(
             _ => this.SaveEditMode(),
-            _ => this.IsEditMode);
+            _ => this.IsEditMode && this.Validation.IsValid);
         this.DiscardEditModeCommand = new RelayCommand(
             _ => this.DiscardEditMode(),
             _ => this.IsEditMode);
@@ -147,6 +151,12 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.fieldEditors;
 
+    public JsonValidationViewModel Validation => this.validation;
+
+    public bool AreShortcutsEnabled => !this.IsEditMode;
+
+    public bool AreBadgesEnabled => !this.IsEditMode;
+
     public bool IsEditMode
     {
         get => this.isEditMode;
@@ -159,6 +169,10 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
             this.SetFieldEditorEditMode(value);
             this.RaisePropertyChanged(nameof(this.EditModeGlyph));
+            this.RaisePropertyChanged(nameof(this.AreShortcutsEnabled));
+            this.RaisePropertyChanged(nameof(this.AreBadgesEnabled));
+            this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+            this.SaveEditModeCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -169,7 +183,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     public bool ShowEditActions => this.IsEditMode;
 
     public bool ShowJsonButton => (this.entity?.CanToggleRawJson ?? !string.IsNullOrWhiteSpace(this.rawJsonText))
-        && !this.HasShortcuts;
+        && (!this.HasShortcuts || this.IsEditMode);
 
     public bool ShowDeleteButton => (this.entity?.CanDeleteEntity ?? false)
         && !this.HasShortcuts;
@@ -208,7 +222,24 @@ public sealed class EntityListNodeViewModel : ViewModelBase
     public string RawJsonText
     {
         get => this.rawJsonText;
-        set => this.SetProperty(ref this.rawJsonText, value);
+        set
+        {
+            if (!this.SetProperty(ref this.rawJsonText, value))
+            {
+                return;
+            }
+
+            if (this.IsEditMode)
+            {
+                _ = this.ValidateRawJsonAsync();
+            }
+        }
+    }
+
+    private async System.Threading.Tasks.Task ValidateRawJsonAsync()
+    {
+        await this.validation.UpdateAsync(this.rawJsonText);
+        this.SaveEditModeCommand.RaiseCanExecuteChanged();
     }
 
     public bool HasChildren => this.Children.Count > 0;
@@ -339,8 +370,13 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         }
     }
 
-    private void EnterEditMode()
+    public void EnterEditMode()
     {
+        if (this.IsEditMode)
+        {
+            return;
+        }
+
         this.editModeSnapshot = this.fieldEditors.Select(static fieldEditor => fieldEditor.Clone()).ToArray();
         this.editModeRawJsonSnapshot = this.rawJsonText;
         this.IsEditMode = true;
@@ -350,13 +386,34 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
         this.RaisePropertyChanged(nameof(this.ShowEditActions));
         this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
+        _ = this.ValidateRawJsonAsync();
     }
 
-    private void SaveEditMode()
+    private async void SaveEditMode()
     {
         if (!this.IsEditMode)
         {
             return;
+        }
+
+        if (this.entity is not null)
+        {
+            JsonElement? parsed = null;
+            try
+            {
+                using var document = JsonDocument.Parse(this.rawJsonText);
+                parsed = document.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                // Invalid JSON should already block save via validation; ignore defensively only here.
+                return;
+            }
+
+            if (parsed is JsonElement data)
+            {
+                await this.entity.SaveEditedEntityAsync(data);
+            }
         }
 
         this.editModeSnapshot = null;
@@ -458,6 +515,12 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.CanDeleteEntity), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+            return;
+        }
+
+        if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.CanEditEntity), StringComparison.Ordinal))
+        {
+            this.ToggleEditModeCommand.RaiseCanExecuteChanged();
             return;
         }
 

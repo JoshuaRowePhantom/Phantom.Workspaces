@@ -28,6 +28,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
             ResolveNameComponents(entity),
             entity.EntityId.ToString(),
             cardViewName: EntityCardViewResolver.RawViewName);
+        mainWindowViewModel.RegisterCardNode(entity, this.entityCardNode);
         EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
         this.entityCardNode.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
         this.entityCardNode.SetBadges(this.Badges);

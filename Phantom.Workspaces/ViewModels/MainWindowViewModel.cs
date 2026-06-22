@@ -86,6 +86,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new ToggleJsonEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new EditEntityShortcutHandler(this.FindCardNode));
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity
@@ -730,6 +731,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return this.entityClickShortcutHandler is { } handler
             ? handler.Handle(this, Shortcut.Open, entity)
             : Task.FromResult(false);
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SubscribedEntityViewModel, EntityListNodeViewModel> cardNodesByEntity = new();
+
+    /// <summary>
+    /// Registers the card node that renders the supplied entity, so shortcut handlers (such as the
+    /// edit handler) can locate it.
+    /// </summary>
+    public void RegisterCardNode(SubscribedEntityViewModel entity, EntityListNodeViewModel cardNode)
+    {
+        this.cardNodesByEntity.AddOrUpdate(entity, cardNode);
+    }
+
+    /// <summary>Finds the card node currently rendering the supplied entity, if any.</summary>
+    public EntityListNodeViewModel? FindCardNode(SubscribedEntityViewModel entity)
+    {
+        return this.cardNodesByEntity.TryGetValue(entity, out var cardNode) ? cardNode : null;
     }
 
     private async Task OnActivateEntityClickAsync(
