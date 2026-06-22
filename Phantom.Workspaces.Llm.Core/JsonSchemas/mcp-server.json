@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phantom-workspaces/schemas/mcp-server.json",
+  "title": "MCP Server",
+  "description": "A registration for a Model Context Protocol (MCP) server. MCP server entities are referenced by name from agent manifest tool resources (type 'mcp-server-entity') and resolved into MCP tools at runtime. Storing servers as entities lets different machines and users register different servers (for example, machine-specific stdio commands) under the same logical name.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "serverName",
+    "connection"
+  ],
+  "properties": {
+    "serverName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The logical name of the MCP server (e.g., 'github'). Tool resources reference this name to resolve the server."
+    },
+    "serverDescription": {
+      "type": "string",
+      "description": "Human-readable description of the MCP server and the tools it provides."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description used when the server is surfaced as a tool."
+    },
+    "connection": {
+      "type": "object",
+      "description": "How to connect to the MCP server. Remote servers use an http(s) endpoint with an optional API key. Local servers use a 'stdio://?command=<process>&arg=<value>&cwd=<dir>' endpoint.",
+      "additionalProperties": true,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Connection kind. Common values: 'key' (API-key authenticated remote endpoint), 'Anonymous' (unauthenticated remote or stdio endpoint)."
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Endpoint URL. Use an http(s) URL for remote servers or a 'stdio://?command=...' URL for local stdio servers."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "API key or token for authenticated remote servers. Supports ${ENV_VAR} references. Prefer environment references over storing secrets directly."
+        }
+      }
+    },
+    "approvalMode": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Tool-call approval policy for this server. Mirrors the agent tool approvalMode (kinds: 'always', 'never', 'specify').",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Approval mode kind: 'always', 'never', or 'specify'."
+        },
+        "alwaysRequireApprovalTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "When kind is 'specify', the tool names that always require approval."
+        },
+        "neverRequireApprovalTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "When kind is 'specify', the tool names that never require approval."
+        }
+      }
+    },
+    "allowedTools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional allow-list of tool names exposed by the server. When omitted, all tools are available."
+    }
+  }
+}

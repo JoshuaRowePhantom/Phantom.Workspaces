@@ -1,0 +1,25 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/mcp-server.json",
+  "description": "Schema for mcp-server entities that register Model Context Protocol servers. The 'mcp-server' property describes how to connect to and use the server.",
+  "allOf": [
+    {
+      "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": {
+        "const": "mcp-server"
+      }
+    },
+    "mcp-server": {
+      "$ref": "https://phantom-workspaces/schemas/mcp-server.json"
+    }
+  },
+  "required": [
+    "entity-types",
+    "mcp-server"
+  ]
+}

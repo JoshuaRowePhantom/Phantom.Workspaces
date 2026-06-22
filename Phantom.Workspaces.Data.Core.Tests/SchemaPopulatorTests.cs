@@ -215,6 +215,140 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
+    public async Task Populate_SeedsMcpServerEntityTypeAndSchema()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var seededNames = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .Where(static data => data.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
+            .SelectMany(static data => data.GetProperty("names").EnumerateArray())
+            .Select(static name => name.TryReadEntityName())
+            .Where(static name => name is not null)
+            .Select(static name => name!.Value.Components)
+            .ToArray();
+
+        string[][] expected =
+        [
+            ["entity-types", "mcp-server"],
+            ["entity-types", "mcp-server-json-schema"],
+        ];
+
+        foreach (var expectedName in expected)
+        {
+            Assert.Contains(
+                seededNames,
+                components => components.SequenceEqual(expectedName, StringComparer.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task Populate_ThenWritingValidMcpServerEntity_Succeeds()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        await schemaPopulator.Populate();
+
+        var validMcpServerEntity = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "22222222-3333-4444-5555-666666666666",
+              "entity-types": [ "mcp-server" ],
+              "names": [ [ "test", "mcp-servers", "github" ] ],
+              "display-name": { "default": "GitHub MCP Server" },
+              "mcp-server": {
+                "serverName": "github",
+                "serverDescription": "GitHub's official remote MCP server.",
+                "connection": {
+                  "kind": "key",
+                  "endpoint": "https://api.githubcopilot.com/mcp/",
+                  "apiKey": "${GITHUB_TOKEN}"
+                },
+                "approvalMode": { "kind": "never" }
+              }
+            }
+            """).RootElement.Clone();
+
+        var updateResult = await validatedDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Write valid mcp-server entity." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId("22222222-3333-4444-5555-666666666666"),
+                        Data = validMcpServerEntity,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+
+        var failures = updateResult.EntityResults.SelectMany(static result => result.Errors).ToArray();
+        Assert.True(
+            failures.Length == 0,
+            string.Join(Environment.NewLine, failures.Select(error => error.Message)));
+    }
+
+    [Fact]
+    public async Task Populate_ThenWritingInvalidMcpServerEntity_Fails()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        await schemaPopulator.Populate();
+
+        var invalidMcpServerEntity = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+              "entity-types": [ "mcp-server" ],
+              "names": [ [ "test", "mcp-servers", "invalid" ] ],
+              "display-name": { "default": "Invalid MCP Server" },
+              "mcp-server": {
+                "serverDescription": "Missing serverName and connection."
+              }
+            }
+            """).RootElement.Clone();
+
+        var updateResult = await validatedDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Write invalid mcp-server entity." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = new EntityId("77777777-8888-9999-aaaa-bbbbbbbbbbbb"),
+                        Data = invalidMcpServerEntity,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+
+        Assert.Contains(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
     public async Task Populate_SeedsDefaultTrustProfiles()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
