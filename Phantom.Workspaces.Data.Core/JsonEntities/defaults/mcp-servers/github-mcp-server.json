@@ -1,0 +1,28 @@
+{
+  "entity-id": "e5f6a7b8-3c4d-4e5f-9a0b-2c3d4e5f6a7b",
+  "entity-types": [
+    "mcp-server"
+  ],
+  "names": [
+    [
+      "defaults",
+      "mcp-servers",
+      "github"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub MCP Server"
+  },
+  "mcp-server": {
+    "serverName": "github",
+    "serverDescription": "GitHub's official remote MCP server (https://github.com/github/github-mcp-server) providing tools for repository management, issues, pull requests, code search, Actions workflow runs, Dependabot alerts, and more.",
+    "connection": {
+      "kind": "key",
+      "endpoint": "https://api.githubcopilot.com/mcp/",
+      "apiKey": "${GITHUB_TOKEN}"
+    },
+    "approvalMode": {
+      "kind": "never"
+    }
+  }
+}
