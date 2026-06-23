@@ -233,7 +233,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
         this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
         this.entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(this.entityBroker);
-        this.fieldEditorFactory = new FieldEditorFactory(this.entityBroker, this.entityTypeViewCatalog);
+        this.fieldEditorFactory = new FieldEditorFactory(
+            this.entityBroker,
+            this.entityTypeViewCatalog,
+            entityReferenceSearch: new EntityReferenceSearch(this.entityBroker),
+            openEntity: entityId => _ = this.OpenEntityByIdAsync(entityId));
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -780,6 +784,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return this.entityClickShortcutHandler is { } handler
             ? handler.Handle(this, Shortcut.Open, entity)
             : Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// Opens the entity with the supplied id (used to navigate from a rendered entity-reference field,
+    /// for example a relationship's participants).
+    /// </summary>
+    public async Task OpenEntityByIdAsync(string entityId)
+    {
+        if (this.entityBroker is null || string.IsNullOrWhiteSpace(entityId))
+        {
+            return;
+        }
+
+        EntityId id;
+        try
+        {
+            id = new EntityId(entityId);
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentException)
+        {
+            return;
+        }
+
+        var entities = await this.entityBroker.GetEntitiesAsync(new[] { id });
+        var entity = entities.FirstOrDefault(candidate => candidate.EntityId == id) ?? entities.FirstOrDefault();
+        if (entity is not null)
+        {
+            await this.ActivateEntityClickAsync(entity);
+        }
     }
 
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SubscribedEntityViewModel, EntityListNodeViewModel> cardNodesByEntity = new();

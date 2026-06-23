@@ -114,6 +114,43 @@
         <md:Markdown Text="{Binding Text}" />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:EntityReferenceFieldEditorViewModel">
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*"
+              RowDefinitions="Auto,Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <!-- Read mode: navigable link to the referenced entity (resolved display name). -->
+            <Button Grid.Column="1" Grid.Row="0"
+                    Content="{Binding ResolvedDisplayName}"
+                    ToolTip.Tip="{Binding TooltipText}"
+                    Command="{Binding OpenCommand}"
+                    IsEnabled="{Binding CanOpen}"
+                    Classes="workspace-entity-reference-link"
+                    HorizontalAlignment="Left"
+                    IsVisible="{Binding IsReadMode}" />
+            <!-- Edit mode: search box plus candidate results. -->
+            <TextBox Grid.Column="1" Grid.Row="0"
+                     Text="{Binding SearchText, Mode=TwoWay}"
+                     Watermark="{Binding ResolvedDisplayName}"
+                     IsVisible="{Binding IsEditMode}"
+                     Classes="workspace-field-value" />
+            <ItemsControl Grid.Column="1" Grid.Row="1"
+                          ItemsSource="{Binding Results}"
+                          IsVisible="{Binding IsEditMode}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Command="{Binding SelectCommand}"
+                                ToolTip.Tip="{Binding Names}"
+                                Content="{Binding DisplayName}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Left"
+                                Classes="workspace-entity-reference-candidate" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Grid>
+    </DataTemplate>
+
     <DataTemplate DataType="vm:StringFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="200,*"

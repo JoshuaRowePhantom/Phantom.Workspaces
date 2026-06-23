@@ -43,6 +43,7 @@ public sealed class EntityReferenceFieldEditorViewModel : EntityFieldEditorViewM
 {
     private readonly IEntityReferenceSearch? search;
     private readonly IReadOnlyCollection<string> entityTypes;
+    private readonly Action<string>? openEntity;
     private string value;
     private string resolvedDisplayName;
     private string tooltipText;
@@ -52,16 +53,26 @@ public sealed class EntityReferenceFieldEditorViewModel : EntityFieldEditorViewM
         string fieldName,
         string? entityId,
         IReadOnlyCollection<string> entityTypes,
-        IEntityReferenceSearch? search)
+        IEntityReferenceSearch? search,
+        Action<string>? openEntity = null)
         : base(fieldName, "entity-reference")
     {
         this.value = entityId ?? string.Empty;
         this.entityTypes = entityTypes;
         this.search = search;
+        this.openEntity = openEntity;
         this.resolvedDisplayName = this.value;
         this.tooltipText = this.value;
         this.Results = new ReadOnlyObservableCollection<EntityReferenceCandidateViewModel>(this.results);
+        this.OpenCommand = new RelayCommand(
+            _ => this.openEntity?.Invoke(this.value),
+            _ => this.CanOpen);
     }
+
+    public RelayCommand OpenCommand { get; }
+
+    /// <summary>Whether the referenced entity can be opened (it has a value and a navigation handler).</summary>
+    public bool CanOpen => this.HasValue && this.openEntity is not null;
 
     private readonly ObservableCollection<EntityReferenceCandidateViewModel> results = [];
 
@@ -78,6 +89,8 @@ public sealed class EntityReferenceFieldEditorViewModel : EntityFieldEditorViewM
             if (this.SetProperty(ref this.value, value))
             {
                 this.RaisePropertyChanged(nameof(this.HasValue));
+                this.RaisePropertyChanged(nameof(this.CanOpen));
+                this.OpenCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -160,7 +173,7 @@ public sealed class EntityReferenceFieldEditorViewModel : EntityFieldEditorViewM
 
     public override EntityFieldEditorViewModel Clone()
     {
-        var clone = new EntityReferenceFieldEditorViewModel(this.FieldName, this.value, this.entityTypes, this.search)
+        var clone = new EntityReferenceFieldEditorViewModel(this.FieldName, this.value, this.entityTypes, this.search, this.openEntity)
         {
             ResolvedDisplayName = this.resolvedDisplayName,
             TooltipText = this.tooltipText,

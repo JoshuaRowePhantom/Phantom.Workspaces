@@ -17,19 +17,22 @@ public sealed class FieldEditorFactory
     private readonly EntityTypeViewCatalog entityTypeViewCatalog;
     private readonly IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews;
     private readonly IEntityReferenceSearch? entityReferenceSearch;
+    private readonly Action<string>? openEntity;
     private readonly CustomFieldEditorActivator customFieldEditorActivator;
 
     public FieldEditorFactory(
         EntityBroker entityBroker,
         EntityTypeViewCatalog entityTypeViewCatalog,
         IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews = null,
-        IEntityReferenceSearch? entityReferenceSearch = null)
+        IEntityReferenceSearch? entityReferenceSearch = null,
+        Action<string>? openEntity = null)
     {
         this.schemaAccessor = new SchemaAccessor(entityBroker.EntityRepository.DataAccessLayer);
         this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
         this.entityTypeViewCatalog = entityTypeViewCatalog;
         this.viewSpecificEntityTypeViews = viewSpecificEntityTypeViews;
         this.entityReferenceSearch = entityReferenceSearch;
+        this.openEntity = openEntity;
         this.customFieldEditorActivator = new CustomFieldEditorActivator(
             message => System.Diagnostics.Debug.WriteLine(message));
     }
@@ -183,11 +186,14 @@ public sealed class FieldEditorFactory
         if (resolvedType.EntityTypes.Count > 0)
         {
             var entityId = fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() : null;
-            return new EntityReferenceFieldEditorViewModel(
+            var referenceEditor = new EntityReferenceFieldEditorViewModel(
                 fieldName,
                 entityId,
                 resolvedType.EntityTypes,
-                this.entityReferenceSearch);
+                this.entityReferenceSearch,
+                this.openEntity);
+            await referenceEditor.ResolveCurrentValueAsync().ConfigureAwait(true);
+            return referenceEditor;
         }
 
         switch (resolvedType.TypeName)

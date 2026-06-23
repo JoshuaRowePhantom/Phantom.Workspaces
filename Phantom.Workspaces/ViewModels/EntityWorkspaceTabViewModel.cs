@@ -18,7 +18,10 @@ public sealed class EntityWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         if (entityBroker is not null && entityTypeViewCatalog is not null)
         {
-            this.fieldEditorFactory = new FieldEditorFactory(entityBroker, entityTypeViewCatalog);
+            this.fieldEditorFactory = new FieldEditorFactory(
+                entityBroker,
+                entityTypeViewCatalog,
+                entityReferenceSearch: new EntityReferenceSearch(entityBroker));
         }
     }
 
