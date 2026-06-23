@@ -317,17 +317,68 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
 
 1. **Management identity acquisition.** Creating/owning a dev tunnel through the management SDK
    requires an authenticated identity with the dev-tunnels service (a Microsoft account / Entra ID /
-   GitHub user, the same identities `devtunnel user login` uses). Two ways to obtain it:
-   - **Interactive first-run login** — the app performs an OAuth sign-in the first time hosting is
-     enabled, caching the refresh token in the OS secret store (most user-friendly; needs an embedded
-     auth flow).
-   - **Headless token source only** — the app reads a pre-provisioned dev-tunnels access token from a
-     configured source (env var / keychain key named by `AccessTokenSource`) and never prompts (best
-     for unattended/service installs; the user must provision the token out-of-band).
+   GitHub user, the same identities `devtunnel user login` uses). This concerns only how *this host*
+   authenticates to the dev-tunnels service to manage its own tunnel; it does **not** affect the
+   *tunnel access mode* (Private/Token/Anonymous) for inbound clients.
 
-   Decision needed: support interactive login, headless-only, or both (headless as an override). This
-   does not affect the *tunnel access mode* (Private/Token/Anonymous) for inbound clients — it only
-   concerns how *this host* authenticates to the dev-tunnels service to manage its own tunnel.
+   ### Option A — Interactive first-run login
+
+   The app runs an OAuth sign-in the first time hosting is enabled, then caches the resulting refresh
+   token in the OS secret store and refreshes silently thereafter.
+
+   - **Pros:** lowest-friction for desktop users (no manual token provisioning); tokens are short-lived
+     and auto-refreshed; the GUI can show the signed-in account and a clear "not signed in" state; no
+     secret handling by the user.
+   - **Cons:** requires embedding an OAuth flow (system browser + loopback redirect, or device-code);
+     more moving parts to build/test; doesn't fit unattended/headless installs (a service or CI box
+     with no interactive user can't complete the prompt); first run blocks on user action.
+
+   **GUI (Option A):** in Remote Access settings, a **"Dev tunnel account"** row:
+   - signed out → `[ Sign in to host a dev tunnel ]` button; clicking opens the system browser /
+     device-code dialog; status shows "Waiting for sign-in…".
+   - signed in → `Signed in as <account>` (read-only) with a `[ Sign out ]` link; hosting controls
+     enabled. Errors surface inline ("Sign-in expired — sign in again").
+
+   ### Option B — Headless token source only
+
+   The app reads a pre-provisioned dev-tunnels access token from a configured **source** (env var /
+   OS keychain key named by `AccessTokenSource`) and never prompts.
+
+   - **Pros:** simplest to implement (no embedded auth UI); works for unattended/service/CI installs;
+     consistent with the repo rule of storing only a *source name*, never a raw token; easy to fake in
+     tests.
+   - **Cons:** the user must obtain and store the token out-of-band (e.g. `devtunnel token` then set an
+     env var / keychain entry) — higher friction and easy to misconfigure; token rotation/expiry is
+     the user's responsibility; poorer first-run UX with cryptic failures if the source is missing.
+
+   **GUI (Option B):** in Remote Access settings, a **"Dev tunnel token source"** field (text box for
+   the env-var/keychain key name, never the token itself) plus a `[ Test ]` button that resolves the
+   source and reports "Token resolved / Source not found / Token rejected". A short helper link
+   explains how to provision a token.
+
+   ### Implementing both (recommended)
+
+   Yes — both can coexist behind `IDevTunnelAuthTokenProvider`, which already abstracts token
+   acquisition. Resolution order: **headless source first** (if `AccessTokenSource` resolves to a
+   valid token, use it — covers unattended/override), **else interactive login** (prompt and cache).
+
+   - **Pros:** covers both desktop and unattended installs; the headless source acts as an override
+     for power users/CI without removing the friendly desktop path; only one provider seam to wire.
+   - **Cons:** more to build and test than either alone; the GUI must present both affordances clearly
+     so users understand which is in effect.
+
+   **GUI (both):** a single **"Dev tunnel account"** section with a small mode selector:
+   - **Sign in (recommended)** → Option A's account row.
+   - **Use a token source (advanced)** → Option B's source field + Test button.
+   When a token source is configured and valid, show `Using token source "<name>"` and hide/disable the
+   sign-in prompt; otherwise fall back to the sign-in affordance. A single status line reports the
+   effective identity state (Signed in as X / Using token source / Not configured + error).
+
+   **Recommendation:** implement **both** with the headless-source-as-override resolution order, but
+   stage it — ship **Option B (headless)** first (smallest, unblocks unattended hosting and is fully
+   testable), then add **Option A (interactive)** as a follow-up for desktop friendliness. Open
+   sub-decision: whether the interactive flow uses system-browser+loopback or device-code (device-code
+   is simpler and works without a loopback listener, at the cost of a copy-paste step).
 
 ## Source references
 
