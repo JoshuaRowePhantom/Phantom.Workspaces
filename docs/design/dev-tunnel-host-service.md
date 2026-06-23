@@ -315,16 +315,24 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
 
 ## Open questions
 
-1. **Management identity acquisition.** Creating/owning a dev tunnel through the management SDK
-   requires an authenticated identity with the dev-tunnels service (a Microsoft account / Entra ID /
-   GitHub user, the same identities `devtunnel user login` uses). This concerns only how *this host*
-   authenticates to the dev-tunnels service to manage its own tunnel; it does **not** affect the
-   *tunnel access mode* (Private/Token/Anonymous) for inbound clients.
+1. **Management identity / token source.** Creating/owning a dev tunnel through the management SDK
+   requires a dev-tunnels **access token** (obtained from an authenticated Microsoft account / Entra ID
+   / GitHub identity — the same identities `devtunnel user login` uses). Every option below ultimately
+   provides such a token to `TunnelManagementClient`; they differ only in **where the token comes
+   from**. This concerns only how *this host* authenticates to manage its own tunnel; it does **not**
+   affect the *tunnel access mode* (Private/Token/Anonymous) for inbound clients.
 
-   ### Option A — Interactive first-run login
+   > Note on labeling: "interactive login" is not just a prompt — it *acquires and then caches* a token
+   > and refreshes it silently, so it inherently includes an app-managed token store. In other words
+   > the interactive option already subsumes a token cache (it is effectively "acquire + cache"). The
+   > truly separate axis is **app-acquired token** vs **externally-provisioned token**, so the three
+   > options are framed that way below (A = app-acquired, B = externally provided, C = both).
 
-   The app runs an OAuth sign-in the first time hosting is enabled, then caches the resulting refresh
-   token in the OS secret store and refreshes silently thereafter.
+   ### Option A — App-acquired via interactive login (acquire + cached store)
+
+   The app runs an OAuth sign-in the first time hosting is enabled, then **caches** the resulting
+   refresh/access token in the OS secret store and refreshes it silently thereafter. The cache is an
+   app-managed token store — so this option already provides ongoing tokens after the one-time prompt.
 
    - **Pros:** lowest-friction for desktop users (no manual token provisioning); tokens are short-lived
      and auto-refreshed; the GUI can show the signed-in account and a clear "not signed in" state; no
@@ -339,10 +347,11 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
    - signed in → `Signed in as <account>` (read-only) with a `[ Sign out ]` link; hosting controls
      enabled. Errors surface inline ("Sign-in expired — sign in again").
 
-   ### Option B — Headless token source only
+   ### Option B — Externally-provisioned token source (headless)
 
-   The app reads a pre-provisioned dev-tunnels access token from a configured **source** (env var /
-   OS keychain key named by `AccessTokenSource`) and never prompts.
+   The app reads a token the user provisioned **out-of-band** from a configured **source** (env var /
+   OS keychain key named by `AccessTokenSource`) and never prompts. The app does not acquire or cache
+   the token — it only reads what the user supplied.
 
    - **Pros:** simplest to implement (no embedded auth UI); works for unattended/service/CI installs;
      consistent with the repo rule of storing only a *source name*, never a raw token; easy to fake in
@@ -356,29 +365,30 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
    source and reports "Token resolved / Source not found / Token rejected". A short helper link
    explains how to provision a token.
 
-   ### Implementing both (recommended)
+   ### Option C — Both (externally-provisioned overrides app-acquired) (recommended)
 
-   Yes — both can coexist behind `IDevTunnelAuthTokenProvider`, which already abstracts token
-   acquisition. Resolution order: **headless source first** (if `AccessTokenSource` resolves to a
-   valid token, use it — covers unattended/override), **else interactive login** (prompt and cache).
+   Support both token sources behind `IDevTunnelAuthTokenProvider` (which already abstracts token
+   acquisition). Resolution order: **external source first** (if `AccessTokenSource` resolves to a
+   valid token, use it — covers unattended/override), **else app-acquired interactive login** (prompt
+   and cache).
 
-   - **Pros:** covers both desktop and unattended installs; the headless source acts as an override
-     for power users/CI without removing the friendly desktop path; only one provider seam to wire.
+   - **Pros:** covers both desktop and unattended installs; the external source acts as an override for
+     power users/CI without removing the friendly desktop path; only one provider seam to wire.
    - **Cons:** more to build and test than either alone; the GUI must present both affordances clearly
      so users understand which is in effect.
 
-   **GUI (both):** a single **"Dev tunnel account"** section with a small mode selector:
+   **GUI (Option C):** a single **"Dev tunnel account"** section with a small mode selector:
    - **Sign in (recommended)** → Option A's account row.
    - **Use a token source (advanced)** → Option B's source field + Test button.
    When a token source is configured and valid, show `Using token source "<name>"` and hide/disable the
    sign-in prompt; otherwise fall back to the sign-in affordance. A single status line reports the
    effective identity state (Signed in as X / Using token source / Not configured + error).
 
-   **Recommendation:** implement **both** with the headless-source-as-override resolution order, but
-   stage it — ship **Option B (headless)** first (smallest, unblocks unattended hosting and is fully
-   testable), then add **Option A (interactive)** as a follow-up for desktop friendliness. Open
-   sub-decision: whether the interactive flow uses system-browser+loopback or device-code (device-code
-   is simpler and works without a loopback listener, at the cost of a copy-paste step).
+   **Recommendation:** implement **Option C**, but stage it — ship **Option B (external source)** first
+   (smallest, unblocks unattended hosting and is fully testable), then add **Option A (interactive
+   acquire + cache)** as a follow-up for desktop friendliness. Open sub-decision: whether the
+   interactive flow uses system-browser+loopback or device-code (device-code is simpler and works
+   without a loopback listener, at the cost of a copy-paste step).
 
 ## Source references
 
