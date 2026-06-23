@@ -150,18 +150,21 @@ access-point mode is **retained**:
    (`WebEndpoint`, e.g. `https://<id>-<port>.<cluster>.devtunnels.ms/`). Used as-is. No management
    lookup required. This remains fully supported and is the right choice when the endpoint is fixed or
    the client has no management access.
-2. **Tunnel name (new).** The user supplies just a **tunnel name** (and, for Token mode, a token
-   source). The client resolves the live endpoint at connect time via a new
-   `IDevTunnelEndpointResolver`:
-   - look up the tunnel by name with a (read-scoped) `TunnelManagementClient`;
+2. **Tunnel name (new).** The user supplies just a **tunnel name**. The client resolves the live
+   endpoint at connect time via a new `IDevTunnelEndpointResolver`, using the **unified dev tunnel
+   sign-in** (`IDevTunnelAuthTokenProvider`) for identity:
+   - look up the tunnel by name with a `TunnelManagementClient` authenticated by the signed-in
+     identity;
    - read its **single** forwarded `TunnelPort` (relying on the host's single-port invariant) — no
      port number is configured by the user;
-   - construct the relay endpoint URI for that port (and attach the `X-Tunnel-Authorization` token for
-     Token mode);
-   - hand the resolved base URI to `WebClientDataAccessLayer`.
+   - construct the relay endpoint URI for that port. For **Private** access the per-connection
+     `X-Tunnel-Authorization` is derived from the signed-in identity (the user never types a token);
+     only in **Token** mode is a pre-shared token read from `AccessTokenSource`;
+   - hand the resolved base URI (and header, if any) to `WebClientDataAccessLayer`.
 
    Because the port is discovered, the host can change its listening port (the host re-points its
-   single forwarded port) and the client still reconnects to the right place by name.
+   single forwarded port) and the client still reconnects to the right place by name. Because identity
+   comes from the same sign-in as hosting, the client and host share one account experience.
 
 ### Resolution + reconnect refresh
 
@@ -184,27 +187,43 @@ access-point mode is **retained**:
   **`TunnelName`** alongside the existing `WebEndpoint`; exactly one of the two identifies the host.
   When `TunnelName` is set, `WebEndpoint` is resolved dynamically; when only `WebEndpoint` is set,
   behavior is unchanged.
-- `IDevTunnelEndpointResolver.ResolveAsync(tunnelName, accessMode, tokenSource, ct)` →
-  `(Uri baseUri, string? tunnelAuthToken)`. Backed by `TunnelManagementClient`; fakeable in tests.
+- `IDevTunnelEndpointResolver.ResolveAsync(tunnelName, accessMode, ct)` →
+  `(Uri baseUri, string? tunnelAuthToken)`. Backed by `TunnelManagementClient` and the unified
+  `IDevTunnelAuthTokenProvider` (same sign-in as the host); `tunnelAuthToken` is null for Private
+  access (identity-based) and the pre-shared token only in Token mode. Fakeable in tests.
 - `DevTunnelConnectionMonitor` wraps the web DAL connection with the resolver + backoff policy and
   raises status events.
 
 ## Authentication model
 
-Two distinct token concerns (kept separate):
+The same dev-tunnels identity is used on **both ends** — the host (to create/own/host its tunnel) and
+a connecting client (to reach a Private tunnel). They share **one** unified sign-in.
 
-1. **Management / hosting identity** — needed to create and host the tunnel. Obtained by
-   `IDevTunnelAuthTokenProvider` via **interactive sign-in**, then cached/refreshed in the OS secret
-   store (Decision 3). Supplied to `TunnelManagementClient` via its access-token callback so it can
-   refresh without restart. (No externally-provisioned/headless token source for this identity.)
-2. **Tunnel access (clients connecting in)** — governed by `DevTunnelAccessMode`:
-   - **Private** (default): only the owning identity / authorized identities; clients authenticate to
-     the relay.
-   - **Token**: anonymous-but-token — clients send `X-Tunnel-Authorization: tunnel <token>`
-     (already supported by `WebClientDataAccessLayer`). The service mints a port/tunnel-scoped,
-     short-lived access token via the management client when this mode is selected.
-   - **Anonymous**: opt-in only, visibly warned in the UI (existing
-     `IsAnonymousAccessWarningVisible`). Not the default for workspace data APIs.
+1. **Unified dev tunnel sign-in (host *and* client identity).** `IDevTunnelAuthTokenProvider` performs
+   the interactive sign-in (Microsoft account / Entra ID / GitHub) once and caches/refreshes the token
+   in the OS secret store (Decision 3). The **same** provider and the **same** "Dev tunnel account" GUI
+   serve two roles:
+   - **Host:** the token is given to `TunnelManagementClient` (access-token callback) to create/host
+     the tunnel.
+   - **Client (Private access):** the token authorizes the client against the relay. The client's
+     `IDevTunnelEndpointResolver` / web DAL obtain the per-connection `X-Tunnel-Authorization` from the
+     signed-in identity via the SDK — the client does **not** type or store a token. This is why
+     connecting to a Private tunnel by name "just works" after the user signs in, exactly like hosting.
+2. **Tunnel access mode (what the host requires of inbound clients)** — governed by
+   `DevTunnelAccessMode`:
+   - **Private** (default): clients authenticate with their **signed-in identity** (role 1 above) — no
+     separate credential to manage. This is the unified, recommended path.
+   - **Token**: an explicit **pre-shared** access token for granting access to someone who will *not*
+     sign in (e.g. an automation, or sharing without an account). The host mints a tunnel/port-scoped,
+     short-lived token; the recipient configures it via `AccessTokenSource` and the web DAL sends it as
+     `X-Tunnel-Authorization: tunnel <token>` (already supported). This is a deliberately *different*
+     mechanism from sign-in — it is the equivalent, on the client side, of the externally-provisioned
+     token path we dropped for the host: only used when identity sign-in is not possible.
+   - **Anonymous**: opt-in only, visibly warned (`IsAnonymousAccessWarningVisible`). Not the default.
+
+So `AccessTokenSource` does **not** duplicate the sign-in flow — it is the *opt-out* of identity, for
+Token mode only. For the default (Private) experience there is a single unified sign-in shared by host
+and client, and no token-source field is shown.
 
 Tunnel authentication **is** the authentication boundary we rely on for remote access: the dev
 tunnel's access control (Private identity / Token / Anonymous) is what gates whether a remote client
@@ -232,15 +251,23 @@ in front of the web data-access API — admittance to the tunnel is admittance t
 
 These are additive — the existing access-point inputs stay; a tunnel-name option is added alongside.
 
+0. **Shared "Dev tunnel account" sign-in (unified).** A single account section (the Decision-3
+   sign-in: `[ Sign in ]` / `Signed in as <account>` / `[ Sign out ]`) is presented **once** and used
+   by both roles — hosting and connecting-by-name to a Private tunnel. The same control/state backs
+   `IDevTunnelAuthTokenProvider`. There is **no** separate token entry for Private access on either
+   side; the token-source field appears only when **Token** access mode is explicitly chosen.
 1. **Host side (`RemoteAccessSettingsView` / `RemoteAccessSettingsViewModel`).** Keep the current
-   access-point/listen settings. Surface the resolved **tunnel name** and the live public access point
-   (read-only, copyable) once hosting, plus the host status. The host already enforces a single port,
-   so no port field is shown.
+   access-point/listen settings. Show the shared sign-in section. Surface the resolved **tunnel name**
+   and the live public access point (read-only, copyable) once hosting, plus the host status. The host
+   already enforces a single port, so no port field is shown.
 2. **Client side (`DevTunnelWebSettingsView` / `DevTunnelWebSettingsViewModel`,
-   `RepositoryConnectionModeViewModels`).** Add a **"Connect by"** choice with two options:
+   `RepositoryConnectionModeViewModels`).** Show the same shared sign-in section, then a **"Connect
+   by"** choice with two options:
    - **Access point** (existing) — the explicit `WebEndpoint` text box, unchanged.
-   - **Tunnel name** (new) — a single tunnel-name text box; no port input (auto-discovered). For Token
-     access mode, the existing token-source field applies to both options.
+   - **Tunnel name** (new) — a single tunnel-name text box; no port input (auto-discovered). For
+     **Private** access no token is entered (identity comes from the shared sign-in); the
+     `AccessTokenSource` field is shown **only** for **Token** access mode and applies to both connect
+     options.
    The two options are mutually exclusive for a given connection; validation requires exactly one of
    `WebEndpoint` / `TunnelName`. Default remains the access-point option so existing configurations are
    untouched.
@@ -300,12 +327,92 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
     fixed URL and does not perform name resolution; reconnect retries the same URL.
 17. **Client settings validation:** exactly one of `WebEndpoint` / `TunnelName` is required; the
     default remains the access-point option so existing configurations are unaffected.
+18. **Unified sign-in shared by host and client:** the host and the client tunnel-name resolver use the
+    **same** `IDevTunnelAuthTokenProvider` instance/flow; a single fake sign-in satisfies both.
+19. **Private connect needs no token:** in Private mode `IDevTunnelEndpointResolver` returns a null
+    `tunnelAuthToken` (identity-derived) and the client connects without any `AccessTokenSource`; the
+    token-source UI is hidden for Private and shown only for Token mode.
+20. **Token mode uses `AccessTokenSource`:** in Token mode the resolver/web DAL sends the pre-shared
+    `X-Tunnel-Authorization` token resolved from `AccessTokenSource` (never a raw token persisted).
+
+## Testing support: user-computer-profile override
+
+To test multiple Workspaces instances on a **single** physical machine (e.g. one acting as host and
+another as client over the dev tunnel), each instance must resolve to a **distinct**
+`user-computer-profile`. Today the profile identity is derived purely from the real OS user + host
+name (`ICurrentExecutionContextProvider.UserName` / `ComputerName`), so every instance on a machine
+collapses to the same profile — and therefore the same per-machine tunnel, MCP-server namespace, and
+session area. This override makes the effective profile identity configurable.
+
+### Config item
+
+Add a testing-only override to `WorkspacesConfiguration` (and its persisted profile), e.g.:
+
+```csharp
+/// <summary>
+/// Testing only: overrides the computer identity used when composing this instance's
+/// user-computer-profile entity name, so multiple instances can run on one machine with distinct
+/// profiles. Null/empty = use the real host name. Not for production use.
+/// </summary>
+public string? UserComputerProfileOverride { get; init; }
+```
+
+When set, the effective computer component of the profile name becomes the override value instead of
+the real host name; the user component is unchanged. (Overriding the *computer* component, not the
+user, keeps it aligned with how a tunnel/host is "a machine".)
+
+### Plumbing (the resolver path, generally)
+
+The override is applied once, at the single point that defines the instance's identity, and flows to
+everything that builds a `computer-user-profiles/.../computers/hostname/<computer>` name:
+
+1. **`ICurrentExecutionContextProvider` / `CurrentExecutionContextProvider`** — gains an
+   `EffectiveComputerName` (real `ComputerName` unless overridden). The override value is injected from
+   `WorkspacesConfiguration.UserComputerProfileOverride` when the provider is constructed. `ComputerName`
+   (the *real* host, used for the `computers/hostname` **computer** entity) stays as-is; only the
+   profile-composition uses `EffectiveComputerName`. This keeps the real computer entity shared while
+   the profile diverges per instance.
+2. **`ComputerUserProfileDiscoveryTool`** — composes the `computer-user-profile` entity name from the
+   effective computer name, so discovery creates/updates the per-instance profile entity.
+3. **`WorkspaceEntitySessionBootstrapper.InitializeAsync`** — constructs the same
+   `userComputerProfileEntityName` from the effective computer name and resolves the per-instance
+   `UserComputerProfileEntityId`. (It currently `new`s a `CurrentExecutionContextProvider()` directly;
+   that construction takes the override.)
+4. **General profile consumers** — anything that derives the machine prefix from the profile name uses
+   the same effective name, including:
+   - the dev tunnel host (Decision 1) → distinct tunnel per instance;
+   - `McpServerEntityToolResourceFactory` / `AgentSessionShortcutContext` machine MCP-server prefix
+     (`computer-user-profiles/.../copilot/mcp-servers`);
+   - the copilot session discovery area (`.../copilot/sessions`).
+
+   Centralizing the override in the execution-context provider (rather than at each call site) ensures
+   these stay consistent and a single switch reroutes the whole instance to its own profile namespace.
+
+### GUI
+
+Under settings (Remote Access or a "Diagnostics/Advanced" group), add a clearly-labeled **testing**
+field: `User-computer-profile override (testing)` — a text box bound to
+`UserComputerProfileOverride`, with helper text "Leave blank for normal use. Set a unique value to run
+a second instance on this machine for testing." Empty = no override.
+
+### Caveats
+
+- **Testing only**, and visibly marked so. It changes which entities (profile, sessions, MCP servers,
+  hosted tunnel) this instance reads/writes — a wrong value silently points the instance at a
+  different namespace.
+- Does **not** change the real `users/username` or `computers/hostname` entities (shared); only the
+  composed `computer-user-profile` name diverges.
+- Changing it at runtime should re-bootstrap the session identity (ties into the pending
+  `live-service-reconfiguration` work) or, more simply, require a restart.
 
 ## Decisions
 
 1. **Tunnel persistence scope: stable per-machine.** The host maintains one stable, reused tunnel per
    machine, keyed by `user-computer-profile`, persisting its `TunnelId`/`TunnelName` so the public URL
-   and tunnel name are stable across app restarts. (Ephemeral per-session tunnels are not used.)
+   and tunnel name are stable across app restarts. (Ephemeral per-session tunnels are not used.) The
+   effective `user-computer-profile` is overridable for testing so multiple instances can run on one
+   machine, each with its own profile and therefore its own tunnel — see
+   "Testing support: user-computer-profile override".
 2. **Reverse-execution WebSocket is forwarded automatically — no extra port.** The reverse-execution
    WebSocket endpoints (`MapReverseEndpoints`) are routes on the **same** Kestrel application as the
    web data-access and agent endpoints, all bound to the single `WorkspacesWebHost.ListenUrl` port.
