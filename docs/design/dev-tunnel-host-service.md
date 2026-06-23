@@ -108,6 +108,92 @@ Supporting seams kept behind interfaces for testability:
 The concrete `DevTunnelHostService` composes these; the SDK types live only in the concrete
 implementations.
 
+> **Implementation note (status: implemented).** The implementation lives in
+> `Phantom.Workspaces/Services/DevTunnel/`:
+> `DevTunnelHostState`/`DevTunnelHostStatus`, `IDevTunnelHostService` + `DevTunnelHostService`,
+> `IDevTunnelAuthTokenProvider` + `GitHubDevTunnelAuthTokenProvider`,
+> `IDevTunnelEndpointResolver` + `DevTunnelEndpointResolver` (+ `DevTunnelEndpointResolution`),
+> `DevTunnelConnectionMonitor` (+ `IDelayScheduler`/`RealDelayScheduler`,
+> `DevTunnelConnectionStatus`/`DevTunnelReconnectOptions`), `IDevTunnelRelayHost`, and the
+> `DevTunnelServiceFactory` composition helper. Key deviations from the sketch above, all to maximize
+> testability behind SDK-free seams:
+> - Instead of exposing the SDK `TunnelManagementClient` through a factory, the orchestration depends on
+>   a **domain-level `IDevTunnelManagementClient`** seam (`EnsureTunnelAsync` /
+>   `SetSingleForwardedPortAsync` / `ApplyAccessModeAsync` / `GetAccessPointUrlAsync`, plus
+>   `DevTunnelDescriptor`); the client-side resolver depends on an SDK-free **`IDevTunnelLookupClient`**
+>   (`LookupByNameAsync` → `DevTunnelLookupResult`). Both are implemented by the single concrete
+>   `DevTunnelManagementClientWrapper`, which is the only place `Microsoft.DevTunnels.*` types appear
+>   (alongside `TunnelRelayDevTunnelHost`). The orchestration, resolver, and monitor are fully
+>   unit-tested with fakes (`DevTunnelHostServiceTests`, `DevTunnelEndpointResolverTests`,
+>   `DevTunnelConnectionMonitorTests`) — no network.
+> - **Management identity uses the GitHub token** (`GitHubDevTunnelAuthTokenProvider` →
+>   `GitHubAuthTokenResolver`, `TunnelAuthenticationSchemes.GitHub`) rather than a bespoke interactive
+>   MSAL sign-in. This unifies host and client identity through the same GitHub sign-in the web client
+>   already uses for `X-Tunnel-Authorization` (see `devtunnels-web-access.md`), and keeps the
+>   "no raw token in tracked files" rule. `IDevTunnelAuthTokenProvider` remains the seam, so an
+>   interactive provider can be substituted later without touching the rest.
+> - **The logical tunnel name is carried as a tunnel _label_, not the SDK custom `Name`.** Custom tunnel
+>   names require a service feature ("allow custom tunnel names") that is disabled for most accounts and
+>   returns `403 Forbidden` on create. `DevTunnelManagementClientWrapper` therefore creates the tunnel
+>   with `Labels = [name]` and both host (`EnsureTunnelAsync`) and client (`LookupByNameAsync`) locate it
+>   by that label (server-side `TunnelRequestOptions.Labels` filter + client-side `HasLabel` match), so no
+>   custom-names feature is needed.
+> - **Tunnel updates must not carry ports.** Ports are managed individually
+>   (`SetSingleForwardedPortAsync` via create-or-update / delete per port); including a `Ports` collection
+>   on `UpdateTunnelAsync` is rejected by the service ("Batch update of ports is not supported"). When an
+>   existing tunnel is fetched with `IncludePorts`, `ApplyAccessModeAsync` clears `Ports`/`Endpoints`
+>   before updating access control. Because that update clears the cached tunnel's ports, the relay host
+>   does **not** reuse the cached tunnel: `TunnelRelayDevTunnelHost.StartAsync` first calls
+>   `GetConnectReadyTunnelAsync` (a fresh `GetTunnelAsync` with `IncludePorts` + host scopes, guaranteeing a
+>   non-null `Tunnel.Ports`, which the SDK relay host requires) and connects with that.
+> - **Auto tunnel discovery (client side).** Every Workspaces-owned tunnel also carries a stable marker
+>   label (`DevTunnelNaming.WorkspacesMarkerLabel = "phantom-workspaces"`). A client configured with the
+>   tunnel name `"auto"` (or blank — `DevTunnelNaming.IsAuto`) skips name matching and instead discovers
+>   the single marker-labeled tunnel via `IDevTunnelLookupClient.DiscoverSingleAsync` (throws when none or
+>   more than one is found, guiding the user to set a specific name). `DevTunnelEndpointResolver` routes
+>   auto → `DiscoverSingleAsync`, named → `LookupByNameAsync`; covered by `DevTunnelEndpointResolverTests`.
+>   The host's `EnsureTunnelAsync` likewise accepts `"auto"`: it reuses the single existing marker tunnel
+>   or creates a marker-only one. The settings UI documents the `"auto"` selector.
+> - `MainWindowViewModel.InitializeWebHostAsync` starts the host service (via `DevTunnelServiceFactory`)
+>   only when a tunnel is configured (`DevTunnel.TunnelName`/`TunnelId` set), sets
+>   `ConnectionStatusViewModel`'s **local** access point to `webHost.ListenUrl`, the **tunnel name**, and
+>   forwards every `DevTunnelHostStatus` change to `SetDevTunnelStatus(state, accessPointUrl, lastError)` —
+>   which publishes the real public tunnel URL on `Hosting` and flags `HasProblem` on `Error`/`Reconnecting`.
+>   Hosting runs in the background so a sign-in/relay failure never blocks GUI startup; failures surface
+>   through `DevTunnelHostStatus.Error`. The network display (`ConnectionStatusWindow`) shows the local and
+>   dev tunnel access points, the tunnel name, the host status text, and a translucent red exclamation
+>   glyph (also overlaid on the main-window 🌐 button) when `HasProblem`.
+> - The `Microsoft.DevTunnels.{Contracts,Management,Connections}` `PackageReference`s (1.3.50) are added
+>   to `Phantom.Workspaces`. The `DevTunnelManagementClientWrapper` is unit-tested with a **Moq**
+>   `ITunnelManagementClient` (`DevTunnelManagementClientWrapperTests`, enabled by `InternalsVisibleTo`)
+>   — covering label-not-custom-name creation, marker-label find/lookup/auto-discovery, the single-port
+>   management, and the "no ports/endpoints on a tunnel update" service constraint. The relay host
+>   (`TunnelRelayDevTunnelHost`) remains thin glue verified by compilation; full live round-trip behavior
+>   is covered only by the opt-in smoke test (see Testing strategy), not the fast suite.
+> - **Client connect-by-tunnel-name is wired into repository creation, with reconnect.** `WorkspacesConfiguration.ToRepositorySource()`
+>   projects `DataAccessMode.DevTunnelWeb` to the existing `WebRepositorySource` when `DataAccess.WebEndpoint`
+>   is set, otherwise to a new **`DevTunnelNameRepositorySource(TunnelName, AccessMode, AccessTokenSource)`**
+>   when `DevTunnel.TunnelName` is set. `EntityRepository.CreateUnderlyingDataAccessLayerAsync` builds a
+>   **`ReconnectingWebDataAccessLayer`** for that source: it resolves the live relay URI via
+>   `DevTunnelServiceFactory.CreateEndpointResolver(...)` and, on a connection drop, re-resolves the tunnel
+>   (picking up a changed forwarded port) and reconnects with bounded exponential backoff via the
+>   `DevTunnelConnectionMonitor` — retrying the in-flight data operation against the fresh inner layer,
+>   without restarting the workspace. Connectivity failures are classified at the web client via the typed
+>   **`WebDataAccessRequestException`** (`IsConnectivityFailure`: no response, or status >= 500); 4xx
+>   application errors are not retried. Auth reuses the proven scheme: **Token** mode sends the resolved
+>   pre-shared token; **Private** mode reuses the GitHub identity token as `X-Tunnel-Authorization` (same as
+>   the explicit-endpoint dev tunnel path). Covered by `RepositorySourceTests` and
+>   `ReconnectingWebDataAccessLayerTests` (deterministic, injected clock). The monitor surfaces
+>   Connected/Reconnecting/Failed status via `ReconnectingWebDataAccessLayer.Status`/`StatusChanged`;
+>   binding that to the workspace connection-status UI is the remaining follow-up.
+>
+> **Manual test setup.** `playspace-config.json` hosts the tunnel (`remoteHosting.enabled: true`,
+> `devTunnel.tunnelName: "phantom-workspaces-playspace"`), and `playspace-config-2.json` connects over it
+> (`dataAccess.mode: "devTunnelWeb"`, same `devTunnel.tunnelName`, `userComputerProfileOverride:
+> "playspace-second-instance"`). Both are exposed as Visual Studio launch profiles in
+> `Phantom.Workspaces/Properties/launchSettings.json`, so the host and the override-profile client can be
+> run side by side on one machine.
+
 ## Lifecycle and integration
 
 1. **Startup wiring** — in `MainWindowViewModel.InitializeWebHostAsync`, after
@@ -350,8 +436,10 @@ injects fakes and the SDK types never appear in the logic under test.
 - No timing-based waits: reconnect/backoff and relay drop/recover are driven by injected
   clock/scheduler and explicit event triggers, not `Task.Delay` (matches the standing
   "all tests deterministic / event-driven synchronization" convention).
-- `IDevTunnelRelayHost` and the concrete `TunnelManagementClient` wrapper are thin SDK glue and are
-  **not** unit-tested directly; their behavior is covered indirectly via the orchestration fakes.
+- `IDevTunnelRelayHost` is thin SDK glue and is **not** unit-tested directly; its behavior is covered
+  indirectly via the orchestration fakes and the opt-in smoke test. The `TunnelManagementClient` wrapper
+  **is** unit-tested with a Moq `ITunnelManagementClient` (`DevTunnelManagementClientWrapperTests`),
+  since its label/port/access-control mapping encodes service constraints worth guarding.
 
 ### Optional live smoke test (opt-in, not in the fast suite)
 
