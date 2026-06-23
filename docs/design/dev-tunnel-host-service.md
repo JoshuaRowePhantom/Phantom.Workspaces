@@ -296,6 +296,71 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
    boundary for remote workspace access (see Authentication model), the access mode must be chosen
    deliberately; workspace-level authorization is a future **additional** layer, not yet present.
 
+## Testing strategy
+
+Dev tunnel work is tested **without ever contacting the real Microsoft Dev Tunnels service** (no
+network, no credentials, no `*.devtunnels.ms`), consistent with the repo's deterministic,
+no-timing-based test conventions. The enabling principle is that the SDK is reached only through the
+seams defined above — `IDevTunnelManagementClientFactory`, `IDevTunnelAuthTokenProvider`,
+`IDevTunnelRelayHost`, `IDevTunnelEndpointResolver`, `DevTunnelConnectionMonitor` — so every test
+injects fakes and the SDK types never appear in the logic under test.
+
+### Layers and how each is tested
+
+1. **`DevTunnelHostService` (orchestration) — unit tests with fakes.**
+   - *Fake management client* records calls (get/create tunnel, create/update/delete port, set access
+     control, mint token) and returns canned `Tunnel`/`TunnelPort` contracts. Assert ensure-or-create,
+     the single-port invariant (stale port removed), access control per `AccessMode`, and persistence
+     of `TunnelId`/`HostedPorts`.
+   - *Fake relay host* exposes controllable `Started`/`Dropped`/`Reconnected`/`Failed` triggers (no
+     sockets). Assert status transitions `Starting → Hosting`, `Hosting → Reconnecting → Hosting`, and
+     `→ Error` on hard failure.
+   - *Fake auth provider* returns a token or simulates a sign-in/refresh failure. Assert `Error` +
+     `LastError` and that hosting stops.
+2. **`IDevTunnelEndpointResolver` (client name resolution) — unit tests.** Fake management client
+   returns a tunnel with exactly one forwarded port; assert the relay base URI is built correctly, that
+   no user-supplied port is needed, and that `tunnelAuthToken` is null for Private and the pre-shared
+   token only for Token mode.
+3. **`DevTunnelConnectionMonitor` (reconnect) — deterministic unit tests.** Drive failures by raising
+   a fake connection's failure event and advance retries through an **injected clock/scheduler** (no
+   real timers, no `Task.Delay`). Assert: re-resolution happens on failure (picking up a changed port),
+   reconnect follows bounded backoff at the scheduled ticks, a healthy connection performs **no** extra
+   management calls, and explicit-`WebEndpoint` mode retries the same URL without re-resolving.
+4. **Client HTTP path (web DAL over a tunnel-style endpoint) — local-server integration tests.** To
+   exercise the actual request path and header injection produced by the resolver, point
+   `WebClientDataAccessLayer` at a **local in-process test web server** (Kestrel/`TestServer`) using a
+   tunnel-style base URI, and assert behavior and that `X-Tunnel-Authorization: tunnel <token>` is sent
+   in Token mode and absent in Private mode. This reuses the pattern already called for in
+   `devtunnels-web-access.md` (web DAL over tunnel-style base URI + header injection) — **no real
+   tunnel** is involved.
+5. **View models — unit tests.** Feed a fake `DevTunnelHostStatus` / monitor state and assert UI state:
+   shared sign-in shown/hidden by signed-in state, the `AccessTokenSource` field visible **only** for
+   Token mode, the access point exposed as copyable text, and "Connect by" validation requiring exactly
+   one of `WebEndpoint` / `TunnelName`. (Avalonia headless test pattern, as elsewhere in
+   `Phantom.Workspaces.Tests`.)
+6. **User-computer-profile override — unit tests.** Use a fake `ICurrentExecutionContextProvider` whose
+   `EffectiveComputerName` is overridden and assert that `ComputerUserProfileDiscoveryTool` /
+   `WorkspaceEntitySessionBootstrapper` compose a **diverged** `computer-user-profile` entity name while
+   the shared `users/username` and `computers/hostname` entities are unchanged. (Extends the existing
+   `DiscoveryToolsTests` fake-provider pattern.)
+
+### Determinism
+
+- No real network or tunnel service in any automated test; the fakes are the boundary.
+- No timing-based waits: reconnect/backoff and relay drop/recover are driven by injected
+  clock/scheduler and explicit event triggers, not `Task.Delay` (matches the standing
+  "all tests deterministic / event-driven synchronization" convention).
+- `IDevTunnelRelayHost` and the concrete `TunnelManagementClient` wrapper are thin SDK glue and are
+  **not** unit-tested directly; their behavior is covered indirectly via the orchestration fakes.
+
+### Optional live smoke test (opt-in, not in the fast suite)
+
+A single, **opt-in** integration test may actually sign in, create a tunnel, forward a port, and
+verify a round-trip — for local/manual verification only. It must be **skipped by default** (gated by
+an environment variable / `Skip`, like the slow Git tests run only under `-Mode full`), never run in
+the deterministic fast suite or CI, and never require committed credentials. It is a safety net, not
+the primary strategy — the fakes above are.
+
 ## Test tasks
 
 1. `DevTunnelHostService.StartAsync` ensures-or-creates a tunnel and adds a port for the supplied
