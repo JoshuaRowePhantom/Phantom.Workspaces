@@ -255,6 +255,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
                 this.entityBroker.EntityRepository.DataAccessLayer);
+            this.ConnectionStatus.SetAccessPoint(this.webHost.ListenUrl);
         }
     }
 

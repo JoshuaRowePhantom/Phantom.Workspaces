@@ -9,13 +9,23 @@
         MinHeight="300"
         WindowStartupLocation="CenterScreen"
         Title="Network Connection Status">
-    <Grid RowDefinitions="Auto,*,Auto"
+    <Grid RowDefinitions="Auto,Auto,*,Auto"
           Margin="16">
-        <TextBlock Grid.Row="0"
+        <StackPanel Grid.Row="0"
+                    IsVisible="{Binding HasAccessPoint}"
+                    Margin="0,0,0,16">
+            <TextBlock Text="Dev Tunnel Access Point"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,4" />
+            <TextBox Text="{Binding AccessPoint, Mode=OneWay}"
+                     IsReadOnly="True"
+                     ToolTip.Tip="Select and copy this address to reach this instance" />
+        </StackPanel>
+        <TextBlock Grid.Row="1"
                    Text="Inbound Connections (instances connected to us)"
                    FontWeight="SemiBold"
                    Margin="0,0,0,8" />
-        <Border Grid.Row="1" Classes="pane-container" Margin="0,0,0,16">
+        <Border Grid.Row="2" Classes="pane-container" Margin="0,0,0,16">
             <ScrollViewer>
                 <ItemsControl ItemsSource="{Binding Inbound}">
                     <ItemsControl.ItemTemplate>
@@ -38,7 +48,7 @@
             </ScrollViewer>
         </Border>
         
-        <Button Grid.Row="2"
+        <Button Grid.Row="3"
                 Content="Close"
                 HorizontalAlignment="Right"
                 Click="OnCloseClick" />

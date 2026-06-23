@@ -36,6 +36,7 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
 {
     private readonly ReverseExecutionRegistry registry;
     private readonly Action<Action> dispatch;
+    private string? accessPoint;
 
     /// <param name="registry">The reverse-execution registry providing the inbound connections.</param>
     /// <param name="dispatch">
@@ -49,6 +50,28 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
         this.registry.ConnectionsChanged += this.OnConnectionsChanged;
         this.RefreshInbound();
     }
+
+    /// <summary>
+    /// The dev tunnel access point (the URL where this instance is reachable for remote access),
+    /// shown so it can be selected and copied. Null when remote hosting is not active.
+    /// </summary>
+    public string? AccessPoint
+    {
+        get => this.accessPoint;
+        private set
+        {
+            if (this.SetProperty(ref this.accessPoint, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasAccessPoint));
+            }
+        }
+    }
+
+    /// <summary>Whether a dev tunnel access point is currently available to display.</summary>
+    public bool HasAccessPoint => !string.IsNullOrWhiteSpace(this.accessPoint);
+
+    /// <summary>Sets the dev tunnel access point URL to display (or null to hide it).</summary>
+    public void SetAccessPoint(string? accessPoint) => this.AccessPoint = accessPoint;
 
     /// <summary>Instances currently connected to us (inbound reverse-execution connections).</summary>
     public ObservableCollection<InboundConnectionViewModel> Inbound { get; } = new();

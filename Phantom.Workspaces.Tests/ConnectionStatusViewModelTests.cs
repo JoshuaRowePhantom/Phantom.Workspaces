@@ -80,4 +80,23 @@ public sealed class ConnectionStatusViewModelTests
 
         Assert.Empty(viewModel.Inbound);
     }
+
+    [Fact]
+    public void AccessPoint_IsHiddenUntilSet_ThenExposedForCopying()
+    {
+        var registry = new ReverseExecutionRegistry();
+        using var viewModel = new ConnectionStatusViewModel(registry);
+
+        Assert.False(viewModel.HasAccessPoint);
+        Assert.Null(viewModel.AccessPoint);
+
+        viewModel.SetAccessPoint("http://localhost:5280");
+
+        Assert.True(viewModel.HasAccessPoint);
+        Assert.Equal("http://localhost:5280", viewModel.AccessPoint);
+
+        viewModel.SetAccessPoint(null);
+
+        Assert.False(viewModel.HasAccessPoint);
+    }
 }
