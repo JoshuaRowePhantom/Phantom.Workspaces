@@ -121,6 +121,20 @@ Do not call `workspaces_entity_generate_guid` for normal single-entity adds.
 
 Only call `workspaces_entity_generate_guid` when you must pre-assign IDs (for example, creating multiple related entities in one update where they must reference each other).
 
+## Do not modify default entities
+
+Entities whose name is under the `defaults` namespace — the first name component is `defaults`, for
+example `["defaults", "mcp-servers", "<name>"]`, `["defaults", "agent-manifests", "<name>"]`, or
+`["defaults", "profiles", "default"]` — are system-provided defaults that ship with the workspace.
+
+Do **not** modify, replace, or delete these `defaults/...` entities directly with
+`workspaces_entity_update`. They are managed by the system and may be re-seeded or reset, so direct
+edits can be lost or cause conflicts.
+
+To customize behavior, create your own entity in a non-`defaults` namespace (for example a
+profile-specific entity such as `["computer-user-profiles", ..., "mcp-servers", "<name>"]`) instead of
+editing the `defaults` entity. Reading `defaults/...` entities is fine.
+
 ## Exact query: get one entity type explicitly
 
 To get one entity type named `<type-name>`, call `workspaces_entity_get` with:
@@ -168,3 +182,66 @@ Use this `workspaces_entity_get` request to list each entity type with its displ
 
 When you later filter by entity type, use a value from each type's `names` (its canonical name),
 never its `display-name`.
+
+## Exact query: list all tools
+
+A `tool` entity defines a runnable background task. It is named `["tools", "<tool-type>"]` and
+declares its implementation via the `tool-type` property. To list the available tools with their
+names and implementation type, call `workspaces_entity_get` with:
+
+```json
+{
+  "get-entity": [
+    {
+      "entity-type-names": ["tool"]
+    }
+  ],
+  "properties": ["display-name", "names", "tool-type"]
+}
+```
+
+## How tools are configured and enabled
+
+1. A tool's configuration lives as **top-level properties on the tool entity itself** (not nested
+   under a `configuration` object). Which properties apply depends on the `tool-type`. To read one
+   tool's full configuration, get the tool entity by name and read its properties:
+
+   ```json
+   {
+     "get-entity": [
+       {
+         "entity-name": ["tools", "<tool-type>"]
+       }
+     ]
+   }
+   ```
+
+2. A tool does not run on its own. It runs only when a `tool-relationship` entity
+   (`"entity-types": ["relationship", "tool-relationship"]`) links it, via `participants`, to:
+   - `tool`: the tool entity id,
+   - `schedule`: an array of schedule entity ids (how often it runs),
+   - `target`: an array of target entity ids to run against (typically user-computer-profiles).
+
+   Creating that relationship enables and schedules the tool; deleting it disables the tool on those
+   targets (the tool and schedule entities themselves are left intact). Because it is a relationship,
+   it must include a `note` reason (see the relationship reason-note rule above).
+
+3. To list how tools are currently enabled/scheduled, list `tool-relationship` entities:
+
+   ```json
+   {
+     "get-entity": [
+       {
+         "entity-type-names": ["tool-relationship"]
+       }
+     ],
+     "properties": ["names", "participants"]
+   }
+   ```
+
+4. Schedules are themselves entities (`schedule` entity type); list them
+   (`"entity-type-names": ["schedule"]`) to choose an existing frequency, or create one, before
+   linking it in a `tool-relationship`.
+
+5. Execution history and errors are recorded as `tool-execution-result` entities; read them to verify
+   a tool ran and to see any error messages.
