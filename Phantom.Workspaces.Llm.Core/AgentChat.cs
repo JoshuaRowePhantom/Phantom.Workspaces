@@ -517,10 +517,6 @@ public sealed class AgentChat : IAsyncDisposable
     private async Task RunProcessLoopAsync(
         CancellationToken cancellationToken)
     {
-        lock (processingStateLock)
-        {
-            activeRunCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        }
         var currentSession = this.GetSession();
         using var queueStateSignal = new SemaphoreSlim(0);
         void OnQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
@@ -562,20 +558,68 @@ public sealed class AgentChat : IAsyncDisposable
                         Role = ChatRole.Assistant,
                     }]);
 
+                // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
+                // cancels, so a Ctrl+Break interrupts only the current run while the agent keeps
+                // accepting new input afterwards.
+                var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                lock (this.processingStateLock)
+                {
+                    this.activeRunCancellation = runCancellation;
+                }
+
+                IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator = null;
+                Task<bool>? pendingMoveNext = null;
                 try
                 {
                     List<AgentResponseUpdate> agentResponseUpdates = new List<AgentResponseUpdate>();
 
-                    await foreach (var update in this.StartRun(
-                        chatMessagesToSubmit.ToArray(),
-                        currentSession,
-                        cancellationToken))
+                    providerEnumerator = this.StartRun(
+                            chatMessagesToSubmit.ToArray(),
+                            currentSession,
+                            runCancellation.Token)
+                        .GetAsyncEnumerator(runCancellation.Token);
+
+                    while (true)
                     {
+                        // Race each provider read against the interrupt token so a Ctrl+Break stops the
+                        // loop promptly even if the provider/framework is slow to observe cancellation
+                        // (for example while flushing end-of-run persistence).
+                        pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
+                        if (await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
+                        {
+                            throw new OperationCanceledException(runCancellation.Token);
+                        }
+
+                        var hasNext = await pendingMoveNext;
+                        pendingMoveNext = null;
+                        if (!hasNext)
+                        {
+                            break;
+                        }
+
                         await this.UpdateCurrentPartialResponse(
                             currentPartialTextResponseItem,
-                            update,
+                            providerEnumerator.Current,
                             agentResponseUpdates);
                     }
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The user interrupted the active run (Ctrl+Break). Record an "interrupted"
+                    // diagnostic message after whatever partial content had already streamed in.
+                    var runningItem = currentPartialTextResponseItem
+                        ?? throw new InvalidOperationException("Running item was unexpectedly null while handling an interruption.");
+                    var interruptedItems = runningItem.Items
+                        .Concat([
+                            new AgentChatHistoryItem
+                            {
+                                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                                Contents = [new TextContent("Interrupted by user.")],
+                            },
+                        ])
+                        .ToArray();
+
+                    this.UpdateRunningItem(runningItem, interruptedItems);
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -595,6 +639,18 @@ public sealed class AgentChat : IAsyncDisposable
                 }
                 finally
                 {
+                    lock (this.processingStateLock)
+                    {
+                        if (ReferenceEquals(this.activeRunCancellation, runCancellation))
+                        {
+                            this.activeRunCancellation = null;
+                        }
+                    }
+
+                    // Clean up the provider enumerator and run CTS in the background so a provider stuck
+                    // on a canceled read cannot block the agent. The in-flight read is observed before
+                    // disposing to honor the async-enumerator contract.
+                    _ = CleanUpRunAsync(providerEnumerator, pendingMoveNext, runCancellation);
                     this.CompleteRunningItem(currentPartialTextResponseItem);
                 }
             }
@@ -614,6 +670,37 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Cleans up a run's provider enumerator and cancellation source in the background. The in-flight
+    /// read (if any) is awaited first so the enumerator is never disposed while a <c>MoveNextAsync</c>
+    /// is still running; doing this in the background means a provider stuck on a canceled read cannot
+    /// block the agent loop or an interrupt.
+    /// </summary>
+    private static async Task CleanUpRunAsync(
+        IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator,
+        Task<bool>? pendingMoveNext,
+        CancellationTokenSource runCancellation)
+    {
+        if (pendingMoveNext is not null)
+        {
+            try
+            {
+                await pendingMoveNext.ConfigureAwait(false);
+            }
+            catch
+            {
+                // The abandoned read was canceled or failed; nothing to surface from cleanup.
+            }
+        }
+
+        if (providerEnumerator is not null)
+        {
+            await DisposeProviderEnumeratorAsync(providerEnumerator).ConfigureAwait(false);
+        }
+
+        runCancellation.Dispose();
+    }
+
     private static async Task DisposeProviderEnumeratorAsync(
         IAsyncEnumerator<AgentResponseUpdate> providerEnumerator)
     {
@@ -623,6 +710,29 @@ public sealed class AgentChat : IAsyncDisposable
         }
         catch (NotSupportedException)
         {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Awaits <paramref name="task"/> but returns early if <paramref name="cancellationToken"/> is
+    /// canceled first. Returns true when canceled before the task completed (the task is left running
+    /// and should be observed/disposed by the caller), false when the task completed first.
+    /// </summary>
+    private static async Task<bool> WasCanceledBeforeCompletingAsync(Task task, CancellationToken cancellationToken)
+    {
+        if (task.IsCompleted)
+        {
+            return false;
+        }
+
+        var cancellationSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using (cancellationToken.Register(static state => ((TaskCompletionSource)state!).TrySetResult(), cancellationSignal))
+        {
+            var completed = await Task.WhenAny(task, cancellationSignal.Task).ConfigureAwait(false);
+            return completed != task;
         }
     }
 

@@ -597,6 +597,40 @@ public sealed class AgentChatTests
             .SelectMany(item => item.Contents);
 
     [Fact]
+    public async Task Interrupt_DuringRun_RecordsInterruptedDiagnosticAndCompletes()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "thinking... "));
+        // A blocked update keeps the run in progress until the interrupt cancels it.
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "more")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        stream.Complete(isReady: false);
+
+        await using var chat = CreateChat(client);
+        chat.EnqueueUserMessage("hello");
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 1
+                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("thinking", StringComparison.Ordinal)),
+            "run to start and stream initial content");
+
+        chat.Interrupt();
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0
+                && chat.History.Any(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                    && GetText(item.Contents).Contains("Interrupted", StringComparison.Ordinal)),
+            "interrupt to complete the run and record an interrupted diagnostic message");
+    }
+
+    [Fact]
     public void ResolveUseProvidedChatClientAsIs_TrueForOverride_SelfInvoking_OrServiceDiscovered()
     {
         var normalClient = new DeterministicTestChatClient();
