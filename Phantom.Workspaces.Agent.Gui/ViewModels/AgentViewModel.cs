@@ -226,7 +226,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                 new AgentEditorNavigationItemViewModel("chat-background-tasks", "Background tasks", null, "Planned background work", null, this.backgroundTasksDetail, []),
                 new AgentEditorNavigationItemViewModel("chat-sub-agents", "Sub-agents", null, "Planned sub-agent work", null, this.subAgentsDetail, []),
             ],
-            isExpanded: true);
+            isExpanded: false);
 
         this.toolsDetail.SetToolNavigationItems(toolNavigationItems);
         this.EditorItems.Add(root);
