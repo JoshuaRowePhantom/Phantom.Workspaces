@@ -211,7 +211,7 @@ public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
             this.currentExecutionContextProvider.UserName,
             "computers",
             "hostname",
-            this.currentExecutionContextProvider.ComputerName,
+            this.currentExecutionContextProvider.EffectiveComputerName,
             "copilot",
             "mcp-servers");
     }

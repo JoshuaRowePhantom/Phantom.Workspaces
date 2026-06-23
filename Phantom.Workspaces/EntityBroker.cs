@@ -28,9 +28,10 @@ public sealed class EntityBroker
 
     public static async Task<EntityBroker> CreateInitializedAsync(
         RepositorySource repositorySource,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? userComputerProfileOverride = null)
     {
-        var repository = await EntityRepository.CreateAsync(repositorySource);
+        var repository = await EntityRepository.CreateAsync(repositorySource, userComputerProfileOverride);
         cancellationToken.ThrowIfCancellationRequested();
 
         var broker = new EntityBroker(repository);

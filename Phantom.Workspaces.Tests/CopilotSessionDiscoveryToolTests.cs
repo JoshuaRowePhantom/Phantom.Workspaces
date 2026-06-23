@@ -59,7 +59,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         return path;
     }
 
-    private sealed class FakeExecutionContextProvider : ICurrentExecutionContextProvider
+    private sealed class FakeExecutionContextProvider(string? effectiveComputerNameOverride = null) : ICurrentExecutionContextProvider
     {
         public string ComputerName => "test-machine";
 
@@ -68,6 +68,8 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         public string OperatingSystemName => "windows";
 
         public string HomeDirectoryPath => "C:/Users/test-user";
+
+        public string EffectiveComputerName => effectiveComputerNameOverride ?? this.ComputerName;
     }
 
     private static async Task<JsonElement?> GetEntityByNameAsync(IDataAccessLayer dataAccessLayer, EntityName entityName)
@@ -158,6 +160,32 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         var entity = await GetEntityAsync(repository.DataAccessLayer, sessionId);
         Assert.NotNull(entity);
         Assert.Equal("agent-definition", entity!.Value.GetProperty("entity-types")[0].GetString());
+    }
+
+    [Fact]
+    public async Task Run_WithProfileOverride_PlacesMcpServerUnderOverriddenMachineProfile()
+    {
+        var mcpConfigPath = this.WriteMcpConfig(
+            """
+            {
+              "mcpServers": {
+                "github": { "url": "https://api.githubcopilot.com/mcp/" }
+              }
+            }
+            """);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        await new CopilotSessionDiscoveryTool(new FakeExecutionContextProvider("override-machine"))
+            .ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
+
+        var overriddenName = new EntityName(
+            "computer-user-profiles", "users", "username", "test-user",
+            "computers", "hostname", "override-machine", "copilot", "mcp-servers", "github");
+        var overriddenEntity = await GetEntityByNameAsync(dataAccessLayer, overriddenName);
+        Assert.NotNull(overriddenEntity);
+
+        var realEntity = await GetEntityByNameAsync(dataAccessLayer, MachineMcpServerName);
+        Assert.Null(realEntity);
     }
 
     private static readonly EntityName MachineMcpServerName = new(

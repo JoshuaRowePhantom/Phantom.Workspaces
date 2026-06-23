@@ -18,13 +18,16 @@ public sealed class AgentSessionShortcutContext
 {
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
     private readonly Func<DateTimeOffset> currentTimeProvider;
+    private readonly string? userComputerProfileOverride;
     private Task<IAgentPersistenceStore>? agentPersistenceStoreTask;
 
     public AgentSessionShortcutContext(
-        Func<DateTimeOffset>? currentTimeProvider = null)
+        Func<DateTimeOffset>? currentTimeProvider = null,
+        string? userComputerProfileOverride = null)
     {
         this.currentTimeProvider = currentTimeProvider
             ?? (() => DateTimeOffset.UtcNow);
+        this.userComputerProfileOverride = userComputerProfileOverride;
     }
 
     public async Task<AgentServices> CreateAgentServicesAsync(
@@ -41,13 +44,13 @@ public sealed class AgentSessionShortcutContext
             AgentPersistenceStoreOverride = agentPersistenceStore,
             LoggerFactory = loggerFactory,
             ToolsetFactory = workspaceEntityToolsetFactory,
-            ToolResourceFactory = CreateToolResourceFactory(dataAccessLayer),
+            ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
         };
     }
 
-    private static IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)
+    private IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)
     {
-        var executionContext = new CurrentExecutionContextProvider();
+        var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
         var machineProfilePrefix = new EntityName(
             "computer-user-profiles",
             "users",
@@ -55,7 +58,7 @@ public sealed class AgentSessionShortcutContext
             executionContext.UserName,
             "computers",
             "hostname",
-            executionContext.ComputerName,
+            executionContext.EffectiveComputerName,
             "copilot",
             "mcp-servers");
 
