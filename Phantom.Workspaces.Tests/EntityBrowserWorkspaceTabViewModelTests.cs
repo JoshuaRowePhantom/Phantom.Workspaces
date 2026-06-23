@@ -100,6 +100,83 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task BrowserList_FolderItem_ExpandsViaItemToggleCommand()
+    {
+        var broker = await CreateBrokerAsync();
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("44444444-4444-4444-4444-444444444444"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "44444444-4444-4444-4444-444444444444",
+                  "entity-types": ["folder"],
+                  "names": [["tools"]],
+                  "display-name": { "default": "Tools" }
+                }
+                """));
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("55555555-5555-5555-5555-555555555555"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "1"),
+                """
+                {
+                  "entity-id": "55555555-5555-5555-5555-555555555555",
+                  "entity-types": ["tool"],
+                  "names": [["tools", "git-workspace-scan"]],
+                  "display-name": { "default": "Git Workspace Scan" }
+                }
+                """));
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-tab-folder",
+            Title = "Entity Browser",
+        };
+
+        // The folder must report it has children (so the expand affordance is shown) even though it
+        // is collapsed by default.
+        var folderItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"tools\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+        Assert.False(folderItem.IsExpanded);
+        Assert.True(folderItem.ToggleExpandCommand.CanExecute(null));
+
+        // Toggling via the item's command (the path the browser template binds) must expand it and
+        // reveal the child. Previously the expander toggled the node, whose expansion state the
+        // browser ignores on rebuild, so folders never expanded.
+        folderItem.ToggleExpandCommand.Execute(null);
+
+        var childItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"tools\",\"git-workspace-scan\"]", StringComparison.Ordinal));
+        Assert.Equal(folderItem.ItemKey, childItem.ParentItemKey);
+    }
+
+    [AvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
