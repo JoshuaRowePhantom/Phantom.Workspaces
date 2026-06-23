@@ -275,12 +275,12 @@ public static class AgentFactory
                     AgentManifest = agentManifest,
                     ToolResourceFactory = createAgentChatRequest.ToolResourceFactory
                         ?? services?.ToolResourceFactory!,
-                }).ConfigureAwait(false)
+                })
             : createAgentChatRequest.AgentDefinition;
 
         await EnforceTrustProfileAsync(
             requestedAgentDefinition,
-            createAgentChatRequest.TrustProfileProvider).ConfigureAwait(false);
+            createAgentChatRequest.TrustProfileProvider);
 
         IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
             ?? new InMemoryAgentPersistenceStore();
@@ -488,8 +488,7 @@ public static class AgentFactory
         }
 
         var trustProfile = await Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
-            .ResolveAsync(agentDefinition, trustProfileProvider)
-            .ConfigureAwait(false);
+            .ResolveAsync(agentDefinition, trustProfileProvider);
 
         if (trustProfile is not null && !trustProfile.AllowsLocalExecution())
         {

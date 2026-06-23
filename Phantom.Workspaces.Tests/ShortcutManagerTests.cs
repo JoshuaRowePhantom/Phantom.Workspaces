@@ -100,7 +100,7 @@ public sealed class ShortcutManagerTests
             new TestShortcutHandler(
                 shouldApply: true,
                 handleResult: true,
-                supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Json.Name, Shortcut.Delete.Name]));
+                supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Delete.Name]));
         var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         var entity = CreateEntity("entity", _ => Task.CompletedTask);
 
@@ -112,9 +112,10 @@ public sealed class ShortcutManagerTests
 
         var cardNode = viewEntity.EntityCardNode;
         Assert.True(cardNode.HasShortcuts);
-        Assert.Equal(3, cardNode.Shortcuts.Count);
+        Assert.Equal(2, cardNode.Shortcuts.Count);
         Assert.NotNull(cardNode.ActivateShortcutCommand);
-        Assert.False(cardNode.ShowJsonButton);
+        // The JSON toggle is a dedicated card button (no longer a shortcut-bar button), so it stays available.
+        Assert.True(cardNode.ShowJsonButton);
         Assert.False(cardNode.ShowDeleteButton);
     }
 

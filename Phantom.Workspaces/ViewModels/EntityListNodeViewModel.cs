@@ -182,8 +182,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public bool ShowEditActions => this.IsEditMode;
 
-    public bool ShowJsonButton => (this.entity?.CanToggleRawJson ?? !string.IsNullOrWhiteSpace(this.rawJsonText))
-        && (!this.HasShortcuts || this.IsEditMode);
+    public bool ShowJsonButton => this.entity?.CanToggleRawJson ?? !string.IsNullOrWhiteSpace(this.rawJsonText);
 
     public bool ShowDeleteButton => (this.entity?.CanDeleteEntity ?? false)
         && !this.HasShortcuts;
