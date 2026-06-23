@@ -248,6 +248,20 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
+    public void BuildConfiguration_ProjectsUserComputerProfileOverride()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.RemoteAccess.UserComputerProfileOverride = "second-instance";
+        Assert.Equal("second-instance", settings.BuildConfiguration().UserComputerProfileOverride);
+
+        // Blank override projects as null, not an empty string.
+        settings.RemoteAccess.UserComputerProfileOverride = "   ";
+        Assert.Null(settings.BuildConfiguration().UserComputerProfileOverride);
+    }
+
+    [AvaloniaFact]
     public void Settings_Theme_DelegatesToAppearanceSection()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());

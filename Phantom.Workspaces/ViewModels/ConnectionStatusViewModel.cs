@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Services.DevTunnel;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -37,6 +38,10 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
     private readonly ReverseExecutionRegistry registry;
     private readonly Action<Action> dispatch;
     private string? accessPoint;
+    private string? localAccessPoint;
+    private string? tunnelName;
+    private DevTunnelHostState? devTunnelState;
+    private string? devTunnelError;
 
     /// <param name="registry">The reverse-execution registry providing the inbound connections.</param>
     /// <param name="dispatch">
@@ -52,8 +57,8 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// The dev tunnel access point (the URL where this instance is reachable for remote access),
-    /// shown so it can be selected and copied. Null when remote hosting is not active.
+    /// The dev tunnel access point (the public URL where this instance is reachable for remote
+    /// access), shown so it can be selected and copied. Null when the tunnel is not hosting.
     /// </summary>
     public string? AccessPoint
     {
@@ -70,8 +75,88 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
     /// <summary>Whether a dev tunnel access point is currently available to display.</summary>
     public bool HasAccessPoint => !string.IsNullOrWhiteSpace(this.accessPoint);
 
-    /// <summary>Sets the dev tunnel access point URL to display (or null to hide it).</summary>
+    /// <summary>Sets the dev tunnel (public) access point URL to display (or null to hide it).</summary>
     public void SetAccessPoint(string? accessPoint) => this.AccessPoint = accessPoint;
+
+    /// <summary>
+    /// The local access point (the URL the web server binds to on this machine), shown alongside the
+    /// dev tunnel access point so the locally-reachable address is always visible.
+    /// </summary>
+    public string? LocalAccessPoint
+    {
+        get => this.localAccessPoint;
+        private set
+        {
+            if (this.SetProperty(ref this.localAccessPoint, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasLocalAccessPoint));
+            }
+        }
+    }
+
+    /// <summary>Whether a local access point is currently available to display.</summary>
+    public bool HasLocalAccessPoint => !string.IsNullOrWhiteSpace(this.localAccessPoint);
+
+    /// <summary>Sets the local web-server access point URL to display (or null to hide it).</summary>
+    public void SetLocalAccessPoint(string? localAccessPoint) => this.LocalAccessPoint = localAccessPoint;
+
+    /// <summary>The configured dev tunnel name, shown when a dev tunnel is in use.</summary>
+    public string? TunnelName
+    {
+        get => this.tunnelName;
+        private set
+        {
+            if (this.SetProperty(ref this.tunnelName, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasDevTunnel));
+            }
+        }
+    }
+
+    /// <summary>Sets the dev tunnel name to display (or null when no dev tunnel is configured).</summary>
+    public void SetTunnelName(string? tunnelName) => this.TunnelName = tunnelName;
+
+    /// <summary>Whether a dev tunnel is in use (a name is configured), so its status should be shown.</summary>
+    public bool HasDevTunnel => !string.IsNullOrWhiteSpace(this.tunnelName);
+
+    /// <summary>A human-readable description of the dev tunnel host status.</summary>
+    public string DevTunnelStatusText => this.devTunnelState switch
+    {
+        null => "Not started",
+        DevTunnelHostState.Stopped => "Stopped",
+        DevTunnelHostState.Starting => "Starting…",
+        DevTunnelHostState.Hosting => "Hosting",
+        DevTunnelHostState.Reconnecting => "Reconnecting…",
+        DevTunnelHostState.Error => "Error",
+        _ => this.devTunnelState.ToString() ?? "Unknown",
+    };
+
+    /// <summary>
+    /// Whether the dev tunnel is in a state that should be flagged to the user (an error, or actively
+    /// reconnecting). Drives the warning glyph in the network display.
+    /// </summary>
+    public bool HasProblem =>
+        this.devTunnelState is DevTunnelHostState.Error or DevTunnelHostState.Reconnecting;
+
+    /// <summary>Detail about the current problem (the last error), when <see cref="HasProblem"/>.</summary>
+    public string? ProblemText => this.HasProblem
+        ? this.devTunnelError ?? this.DevTunnelStatusText
+        : null;
+
+    /// <summary>Updates the displayed dev tunnel host status (state, public access point, last error).</summary>
+    public void SetDevTunnelStatus(DevTunnelHostState state, string? accessPointUrl, string? lastError)
+    {
+        this.devTunnelState = state;
+        this.devTunnelError = lastError;
+        if (!string.IsNullOrWhiteSpace(accessPointUrl))
+        {
+            this.AccessPoint = accessPointUrl;
+        }
+
+        this.RaisePropertyChanged(nameof(this.DevTunnelStatusText));
+        this.RaisePropertyChanged(nameof(this.HasProblem));
+        this.RaisePropertyChanged(nameof(this.ProblemText));
+    }
 
     /// <summary>Instances currently connected to us (inbound reverse-execution connections).</summary>
     public ObservableCollection<InboundConnectionViewModel> Inbound { get; } = new();

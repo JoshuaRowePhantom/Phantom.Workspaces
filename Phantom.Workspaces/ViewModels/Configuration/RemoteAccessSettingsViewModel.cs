@@ -14,6 +14,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     private DevTunnelAccessMode devTunnelAccessMode;
     private string? devTunnelAccessTokenSource;
     private string? tunnelName;
+    private string? userComputerProfileOverride;
 
     /// <summary>Creates a view model with default settings.</summary>
     public RemoteAccessSettingsViewModel()
@@ -24,7 +25,8 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     /// <summary>Creates a view model initialized from existing settings.</summary>
     public RemoteAccessSettingsViewModel(
         RemoteHostingSettings remoteHosting,
-        DevTunnelConfiguration devTunnel)
+        DevTunnelConfiguration devTunnel,
+        string? userComputerProfileOverride = null)
     {
         ArgumentNullException.ThrowIfNull(remoteHosting);
         ArgumentNullException.ThrowIfNull(devTunnel);
@@ -34,6 +36,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         this.devTunnelAccessMode = devTunnel.AccessMode;
         this.devTunnelAccessTokenSource = devTunnel.AccessTokenSource;
         this.tunnelName = devTunnel.TunnelName;
+        this.userComputerProfileOverride = userComputerProfileOverride;
     }
 
     /// <summary>The selectable dev tunnel access modes for binding.</summary>
@@ -90,9 +93,27 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Testing only: overrides the computer identity used when composing this instance's
+    /// user-computer-profile, so a second instance can run on this machine with a distinct profile
+    /// (and therefore distinct dev tunnel / MCP-server namespace / sessions). Leave blank for normal
+    /// use.
+    /// </summary>
+    public string? UserComputerProfileOverride
+    {
+        get => this.userComputerProfileOverride;
+        set => this.SetProperty(ref this.userComputerProfileOverride, value);
+    }
+
+    /// <summary>
     /// Whether anonymous tunnel access is selected, which should be warned in the UI.
     /// </summary>
     public bool IsAnonymousAccessWarningVisible => this.DevTunnelAccessMode == DevTunnelAccessMode.Anonymous;
+
+    /// <summary>
+    /// Whether the dev tunnel access-token-source field should be shown. Only Token mode uses a
+    /// pre-shared token; Private (identity) and Anonymous modes do not.
+    /// </summary>
+    public bool IsAccessTokenSourceVisible => this.DevTunnelAccessMode == DevTunnelAccessMode.Token;
 
     /// <summary>Whether the current settings are valid.</summary>
     public bool IsValid
@@ -137,6 +158,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.IsValid));
             this.RaisePropertyChanged(nameof(this.IsAnonymousAccessWarningVisible));
+            this.RaisePropertyChanged(nameof(this.IsAccessTokenSourceVisible));
         }
     }
 }

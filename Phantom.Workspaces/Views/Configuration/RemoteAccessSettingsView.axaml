@@ -21,13 +21,21 @@
         </StackPanel>
 
         <StackPanel Spacing="4">
+            <TextBlock Text="Dev tunnel name" />
+            <TextBox PlaceholderText="my-workspace-tunnel or auto" Text="{Binding TunnelName}" />
+            <TextBlock Text="Name of the dev tunnel to host/connect by; the forwarded port is discovered automatically. When connecting, use &quot;auto&quot; to discover the single Workspaces tunnel without naming it."
+                       Opacity="0.7"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <StackPanel Spacing="4">
             <TextBlock Text="Dev tunnel access mode" />
             <ComboBox HorizontalAlignment="Stretch"
                       ItemsSource="{Binding AvailableAccessModes}"
                       SelectedItem="{Binding DevTunnelAccessMode}" />
         </StackPanel>
 
-        <StackPanel Spacing="4">
+        <StackPanel Spacing="4" IsVisible="{Binding IsAccessTokenSourceVisible}">
             <TextBlock Text="Dev tunnel access-token source (env var name)" />
             <TextBox PlaceholderText="DEVTUNNEL_TOKEN" Text="{Binding DevTunnelAccessTokenSource}" />
         </StackPanel>
@@ -36,5 +44,13 @@
                    Foreground="#B00020"
                    TextWrapping="Wrap"
                    IsVisible="{Binding IsAnonymousAccessWarningVisible}" />
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="User-computer-profile override (testing)" />
+            <TextBox PlaceholderText="Leave blank for normal use" Text="{Binding UserComputerProfileOverride}" />
+            <TextBlock Text="Testing only: set a unique value to run a second instance on this machine with its own profile, tunnel, and sessions."
+                       Opacity="0.7"
+                       TextWrapping="Wrap" />
+        </StackPanel>
     </StackPanel>
 </UserControl>

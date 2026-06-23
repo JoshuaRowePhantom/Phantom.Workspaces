@@ -47,12 +47,23 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <Button Grid.Column="2"
-                        Classes="settings-gear"
-                        Content="🌐"
-                        ToolTip.Tip="Network connections"
-                        Click="OnOpenConnectionStatusClicked"
-                        IsVisible="{Binding ConnectionStatus, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <Panel Grid.Column="2"
+                       IsVisible="{Binding ConnectionStatus, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <Button Classes="settings-gear"
+                            Content="🌐"
+                            ToolTip.Tip="Network connections"
+                            Click="OnOpenConnectionStatusClicked" />
+                    <TextBlock Text="❗"
+                               Foreground="Red"
+                               Opacity="0.6"
+                               FontWeight="Bold"
+                               IsHitTestVisible="False"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Top"
+                               Margin="0,-2,-2,0"
+                               IsVisible="{Binding ConnectionStatus.HasProblem, FallbackValue=False}"
+                               ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
+                </Panel>
 
                 <Button Grid.Column="3"
                         Classes="settings-gear"

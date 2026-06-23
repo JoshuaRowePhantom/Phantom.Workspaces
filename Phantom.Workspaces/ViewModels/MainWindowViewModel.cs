@@ -32,6 +32,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Task<EntityBroker> entityBrokerTask;
     private readonly WorkspacesConfiguration? configuration;
     private WorkspacesWebHost? webHost;
+    private Services.DevTunnel.IDevTunnelHostService? devTunnelHostService;
+    private Task? devTunnelHostStartTask;
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
@@ -59,7 +61,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
-        this.entityBrokerTask = EntityBroker.CreateInitializedAsync(repositorySource);
+        this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
+            repositorySource,
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         this.profileStore = ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
@@ -75,7 +79,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.CloseWorkspaceCommand = new RelayCommand(this.OnCloseWorkspace, this.CanCloseWorkspace);
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
-        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
@@ -255,7 +260,50 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
                 this.entityBroker.EntityRepository.DataAccessLayer);
-            this.ConnectionStatus.SetAccessPoint(this.webHost.ListenUrl);
+            this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
+            this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
+        }
+    }
+
+    private void StartDevTunnelHostIfConfigured(string? listenUrl)
+    {
+        var devTunnelConfiguration = this.configuration?.DevTunnel;
+        if (devTunnelConfiguration is null
+            || (string.IsNullOrWhiteSpace(devTunnelConfiguration.TunnelName)
+                && string.IsNullOrWhiteSpace(devTunnelConfiguration.TunnelId)))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(listenUrl) || !Uri.TryCreate(listenUrl, UriKind.Absolute, out var listenUri))
+        {
+            return;
+        }
+
+        this.ConnectionStatus?.SetTunnelName(devTunnelConfiguration.TunnelName);
+
+        var localPort = listenUri.Port;
+        var hostService = new Services.DevTunnel.DevTunnelServiceFactory().CreateHostService();
+        this.devTunnelHostService = hostService;
+        hostService.StatusChanged += (_, status) => Dispatcher.UIThread.Post(
+            () => this.ConnectionStatus?.SetDevTunnelStatus(status.State, status.AccessPointUrl, status.LastError));
+
+        // Hosting runs in the background and surfaces progress/errors through the status event, so a
+        // sign-in or relay failure never blocks GUI startup. The task is observed to avoid an
+        // unobserved-exception escalation; the Error status already carries the failure detail.
+        this.devTunnelHostStartTask = ObserveAsync(
+            hostService.StartAsync(localPort, devTunnelConfiguration));
+
+        static async Task ObserveAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Surfaced via DevTunnelHostStatus.Error.
+            }
         }
     }
 
@@ -2008,6 +2056,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public async ValueTask DisposeAsync()
     {
+        if (this.devTunnelHostService is not null)
+        {
+            await this.devTunnelHostService.DisposeAsync();
+        }
+
         if (this.webHost is not null)
         {
             await this.webHost.DisposeAsync();

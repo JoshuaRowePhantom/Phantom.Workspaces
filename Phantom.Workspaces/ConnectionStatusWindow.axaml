@@ -9,23 +9,68 @@
         MinHeight="300"
         WindowStartupLocation="CenterScreen"
         Title="Network Connection Status">
-    <Grid RowDefinitions="Auto,Auto,*,Auto"
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto"
           Margin="16">
         <StackPanel Grid.Row="0"
-                    IsVisible="{Binding HasAccessPoint}"
+                    IsVisible="{Binding HasLocalAccessPoint}"
                     Margin="0,0,0,16">
-            <TextBlock Text="Dev Tunnel Access Point"
+            <TextBlock Text="Local Access Point"
                        FontWeight="SemiBold"
                        Margin="0,0,0,4" />
-            <TextBox Text="{Binding AccessPoint, Mode=OneWay}"
-                     IsReadOnly="True"
-                     ToolTip.Tip="Select and copy this address to reach this instance" />
+            <TextBox Text="{Binding LocalAccessPoint, Mode=OneWay}"
+                     Classes="copyable-text"
+                     ToolTip.Tip="The address this instance is reachable at on this machine" />
         </StackPanel>
-        <TextBlock Grid.Row="1"
+
+        <StackPanel Grid.Row="1"
+                    IsVisible="{Binding HasDevTunnel}"
+                    Margin="0,0,0,16">
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+                <TextBlock Text="Dev Tunnel" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <TextBlock Text="❗"
+                           Foreground="Red"
+                           Opacity="0.55"
+                           FontWeight="Bold"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding HasProblem}"
+                           ToolTip.Tip="{Binding ProblemText}" />
+            </StackPanel>
+
+            <TextBlock Text="Name" Classes="muted" Margin="0,0,0,2" />
+            <TextBox Text="{Binding TunnelName, Mode=OneWay}"
+                     Classes="copyable-text"
+                     Margin="0,0,0,8"
+                     ToolTip.Tip="The dev tunnel name" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+                <TextBlock Text="Status:" Classes="muted" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding DevTunnelStatusText}" VerticalAlignment="Center" />
+            </StackPanel>
+
+            <StackPanel IsVisible="{Binding HasProblem}" Margin="0,0,0,8">
+                <TextBlock Text="Error" Classes="muted" Margin="0,0,0,2" />
+                <TextBox Text="{Binding ProblemText, Mode=OneWay}"
+                         Classes="copyable-text"
+                         Foreground="Red"
+                         TextWrapping="Wrap"
+                         ToolTip.Tip="The dev tunnel error detail" />
+            </StackPanel>
+
+            <StackPanel IsVisible="{Binding HasAccessPoint}">
+                <TextBlock Text="Dev Tunnel Access Point"
+                           Classes="muted"
+                           Margin="0,0,0,2" />
+                <TextBox Text="{Binding AccessPoint, Mode=OneWay}"
+                         Classes="copyable-text"
+                         ToolTip.Tip="Select and copy this address to reach this instance remotely" />
+            </StackPanel>
+        </StackPanel>
+
+        <TextBlock Grid.Row="2"
                    Text="Inbound Connections (instances connected to us)"
                    FontWeight="SemiBold"
                    Margin="0,0,0,8" />
-        <Border Grid.Row="2" Classes="pane-container" Margin="0,0,0,16">
+        <Border Grid.Row="3" Classes="pane-container" Margin="0,0,0,16">
             <ScrollViewer>
                 <ItemsControl ItemsSource="{Binding Inbound}">
                     <ItemsControl.ItemTemplate>
@@ -47,8 +92,8 @@
                 </ItemsControl>
             </ScrollViewer>
         </Border>
-        
-        <Button Grid.Row="3"
+
+        <Button Grid.Row="4"
                 Content="Close"
                 HorizontalAlignment="Right"
                 Click="OnCloseClick" />

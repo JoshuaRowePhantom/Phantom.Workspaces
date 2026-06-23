@@ -68,17 +68,29 @@ public sealed class RemoteAccessSettingsViewModelTests
     }
 
     [AvaloniaFact]
-    public void IsValid_HostingEnabled_RequiresAbsoluteListenUrl()
+    public void IsAccessTokenSourceVisible_OnlyForTokenMode()
     {
         var viewModel = new RemoteAccessSettingsViewModel
         {
-            HostingEnabled = true,
-            ListenUrl = "not-a-url",
+            DevTunnelAccessMode = DevTunnelAccessMode.Private,
         };
+        Assert.False(viewModel.IsAccessTokenSourceVisible);
 
-        Assert.False(viewModel.IsValid);
+        viewModel.DevTunnelAccessMode = DevTunnelAccessMode.Token;
+        Assert.True(viewModel.IsAccessTokenSourceVisible);
 
-        viewModel.ListenUrl = "http://localhost:5280";
-        Assert.True(viewModel.IsValid);
+        viewModel.DevTunnelAccessMode = DevTunnelAccessMode.Anonymous;
+        Assert.False(viewModel.IsAccessTokenSourceVisible);
+    }
+
+    [AvaloniaFact]
+    public void UserComputerProfileOverride_RoundTripsFromConstructor()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel(
+            new RemoteHostingSettings(),
+            new DevTunnelConfiguration(),
+            userComputerProfileOverride: "second-instance");
+
+        Assert.Equal("second-instance", viewModel.UserComputerProfileOverride);
     }
 }

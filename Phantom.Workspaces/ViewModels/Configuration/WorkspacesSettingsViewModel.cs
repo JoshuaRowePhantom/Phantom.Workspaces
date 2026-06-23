@@ -40,7 +40,8 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         this.Repository = new RepositoryConnectionSettingsViewModel(configuration.DataAccess);
         this.RemoteAccess = new RemoteAccessSettingsViewModel(
             configuration.RemoteHosting,
-            configuration.DevTunnel);
+            configuration.DevTunnel,
+            configuration.UserComputerProfileOverride);
         this.Appearance = new AppearanceSettingsViewModel(configuration.Visual.Theme);
 
         this.Repository.PropertyChanged += this.OnSectionChanged;
@@ -113,6 +114,9 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         RemoteHosting = this.RemoteAccess.ToRemoteHostingSettings(),
         DevTunnel = this.RemoteAccess.ToDevTunnelConfiguration(this.baseConfiguration.DevTunnel),
         Visual = this.baseConfiguration.Visual with { Theme = this.Appearance.Theme },
+        UserComputerProfileOverride = string.IsNullOrWhiteSpace(this.RemoteAccess.UserComputerProfileOverride)
+            ? null
+            : this.RemoteAccess.UserComputerProfileOverride,
     };
 
     /// <summary>Builds and persists the configuration, returning the saved configuration.</summary>
