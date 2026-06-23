@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia;
 using Avalonia.Threading;
@@ -31,6 +32,9 @@ public partial class AgentChatOutputControl : UserControl
         this.Loaded += this.OnLoaded;
         this.Unloaded += this.OnUnloaded;
         this.SelectableOutputScrollViewer.ScrollChanged += this.OnSelectableOutputScrollChanged;
+        // Intercept navigation keys before the SelectableTextBlock consumes them for caret movement so
+        // Page Up/Down, Home and End scroll the read-only output instead.
+        this.AddHandler(KeyDownEvent, this.OnSelectableOutputPreviewKeyDown, RoutingStrategies.Tunnel);
         this.ApplyOutputModeVisibility();
     }
 
@@ -142,6 +146,30 @@ public partial class AgentChatOutputControl : UserControl
             this.SelectableOutputScrollViewer.Extent.Height - this.SelectableOutputScrollViewer.Viewport.Height);
         this.selectableOutputPinnedToBottom = maxVerticalOffset <= 0
             || this.SelectableOutputScrollViewer.Offset.Y >= maxVerticalOffset - 1;
+    }
+
+    private void OnSelectableOutputPreviewKeyDown(
+        object? sender,
+        KeyEventArgs e)
+    {
+        if (this.OutputMode != AgentChatOutputMode.SelectableTextBox)
+        {
+            return;
+        }
+
+        var scrollViewer = this.SelectableOutputScrollViewer;
+        var newOffset = SelectableOutputScrollMath.ComputeVerticalOffset(
+            e.Key,
+            scrollViewer.Offset.Y,
+            scrollViewer.Viewport.Height,
+            scrollViewer.Extent.Height);
+        if (newOffset is not double targetY)
+        {
+            return;
+        }
+
+        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, targetY);
+        e.Handled = true;
     }
 
     private void ScheduleSelectableOutputScrollToBottom()
