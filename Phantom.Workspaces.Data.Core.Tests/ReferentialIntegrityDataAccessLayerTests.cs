@@ -345,7 +345,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                 CreateUpdateMetadata("Create valid target"),
                 new[]
                 {
-                    this.CreateEntityChange(validTargetEntityId, "valid-target"),
+                    this.CreateEntityChange(validTargetEntityId, "valid-target", "folder"),
                 }));
 
         var validCreateResult = await RequireUpdateSucceedsAsync(
@@ -727,7 +727,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                   },
                   "target-entity-id": {
                     "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-id",
-                    "x-entity-types": ["entity"]
+                    "x-entity-types": ["folder"]
                   }
                 }
               }

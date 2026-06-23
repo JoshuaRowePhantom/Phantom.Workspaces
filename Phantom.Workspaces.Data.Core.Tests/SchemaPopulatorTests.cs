@@ -164,6 +164,92 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
+    public async Task ToolRelationship_ForGitWorkspaceScan_TargetingSeededProfile_PassesValidation()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var populateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            populateErrors.Count == 0,
+            string.Join(Environment.NewLine, populateErrors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var seededNameToId = await GetSeededNameToIdAsync(inMemoryDataAccessLayer);
+        var toolId = seededNameToId["tools/git-workspace-scan"];
+        var scheduleId = seededNameToId["schedule/every-day-at-09"];
+        // The default profile declares entity-types ["workspaces-profile"] (it does not explicitly list
+        // "entity"); the tool-relationship target requires x-entity-types ["entity"], which every entity
+        // implicitly satisfies. This reproduces the bug where the implicit base "entity" type was not
+        // considered when validating typed references.
+        var targetProfileId = seededNameToId["defaults/profiles/default"];
+
+        var relationshipId = new EntityId("c1d2e3f4-a5b6-47c8-9d0e-1f2a3b4c5d6e");
+        using var relationshipDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{relationshipId.Value}}",
+              "entity-types": ["relationship", "tool-relationship"],
+              "names": [["tool-relationships", "git-workspace-scan-on-default-profile"]],
+              "participants": {
+                "tool": "{{toolId.Value}}",
+                "schedule": ["{{scheduleId.Value}}"],
+                "target": ["{{targetProfileId.Value}}"]
+              },
+              "note": "Enable git workspace scanning on the default profile."
+            }
+            """);
+
+        var result = await validatedDataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Create git workspace scan tool relationship." } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = relationshipId,
+                    Data = relationshipDocument.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        var failures = result.EntityResults
+            .SelectMany(entityResult => entityResult.Errors)
+            .Select(error => error.Message)
+            .ToArray();
+        Assert.True(failures.Length == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    private static async Task<IReadOnlyDictionary<string, EntityId>> GetSeededNameToIdAsync(InMemoryDataAccessLayer store)
+    {
+        var export = await store.ExportAsync(new ExportRequest());
+        var nameToId = new Dictionary<string, EntityId>(StringComparer.Ordinal);
+        foreach (var entity in export.ChangeBatches.SelectMany(static batch => batch.Entities))
+        {
+            if (entity.Data is not JsonElement data
+                || !data.TryGetProperty("names", out var names)
+                || names.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var name in names.EnumerateArray())
+            {
+                if (name.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var key = string.Join("/", name.EnumerateArray().Select(static part => part.GetString()));
+                nameToId[key] = entity.EntityId;
+            }
+        }
+
+        return nameToId;
+    }
+
+    [Fact]
     public async Task Populate_EntityTypeSchema_IsEntityTypeAndRequiresSchema()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
