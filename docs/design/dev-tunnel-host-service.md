@@ -48,8 +48,13 @@ view models and can be faked in tests.
 1. **Ensure tunnel** — get-or-create a persistent tunnel for this machine via the management client,
    reusing `DevTunnelConfiguration.TunnelId`/`TunnelName` when present, otherwise creating one and
    persisting the resulting id/name back to configuration.
-2. **Configure port** — add/ensure a `TunnelPort` for the GUI's listening port (parsed from
-   `WorkspacesWebHost.ListenUrl`) with the configured `Protocol` (default `https`).
+2. **Configure port (single-port invariant)** — ensure **exactly one** `TunnelPort` exists on the
+   tunnel, for the GUI's current listening port (parsed from `WorkspacesWebHost.ListenUrl`) with the
+   configured `Protocol` (default `https`). Any previously-forwarded ports that no longer match the
+   current listen port are removed, so a tunnel always has a single, unambiguous forwarded port. This
+   single-port invariant is what makes the **additive** tunnel-name client mode possible: a client
+   can connect by tunnel name and discover the port automatically (see "Client tunnel connection
+   scheme") — this does **not** remove the existing explicit access-point mode.
 3. **Apply access control** — set the tunnel/port access to match
    `DevTunnelConfiguration.AccessMode` (Private / Token / Anonymous).
 4. **Host** — start a `TunnelRelayTunnelHost` to accept relay traffic and forward it to the local
@@ -135,6 +140,55 @@ implementations.
 6. Persist `TunnelId`, resolved `TunnelName`, and `HostedPorts = [localPort]` back to
    `DevTunnelConfiguration`.
 
+## Client tunnel connection scheme
+
+The web client (`Phantom.Workspaces.Data.Web.Client` in `DataAccessMode.DevTunnelWeb`) supports
+**two** ways to locate a host, side by side — the tunnel-name mode is **added**, the existing explicit
+access-point mode is **retained**:
+
+1. **Explicit access point (existing).** The user supplies a full relay endpoint URL
+   (`WebEndpoint`, e.g. `https://<id>-<port>.<cluster>.devtunnels.ms/`). Used as-is. No management
+   lookup required. This remains fully supported and is the right choice when the endpoint is fixed or
+   the client has no management access.
+2. **Tunnel name (new).** The user supplies just a **tunnel name** (and, for Token mode, a token
+   source). The client resolves the live endpoint at connect time via a new
+   `IDevTunnelEndpointResolver`:
+   - look up the tunnel by name with a (read-scoped) `TunnelManagementClient`;
+   - read its **single** forwarded `TunnelPort` (relying on the host's single-port invariant) — no
+     port number is configured by the user;
+   - construct the relay endpoint URI for that port (and attach the `X-Tunnel-Authorization` token for
+     Token mode);
+   - hand the resolved base URI to `WebClientDataAccessLayer`.
+
+   Because the port is discovered, the host can change its listening port (the host re-points its
+   single forwarded port) and the client still reconnects to the right place by name.
+
+### Resolution + reconnect refresh
+
+- The resolved endpoint is **cached** for the life of a healthy connection.
+- A client-side `DevTunnelConnectionMonitor` watches the web/data connection. **On connection
+  failure** (request errors, websocket drop, DNS/relay failure) it **re-resolves** the tunnel by name
+  — picking up a changed port or a re-created tunnel endpoint — and reconnects, with bounded
+  exponential backoff and jitter, **without restarting the workspace**.
+- Re-resolution is event-driven (triggered by failures), not a fixed-interval poll, so a healthy
+  connection does no extra management calls; a persistently failing one keeps retrying at the backoff
+  cadence until it succeeds or the workspace is closed.
+- The explicit-access-point mode reconnects to the same fixed URL on failure (no re-resolution, since
+  there is nothing to discover).
+- Reconnect state is surfaced to the workspace's connection status (Connected / Reconnecting / Failed
+  + last error) so the user sees recovery without taking action.
+
+### Config and abstractions (client side)
+
+- `DevTunnelConfiguration` (or the repository `DevTunnelWeb` settings) gains an optional
+  **`TunnelName`** alongside the existing `WebEndpoint`; exactly one of the two identifies the host.
+  When `TunnelName` is set, `WebEndpoint` is resolved dynamically; when only `WebEndpoint` is set,
+  behavior is unchanged.
+- `IDevTunnelEndpointResolver.ResolveAsync(tunnelName, accessMode, tokenSource, ct)` →
+  `(Uri baseUri, string? tunnelAuthToken)`. Backed by `TunnelManagementClient`; fakeable in tests.
+- `DevTunnelConnectionMonitor` wraps the web DAL connection with the resolver + backoff policy and
+  raises status events.
+
 ## Authentication model
 
 Two distinct token concerns (kept separate):
@@ -152,8 +206,18 @@ Two distinct token concerns (kept separate):
    - **Anonymous**: opt-in only, visibly warned in the UI (existing
      `IsAnonymousAccessWarningVisible`). Not the default for workspace data APIs.
 
-Tunnel auth is a **transport gate only** — application-level authorization remains independent
-(unchanged from the existing design).
+Tunnel authentication **is** the authentication boundary we rely on for remote access: the dev
+tunnel's access control (Private identity / Token / Anonymous) is what gates whether a remote client
+can reach the workspace web endpoints at all. There is no separate application-level identity layer
+in front of the web data-access API — admittance to the tunnel is admittance to the API. Consequently:
+
+- The chosen `DevTunnelAccessMode` is a real security decision, not a transport convenience (this is
+  why **Anonymous** must be opt-in and visibly warned, and why **Private** is the default).
+- Token mode's `X-Tunnel-Authorization` token is the client's credential; it must be short-lived,
+  tunnel/port-scoped, and never persisted raw.
+- Any future per-request application authorization (e.g. per-workspace ACLs) would be an **additional**
+  layer on top of tunnel auth, not a replacement for it; until that exists, tunnel auth is the
+  authentication we depend on.
 
 ## Status surfaced to UI
 
@@ -163,6 +227,26 @@ Tunnel auth is a **transport gate only** — application-level authorization rem
   public tunnel URL while `Hosting`.
 - The top-right global status dropdown row (per `devtunnels-web-access.md`): state indicator, public
   endpoint, access mode, last error, and quick actions (restart / copy endpoint).
+
+## UI changes (additive)
+
+These are additive — the existing access-point inputs stay; a tunnel-name option is added alongside.
+
+1. **Host side (`RemoteAccessSettingsView` / `RemoteAccessSettingsViewModel`).** Keep the current
+   access-point/listen settings. Surface the resolved **tunnel name** and the live public access point
+   (read-only, copyable) once hosting, plus the host status. The host already enforces a single port,
+   so no port field is shown.
+2. **Client side (`DevTunnelWebSettingsView` / `DevTunnelWebSettingsViewModel`,
+   `RepositoryConnectionModeViewModels`).** Add a **"Connect by"** choice with two options:
+   - **Access point** (existing) — the explicit `WebEndpoint` text box, unchanged.
+   - **Tunnel name** (new) — a single tunnel-name text box; no port input (auto-discovered). For Token
+     access mode, the existing token-source field applies to both options.
+   The two options are mutually exclusive for a given connection; validation requires exactly one of
+   `WebEndpoint` / `TunnelName`. Default remains the access-point option so existing configurations are
+   untouched.
+3. **Connection status.** The workspace's connection status reflects the client
+   `DevTunnelConnectionMonitor` state (Connected / Reconnecting / Failed + last error) so name-based
+   reconnects are visible.
 
 ## Threading, async, resilience
 
@@ -181,7 +265,9 @@ Tunnel auth is a **transport gate only** — application-level authorization rem
 2. Never persist raw tokens in tracked files — store only a **source name** (env var / keychain key);
    resolve at runtime. (Repository rule: no secrets in tracked files.)
 3. Use least-privilege, short-lived, tunnel/port-scoped access tokens for Token mode.
-4. Dev tunnels are preview infrastructure — not a substitute for workspace-level authorization.
+4. Dev tunnels are preview infrastructure. Because tunnel auth is currently the authentication
+   boundary for remote workspace access (see Authentication model), the access mode must be chosen
+   deliberately; workspace-level authorization is a future **additional** layer, not yet present.
 
 ## Test tasks
 
@@ -200,14 +286,48 @@ Tunnel auth is a **transport gate only** — application-level authorization rem
 9. The local port is parsed correctly from `WorkspacesWebHost.ListenUrl` (including non-default ports).
 10. No raw token is ever written to persisted configuration (only the source name).
 11. Disposal stops the relay host and is idempotent.
+12. **Single-port invariant:** when the listen port changes, the host removes the stale `TunnelPort`
+    and leaves exactly one port matching the new listen port; a tunnel never ends up with two ports.
+13. **Reverse-execution over the same port:** the reverse-execution WebSocket route is reachable
+    through the single forwarded port (no separate port is created/forwarded).
+14. **Client tunnel-name resolution:** `IDevTunnelEndpointResolver` looks up a tunnel by name, reads
+    its single forwarded port, and produces the correct relay base URI (and `X-Tunnel-Authorization`
+    token for Token mode) — without any user-supplied port.
+15. **Client reconnect refresh:** on a simulated connection failure, `DevTunnelConnectionMonitor`
+    re-resolves the tunnel by name (picking up a changed port) and reconnects with bounded backoff,
+    without restarting the workspace; a healthy connection performs no extra management lookups.
+16. **Explicit-access-point mode unchanged:** a client configured with `WebEndpoint` connects to that
+    fixed URL and does not perform name resolution; reconnect retries the same URL.
+17. **Client settings validation:** exactly one of `WebEndpoint` / `TunnelName` is required; the
+    default remains the access-point option so existing configurations are unaffected.
+
+## Decisions
+
+1. **Tunnel persistence scope: stable per-machine.** The host maintains one stable, reused tunnel per
+   machine, keyed by `user-computer-profile`, persisting its `TunnelId`/`TunnelName` so the public URL
+   and tunnel name are stable across app restarts. (Ephemeral per-session tunnels are not used.)
+2. **Reverse-execution WebSocket is forwarded automatically — no extra port.** The reverse-execution
+   WebSocket endpoints (`MapReverseEndpoints`) are routes on the **same** Kestrel application as the
+   web data-access and agent endpoints, all bound to the single `WorkspacesWebHost.ListenUrl` port.
+   Forwarding that one port therefore carries web data access **and** the reverse-execution WebSocket
+   over the same dev tunnel; there is nothing additional to forward. This reinforces the single-port
+   invariant: one forwarded port serves all three endpoint families.
 
 ## Open questions
 
-1. Tunnel persistence scope: one stable per-machine tunnel (reused across runs) vs. ephemeral per
-   session. Default recommendation: stable per-machine, keyed by `user-computer-profile`.
-2. Management identity acquisition UX: interactive first-run login vs. headless token source only.
-3. Whether to also forward the reverse-execution WebSocket port automatically or only the primary
-   web port (initial scope: the primary `ListenUrl` port).
+1. **Management identity acquisition.** Creating/owning a dev tunnel through the management SDK
+   requires an authenticated identity with the dev-tunnels service (a Microsoft account / Entra ID /
+   GitHub user, the same identities `devtunnel user login` uses). Two ways to obtain it:
+   - **Interactive first-run login** — the app performs an OAuth sign-in the first time hosting is
+     enabled, caching the refresh token in the OS secret store (most user-friendly; needs an embedded
+     auth flow).
+   - **Headless token source only** — the app reads a pre-provisioned dev-tunnels access token from a
+     configured source (env var / keychain key named by `AccessTokenSource`) and never prompts (best
+     for unattended/service installs; the user must provision the token out-of-band).
+
+   Decision needed: support interactive login, headless-only, or both (headless as an override). This
+   does not affect the *tunnel access mode* (Private/Token/Anonymous) for inbound clients — it only
+   concerns how *this host* authenticates to the dev-tunnels service to manage its own tunnel.
 
 ## Source references
 
