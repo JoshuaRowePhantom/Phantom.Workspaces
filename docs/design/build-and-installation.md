@@ -17,9 +17,9 @@ under "Future (non-Windows)".
 
 - `Phantom.Workspaces` is the GUI entry point: `OutputType=WinExe`, `net10.0`, Avalonia 12,
   with a Windows `app.manifest` (`assemblyIdentity name="Phantom.Workspaces.Desktop"`).
-- Secondary executables exist (`Phantom.Workspaces.Agent.Cli`, `Phantom.Workspaces.Web.Server`).
-  The installable product is the GUI app; the CLI ships **alongside** it in the same package
-  so `pw`/agent tooling is on the user's machine after install.
+- Secondary executables exist (`Phantom.Workspaces.Agent.Cli`, `Phantom.Workspaces.Web.Server`),
+  but they are **not shipped for now**. The installable product is the **GUI app only**; the
+  CLI/server may be packaged later.
 
 ## Build
 
@@ -31,7 +31,7 @@ under "Future (non-Windows)".
 
 ### Release publish (Windows)
 
-Produce a self-contained, framework-independent app so users need no preinstalled .NET:
+Produce a self-contained, single-file app so users need no preinstalled .NET:
 
 ```
 dotnet publish Phantom.Workspaces\Phantom.Workspaces.csproj `
@@ -43,17 +43,79 @@ dotnet publish Phantom.Workspaces\Phantom.Workspaces.csproj `
   -p:EnableCompressionInSingleFile=true
 ```
 
+#### How a multi-dependency app becomes one self-contained `.exe`
+
+The app is **not** statically linked into a single native binary. .NET produces a **bundle**:
+a host executable with all the managed assemblies, the runtime, and native libraries packed
+into it. The relevant mechanisms:
+
+1. **Self-contained publish** (`--self-contained true -r win-x64`). The publish output
+   includes the entire **.NET runtime** (CoreCLR + the BCL assemblies) for the target RID, so
+   the user needs nothing preinstalled. This is what makes it "self-hosting": the runtime
+   travels with the app rather than being resolved from a machine-wide install.
+2. **Dependency resolution at publish.** `dotnet publish` walks the project's transitive
+   closure — every `PackageReference` (Avalonia, Skia, LibGit2Sharp, Dock, MongoDB driver,
+   etc.) and every `ProjectReference` (`Phantom.Workspaces.Data.*`, `Llm.*`, `Web.Server`, …)
+   — and copies the resulting managed DLLs and their **native** assets (per-RID
+   `runtimes/win-x64/native/*.dll`) into the publish folder. NuGet's RID graph picks the
+   correct native bits for the target architecture.
+3. **Single-file bundling** (`PublishSingleFile=true`). The SDK's bundler then packs that
+   publish folder into one `Phantom.Workspaces.exe`: a small native **AppHost** with all
+   managed assemblies appended as an embedded bundle. The managed DLLs are read from inside the
+   exe by the runtime; no extraction is needed for them.
+4. **Native libraries** (`IncludeNativeLibrariesForSelfExtract=true`). Native dependencies
+   (SkiaSharp's `libSkiaSharp.dll`, ANGLE/HarfBuzz, `git2-*.dll` for LibGit2Sharp, the
+   Avalonia native bits) can't be loaded directly from inside the bundle on Windows, so at
+   first run the AppHost **self-extracts** them to a per-user temp/cache directory and loads
+   them from there (subsequent runs reuse the cache). This flag opts the native assets into the
+   single file rather than leaving loose `.dll`s beside the exe.
+5. **Compression** (`EnableCompressionInSingleFile=true`). The embedded bundle is compressed to
+   shrink the ~70–100 MB self-contained payload; it is decompressed in memory at load. Trades a
+   little startup CPU for a much smaller download.
+6. **ReadyToRun** (`PublishReadyToRun=true`). Assemblies are AOT-precompiled to native code
+   ahead of time (alongside IL) to cut JIT cost and improve cold start; the IL remains as
+   fallback. Increases size modestly.
+
+The net result per architecture is effectively **one `Phantom.Workspaces.exe`** (plus a PDB
+produced beside it). That single exe is what the zip ships, what `versions\<v>\` holds, and
+what `current` points at.
+
+#### What ends up in the release payload
+
+- `Phantom.Workspaces.exe` — the bundled GUI (runtime + all managed + native deps inside).
+- A few assets the bundler intentionally leaves on disk if any (e.g. the WebView2 loader, if
+  `Avalonia.Controls.WebView` requires a loose native loader) — verified per release and added
+  to the zip staging.
+- **Not in the user zip:** `*.pdb` symbol files are **not shipped** for now; they are retained
+  as a **separate CI artifact** (and a future symbol server) for crash diagnostics.
+- **Not shipped for now:** `Phantom.Workspaces.Agent.Cli.exe` and the web server — GUI only.
+
+#### Caveats this design accounts for
+
+- **Trimming is off** (`PublishTrimmed=false`) initially: Avalonia XAML, reflection-heavy
+  schema/DI paths, and the `x-field-editor` `Type.GetType` activation can break under the
+  trimmer. Size is controlled via compression instead; a trim/`TrimmerRootDescriptor` model is
+  a later optimization.
+- **Per-RID publish**: single-file bundles are RID-specific, so we run publish once per
+  `win-x64` and `win-arm64` (no "AnyCPU" single file). `RuntimeIdentifiers` lists both.
+- **Native self-extract dir**: the first-run extraction location is a per-user cache; it must
+  be writable without elevation (it is, under the user profile) — consistent with the per-user
+  install model.
+- **WebView2 runtime**: `Avalonia.Controls.WebView` relies on the system **WebView2 Runtime**
+  (Evergreen), which is *not* bundled. It is preinstalled on current Windows; the app should
+  detect its absence and point the user to install it (a first-run concern, not a build one).
+
 Notes / proposed project settings (added to `Phantom.Workspaces.csproj` or a
 `Directory.Build.props` publish section):
 
 - `RuntimeIdentifiers` = `win-x64;win-arm64`.
-- Keep `PublishTrimmed=false` initially (Avalonia + reflection-heavy schema/DI paths and the
-  `x-field-editor` `Type.GetType` activation make trimming risky; revisit with a trim model
-  later).
+- `PublishTrimmed=false` initially (see caveat above; revisit with a trim model later).
 - `PublishReadyToRun=true` for faster cold start.
-- LibGit2Sharp and Avalonia native assets must be included in the single-file bundle
-  (`IncludeNativeLibrariesForSelfExtract`).
-- Bundle the CLI publish output into the same staging folder used by the installer.
+- `PublishSingleFile=true`, `IncludeNativeLibrariesForSelfExtract=true`,
+  `EnableCompressionInSingleFile=true` — applied for **publish only** (guarded so normal
+  `dotnet build`/F5 debugging is unaffected).
+- `SelfContained=true` with the runtime included.
+- Only the GUI app is published/packaged for now (no CLI/server in the release payload).
 
 ### Versioning
 
@@ -103,8 +165,8 @@ is just "drop a new version folder and repoint the link":
   app\
     current\           ->  symlink/junction to versions\0.2.0
     versions\
-      0.1.0\           Phantom.Workspaces.exe, CLI, all assets
-      0.2.0\           Phantom.Workspaces.exe, CLI, all assets
+      0.1.0\           Phantom.Workspaces.exe + all assets
+      0.2.0\           Phantom.Workspaces.exe + all assets
     updates\           scratch space for in-progress downloads
 ```
 
@@ -117,6 +179,130 @@ is just "drop a new version folder and repoint the link":
 - This is a **per-user** install under `%LOCALAPPDATA%` so neither install nor update needs
   elevation. Runtime config stays at `%APPDATA%\Phantom.Workspaces\config.json` (unchanged).
 
+## The `Phantom.Workspaces.exe` executable
+
+A **single** self-contained executable serves every role — first-run installer/bootstrapper,
+normal GUI, updater, and the target of shortcuts/startup task — selected by command-line mode.
+There is no separate installer binary; the same exe that ships in the zip installs and updates
+itself.
+
+### Command-line surface
+
+`Program.Main` parses arguments and dispatches to a mode. Every mode is a **GUI** mode — there
+is no console/headless path; install/update modes simply show a lightweight progress window
+instead of the main window. All modes share the same composition root (configuration, logging,
+services); only the entry behavior and which window is shown differ.
+
+- *(no args)* — **normal GUI launch.** If running from an *unmanaged* location (e.g. an
+  extracted zip not under `app\versions\`), perform first-run bootstrap with a progress window
+  (see below); otherwise start the main window.
+- `--install [--silent]` — **bootstrap** into the managed layout, then launch the installed
+  app. Interactive shows an installation **progress window**; `--silent` runs without UI and
+  returns an `ExitCode` (for scripted installs).
+- `--startup` — normal launch honoring startup preferences (start minimized to tray, skip
+  splash). This is the argument the logon scheduled task passes.
+- `--minimized` — start hidden/minimized to the tray.
+- `--apply-update <stagedVersionDir> [--relaunch]` — internal mode used by the updater to
+  repoint `current` after the previous process exits, showing a small "Updating…" progress
+  window, then relaunching (see *Update application & relaunch*). Logs to a **file** and
+  returns an `ExitCode`.
+- `--uninstall [--purge]` — remove shortcuts, the startup task, and (with confirmation) the
+  managed `app\` tree via a small GUI; leave `%APPDATA%` config unless `--purge` is given.
+- `--help` / `-h` — show usage (a dialog; the app is GUI-only).
+
+Argument parsing is centralized in a `CommandLineOptions` parser (testable in isolation; no
+side effects from parsing). Unknown arguments are reported (dialog) with a non-zero exit code,
+except that a single positional path may be accepted later for "open entity/file" associations.
+
+### Everything is GUI — no console mode needed
+
+`Phantom.Workspaces` is `OutputType=WinExe` → **GUI subsystem**, which is exactly what we want:
+launched from a shortcut/Explorer it never flashes a console window. We deliberately do **not**
+add any console/stdout behavior (no `AttachConsole`, no hybrid console attach):
+
+- **Install/update progress is shown in the GUI**, not printed to a terminal. The `--install`
+  and `--apply-update` modes spin up a minimal Avalonia progress window (the full main window,
+  tray, and update scheduler are only created for the actual app launch). There is no
+  requirement to "avoid instantiating Avalonia" — every mode may use the UI toolkit freely.
+- **Inter-process steps use exit codes, not text.** The updater spawns `--apply-update` and
+  **waits on the process handle directly**, reading the returned `ExitCode`; nothing depends on
+  stdout or on a shell waiting for the process.
+- **CI reads the version from file metadata.** The publish smoke check reads the published
+  exe's `FileVersionInfo` (deterministic, no process launch) rather than running a `--version`
+  command, so no console output is ever needed. (There is therefore no `--version`/stdout mode.)
+
+This keeps the binary a clean single-purpose GUI app and removes the entire console-subsystem
+problem from the design.
+
+### First-run bootstrap (`--install` / run-from-zip)
+
+When the exe runs from outside the managed layout, `InstallLayout.BootstrapAsync`:
+
+1. Resolves the install root `%LOCALAPPDATA%\Phantom.Workspaces\app\`.
+2. Copies the current published payload (the exe + assets sitting next to it) into
+   `versions\<thisVersion>\`. If the source is still a zip, extract it; if it is an unpacked
+   folder, copy it.
+3. Creates/repoints the `current` junction (preferred) or symlink to that version.
+4. Registers per-user integration: Start-menu shortcut to `app\current\Phantom.Workspaces.exe`,
+   an optional PATH/App-Execution-Alias entry, and (if the user opted in) the logon startup
+   task — all pointing at the stable `current` path.
+5. Writes a small install marker/metadata (installed version, channel, install timestamp) so
+   subsequent launches know they are "managed".
+6. Relaunches the managed copy (showing/closing a progress window as appropriate) and exits;
+   in `--silent` mode it skips UI and exits `0` for installer/script callers.
+
+Bootstrap is **idempotent** and elevation-free (per-user). Re-running it repairs the
+`current` link and shortcuts.
+
+### Single-instance behavior
+
+- GUI launches acquire a **named mutex** (per-user) so a second launch (e.g. double-clicking
+  the tray target while running) **activates the existing window** instead of starting a
+  second process, then exits. The activation is signalled to the running instance (named pipe
+  / event) so it can restore from tray.
+- The `--apply-update` mode does **not** take the single-instance lock (it must run while it
+  waits for the previous instance to release it); its progress window is a standalone
+  lightweight window, not the main app.
+
+### Update application & relaunch (interaction with the updater)
+
+The running GUI cannot replace files it has locked, so the `current` repoint is performed by a
+short-lived process, not the live instance:
+
+1. The GUI's `UpdateService` stages the new version into `versions\<new>\` (download → verify
+   SHA256 → extract).
+2. To apply, it spawns `app\versions\<new>\Phantom.Workspaces.exe --apply-update
+   <newVersionDir> --relaunch`, then begins shutting itself down.
+3. The spawned **apply** process waits for the previous instance to release its
+   single-instance lock (bounded wait), atomically repoints `current` to `<newVersionDir>`,
+   prunes superseded `versions\*` (retaining the immediately previous one for rollback), and —
+   with `--relaunch` — starts `app\current\Phantom.Workspaces.exe` (which is now the new
+   version) and exits.
+4. On launch, the new version verifies it started successfully; a **launcher/health gate**
+   records "this version booted OK". If a freshly-applied version fails to reach the ready
+   state, the next launch (or the apply shim) repoints `current` back to the retained previous
+   version — automatic rollback.
+
+This keeps the only mutating step (the link repoint) in a process that holds no locks on the
+files being swapped, and never touches the directory of the version that is currently running.
+
+### Exit codes
+
+Well-defined exit codes (used by `--silent` install and by the updater, which waits on the
+`--apply-update` process handle): `0` success, `1` generic failure, `2` bad arguments,
+`3` bootstrap/IO failure, `4` update-apply failure (left `current` untouched). Enumerated in
+code as `ExitCode`.
+
+### Code shape
+
+- `Program.Main` → `CommandLineOptions.Parse` → `switch` over mode to handlers:
+  `RunGui`, `RunInstall`, `RunApplyUpdate`, `RunUninstall` (each builds whatever Avalonia
+  window — main or progress — its mode needs).
+- `InstallLayout` (shared with the updater) owns root/`current`/`versions`/`updates`
+  resolution, junction/symlink creation, and bootstrap.
+- `SingleInstanceGuard` owns the mutex + activation signalling.
+- `ExitCode` enum centralizes process results.
+
 ## Windows packaging options
 
 We package the published output as one of the following. winget `installerType` mapping for
@@ -124,7 +310,7 @@ each is deferred to `docs/design/winget.md`.
 
 ### Option A — Standalone EXE / portable zip (lead)
 
-- Publish the self-contained single-file `Phantom.Workspaces.exe` (+ CLI) and ship as a
+- Publish the self-contained single-file `Phantom.Workspaces.exe` and ship as a
   versioned **zip** hosted as a GitHub Release asset.
 - First run bootstraps the managed install layout (`app\versions\<v>\` + `current` link),
   registers shortcuts/PATH alias, and is then self-updating via the in-app updater.
@@ -248,8 +434,8 @@ The **`release.yml`** workflow, triggered on a `v*` tag (or `workflow_dispatch`)
    non-zero / failing log (upload the log artifact on failure).
 3. **Derive version** — read the single version source (tag → `Version`/`InformationalVersion`)
    so every artifact and asset name is consistent.
-4. **Publish** — `dotnet publish` for `win-x64` and `win-arm64` (self-contained single-file,
-   ReadyToRun), staging GUI + CLI into per-arch folders.
+4. **Publish** — `dotnet publish` the GUI for `win-x64` and `win-arm64` (self-contained
+   single-file, ReadyToRun) into per-arch folders.
 5. **Package** — assemble the portable zip per arch (lead); later build Inno/WiX (or MSIX);
    **sign** the binaries/installer with the signing cert; compute each asset's `.sha256`.
 6. **Release** — create the GitHub Release for the tag, attach the assets + checksum files,
@@ -457,11 +643,88 @@ We want a one-click "get it installed" path straight from GitHub (and, later, wi
   source" section (`dotnet publish` command above). A future `winget install
   Phantom.Workspaces` line is added when winget support lands (`docs/design/winget.md`).
 
+## Testing strategy
+
+Most of this feature touches the OS (filesystem links, scheduled tasks, processes, the console
+subsystem, GitHub network, and an Avalonia GUI), so the strategy is to **push logic behind
+narrow interfaces** and test the logic with fakes, reserving a small number of
+opt-in/integration tests for the genuinely OS-specific seams. Three tiers:
+
+### 1. Unit tests (the bulk — fast, deterministic, no OS/network)
+
+Everything that can be made a pure-ish function or a service over an interface is unit-tested
+with in-memory fakes. Key seams to introduce so this is possible:
+
+- **`IFileSystem`** (or abstract `InstallLayout` over `System.IO.Abstractions`) — so
+  `InstallLayout`/bootstrap/`--apply-update` run against an **in-memory filesystem**. The
+  `current` link is modelled as an indirection the fake can represent, so "repoint" and
+  "resolve `current\Phantom.Workspaces.exe`" are assertable without real symlinks/junctions.
+- **`IReleaseSource`** — wraps the GitHub Releases API; tests inject canned release lists
+  (newer/older/draft/pre-release) so `UpdateService.CheckAsync` and latest-release selection
+  are deterministic with **no network**.
+- **`IClock` + `IUpdateCheckScheduler`** — virtual time. The 6-hour cadence is tested by
+  **advancing the clock**, never by `Task.Delay`/wall-clock waits (matches the
+  deterministic-tests convention).
+- **`IProcessLauncher`** — wraps spawning `--apply-update` and relaunch, so the
+  update→apply→relaunch handshake is verified by asserting *what* would be launched and the
+  wait/exit-code contract, without starting real processes.
+- **`IScheduledTasks`** — wraps Task Scheduler; `StartupTaskService` is unit-tested against a
+  fake (register/unregister/idempotent/targets `current`).
+- **`INotifier`** — wraps tray toasts; tray-notification tests assert an `UpdateAvailable`
+  event raises a toast and flips menu state against a fake sink.
+- **`CommandLineOptions.Parse`** — pure function, exhaustively unit-tested (every mode, unknown
+  args → exit `2`, no side effects).
+- **`UpdateService`** download/verify/apply orchestration — tested with the fakes above:
+  hash-mismatch is rejected and `current` is untouched; previous version retained for rollback.
+- **ViewModels** (`UpdateSettingsViewModel`, `TrayIconViewModel`, `StartupSettingsViewModel`) —
+  standard Avalonia VM tests: command `CanExecute`/enable state, "Update now" only when
+  available, no view required.
+
+These run under the existing harness — `.\scripts\run-tests.ps1` (results in
+`scripts\test-results.log`) — in a new `Phantom.Workspaces.Tests` area (or a dedicated
+`Phantom.Workspaces.Install.Tests`).
+
+### 2. Integration tests (opt-in, Windows-only, real OS seams)
+
+A small, explicitly-categorized set (e.g. `[Trait("Category","WindowsIntegration")]`) that
+exercises the real behavior the fakes stand in for, run on the Windows CI runner but skippable
+locally:
+
+- **Junction/symlink reality** — create a real junction in a temp dir, repoint it, resolve
+  through it; assert the fallback from symlink→junction when symlink privilege is absent.
+- **Scheduled task reality** — register/query/delete a real per-user logon task in a temp name,
+  assert it targets `current`, then clean up.
+- **Single-instance** — launch two real processes; assert the second activates the first and
+  exits.
+- **Apply-update end-to-end** — stage two fake "version" folders containing tiny exes, run the
+  real `--apply-update`, assert `current` moved and relaunch happened.
+
+These have real side effects, so each uses a unique temp root/task name and cleans up; none
+touch the developer's actual install or processes (respecting "don't kill my processes").
+
+### 3. CI / packaging checks (in the workflows, not xUnit)
+
+- **Publish smoke** (per RID) — `dotnet publish` the GUI, then read its `FileVersionInfo` (no
+  process launch, no console needed) and assert the bundle is present (see Test task 1).
+- **Version consistency** — assembly `InformationalVersion` == `app.manifest` == release tag.
+- **Release-artifact hash** — uploaded asset SHA256 matches the published `.sha256`.
+- **Subsystem assertion** — verify the published exe's PE header is GUI-subsystem (no console
+  flash) — a tiny header check in CI.
+
+### Cross-cutting principles
+
+- **Determinism:** no timing-based waits anywhere — virtual clocks and event-driven
+  synchronization only.
+- **No real network in unit tests:** all GitHub access is behind `IReleaseSource`.
+- **Reproduce-bug-first:** when a packaging/update bug is found, add a failing test (usually at
+  the unit tier via the relevant fake) before fixing.
+- **GUI never blocks:** updater/check paths are async; VM tests assert no synchronous blocking.
+
 ## Test tasks
 
-1. **Publish smoke test** — a CI step asserts `dotnet publish` for `win-x64`/`win-arm64`
-   produces a runnable single-file exe (launch `--version`/headless self-check) and bundles
-   the CLI.
+1. **Publish smoke test** — a CI step asserts `dotnet publish` of the GUI for
+   `win-x64`/`win-arm64` produces a single-file exe and reads its version from `FileVersionInfo`
+   (no process launch, no console output needed).
 2. **Version consistency test** — assert the assembly `InformationalVersion`, `app.manifest`
    identity version, and the release tag all derive from the single version source.
 3. **Config-path test** — verify the packaged app reads/writes
@@ -492,6 +755,22 @@ We want a one-click "get it installed" path straight from GitHub (and, later, wi
     mocked notification sink).
 12. **Latest-release selection test** — the GitHub Releases query ignores draft/pre-release
     entries and selects the newest published, non-prerelease tag (mocked release source).
+13. **Command-line parsing test** — `CommandLineOptions.Parse` maps each argument
+    (`--install`/`--silent`, `--startup`, `--minimized`, `--apply-update`, `--uninstall`/
+    `--purge`, none) to the correct mode; unknown args yield exit code `2` and no side effects.
+14. **Progress-mode test** — `--install` and `--apply-update` select the lightweight progress
+    window (not the main window); `--silent` install runs without UI and returns the documented
+    `ExitCode`.
+15. **Apply-update/relaunch test** — `--apply-update <dir>` waits for the lock, repoints
+    `current`, retains the previous version, and exits with the defined code; failure leaves
+    `current` untouched (exit `4`).
+16. **Rollback test** — a freshly-applied version that never reaches "ready" causes the next
+    launch/apply to repoint `current` back to the retained previous version.
+17. **Single-instance test** — a second GUI launch activates the existing instance (signals
+    restore-from-tray) and exits; `--apply-update` does not take the single-instance lock.
+18. **Subsystem/exit-code test** — the published exe's PE header is GUI-subsystem (no console
+    window on a normal launch), and `--silent` install / `--apply-update` return the documented
+    `ExitCode`, observed via a direct process-handle wait.
 
 > winget-specific test tasks (manifest validation, installer silent-switch, manifest hash
 > match) are deferred to `docs/design/winget.md`.
