@@ -16,7 +16,7 @@
         Title="Phantom.Workspaces">
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
-            <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
                 <StackPanel Grid.Column="0"
                             VerticalAlignment="Center"
                             Spacing="2">
@@ -66,6 +66,12 @@
                 </Panel>
 
                 <Button Grid.Column="3"
+                        Classes="settings-gear"
+                        Content="⏱"
+                        ToolTip.Tip="Scheduled tasks"
+                        Click="OnOpenScheduledTasksClicked" />
+
+                <Button Grid.Column="4"
                         Classes="settings-gear"
                         Content="⚙"
                         ToolTip.Tip="Settings"

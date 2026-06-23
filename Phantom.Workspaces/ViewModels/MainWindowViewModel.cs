@@ -224,6 +224,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal EntityBroker EntityBroker => this.entityBroker
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
+    /// <summary>
+    /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
+    /// results tree), or returns null if the workspace has not finished initializing.
+    /// </summary>
+    internal ScheduledTasksViewModel? TryCreateScheduledTasksViewModel()
+        => this.entityBroker is { } broker ? new ScheduledTasksViewModel(broker) : null;
+
     public async Task InitializeAsync()
     {
         this.entityBroker = await this.entityBrokerTask;

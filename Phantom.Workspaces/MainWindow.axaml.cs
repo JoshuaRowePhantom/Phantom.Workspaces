@@ -57,4 +57,19 @@ public partial class MainWindow : Window
         var statusWindow = new ConnectionStatusWindow(viewModel.ConnectionStatus);
         statusWindow.ShowDialog(this);
     }
+
+    private async void OnOpenScheduledTasksClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel
+            || viewModel.TryCreateScheduledTasksViewModel() is not { } scheduledTasksViewModel)
+        {
+            return;
+        }
+
+        await scheduledTasksViewModel.RefreshAsync();
+        var scheduledTasksWindow = new ScheduledTasksWindow(scheduledTasksViewModel);
+        await scheduledTasksWindow.ShowDialog(this);
+    }
 }
