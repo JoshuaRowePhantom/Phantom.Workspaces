@@ -32,9 +32,9 @@ public partial class AgentChatOutputControl : UserControl
         this.Loaded += this.OnLoaded;
         this.Unloaded += this.OnUnloaded;
         this.SelectableOutputScrollViewer.ScrollChanged += this.OnSelectableOutputScrollChanged;
-        // Intercept navigation keys before the SelectableTextBlock consumes them for caret movement so
-        // Page Up/Down, Home and End scroll the read-only output instead.
-        this.AddHandler(KeyDownEvent, this.OnSelectableOutputPreviewKeyDown, RoutingStrategies.Tunnel);
+        // Avalonia's ScrollViewer already pages with Page Up/Down; it does not handle Home/End, so add
+        // those (scroll to top/bottom). A bubble handler suffices because nothing else consumes them.
+        this.AddHandler(KeyDownEvent, this.OnSelectableOutputKeyDown, RoutingStrategies.Bubble);
         this.ApplyOutputModeVisibility();
     }
 
@@ -148,11 +148,11 @@ public partial class AgentChatOutputControl : UserControl
             || this.SelectableOutputScrollViewer.Offset.Y >= maxVerticalOffset - 1;
     }
 
-    private void OnSelectableOutputPreviewKeyDown(
+    private void OnSelectableOutputKeyDown(
         object? sender,
         KeyEventArgs e)
     {
-        if (this.OutputMode != AgentChatOutputMode.SelectableTextBox)
+        if (e.Handled || this.OutputMode != AgentChatOutputMode.SelectableTextBox)
         {
             return;
         }
@@ -160,7 +160,6 @@ public partial class AgentChatOutputControl : UserControl
         var scrollViewer = this.SelectableOutputScrollViewer;
         var newOffset = SelectableOutputScrollMath.ComputeVerticalOffset(
             e.Key,
-            scrollViewer.Offset.Y,
             scrollViewer.Viewport.Height,
             scrollViewer.Extent.Height);
         if (newOffset is not double targetY)
