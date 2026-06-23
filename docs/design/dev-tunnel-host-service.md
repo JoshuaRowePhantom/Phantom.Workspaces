@@ -100,9 +100,9 @@ Supporting seams kept behind interfaces for testability:
 - `IDevTunnelManagementClientFactory` → wraps construction of `TunnelManagementClient` (user agent +
   access-token callback). Fakeable in tests.
 - `IDevTunnelAuthTokenProvider` → supplies the **management** identity token (Microsoft account /
-  Entra ID / GitHub) used to create/own tunnels, resolved from environment or OS secret store via a
-  source name (never a raw token in tracked files). Mirrors the existing
-  `DevTunnelConfiguration.AccessTokenSource` convention.
+  Entra ID / GitHub) used to create/own tunnels by performing an **interactive sign-in** and then
+  caching/refreshing the token in the OS secret store (acquire + cache; see Decision 3). It does
+  **not** read an externally-provisioned token; a raw token is never stored in tracked files.
 - `IDevTunnelRelayHost` → thin wrapper over `TunnelRelayTunnelHost` so hosting can be faked.
 
 The concrete `DevTunnelHostService` composes these; the SDK types live only in the concrete
@@ -193,10 +193,10 @@ access-point mode is **retained**:
 
 Two distinct token concerns (kept separate):
 
-1. **Management / hosting identity** — needed to create and host the tunnel. Resolved by
-   `IDevTunnelAuthTokenProvider` from the configured source (env var / OS keychain), consistent with
-   `AccessTokenSource`. Supplied to `TunnelManagementClient` via its access-token callback so it can
-   refresh without restart.
+1. **Management / hosting identity** — needed to create and host the tunnel. Obtained by
+   `IDevTunnelAuthTokenProvider` via **interactive sign-in**, then cached/refreshed in the OS secret
+   store (Decision 3). Supplied to `TunnelManagementClient` via its access-token callback so it can
+   refresh without restart. (No externally-provisioned/headless token source for this identity.)
 2. **Tunnel access (clients connecting in)** — governed by `DevTunnelAccessMode`:
    - **Private** (default): only the owning identity / authorized identities; clients authenticate to
      the relay.
@@ -312,83 +312,28 @@ These are additive — the existing access-point inputs stay; a tunnel-name opti
    Forwarding that one port therefore carries web data access **and** the reverse-execution WebSocket
    over the same dev tunnel; there is nothing additional to forward. This reinforces the single-port
    invariant: one forwarded port serves all three endpoint families.
+3. **Management identity: interactive sign-in only.** The host obtains its dev-tunnels access token by
+   having the user **sign in interactively** (Microsoft account / Entra ID / GitHub — the identities
+   `devtunnel user login` uses); the app then caches the token in the OS secret store and refreshes it
+   silently. `IDevTunnelAuthTokenProvider` encapsulates this acquire-and-cache flow.
+   - We **explicitly do not** support an externally-provisioned ("headless") token source for the
+     management identity — i.e. reading a token the user set in an env var / keychain for unattended,
+     no-UI installs. That scenario is out of scope; hosting requires a signed-in user.
+   - This is separate from the **tunnel access mode** for inbound clients. In particular,
+     `DevTunnelConfiguration.AccessTokenSource` continues to name the source of the *Token-mode client
+     access token* (`X-Tunnel-Authorization`), which is unrelated to how the host signs in.
+   - **GUI:** Remote Access settings show a single **"Dev tunnel account"** row — signed out shows a
+     `[ Sign in to host a dev tunnel ]` button (hosting controls disabled until signed in); signed in
+     shows `Signed in as <account>` (read-only) with a `[ Sign out ]` link, plus inline errors
+     ("Sign-in expired — sign in again"). No token-source field for the host identity.
 
 ## Open questions
 
-1. **Management identity / token source.** Creating/owning a dev tunnel through the management SDK
-   requires a dev-tunnels **access token** (obtained from an authenticated Microsoft account / Entra ID
-   / GitHub identity — the same identities `devtunnel user login` uses). Every option below ultimately
-   provides such a token to `TunnelManagementClient`; they differ only in **where the token comes
-   from**. This concerns only how *this host* authenticates to manage its own tunnel; it does **not**
-   affect the *tunnel access mode* (Private/Token/Anonymous) for inbound clients.
-
-   > Note on labeling: "interactive login" is not just a prompt — it *acquires and then caches* a token
-   > and refreshes it silently, so it inherently includes an app-managed token store. In other words
-   > the interactive option already subsumes a token cache (it is effectively "acquire + cache"). The
-   > truly separate axis is **app-acquired token** vs **externally-provisioned token**, so the three
-   > options are framed that way below (A = app-acquired, B = externally provided, C = both).
-
-   ### Option A — App-acquired via interactive login (acquire + cached store)
-
-   The app runs an OAuth sign-in the first time hosting is enabled, then **caches** the resulting
-   refresh/access token in the OS secret store and refreshes it silently thereafter. The cache is an
-   app-managed token store — so this option already provides ongoing tokens after the one-time prompt.
-
-   - **Pros:** lowest-friction for desktop users (no manual token provisioning); tokens are short-lived
-     and auto-refreshed; the GUI can show the signed-in account and a clear "not signed in" state; no
-     secret handling by the user.
-   - **Cons:** requires embedding an OAuth flow (system browser + loopback redirect, or device-code);
-     more moving parts to build/test; doesn't fit unattended/headless installs (a service or CI box
-     with no interactive user can't complete the prompt); first run blocks on user action.
-
-   **GUI (Option A):** in Remote Access settings, a **"Dev tunnel account"** row:
-   - signed out → `[ Sign in to host a dev tunnel ]` button; clicking opens the system browser /
-     device-code dialog; status shows "Waiting for sign-in…".
-   - signed in → `Signed in as <account>` (read-only) with a `[ Sign out ]` link; hosting controls
-     enabled. Errors surface inline ("Sign-in expired — sign in again").
-
-   ### Option B — Externally-provisioned token source (headless)
-
-   The app reads a token the user provisioned **out-of-band** from a configured **source** (env var /
-   OS keychain key named by `AccessTokenSource`) and never prompts. The app does not acquire or cache
-   the token — it only reads what the user supplied.
-
-   - **Pros:** simplest to implement (no embedded auth UI); works for unattended/service/CI installs;
-     consistent with the repo rule of storing only a *source name*, never a raw token; easy to fake in
-     tests.
-   - **Cons:** the user must obtain and store the token out-of-band (e.g. `devtunnel token` then set an
-     env var / keychain entry) — higher friction and easy to misconfigure; token rotation/expiry is
-     the user's responsibility; poorer first-run UX with cryptic failures if the source is missing.
-
-   **GUI (Option B):** in Remote Access settings, a **"Dev tunnel token source"** field (text box for
-   the env-var/keychain key name, never the token itself) plus a `[ Test ]` button that resolves the
-   source and reports "Token resolved / Source not found / Token rejected". A short helper link
-   explains how to provision a token.
-
-   ### Option C — Both (externally-provisioned overrides app-acquired) (recommended)
-
-   Support both token sources behind `IDevTunnelAuthTokenProvider` (which already abstracts token
-   acquisition). Resolution order: **external source first** (if `AccessTokenSource` resolves to a
-   valid token, use it — covers unattended/override), **else app-acquired interactive login** (prompt
-   and cache).
-
-   - **Pros:** covers both desktop and unattended installs; the external source acts as an override for
-     power users/CI without removing the friendly desktop path; only one provider seam to wire.
-   - **Cons:** more to build and test than either alone; the GUI must present both affordances clearly
-     so users understand which is in effect.
-
-   **GUI (Option C):** a single **"Dev tunnel account"** section with a small mode selector:
-   - **Sign in (recommended)** → Option A's account row.
-   - **Use a token source (advanced)** → Option B's source field + Test button.
-   When a token source is configured and valid, show `Using token source "<name>"` and hide/disable the
-   sign-in prompt; otherwise fall back to the sign-in affordance. A single status line reports the
-   effective identity state (Signed in as X / Using token source / Not configured + error).
-
-   **Recommendation:** implement **Option C**, but stage it — ship **Option B (external source)** first
-   (smallest, unblocks unattended hosting and is fully testable), then add **Option A (interactive
-   acquire + cache)** as a follow-up for desktop friendliness. Open sub-decision: whether the
-   interactive flow uses system-browser+loopback or device-code (device-code is simpler and works
-   without a loopback listener, at the cost of a copy-paste step).
+1. **Interactive sign-in flow mechanism.** Whether the sign-in (Decision 3) uses a
+   **system-browser + loopback redirect** flow or a **device-code** flow. Device-code is simpler (no
+   loopback listener) at the cost of a copy-paste step; system-browser+loopback is more seamless. Both
+   sit behind `IDevTunnelAuthTokenProvider`, so this can be decided/changed without affecting the rest
+   of the design.
 
 ## Source references
 
