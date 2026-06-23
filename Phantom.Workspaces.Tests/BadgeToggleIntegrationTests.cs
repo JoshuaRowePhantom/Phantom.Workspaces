@@ -131,10 +131,10 @@ public sealed class BadgeToggleIntegrationTests
         var badgesViewModel = new BadgesViewModel(badgesModel);
 
         // Set up the badges
-        cardNode.SetBadges(badgesViewModel);
+        cardNode.Card.SetBadges(badgesViewModel);
 
-        Assert.NotNull(cardNode.ToggleInterestCommand);
-        Assert.True(cardNode.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
+        Assert.NotNull(cardNode.Card.ToggleInterestCommand);
+        Assert.True(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
     [AvaloniaFact]
@@ -156,10 +156,10 @@ public sealed class BadgeToggleIntegrationTests
         var badgesViewModel = new BadgesViewModel(badgesModel);
 
         // Set up the badges
-        cardNode.SetBadges(badgesViewModel);
+        cardNode.Card.SetBadges(badgesViewModel);
 
-        Assert.NotNull(cardNode.ToggleInterestCommand);
-        Assert.False(cardNode.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
+        Assert.NotNull(cardNode.Card.ToggleInterestCommand);
+        Assert.False(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
     private static async Task SeedTaskAsync(IDataAccessLayer dataAccessLayer, EntityId id)

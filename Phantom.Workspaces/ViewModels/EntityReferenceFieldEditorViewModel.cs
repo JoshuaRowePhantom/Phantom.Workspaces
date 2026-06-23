@@ -165,7 +165,7 @@ public sealed class EntityReferenceFieldEditorViewModel : EntityFieldEditorViewM
             ResolvedDisplayName = this.resolvedDisplayName,
             TooltipText = this.tooltipText,
         };
-        clone.SetEditMode(this.IsEditMode);
+        clone.IsEditMode = this.IsEditMode;
         return clone;
     }
 }

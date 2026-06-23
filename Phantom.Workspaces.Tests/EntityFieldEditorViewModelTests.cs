@@ -13,11 +13,11 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.True(editor.IsReadMode);
         Assert.False(editor.IsEditMode);
 
-        editor.SetEditMode(true);
+        editor.IsEditMode = true;
         Assert.False(editor.IsReadMode);
         Assert.True(editor.IsEditMode);
 
-        editor.SetEditMode(false);
+        editor.IsEditMode = false;
         Assert.True(editor.IsReadMode);
         Assert.False(editor.IsEditMode);
     }
@@ -36,7 +36,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.False(editor.ShowPlainTextReadMode);
         Assert.False(editor.ShowPlainTextEditMode);
 
-        editor.SetEditMode(true);
+        editor.IsEditMode = true;
         Assert.False(editor.ShowMarkdownReadMode);
         Assert.True(editor.ShowMarkdownEditMode);
         Assert.False(editor.ShowPlainTextReadMode);
@@ -79,11 +79,11 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.True(objectEditor.IsReadMode);
         Assert.True(childEditor.IsReadMode);
 
-        node.IsEditMode = true;
+        node.Card.IsEditMode = true;
         Assert.True(objectEditor.IsEditMode);
         Assert.True(childEditor.IsEditMode);
 
-        node.IsEditMode = false;
+        node.Card.IsEditMode = false;
         Assert.True(objectEditor.IsReadMode);
         Assert.True(childEditor.IsReadMode);
     }
@@ -99,14 +99,14 @@ public sealed class EntityFieldEditorViewModelTests
             "[\"documentation\",\"note\"]",
             [titleEditor]);
 
-        node.ToggleEditModeCommand.Execute(null);
+        node.Card.ToggleEditModeCommand.Execute(null);
         titleEditor.Value = "Changed";
-        node.DiscardEditModeCommand.Execute(null);
+        node.Card.DiscardEditModeCommand.Execute(null);
 
-        var revertedEditor = Assert.Single(node.FieldEditors, static editor => editor.FieldName == "title");
+        var revertedEditor = Assert.Single(node.Card.FieldEditors, static editor => editor.FieldName == "title");
         var revertedStringEditor = Assert.IsType<StringFieldEditorViewModel>(revertedEditor);
         Assert.Equal("Before", revertedStringEditor.Value);
-        Assert.False(node.IsEditMode);
+        Assert.False(node.Card.IsEditMode);
     }
 
     [AvaloniaFact]
@@ -120,14 +120,14 @@ public sealed class EntityFieldEditorViewModelTests
             "[\"documentation\",\"note\"]",
             [titleEditor]);
 
-        node.ToggleEditModeCommand.Execute(null);
+        node.Card.ToggleEditModeCommand.Execute(null);
         titleEditor.Value = "Changed";
-        node.SaveEditModeCommand.Execute(null);
+        node.Card.SaveEditModeCommand.Execute(null);
 
-        var savedEditor = Assert.Single(node.FieldEditors, static editor => editor.FieldName == "title");
+        var savedEditor = Assert.Single(node.Card.FieldEditors, static editor => editor.FieldName == "title");
         var savedStringEditor = Assert.IsType<StringFieldEditorViewModel>(savedEditor);
         Assert.Equal("Changed", savedStringEditor.Value);
-        Assert.False(node.IsEditMode);
+        Assert.False(node.Card.IsEditMode);
     }
 
     [AvaloniaFact]
@@ -159,7 +159,7 @@ public sealed class EntityFieldEditorViewModelTests
     {
         var editor = new LocalStringFieldEditorViewModel("title", "Simple value");
 
-        editor.SetEditMode(true);
+        editor.IsEditMode = true;
         editor.AddLocaleCommand.Execute(null);
 
         Assert.True(editor.IsLocalized);
@@ -174,7 +174,7 @@ public sealed class EntityFieldEditorViewModelTests
             "content",
             new MarkdownMimeAttachmentFieldEditorViewModel("content", "text/markdown", "# Heading", null));
 
-        editor.SetEditMode(true);
+        editor.IsEditMode = true;
         editor.AddLocaleCommand.Execute(null);
 
         Assert.True(editor.IsLocalized);

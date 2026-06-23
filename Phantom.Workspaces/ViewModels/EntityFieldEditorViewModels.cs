@@ -28,7 +28,7 @@ public abstract class EntityFieldEditorViewModel
     public bool IsEditMode
     {
         get => this.isEditMode;
-        private set
+        set
         {
             if (!this.SetProperty(ref this.isEditMode, value))
             {
@@ -36,15 +36,19 @@ public abstract class EntityFieldEditorViewModel
             }
 
             this.RaisePropertyChanged(nameof(this.IsReadMode));
+            this.OnEditModeChanged(value);
         }
     }
 
     public bool IsReadMode => !this.IsEditMode;
 
-    public virtual void SetEditMode(
+    /// <summary>
+    /// Invoked when <see cref="IsEditMode"/> changes. Override to cascade the edit mode to any child
+    /// editors and to raise change notifications for mode-dependent presentation properties.
+    /// </summary>
+    protected virtual void OnEditModeChanged(
         bool isEditMode)
     {
-        this.IsEditMode = isEditMode;
     }
 
     public abstract EntityFieldEditorViewModel Clone();
@@ -146,10 +150,9 @@ public sealed class LocalStringFieldEditorViewModel : EntityFieldEditorViewModel
 
     public RelayCommand AddLocaleCommand { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         this.RaisePropertyChanged(nameof(this.ShowOtherLocalesExpander));
         this.RaisePropertyChanged(nameof(this.ShowAddLocaleButton));
     }
@@ -368,10 +371,9 @@ public class MimeAttachmentFieldEditorViewModel : EntityFieldEditorViewModel
 
     public bool ShowPlainTextEditMode => this.IsEditMode && !this.IsMarkdown;
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         this.RaisePropertyChanged(nameof(this.ShowMarkdownReadMode));
         this.RaisePropertyChanged(nameof(this.ShowMarkdownEditMode));
         this.RaisePropertyChanged(nameof(this.ShowPlainTextReadMode));
@@ -464,14 +466,13 @@ public sealed class LocalizedMimeAttachmentFieldEditorViewModel : EntityFieldEdi
 
     public RelayCommand AddLocaleCommand { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
-        this.unlocalizedValue.SetEditMode(isEditMode);
+        this.unlocalizedValue.IsEditMode = isEditMode;
         foreach (var localizedValue in this.localizedValues)
         {
-            localizedValue.Editor.SetEditMode(isEditMode);
+            localizedValue.Editor.IsEditMode = isEditMode;
         }
 
         this.RaisePropertyChanged(nameof(this.ShowOtherLocalesExpander));
@@ -516,7 +517,7 @@ public sealed class LocalizedMimeAttachmentFieldEditorViewModel : EntityFieldEdi
         newValue.PropertyChanged += this.OnLocalizedValuePropertyChanged;
         this.localizedValues.Add(newValue);
         this.UpdateActiveLocalizedValue();
-        newValue.Editor.SetEditMode(this.IsEditMode);
+        newValue.Editor.IsEditMode = this.IsEditMode;
     }
 
     private void EnsureDefaultLocaleExists()
@@ -707,13 +708,12 @@ public sealed class ObjectFieldEditorViewModel : EntityFieldEditorViewModel
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> Fields { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         foreach (var field in this.Fields)
         {
-            field.SetEditMode(isEditMode);
+            field.IsEditMode = isEditMode;
         }
     }
 
@@ -737,13 +737,12 @@ public sealed class ArrayFieldEditorViewModel : EntityFieldEditorViewModel
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> Items { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         foreach (var item in this.Items)
         {
-            item.SetEditMode(isEditMode);
+            item.IsEditMode = isEditMode;
         }
     }
 

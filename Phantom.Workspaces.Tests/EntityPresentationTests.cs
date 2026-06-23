@@ -42,6 +42,48 @@ public sealed class EntityPresentationTests
         Assert.False(entity.IsEntityType("agent-session"));
     }
 
+    [AvaloniaFact]
+    public void GetDisplayItems_ReturnsInlineMarkdownBody_ForNoteContent()
+    {
+        var snapshot = CreateSnapshot(
+            """
+            {
+              "entity-id": "56565656-5656-5656-5656-565656565656",
+              "entity-types": ["note"],
+              "names": [["documentation", "agent-manifests"]],
+              "title": { "default": "Agent Manifests" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Agent Manifests\n\nThis is the body." }
+                }
+              }
+            }
+            """);
+
+        var items = EntityPresentation.GetDisplayItems(snapshot);
+
+        var item = Assert.Single(items);
+        Assert.Contains("# Agent Manifests", item.Text, StringComparison.Ordinal);
+        Assert.Contains("This is the body.", item.Text, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public void GetDisplayItems_ReturnsEmpty_WhenNoteHasNoContent()
+    {
+        var snapshot = CreateSnapshot(
+            """
+            {
+              "entity-id": "67676767-6767-6767-6767-676767676767",
+              "entity-types": ["note"],
+              "names": [["documentation", "empty"]],
+              "title": { "default": "Empty" }
+            }
+            """);
+
+        Assert.Empty(EntityPresentation.GetDisplayItems(snapshot));
+    }
+
     private static EntitySnapshot CreateSnapshot(
         string json)
     {

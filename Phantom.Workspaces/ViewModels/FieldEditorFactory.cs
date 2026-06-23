@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.ViewModels;
 /// <summary>
 /// Factory for building field editors from entity data
 /// </summary>
-internal sealed class FieldEditorFactory
+public sealed class FieldEditorFactory
 {
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;

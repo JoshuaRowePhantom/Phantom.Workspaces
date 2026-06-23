@@ -87,9 +87,9 @@ public sealed class WorkspacePaneViewModelTests
         };
 
         var cardNode = Assert.IsType<EntityListNodeViewModel>(tab.EntityCardNode);
-        Assert.True(cardNode.ShowDeleteButton);
-        Assert.Equal(EntityCardViewResolver.RawViewName, cardNode.CardViewName);
-        cardNode.DeleteEntityCommand.Execute(null);
+        Assert.True(cardNode.Card.ShowDeleteButton);
+        Assert.Equal(EntityCardViewResolver.RawViewName, cardNode.Card.CardViewName);
+        cardNode.Card.DeleteEntityCommand.Execute(null);
         await Task.Yield();
 
         Assert.Equal(1, deleteInvocations);

@@ -38,6 +38,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
     private EntityTypeViewCatalog? entityTypeViewCatalog;
+    private FieldEditorFactory? fieldEditorFactory;
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
@@ -232,6 +233,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
         this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
         this.entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(this.entityBroker);
+        this.fieldEditorFactory = new FieldEditorFactory(this.entityBroker, this.entityTypeViewCatalog);
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -836,7 +838,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this,
             this.shortcutManager,
             indentLevel,
-            isParentContext);
+            isParentContext,
+            this.fieldEditorFactory);
     }
 
     /// <summary>

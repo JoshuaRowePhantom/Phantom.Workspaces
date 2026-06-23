@@ -92,7 +92,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             item => string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal));
         Assert.Equal(2, childItem.Level);
         Assert.Equal(parentItem.ItemKey, childItem.ParentItemKey);
-        Assert.Equal(EntityCardViewResolver.RawViewName, childItem.Node.CardViewName);
+        Assert.Equal(EntityCardViewResolver.RawViewName, childItem.Node.Card.CardViewName);
 
         Assert.Equal(0, rootItem.StickyRow);
         Assert.Equal(1, parentItem.StickyRow);

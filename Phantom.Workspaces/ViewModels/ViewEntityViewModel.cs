@@ -17,7 +17,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
         MainWindowViewModel mainWindowViewModel,
         ShortcutManager shortcutManager,
         int indentLevel,
-        bool isParentContext = false)
+        bool isParentContext = false,
+        FieldEditorFactory? fieldEditorFactory = null)
     {
         this.Entity = entity;
         this.Badges = new BadgesViewModel(entity.Badges);
@@ -27,11 +28,12 @@ public sealed class ViewEntityViewModel : ViewModelBase
             entity,
             ResolveNameComponents(entity),
             entity.EntityId.ToString(),
-            cardViewName: EntityCardViewResolver.RawViewName);
+            cardViewName: EntityCardViewResolver.RawViewName,
+            fieldEditorFactory: fieldEditorFactory);
         mainWindowViewModel.RegisterCardNode(entity, this.entityCardNode);
         EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
-        this.entityCardNode.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
-        this.entityCardNode.SetBadges(this.Badges);
+        this.entityCardNode.Card.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
+        this.entityCardNode.Card.SetBadges(this.Badges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.RefreshCollections();
     }

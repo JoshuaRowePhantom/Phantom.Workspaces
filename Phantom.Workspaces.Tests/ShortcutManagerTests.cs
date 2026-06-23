@@ -88,8 +88,8 @@ public sealed class ShortcutManagerTests
             indentLevel: 0);
 
         var cardNode = viewEntity.EntityCardNode;
-        Assert.True(cardNode.ShowJsonButton);
-        Assert.True(cardNode.ShowDeleteButton);
+        Assert.True(cardNode.Card.ShowJsonButton);
+        Assert.True(cardNode.Card.ShowDeleteButton);
     }
 
     [AvaloniaFact]
@@ -111,12 +111,12 @@ public sealed class ShortcutManagerTests
             indentLevel: 0);
 
         var cardNode = viewEntity.EntityCardNode;
-        Assert.True(cardNode.HasShortcuts);
-        Assert.Equal(2, cardNode.Shortcuts.Count);
-        Assert.NotNull(cardNode.ActivateShortcutCommand);
+        Assert.True(cardNode.Card.HasShortcuts);
+        Assert.Equal(2, cardNode.Card.Shortcuts.Count);
+        Assert.NotNull(cardNode.Card.ActivateShortcutCommand);
         // The JSON toggle is a dedicated card button (no longer a shortcut-bar button), so it stays available.
-        Assert.True(cardNode.ShowJsonButton);
-        Assert.False(cardNode.ShowDeleteButton);
+        Assert.True(cardNode.Card.ShowJsonButton);
+        Assert.False(cardNode.Card.ShowDeleteButton);
     }
 
     [AvaloniaFact]
