@@ -17,16 +17,34 @@ namespace Phantom.Workspaces.Tools;
 /// surface in the workspace. Entities are keyed by a stable, path-derived id, so re-running the
 /// tool updates rather than duplicates. The scan does not descend into a repository once found, nor
 /// into <c>.git</c> directories.
+///
+/// Out of the box (no configuration), it scans **all local fixed drives**, so enabling the tool just
+/// works. The scan can be narrowed by setting top-level <c>scan-root</c> (a single path) or
+/// <c>scan-roots</c> (an array of paths) on the tool entity, and bounded by <c>max-depth</c>.
 /// </summary>
 public sealed class GitWorkspaceScanTool : IWorkspaceTool
 {
-    /// <summary>The tool-entity property naming the root directory to scan.</summary>
+    /// <summary>The tool-entity property naming a single root directory to scan.</summary>
     public const string ScanRootProperty = "scan-root";
+
+    /// <summary>The tool-entity property naming multiple root directories to scan.</summary>
+    public const string ScanRootsProperty = "scan-roots";
 
     /// <summary>The tool-entity property bounding how deep the scan descends. Defaults to 6.</summary>
     public const string MaxDepthProperty = "max-depth";
 
     private const int DefaultMaxDepth = 6;
+
+    private readonly Func<IEnumerable<string>> localFixedDriveRootsProvider;
+
+    /// <param name="localFixedDriveRootsProvider">
+    /// Supplies the local fixed-drive root paths scanned by default when no <c>scan-root</c>/<c>scan-roots</c>
+    /// is configured. Defaults to the machine's ready fixed drives; overridable for testing.
+    /// </param>
+    public GitWorkspaceScanTool(Func<IEnumerable<string>>? localFixedDriveRootsProvider = null)
+    {
+        this.localFixedDriveRootsProvider = localFixedDriveRootsProvider ?? GetLocalFixedDriveRoots;
+    }
 
     public string ToolType => "git-workspace-scan";
 
@@ -34,8 +52,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var scanRoot = ReadStringProperty(context.Tool.Data, ScanRootProperty);
-        if (string.IsNullOrWhiteSpace(scanRoot) || !Directory.Exists(scanRoot))
+        var scanRoots = this.ResolveScanRoots(context.Tool.Data);
+        if (scanRoots.Count == 0)
         {
             return new WorkspaceToolExecutionResult();
         }
@@ -43,16 +61,25 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         var maxDepth = ReadIntProperty(context.Tool.Data, MaxDepthProperty) ?? DefaultMaxDepth;
 
         var changes = new List<EntityChange>();
-        foreach (var repositoryPath in EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
+        var seenRepositoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var scanRoot in scanRoots)
         {
-            using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
-            changes.Add(new EntityChange
+            foreach (var repositoryPath in EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
             {
-                EntityId = new EntityId(DeterministicId(repositoryPath)),
-                ConcurrencyTag = null,
-                Data = document.RootElement.Clone(),
-                EntityChangeMode = EntityChangeMode.Replace,
-            });
+                if (!seenRepositoryPaths.Add(repositoryPath))
+                {
+                    continue;
+                }
+
+                using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
+                changes.Add(new EntityChange
+                {
+                    EntityId = new EntityId(DeterministicId(repositoryPath)),
+                    ConcurrencyTag = null,
+                    Data = document.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                });
+            }
         }
 
         if (changes.Count == 0)
@@ -69,6 +96,47 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             context.CancellationToken).ConfigureAwait(false);
 
         return new WorkspaceToolExecutionResult();
+    }
+
+    /// <summary>
+    /// Resolves the directories to scan: explicit <c>scan-roots</c>/<c>scan-root</c> when configured,
+    /// otherwise all local fixed drives. Only existing directories are returned.
+    /// </summary>
+    private IReadOnlyList<string> ResolveScanRoots(JsonElement? toolEntity)
+    {
+        var configuredRoots = ReadStringArrayProperty(toolEntity, ScanRootsProperty);
+        if (ReadStringProperty(toolEntity, ScanRootProperty) is { Length: > 0 } singleRoot)
+        {
+            configuredRoots = [.. configuredRoots, singleRoot];
+        }
+
+        var roots = configuredRoots.Count > 0
+            ? configuredRoots
+            : this.localFixedDriveRootsProvider().ToList();
+
+        return roots
+            .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static IEnumerable<string> GetLocalFixedDriveRoots()
+    {
+        DriveInfo[] drives;
+        try
+        {
+            drives = DriveInfo.GetDrives();
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+
+        return drives
+            .Where(drive => drive.DriveType == DriveType.Fixed && drive.IsReady)
+            .Select(drive => drive.RootDirectory.FullName)
+            .ToList();
     }
 
     private static IEnumerable<string> EnumerateGitRepositories(string root, int maxDepth, CancellationToken cancellationToken)
@@ -191,5 +259,23 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<string> ReadStringArrayProperty(JsonElement? toolEntity, string propertyName)
+    {
+        if (toolEntity is JsonElement toolEntityValue
+            && toolEntityValue.ValueKind == JsonValueKind.Object
+            && toolEntityValue.TryGetProperty(propertyName, out var element)
+            && element.ValueKind == JsonValueKind.Array)
+        {
+            return element.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value!)
+                .ToList();
+        }
+
+        return [];
     }
 }

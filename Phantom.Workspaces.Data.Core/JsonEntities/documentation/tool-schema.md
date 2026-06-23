@@ -46,15 +46,22 @@ The `tool-type` property identifies the C# implementation class that executes th
 The `configuration` property holds tool-specific configuration data. The structure varies by tool-type:
 
 **GitWorkspaceScanTool**:
+
+Works out of the box with no configuration — it scans **all local fixed drives** for Git
+repositories. The scan can optionally be narrowed/bounded with **top-level** properties (not nested
+under `configuration`):
+
 ```json
 {
   "tool-type": "git-workspace-scan",
-  "configuration": {
-    "scan-root": "C:\\dev",
-    "max-depth": 6
-  }
+  "scan-roots": ["C:\\dev", "D:\\work"],
+  "max-depth": 6
 }
 ```
+
+- `scan-root` (string) or `scan-roots` (array of strings): directories to scan instead of all local
+  drives. Omit both to scan every local fixed drive.
+- `max-depth` (number, default 6): how deep the scan descends.
 
 **EntityClassifierTool**:
 ```json
@@ -177,9 +184,15 @@ Discovers git repositories in a directory tree and creates `git` entities.
 
 **When to use**: User wants to track their git repositories in the workspace.
 
-**Configuration**:
-- `scan-root`: Path to scan (e.g., `C:\\dev`, `/home/user/projects`)
-- `max-depth`: How deep to recurse (default: 6)
+**Out of the box**: With no configuration it scans **all local fixed drives**, so simply enabling the
+tool (creating a `tool-relationship` to a schedule and profile) is enough — the tool entity does not
+need to be edited.
+
+**Optional configuration** (top-level properties on the tool entity, not nested under
+`configuration`):
+- `scan-root`: a single path to scan instead of all drives (e.g. `C:\\dev`, `/home/user/projects`)
+- `scan-roots`: an array of paths to scan instead of all drives
+- `max-depth`: how deep to recurse (default: 6)
 
 ### Entity Classifier
 

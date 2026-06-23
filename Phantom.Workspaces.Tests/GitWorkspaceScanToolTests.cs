@@ -116,4 +116,47 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
 
         Assert.Empty(await GitEntitiesAsync(dataAccessLayer));
     }
+
+    [Fact]
+    public async Task Run_WithoutScanRoot_DefaultsToLocalDrives()
+    {
+        var repo = this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        // No scan-root configured; the tool falls back to the (here, fake) local fixed-drive roots.
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: () => [this.scanRoot]);
+        var context = WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            """{ "entity-types": ["tool"], "tool-type": "git-workspace-scan" }""");
+
+        await tool.ExecuteAsync(context);
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        Assert.Equal(repo, single.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task Run_WithScanRoots_ScansAllConfiguredRoots_Deduplicated()
+    {
+        var rootA = Path.Combine(this.scanRoot, "a");
+        var rootB = Path.Combine(this.scanRoot, "b");
+        Directory.CreateDirectory(rootA);
+        Directory.CreateDirectory(rootB);
+        var repoA = this.MakeRepo("a", "project-a");
+        var repoB = this.MakeRepo("b", "project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        // Configure scan-roots (and overlapping scan-root) — the same repo must not be reported twice.
+        var context = WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["tool"], "tool-type": "git-workspace-scan", "scan-roots": [{{JsonSerializer.Serialize(rootA)}}, {{JsonSerializer.Serialize(rootB)}}], "scan-root": {{JsonSerializer.Serialize(rootA)}} }""");
+        // The fake drive provider would return nothing, proving the configured roots take precedence.
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: Array.Empty<string>);
+
+        await tool.ExecuteAsync(context);
+
+        var paths = (await GitEntitiesAsync(dataAccessLayer)).Select(e => e.GetProperty("path").GetString()).ToHashSet();
+        Assert.Equal(2, paths.Count);
+        Assert.Contains(repoA, paths);
+        Assert.Contains(repoB, paths);
+    }
 }
