@@ -167,11 +167,10 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        // For now, the document model isn't used because
-        // of bugs in the FlowDocument rendering.
-        // https://github.com/AvaloniaUI/AvaloniaPro/issues/126
-        //this.historyDocumentModel?.Refresh();
-        //this.runningDocumentModel?.Refresh();
+        // Refresh the in-place document models so reasoning blocks appear/disappear, plus the
+        // selectable-text output which is the displayed surface.
+        this.historyDocumentModel?.Refresh();
+        this.runningDocumentModel?.Refresh();
         this.selectableTextBlockOutputModel?.Refresh();
     }
 
@@ -294,11 +293,11 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         this.OutputDocument.Blocks.Add(this.outputHistoryRootSection);
         this.OutputDocument.Blocks.Add(this.outputRunningRootSection);
-        // For now, the document model isn't used because
-        // of bugs in the FlowDocument rendering.
-        // https://github.com/AvaloniaUI/AvaloniaPro/issues/126
-        //this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
-        //this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
+        // The FlowDocument is not the displayed output (the editor uses the SelectableTextBox mode),
+        // but these document models keep the document's Sections updated in place from the live history
+        // and running-item collections, so the FlowDocument output mode renders incrementally.
+        this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
+        this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
     }
 
     private void AttachSelectableOutputModel()
