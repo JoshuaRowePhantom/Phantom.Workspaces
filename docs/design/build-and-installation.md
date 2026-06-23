@@ -29,6 +29,65 @@ under "Future (non-Windows)".
 - Tests run through the approved harness `.\scripts\run-tests.ps1` (results in
   `scripts\test-results.log`).
 
+### Linux build/test on a Windows desktop via WSL
+
+The Docker-backed data-layer tests (`Category=SlowDocker`, e.g. MongoDB Atlas Local) need a
+**Linux** container engine, which hosted `windows-latest` cannot provide. A Windows developer
+can reproduce the `ubuntu-latest` CI job **locally** using **WSL2**, which provides a real
+Linux kernel + Docker. This lets you run the same `-Mode full` suite the Linux CI job runs,
+before pushing.
+
+#### One-time setup
+
+1. **Enable WSL2 + a distro:** `wsl --install -d Ubuntu` (reboot if prompted), then set WSL2 as
+   default (`wsl --set-default-version 2`).
+2. **Docker in WSL:** either install **Docker Desktop** with the **WSL2 integration** enabled
+   for the Ubuntu distro, or install the native Docker engine inside the distro. Verify with
+   `docker run hello-world` from inside WSL.
+3. **.NET 10 SDK in WSL:** install the Linux .NET 10 SDK inside the distro (Microsoft package
+   feed or the install script). Verify `dotnet --info` shows the SDK.
+4. **PowerShell in WSL:** install **PowerShell (`pwsh`)** in the distro, because the approved
+   harness is `scripts/run-tests.ps1`. `pwsh` runs it unchanged (the script is cross-platform —
+   `dotnet test` on the `.slnx`, `Join-Path`, `Set-Content`).
+5. **Clone into the WSL filesystem** (e.g. `~/src/Phantom.Workspaces`), **not** under
+   `/mnt/c/...`. Building/testing on the native ext4 filesystem is dramatically faster than the
+   Windows-mount path, and avoids cross-OS file-watcher/permission quirks.
+
+#### Running the Linux suite
+
+From inside WSL, in the repo root:
+
+```bash
+# the cross-platform Docker/data-layer tests (mirrors the ubuntu-latest CI job)
+pwsh ./scripts/run-tests.ps1 -Mode full -TestNames Phantom.Workspaces.Data.MongoDB.Tests
+# or the whole non-Windows-only set
+pwsh ./scripts/run-tests.ps1 -Mode full
+```
+
+- Results land in `scripts/test-results.log` exactly as on Windows.
+- The MongoDB Atlas Local container is started/managed by the test fixture; per the existing
+  design it is left running between runs, so the first run pays the container start cost and
+  subsequent runs are fast.
+
+#### What does and doesn't run on Linux
+
+- **Runs on Linux:** the platform-agnostic .NET test projects — data layers (MongoDB/offline/
+  data-core), LLM/core, tools, schema/serialization. These are exactly what the `ubuntu-latest`
+  job covers.
+- **Does not run on Linux:** Windows-only tests — the install/update/tray/startup integration
+  (junction/symlink, `StartupTaskService`, single-instance) and any Win32-specific paths. Run
+  those from Windows (`.\scripts\run-tests.ps1`). Avalonia GUI/headless tests can run on Linux
+  only with a virtual display (`xvfb`) and are otherwise kept on the Windows job.
+- The **GUI app itself is Windows-only** (`WinExe`); WSL is for *building/testing the
+  cross-platform libraries and Docker integrations*, not for producing the shipped exe.
+
+#### Why this mirrors CI
+
+This is deliberately the same split as the CI matrix (*GitHub Actions workflows* below):
+`windows-latest` for build/GUI + fast tests, `ubuntu-latest` for the Docker/data-layer suite.
+WSL gives a developer the Linux half on their Windows box, so a red Linux-only test can be
+reproduced and fixed locally instead of round-tripping through CI.
+
 ### Release publish (Windows)
 
 Produce a self-contained, single-file app so users need no preinstalled .NET:
@@ -361,9 +420,30 @@ environments, and release outputs) the build/installation design requires. Items
   - Triggers: `pull_request`, `push` to `main`.
   - Runner: `windows-latest` (matches the GUI/Windows target; injects
     `AVALONIA_UI_LICENSE_KEY`).
-  - Steps: checkout → setup .NET 10 → restore → build `-c Release` → `.\scripts\run-tests.ps1`
-    → upload `scripts\test-results.log` as a workflow artifact on failure.
+  - Steps: checkout → setup .NET 10 → restore → build `-c Release` →
+    `.\scripts\run-tests.ps1 -Mode fast` → upload `scripts\test-results.log` as a workflow
+    artifact (always) and **fail the job on a non-zero script exit** (red log).
+  - **Test execution detail:** the pipeline runs the *same* approved script the design uses
+    locally (`.\scripts\run-tests.ps1`), not raw `dotnet test`. `-Mode fast` excludes
+    `Category=SlowGit` and `Category=SlowDocker` tests, so every PR gets quick, deterministic
+    feedback without requiring Docker on the runner.
   - Concurrency group per ref to cancel superseded runs.
+- **`ci-full.yml`** (or a scheduled/`workflow_dispatch` job) — runs the **full** suite
+  (`.\scripts\run-tests.ps1 -Mode full`) including the `SlowGit` and `SlowDocker` integration
+  tests. **Docker caveat:** the `SlowDocker` tests start **MongoDB Atlas Local**, a *Linux*
+  container, which **cannot** run on hosted `windows-latest` (no Linux-container support there).
+  Because these data-layer tests are platform-agnostic .NET (only the app is Windows-only),
+  this job runs on **`ubuntu-latest`**, where Docker + Linux containers work natively. So the
+  matrix is: `windows-latest` for build/GUI + fast tests, `ubuntu-latest` for the Docker/Git
+  integration suite. Scheduled (e.g. nightly), on-demand, and **gated before release**. A
+  self-hosted Docker-capable Windows runner is only needed if a test ever requires *Windows*
+  containers specifically.
+  - **Targeting on Linux:** the full suite also contains **Windows-only** tests (Avalonia GUI,
+    the `StartupTaskService`/scheduled-task and junction/symlink integration tests). The
+    `ubuntu-latest` job therefore runs the **cross-platform data-layer Docker tests** (e.g. via
+    `-TestNames Phantom.Workspaces.Data.MongoDB.Tests` or a dedicated category), while the
+    Windows-only integration tests run in a Windows job. This keeps each platform running only
+    the tests valid for it; combined, the two jobs cover the whole `-Mode full` set.
 - **`release.yml`** — tag-triggered release pipeline (detailed below).
   - Trigger: `push` of tag `v*` (plus `workflow_dispatch` for manual re-runs).
   - Uses the `release` GitHub Environment (holds signing + release secrets, optional manual
@@ -391,6 +471,13 @@ environments, and release outputs) the build/installation design requires. Items
 - **Issue/PR templates** (`ISSUE_TEMPLATE/`, `pull_request_template.md`) — optional.
 - **`copilot-setup-steps.yml`** **(if/when used)** — cloud-agent environment setup.
 
+### Agent skills (`.github/skills/`)
+
+- **`create-release/SKILL.md`**, **`check-release-status/SKILL.md`**,
+  **`draft-release-notes/SKILL.md`**, **`rollback-release/SKILL.md`** — release skills that let
+  the AI drive the pipeline safely (detailed in *Release skills (AI-assisted releases)* below).
+  Same `SKILL.md` format as the existing `run-tests` skill.
+
 ### Secrets and variables
 
 - **Actions secrets (repo or org):** `AVALONIA_UI_LICENSE_KEY` (compile-time Avalonia
@@ -402,8 +489,9 @@ environments, and release outputs) the build/installation design requires. Items
 
 ### Branch protection / rulesets
 
-- Protect `main`: require `ci.yml` to pass, require review, linear history; tags `v*` push by
-  maintainers only (drives releases).
+- Protect `main`: require status checks to pass, require review + `CODEOWNERS`, linear
+  history; restrict `v*` tag creation to maintainers (drives releases). Full policy in
+  *Pull request acceptance* below.
 
 ### Packaging assets in-repo (`build/` or `packaging/`)
 
@@ -423,6 +511,83 @@ environments, and release outputs) the build/installation design requires. Items
 - Auto-generated release notes (from `.github/release.yml` categories).
 - These stable-named, hashed assets are what the in-app updater, the tray notifier, the
   README "latest" link, and a future winget manifest all consume.
+
+## Pull request acceptance
+
+How changes get from a branch/fork into `main`. The goal is a small, automated,
+convention-enforcing gate so the AI agent and human contributors follow the same path, and so
+every commit on `main` is releasable.
+
+### Contribution flow
+
+1. **Branch / fork.** Work happens on a feature branch (or fork). Recommended: prefix branch
+   names with the author's username, e.g. `jrowe/entity-editor`.
+2. **Open a PR into `main`** using the PR template. The description states intent, links any
+   issue, and notes whether changes touch the filesystem/Git/data layers (which decides whether
+   the full/Docker suite must run — see *Required checks*).
+3. **Automated checks run** (below). The author iterates until green.
+4. **Review.** At least one approving review is required; `CODEOWNERS` auto-requests the right
+   reviewers for touched areas (e.g. `docs/design/`, workflows, packaging, data layer).
+5. **Address feedback**, keeping the branch up to date with `main` (rebase/merge per the
+   linear-history rule — never rewrite already-pushed shared history without agreement).
+6. **Merge** once all required checks pass and approvals are in (below).
+7. **Releases are separate.** Merging does **not** publish; a maintainer cuts a release later
+   via the `create-release` skill (tag → `release.yml`). `main` is always in a releasable state.
+
+### Required status checks (branch protection on `main`)
+
+A PR is mergeable only when these pass:
+
+- **`ci.yml` (build + fast tests)** on `windows-latest` — `dotnet build -c Release` and
+  `.\scripts\run-tests.ps1 -Mode fast` green (`scripts\test-results.log`). Required on every PR.
+- **Data-layer Docker tests** on `ubuntu-latest` — required **when the PR touches the data
+  layers** (MongoDB/offline/data-core) or their tests; runs the cross-platform `SlowDocker`
+  suite. For PRs that don't touch those areas it may be skipped/non-blocking to keep feedback
+  fast. (Path-filtered trigger.)
+- **Windows-only integration tests** — required when the PR touches install/update/tray/startup
+  code (junction/symlink, `StartupTaskService`, single-instance, GUI).
+- Optional advisory checks (non-blocking): **CodeQL**, **dependency-review**. These inform
+  review but don't hard-block unless they flag a security issue policy says must be fixed.
+
+The build is **failed on a red `scripts\test-results.log`** (non-zero script exit); the log is
+uploaded as a workflow artifact for inspection.
+
+### Review and ownership rules
+
+- **≥1 approving review** from a code owner of the touched area; **0 unresolved
+  "request-changes"** reviews.
+- **`CODEOWNERS`** maps areas → reviewers so the right people are pulled in automatically.
+- **Stale-approval dismissal:** new commits after an approval re-request review (so approvals
+  always reflect the merged code).
+- **No self-approval** of one's own PR for the required review.
+
+### Merge policy
+
+- **Linear history** required → **squash-merge** is the default (one tidy commit per PR on
+  `main`); the squash commit message is derived from the PR title/description and feeds the
+  auto-generated release notes categorized by `.github/release.yml`.
+- **No direct pushes to `main`** (including maintainers) — everything goes through a PR.
+- **Up-to-date with `main`** required before merge (so checks ran against the final tree).
+- **Conversation resolution** required (all review threads resolved).
+- The Copilot co-author trailer is included on agent-made commits per repo convention.
+
+### Agent-specific rules
+
+- The AI follows the **same** gate: it must get `ci.yml` green via `.\scripts\run-tests.ps1`
+  before requesting merge, and it **never commits, merges, or tags without explicit user
+  instruction**.
+- The agent uses `gh` for PR operations (open/status/merge) consistent with the repo's
+  `gh`-CLI preference, and never force-pushes shared history.
+- Merging and releasing are distinct: the agent may prepare and merge a PR when asked, but
+  releases go through the `create-release` skill and an explicit instruction.
+
+### Enforcement artifacts
+
+- A **branch ruleset** on `main` encodes: required checks (the jobs above), required review +
+  code-owner review, linear history, conversation resolution, up-to-date-before-merge, and
+  no-direct-push.
+- **`CODEOWNERS`**, the **PR template**, and `.github/release.yml` (notes categories) are the
+  tracked files that make the policy concrete; all are secret-free.
 
 ## Release automation (CI/CD)
 
@@ -467,6 +632,70 @@ version, and the in-app updater + tray notifier read from it directly:
 - Asset URLs are stable (`releases/download/<tag>/<name>`), so the in-app updater, the tray
   notifier, the README "latest" link (and a future winget manifest) all reference the same
   GitHub-hosted artifacts.
+
+## Release skills (AI-assisted releases)
+
+We add repository **skills** (the same `.github/skills/<name>/SKILL.md` mechanism as the
+existing `run-tests` skill) so the AI agent can cut releases through a single, codified,
+guard-railed workflow rather than ad-hoc commands. Each skill is a `SKILL.md` with YAML
+frontmatter (`name`, `description`) plus **Commands** and **Rules** sections, and is invoked by
+name.
+
+### Skills to create (under `.github/skills/`)
+
+- **`create-release`** — the orchestrator skill the agent uses to ship a version. It codifies
+  the full sequence and the preconditions:
+  1. Verify the working tree is clean and on the release branch (e.g. `main`), pulled
+     up-to-date.
+  2. Run the test suite via the `run-tests` skill (`.\scripts\run-tests.ps1`) and confirm
+     `scripts\test-results.log` is green — **never** release on a failing/again-untested tree.
+  3. Determine the next version from the single version source / SemVer bump (major/minor/patch
+     chosen by the user), and confirm it is strictly greater than the latest release tag.
+  4. Create and push the annotated `vX.Y.Z` **tag** (tagging is what triggers `release.yml`).
+  5. Watch the `release.yml` run to completion (`gh run watch`) and report status.
+  6. Verify the resulting GitHub Release has the expected per-arch zip + `.sha256` assets and
+     auto-generated notes.
+- **`check-release-status`** — a read-only skill to inspect the latest release(s) and the most
+  recent `release.yml` run: `gh release view`, `gh run list --workflow release.yml`, asset
+  presence, and whether the in-app updater would see it (published, non-prerelease). Useful for
+  "did my release succeed?" without re-cutting.
+- **`draft-release-notes`** — generate/preview release notes for the pending range (from the
+  last tag to `HEAD`) so the human can review before tagging; complements GitHub's
+  auto-generated notes configured in `.github/release.yml`.
+- **`rollback-release`** — guarded skill to mark a bad release as pre-release/draft (so the
+  stable-channel updater stops offering it) and, if needed, publish the previous version as
+  latest. Deliberately conservative: it never force-pushes or rewrites history (per the
+  no-rewrite-history convention) and asks for explicit confirmation.
+
+### Skill content and guardrails
+
+Each skill's **Rules** section encodes the repository conventions so the agent cannot drift:
+
+- Always gate a release on a green `.\scripts\run-tests.ps1` (reuse the `run-tests` skill).
+- Never commit/tag without explicit user instruction; never push to `microsoft/winget-pkgs`
+  (winget is deferred — see `docs/design/winget.md`).
+- Use `gh` for all GitHub operations (releases, runs, tags) — consistent with the repo's
+  `gh`-CLI preference.
+- Never put secrets in commands or logs; signing/license secrets live only in Actions secrets.
+- Versions are SemVer and strictly increasing; the agent confirms the bump with the user.
+- Small, reviewable steps; the agent surfaces what it is about to do (tag name, version,
+  workflow run URL) before destructive actions.
+
+### Relationship to the pipeline
+
+These skills are the **human/agent front-end** to the `release.yml` pipeline described above:
+the skill prepares and triggers (tag + watch), while GitHub Actions does the build, sign,
+package, and publish. The skills add no new build capability — they make the existing pipeline
+safely drivable by the AI, with the conventions baked into `SKILL.md` so behavior is
+reproducible across sessions.
+
+### Test / validation tasks for the skills
+
+- A docs/skill lint test (extend the existing docs tests) asserts each release skill's
+  `SKILL.md` has valid frontmatter (`name`, `description`) and the required **Commands**/
+  **Rules** sections.
+- A dry-run check that `create-release` references the `run-tests` gate and uses `gh` (not raw
+  git pushes to third-party repos), guarding against convention drift.
 
 ## Auto-update (in-app, via Settings)
 
