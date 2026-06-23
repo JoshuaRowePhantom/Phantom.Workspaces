@@ -1,5 +1,9 @@
+using System;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Data.Web.Client;
@@ -74,15 +78,40 @@ public sealed class WebClientDataAccessLayer : IDataAccessLayer, IDisposable
         TRequest request,
         CancellationToken cancellationToken)
     {
-        using var response = await this.httpClient.PostAsJsonAsync(relativeUri, request, JsonSerializerOptions, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage response;
+        try
         {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            throw new InvalidOperationException(
-                $"Web data access call to '{relativeUri}' failed with {(int)response.StatusCode}: {errorBody}");
+            response = await this.httpClient.PostAsJsonAsync(relativeUri, request, JsonSerializerOptions, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new WebDataAccessRequestException(
+                $"Web data access call to '{relativeUri}' could not reach the server: {exception.Message}",
+                exception.StatusCode,
+                exception);
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new WebDataAccessRequestException(
+                $"Web data access call to '{relativeUri}' timed out.",
+                statusCode: null,
+                exception);
         }
 
-        var responseBody = await response.Content.ReadFromJsonAsync<TResponse>(JsonSerializerOptions, cancellationToken).ConfigureAwait(false);
-        return responseBody ?? throw new InvalidOperationException($"Web data access endpoint '{relativeUri}' returned an empty response.");
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                throw new WebDataAccessRequestException(
+                    $"Web data access call to '{relativeUri}' failed with {(int)response.StatusCode}: {errorBody}",
+                    response.StatusCode);
+            }
+
+            var responseBody = await response.Content.ReadFromJsonAsync<TResponse>(JsonSerializerOptions, cancellationToken).ConfigureAwait(false);
+            return responseBody ?? throw new WebDataAccessRequestException(
+                $"Web data access endpoint '{relativeUri}' returned an empty response.",
+                response.StatusCode);
+        }
     }
 }

@@ -147,6 +147,14 @@ public sealed record WorkspacesConfiguration
     public VisualSettings Visual { get; init; } = new();
 
     /// <summary>
+    /// Testing only: overrides the computer identity used when composing this instance's
+    /// user-computer-profile entity name, so multiple instances can run on one machine with distinct
+    /// profiles (and therefore distinct dev tunnels, MCP-server namespaces, and session areas).
+    /// Null/empty uses the real host name. Not for production use.
+    /// </summary>
+    public string? UserComputerProfileOverride { get; init; }
+
+    /// <summary>
     /// Projects the configured data-access profile into a <see cref="RepositorySource"/>
     /// consumable by <see cref="EntityRepository"/>.
     /// </summary>
@@ -164,11 +172,15 @@ public sealed record WorkspacesConfiguration
                 this.DataAccess.WebEndpoint
                     ?? throw new InvalidOperationException(
                         "Web data-access mode requires a web endpoint URL.")),
-            DataAccessMode.DevTunnelWeb => new WebRepositorySource(
-                this.DataAccess.WebEndpoint
-                    ?? throw new InvalidOperationException(
-                        "Dev tunnel web data-access mode requires a web endpoint URL."),
-                UseGitHubAuthToken: true),
+            DataAccessMode.DevTunnelWeb => this.DataAccess.WebEndpoint is { Length: > 0 } devTunnelEndpoint
+                ? new WebRepositorySource(devTunnelEndpoint, UseGitHubAuthToken: true)
+                : this.DevTunnel.TunnelName is { Length: > 0 } devTunnelName
+                    ? new DevTunnelNameRepositorySource(
+                        devTunnelName,
+                        this.DevTunnel.AccessMode,
+                        this.DevTunnel.AccessTokenSource)
+                    : throw new InvalidOperationException(
+                        "Dev tunnel web data-access mode requires either a web endpoint URL or a dev tunnel name."),
             DataAccessMode.RemoteMongo => throw new InvalidOperationException(
                 "Remote MongoDB connection is not yet supported by RepositorySource."),
             _ => throw new InvalidOperationException(

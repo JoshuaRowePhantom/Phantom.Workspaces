@@ -40,10 +40,11 @@ public sealed class EntityRepository
     }
 
     public static async Task<EntityRepository> CreateAsync(
-        RepositorySource repositorySource)
+        RepositorySource repositorySource,
+        string? userComputerProfileOverride = null)
     {
         var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource).ConfigureAwait(false);
-        var isWebSource = repositorySource is WebRepositorySource;
+        var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
         var coreDataAccessLayer = isWebSource
             ? underlyingDataAccessLayer
             : new MergeProcessingDataAccessLayer(
@@ -54,7 +55,7 @@ public sealed class EntityRepository
             await EnsureSeedDataIfNeededAsync(coreDataAccessLayer).ConfigureAwait(false);
         }
 
-        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer).ConfigureAwait(false);
+        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer, userComputerProfileOverride).ConfigureAwait(false);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
     }
@@ -105,6 +106,7 @@ public sealed class EntityRepository
         return repositorySource switch
         {
             WebRepositorySource web => CreateWebDataAccessLayer(web),
+            DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(devTunnel).ConfigureAwait(false),
             LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
             MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo).ConfigureAwait(false),
             _ => new InMemoryDataAccessLayer(),
@@ -125,6 +127,31 @@ public sealed class EntityRepository
             : null;
 
         return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken);
+    }
+
+    private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
+        DevTunnelNameRepositorySource repositorySource)
+    {
+        // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
+        // on a connection drop the reconnecting layer re-resolves the tunnel (picking up a changed
+        // port) and reconnects with bounded backoff, without restarting the workspace. Token access
+        // uses the resolved pre-shared token; Private access reuses the GitHub identity token as the
+        // X-Tunnel-Authorization, matching the explicit-endpoint dev tunnel scheme.
+        var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
+            .CreateEndpointResolver(repositorySource.AccessTokenSource);
+
+        var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
+            resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
+                repositorySource.TunnelName,
+                repositorySource.AccessMode,
+                cancellationToken),
+            buildDataAccessLayer: resolution => new WebClientDataAccessLayer(
+                resolution.BaseUri.ToString(),
+                resolution.TunnelAuthToken ?? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
+            delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
+
+        await reconnectingDataAccessLayer.StartAsync().ConfigureAwait(false);
+        return reconnectingDataAccessLayer;
     }
 
     private static async Task<IDataAccessLayer> CreateMongoDbDataAccessLayerAsync(
