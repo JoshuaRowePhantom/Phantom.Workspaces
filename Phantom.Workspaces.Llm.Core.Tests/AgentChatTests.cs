@@ -554,6 +554,110 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task StreamingInProgress_SurfacesToolCallAndResultInRunningItemBeforeCompletion()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Let me check. "));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new FunctionCallContent("call-1", "search", new Dictionary<string, object?> { ["q"] = "widgets" }),
+        ]));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Tool, [
+            new FunctionResultContent("call-1", "found 3 widgets"),
+        ]));
+        var blockedFinal = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "Done.")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        var blockedComplete = stream.Complete(isReady: false);
+
+        await using var chat = CreateChat(client);
+        chat.EnqueueUserMessage("search please");
+
+        // While the run is still in progress (before the final update is released), the tool call and
+        // result should already have streamed into the running item.
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => RunningItemContents(chat).OfType<FunctionCallContent>().Any(content => content.CallId == "call-1")
+                && RunningItemContents(chat).OfType<FunctionResultContent>().Any(content => content.CallId == "call-1"),
+            "tool call and result to stream into the running item before completion");
+
+        Assert.Equal(1, chat.RunningItems.Count);
+
+        blockedFinal.MarkReady();
+        blockedComplete.MarkReady();
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to complete");
+    }
+
+    private static IEnumerable<AIContent> RunningItemContents(AgentChat chat)
+        => chat.RunningItems
+            .SelectMany(runningItem => runningItem.Items)
+            .SelectMany(item => item.Contents);
+
+    [Fact]
+    public void ResolveUseProvidedChatClientAsIs_TrueForOverride_SelfInvoking_OrServiceDiscovered()
+    {
+        var normalClient = new DeterministicTestChatClient();
+        var selfInvokingClient = new SelfInvokingTestChatClient();
+        var serviceDiscoveredClient = new ServiceDiscoveredSelfInvokingChatClient();
+
+        // A normal resolved client (no override) needs the framework's function-invoking middleware.
+        Assert.False(AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride: false, normalClient));
+        // An explicitly provided client is used as-is.
+        Assert.True(AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride: true, normalClient));
+        // A self-invoking client (e.g. Copilot SDK) is used as-is so its streaming tool events aren't buffered.
+        Assert.True(AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride: false, selfInvokingClient));
+        // Self-invocation is also honored when advertised via GetService (survives client wrappers).
+        Assert.True(AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride: false, serviceDiscoveredClient));
+    }
+
+    [Fact]
+    public void CopilotSdkChatClient_IsSelfInvokingToolChatClient()
+    {
+        Assert.True(typeof(ISelfInvokingToolChatClient).IsAssignableFrom(typeof(CopilotSdkChatClient)));
+    }
+
+    private sealed class SelfInvokingTestChatClient : IChatClient, ISelfInvokingToolChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceKey is null && serviceType.IsInstanceOfType(this) ? this : null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ServiceDiscoveredSelfInvokingChatClient : IChatClient
+    {
+        private static readonly ISelfInvokingToolChatClient Marker = new MarkerOnly();
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(ISelfInvokingToolChatClient) ? Marker : null;
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class MarkerOnly : ISelfInvokingToolChatClient
+        {
+        }
+    }
+
+    [Fact]
     public async Task CreateInputQueue_AddsQueueToInputQueues()
     {
         await using var chat = CreateChat();

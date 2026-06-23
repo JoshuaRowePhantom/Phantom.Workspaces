@@ -113,6 +113,9 @@ public sealed class AgentChat : IAsyncDisposable
            ? (this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
            : AgentFactory.CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
        var resolvedClient = clientInfo.Item1;
+       var useProvidedChatClientAsIs = ResolveUseProvidedChatClientAsIs(
+           this.request.ClientOverride is not null,
+           resolvedClient);
        if (this.request.AgentServices?.LogChat == true)
        {
            resolvedClient = resolvedClient.AsBuilder().UseLogging(this.request.AgentServices.LoggerFactory).Build();
@@ -133,7 +136,7 @@ public sealed class AgentChat : IAsyncDisposable
        {
            ChatOptions = new ChatOptions(),
            ChatHistoryProvider = this.chatHistoryProvider,
-           UseProvidedChatClientAsIs = this.request.ClientOverride is not null,
+           UseProvidedChatClientAsIs = useProvidedChatClientAsIs,
        };
        AgentFactory.ConfigureChatOptions(resolvedAgentDefinition, this.chatOptions.ChatOptions);
        this.runtimeContextProviderRegistrations = await this.CreateRuntimeContextProviderRegistrationsAsync(
@@ -658,6 +661,22 @@ public sealed class AgentChat : IAsyncDisposable
             update.Contents
                 .OfType<TextContent>()
                 .Select(static content => content.Text));
+    }
+
+    /// <summary>
+    /// Decides whether the agent framework should use the resolved chat client as-is (without adding
+    /// function-invoking middleware). This is true when a client is explicitly provided (tests inject a
+    /// ready-to-use client) or when the client invokes its own tools
+    /// (<see cref="ISelfInvokingToolChatClient"/>, e.g. the GitHub Copilot SDK). For self-invoking
+    /// clients the middleware is both unnecessary and harmful — it buffers streaming tool-call/result
+    /// content so it would not stream live into the GUI.
+    /// </summary>
+    internal static bool ResolveUseProvidedChatClientAsIs(bool hasClientOverride, IChatClient resolvedClient)
+    {
+        ArgumentNullException.ThrowIfNull(resolvedClient);
+        return hasClientOverride
+            || resolvedClient is ISelfInvokingToolChatClient
+            || resolvedClient.GetService(typeof(ISelfInvokingToolChatClient)) is not null;
     }
 
     private static bool IsToolContinuationFinishReason(ChatFinishReason? finishReason)
