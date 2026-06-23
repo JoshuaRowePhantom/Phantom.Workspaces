@@ -88,6 +88,85 @@ This is deliberately the same split as the CI matrix (*GitHub Actions workflows*
 WSL gives a developer the Linux half on their Windows box, so a red Linux-only test can be
 reproduced and fixed locally instead of round-tripping through CI.
 
+### Manual build/install verification (`scripts\test-install.ps1`)
+
+A developer script that exercises the **whole** build → package → install → update →
+uninstall flow on the local desktop, in a **sandbox**, without creating a GitHub release or
+touching the developer's real install. This lets us validate packaging/updater behavior in
+seconds instead of waiting for a release round-trip.
+
+#### What it does (stages)
+
+1. **Publish.** Run the same self-contained single-file `dotnet publish` the release pipeline
+   uses, for the current runtime identifier (default `win-x64`), into a temporary staging
+   folder. A `-FastPublish` switch can skip ReadyToRun and single-file compression for quicker
+   iteration.
+2. **Package.** Assemble the versioned portable zip + compute its `.sha256`, exactly as the
+   packaging step would — producing a real artifact to install from.
+3. **Serve a fake release (optional).** Stand up a **local release source** so the in-app
+   updater can be pointed at it without GitHub: either a `file://` folder or a tiny localhost
+   HTTP server that mimics the `releases/latest` + asset-download + `.sha256` shape. The script
+   writes a manifest describing version `A` (and later `B`).
+4. **Install into a sandbox.** Run `Phantom.Workspaces.exe --install --silent` with the install
+   root **overridden** to a throwaway sandbox directory (see *Required seam* below) instead of
+   `%LOCALAPPDATA%`. Assert the managed layout was created: `app\versions\A\`, the `current`
+   junction/symlink resolving to `A`, and (optionally) shortcuts/startup-task creation in a
+   sandboxed/skipped mode.
+5. **Simulate an update.** Publish + package a higher version `B`, publish it to the fake
+   release source, then drive the updater path — either by invoking the staged
+   `--apply-update <version-B-directory> --relaunch` directly, or by triggering `UpdateService`
+   against the local source. Assert `current` now resolves to `B`, version `A` is retained for
+   rollback, and the relaunched executable reports `B`.
+6. **Rollback check (optional).** Force `B` to "fail to start" (a flag/marker) and assert the
+   next launch repoints `current` back to `A`.
+7. **Uninstall + clean up.** Run `--uninstall --purge` against the sandbox and assert shortcuts,
+   startup task, and the `app\` tree are removed; then delete the sandbox and stop the local
+   server. The script is **idempotent** and always cleans up (even on failure, via `finally`).
+
+Each stage prints PASS/FAIL and the script exits non-zero on the first failure, so it doubles
+as a smoke test a developer (or a pre-release skill) can run on demand.
+
+#### Required seam: install-root + update-source overrides
+
+For the script to run safely it must **not** write to the real per-user install or hit GitHub:
+
+- **Install-root override** — `InstallLayout` resolves its root from an override
+  (environment variable `PHANTOM_WORKSPACES_INSTALL_ROOT`, or a hidden `--install-root <path>`
+  argument) before falling back to `%LOCALAPPDATA%\Phantom.Workspaces\app`. The script points
+  this at a temporary sandbox. (This is the same seam the unit tests use via `IFileSystem`.)
+- **Update-source override** — `IReleaseSource` accepts an override base URL/path
+  (`PHANTOM_WORKSPACES_UPDATE_FEED`) so the updater reads the **local** fake release instead of
+  the GitHub Releases API.
+- **Integration sentinels** — shortcut/startup-task creation honor a "sandbox/dry-run" mode so
+  the script doesn't pollute the real Start menu or Task Scheduler (or it targets uniquely-named
+  throwaway entries it deletes).
+
+These overrides are development- and test-only and default to the production values, so shipping
+behavior is unchanged.
+
+#### Parameters (sketch)
+
+```
+scripts\test-install.ps1
+  [-RuntimeIdentifier win-x64]   # publish runtime identifier
+  [-FastPublish]                 # skip ReadyToRun and compression for speed
+  [-Sandbox <path>]              # install root; default: a new temporary directory
+  [-SkipUpdate]                  # stop after install
+  [-KeepSandbox]                 # don't clean up (for inspection)
+  [-Serve]                       # run the local fake-release HTTP server
+```
+
+#### Relationship to other tests
+
+- Complements the **integration tier** in *Testing strategy*: those are categorized xUnit
+  tests of individual seams (junction repoint, apply-update, scheduled task); this script is a
+  **manual, end-to-end, real-artifact** walkthrough of the packaged exe.
+- Mirrors what `release.yml` + the in-app updater do, minus GitHub — so passing it locally gives
+  high confidence the release will install/update correctly.
+- Windows-only (the install/update story is Windows). It is **not** part of the required PR
+  checks (it produces real local side effects in a sandbox); it is a developer/maintainer tool,
+  optionally invoked by the `create-release` skill as a pre-release confidence check.
+
 ### Release publish (Windows)
 
 Produce a self-contained, single-file app so users need no preinstalled .NET:
@@ -358,7 +437,11 @@ code as `ExitCode`.
   `RunGui`, `RunInstall`, `RunApplyUpdate`, `RunUninstall` (each builds whatever Avalonia
   window — main or progress — its mode needs).
 - `InstallLayout` (shared with the updater) owns root/`current`/`versions`/`updates`
-  resolution, junction/symlink creation, and bootstrap.
+  resolution, junction/symlink creation, and bootstrap. The root is resolvable via an
+  override (`PHANTOM_WORKSPACES_INSTALL_ROOT` / `--install-root`) ahead of the default
+  `%LOCALAPPDATA%` path, so tests and `scripts\test-install.ps1` can run in a sandbox.
+- `IReleaseSource` resolves the update feed, with an override
+  (`PHANTOM_WORKSPACES_UPDATE_FEED`) so the updater can be pointed at a local fake release.
 - `SingleInstanceGuard` owns the mutex + activation signalling.
 - `ExitCode` enum centralizes process results.
 
@@ -501,6 +584,10 @@ environments, and release outputs) the build/installation design requires. Items
   project for the "installed" experience (Option C), added at that milestone.
 - **`install.ps1`** (repo root or `packaging/`) — `irm … | iex` bootstrap that downloads
   `releases/latest`, verifies the checksum, and performs the managed-layout install.
+- **`scripts\test-install.ps1`** — developer script that runs the full publish → package →
+  install → update → uninstall flow in a sandbox against a local fake release (see *Manual
+  build/install verification* above); reuses `packaging/zip` and the install-root/update-feed
+  overrides.
 - These are tracked, secret-free build inputs; no certificates or tokens are committed.
 
 ### Release outputs (per `vX.Y.Z` GitHub Release)
