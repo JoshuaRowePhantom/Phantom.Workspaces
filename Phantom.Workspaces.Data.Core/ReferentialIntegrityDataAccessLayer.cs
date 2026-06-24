@@ -1302,6 +1302,37 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return document.RootElement.Clone();
     }
 
+    private static bool TryParseEntityNameString(
+        string name,
+        out EntityName entityName)
+    {
+        if (name.StartsWith("[", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(name);
+                var parsedEntityName = document.RootElement.TryReadEntityName();
+                if (parsedEntityName is not null)
+                {
+                    entityName = parsedEntityName.Value;
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            entityName = default;
+            return false;
+        }
+
+        entityName = new EntityName(name);
+        return true;
+    }
+
     private IReadOnlyDictionary<string, List<JsonElement>> GetEntitiesByName(
         IEnumerable<JsonElement> entities)
     {
@@ -1332,13 +1363,26 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
         }
 
-        var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
-#pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
-#pragma warning restore CS0618
-        foreach (var batch in exportResult.ChangeBatches)
+        var getEntityRequests = new List<GetEntityRequest>();
+        foreach (var name in names)
         {
-            foreach (var entity in batch.Entities)
+            if (TryParseEntityNameString(name, out var parsedName))
+            {
+                getEntityRequests.Add(new GetEntityRequest { EntityName = parsedName });
+            }
+        }
+
+        var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
+        if (getEntityRequests.Count > 0)
+        {
+            var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
+                new GetRequest
+                {
+                    Entities = getEntityRequests.ToArray(),
+                    Timestamps = new Timestamp?[] { null },
+                },
+                cancellationToken).ConfigureAwait(false);
+            foreach (var entity in getResult.Batches.SelectMany(static batch => batch.Entities))
             {
                 latestEntitiesById[entity.EntityId] = entity.Data;
             }
