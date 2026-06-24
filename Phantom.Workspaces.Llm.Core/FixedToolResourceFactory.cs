@@ -3,42 +3,35 @@ using AgentSchema;
 namespace Phantom.Workspaces.Llm;
 
 /// <summary>
-/// Resolves fixed tool resources (id == <see cref="FixedToolResources.FixedToolResourceId"/>)
-/// into <see cref="CustomTool"/> instances whose <see cref="Tool.Kind"/> matches the resource
-/// name. These tools are then handled by the built-in toolset factories.
+/// Resolves tool resources into concrete tools using a mapping supplied at construction time.
+/// The factory encodes no built-in behavior of its own: a tool resource resolves only when its
+/// (id, name) pair is present in the supplied mapping.
 /// </summary>
 public sealed class FixedToolResourceFactory : IToolResourceFactory
 {
-    private readonly IReadOnlyCollection<string> supportedNames;
+    private readonly IReadOnlyDictionary<(string Id, string Name), Tool> toolsByResource;
 
-    public FixedToolResourceFactory()
-        : this(FixedToolResources.DefaultNames)
+    /// <summary>
+    /// Creates a factory that resolves tool resources from the supplied mapping, keyed by the
+    /// tool resource's (id, name) pair.
+    /// </summary>
+    public FixedToolResourceFactory(IReadOnlyDictionary<(string Id, string Name), Tool> toolsByResource)
     {
-    }
-
-    public FixedToolResourceFactory(IReadOnlyCollection<string> supportedNames)
-    {
-        this.supportedNames = supportedNames;
+        this.toolsByResource = toolsByResource;
     }
 
     public Task<Tool?> ResolveToolResourceAsync(
         ToolResource toolResource,
         CancellationToken cancellationToken = default)
     {
-        if (!string.Equals(toolResource.Id, FixedToolResources.FixedToolResourceId, StringComparison.Ordinal)
-            || string.IsNullOrEmpty(toolResource.Name)
-            || !this.supportedNames.Contains(toolResource.Name))
+        if (toolResource.Id is null || toolResource.Name is null)
         {
             return Task.FromResult<Tool?>(null);
         }
 
-        var tool = new CustomTool
-        {
-            Kind = toolResource.Name,
-            Name = toolResource.Name,
-            Options = toolResource.Options,
-        };
-
-        return Task.FromResult<Tool?>(tool);
+        return Task.FromResult(
+            this.toolsByResource.TryGetValue((toolResource.Id, toolResource.Name), out var tool)
+                ? tool
+                : null);
     }
 }

@@ -65,6 +65,8 @@ public sealed class ToolResultBrowserViewModel : ViewModelBase
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
+        // No ConfigureAwait(false): the continuation mutates the UI-bound Hosts collection, so it
+        // must resume on the captured (UI) synchronization context.
         var queryResult = await this.dataAccessLayer.QueryAsync(
             new QueryRequest
             {
@@ -80,7 +82,7 @@ public sealed class ToolResultBrowserViewModel : ViewModelBase
                     },
                 ],
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
 
         var hostsByLabel = new Dictionary<string, ToolResultNodeViewModel>(StringComparer.Ordinal);
         var rootHosts = new List<ToolResultNodeViewModel>();

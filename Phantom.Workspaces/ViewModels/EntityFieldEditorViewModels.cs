@@ -28,7 +28,7 @@ public abstract class EntityFieldEditorViewModel
     public bool IsEditMode
     {
         get => this.isEditMode;
-        private set
+        set
         {
             if (!this.SetProperty(ref this.isEditMode, value))
             {
@@ -36,15 +36,19 @@ public abstract class EntityFieldEditorViewModel
             }
 
             this.RaisePropertyChanged(nameof(this.IsReadMode));
+            this.OnEditModeChanged(value);
         }
     }
 
     public bool IsReadMode => !this.IsEditMode;
 
-    public virtual void SetEditMode(
+    /// <summary>
+    /// Invoked when <see cref="IsEditMode"/> changes. Override to cascade the edit mode to any child
+    /// editors and to raise change notifications for mode-dependent presentation properties.
+    /// </summary>
+    protected virtual void OnEditModeChanged(
         bool isEditMode)
     {
-        this.IsEditMode = isEditMode;
     }
 
     public abstract EntityFieldEditorViewModel Clone();
@@ -146,10 +150,9 @@ public sealed class LocalStringFieldEditorViewModel : EntityFieldEditorViewModel
 
     public RelayCommand AddLocaleCommand { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         this.RaisePropertyChanged(nameof(this.ShowOtherLocalesExpander));
         this.RaisePropertyChanged(nameof(this.ShowAddLocaleButton));
     }
@@ -324,13 +327,21 @@ public class MimeAttachmentFieldEditorViewModel : EntityFieldEditorViewModel
         string fieldName,
         string mimeType,
         string? textContent,
-        string? url)
+        string? url,
+        bool isInline = false)
         : base(fieldName, "mime-attachment")
     {
         this.mimeType = mimeType;
         this.textContent = textContent;
         this.url = url;
+        this.IsInline = isInline;
     }
+
+    /// <summary>
+    /// When set, the field is rendered inline (e.g. a note's content): in read mode only the rendered
+    /// markdown is shown, without the expander, mime-type, url, and content.text chrome.
+    /// </summary>
+    public bool IsInline { get; }
 
     public string MimeType
     {
@@ -368,21 +379,28 @@ public class MimeAttachmentFieldEditorViewModel : EntityFieldEditorViewModel
 
     public bool ShowPlainTextEditMode => this.IsEditMode && !this.IsMarkdown;
 
-    public override void SetEditMode(
+    /// <summary>The rendered markdown is shown on its own (no chrome) when inline and in read mode.</summary>
+    public bool ShowInlineMarkdownReadMode => this.IsInline && this.IsReadMode && this.IsMarkdown;
+
+    /// <summary>The expander chrome (mime-type, url, content.text rows) is shown unless rendering inline.</summary>
+    public bool ShowChrome => !this.ShowInlineMarkdownReadMode;
+
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         this.RaisePropertyChanged(nameof(this.ShowMarkdownReadMode));
         this.RaisePropertyChanged(nameof(this.ShowMarkdownEditMode));
         this.RaisePropertyChanged(nameof(this.ShowPlainTextReadMode));
         this.RaisePropertyChanged(nameof(this.ShowPlainTextEditMode));
+        this.RaisePropertyChanged(nameof(this.ShowInlineMarkdownReadMode));
+        this.RaisePropertyChanged(nameof(this.ShowChrome));
     }
 
     public override EntityFieldEditorViewModel Clone()
     {
         return this.IsMarkdown
-            ? new MarkdownMimeAttachmentFieldEditorViewModel(this.FieldName, this.MimeType, this.TextContent, this.Url)
-            : new PlainMimeAttachmentFieldEditorViewModel(this.FieldName, this.MimeType, this.TextContent, this.Url);
+            ? new MarkdownMimeAttachmentFieldEditorViewModel(this.FieldName, this.MimeType, this.TextContent, this.Url, this.IsInline)
+            : new PlainMimeAttachmentFieldEditorViewModel(this.FieldName, this.MimeType, this.TextContent, this.Url, this.IsInline);
     }
 }
 
@@ -392,8 +410,9 @@ public sealed class MarkdownMimeAttachmentFieldEditorViewModel : MimeAttachmentF
         string fieldName,
         string mimeType,
         string? textContent,
-        string? url)
-        : base(fieldName, mimeType, textContent, url)
+        string? url,
+        bool isInline = false)
+        : base(fieldName, mimeType, textContent, url, isInline)
     {
     }
 }
@@ -404,8 +423,9 @@ public sealed class PlainMimeAttachmentFieldEditorViewModel : MimeAttachmentFiel
         string fieldName,
         string mimeType,
         string? textContent,
-        string? url)
-        : base(fieldName, mimeType, textContent, url)
+        string? url,
+        bool isInline = false)
+        : base(fieldName, mimeType, textContent, url, isInline)
     {
     }
 }
@@ -462,20 +482,27 @@ public sealed class LocalizedMimeAttachmentFieldEditorViewModel : EntityFieldEdi
 
     public bool ShowAddLocaleButton => this.IsEditMode;
 
+    /// <summary>In read mode an inline attachment renders only its active editor, without the field label.</summary>
+    public bool ShowInlineReadMode => this.ActiveEditor.IsInline && this.IsReadMode;
+
+    /// <summary>The labelled chrome (field name, add-locale button) is shown unless rendering inline.</summary>
+    public bool ShowChrome => !this.ShowInlineReadMode;
+
     public RelayCommand AddLocaleCommand { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
-        this.unlocalizedValue.SetEditMode(isEditMode);
+        this.unlocalizedValue.IsEditMode = isEditMode;
         foreach (var localizedValue in this.localizedValues)
         {
-            localizedValue.Editor.SetEditMode(isEditMode);
+            localizedValue.Editor.IsEditMode = isEditMode;
         }
 
         this.RaisePropertyChanged(nameof(this.ShowOtherLocalesExpander));
         this.RaisePropertyChanged(nameof(this.ShowAddLocaleButton));
+        this.RaisePropertyChanged(nameof(this.ShowInlineReadMode));
+        this.RaisePropertyChanged(nameof(this.ShowChrome));
     }
 
     public override EntityFieldEditorViewModel Clone()
@@ -516,7 +543,7 @@ public sealed class LocalizedMimeAttachmentFieldEditorViewModel : EntityFieldEdi
         newValue.PropertyChanged += this.OnLocalizedValuePropertyChanged;
         this.localizedValues.Add(newValue);
         this.UpdateActiveLocalizedValue();
-        newValue.Editor.SetEditMode(this.IsEditMode);
+        newValue.Editor.IsEditMode = this.IsEditMode;
     }
 
     private void EnsureDefaultLocaleExists()
@@ -555,6 +582,8 @@ public sealed class LocalizedMimeAttachmentFieldEditorViewModel : EntityFieldEdi
             this.RaisePropertyChanged(nameof(this.OtherLocalizedValues));
             this.RaisePropertyChanged(nameof(this.HasMultipleLocales));
             this.RaisePropertyChanged(nameof(this.ShowOtherLocalesExpander));
+            this.RaisePropertyChanged(nameof(this.ShowInlineReadMode));
+            this.RaisePropertyChanged(nameof(this.ShowChrome));
             return;
         }
 
@@ -565,6 +594,8 @@ public sealed class LocalizedMimeAttachmentFieldEditorViewModel : EntityFieldEdi
         this.RaisePropertyChanged(nameof(this.OtherLocalizedValues));
         this.RaisePropertyChanged(nameof(this.HasMultipleLocales));
         this.RaisePropertyChanged(nameof(this.ShowOtherLocalesExpander));
+        this.RaisePropertyChanged(nameof(this.ShowInlineReadMode));
+        this.RaisePropertyChanged(nameof(this.ShowChrome));
     }
 
     private static LocalizedMimeAttachmentValueViewModel? SelectLocaleValue(
@@ -707,13 +738,12 @@ public sealed class ObjectFieldEditorViewModel : EntityFieldEditorViewModel
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> Fields { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         foreach (var field in this.Fields)
         {
-            field.SetEditMode(isEditMode);
+            field.IsEditMode = isEditMode;
         }
     }
 
@@ -737,13 +767,12 @@ public sealed class ArrayFieldEditorViewModel : EntityFieldEditorViewModel
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> Items { get; }
 
-    public override void SetEditMode(
+    protected override void OnEditModeChanged(
         bool isEditMode)
     {
-        base.SetEditMode(isEditMode);
         foreach (var item in this.Items)
         {
-            item.SetEditMode(isEditMode);
+            item.IsEditMode = isEditMode;
         }
     }
 

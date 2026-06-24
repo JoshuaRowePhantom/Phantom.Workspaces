@@ -408,20 +408,15 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         int nextOrder,
         CancellationToken cancellationToken)
     {
-        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken).ConfigureAwait(false);
-        var projectedEntitiesById = latestSnapshotsById.ToDictionary(
-            static pair => pair.Key,
-            static pair => (Data: pair.Value.Data, pair.Value.ConcurrencyTag));
+        // Only entities being changed in this transaction can introduce new
+        // ancestor folders; entities already in the store already have theirs.
+        // Compute the required folders from the pending changes alone, then look
+        // up just those folders instead of enumerating the entire store.
+        var requiredFolderNames = new Dictionary<string, EntityName>(StringComparer.Ordinal);
+        var changedFolderKeys = new HashSet<string>(StringComparer.Ordinal);
+        var hasNamedEntities = false;
 
         foreach (var pair in changesByEntityId)
-        {
-            projectedEntitiesById[pair.Key] = (pair.Value.Data, pair.Value.ConcurrencyTag);
-        }
-
-        var requiredFolderNames = new Dictionary<string, EntityName>(StringComparer.Ordinal);
-        var existingFolderByName = new Dictionary<string, (EntityId EntityId, ConcurrencyTag? ConcurrencyTag)>(StringComparer.Ordinal);
-        var hasNamedEntities = false;
-        foreach (var pair in projectedEntitiesById)
         {
             if (pair.Value.Data is not { ValueKind: JsonValueKind.Object } entityData)
             {
@@ -438,8 +433,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             {
                 foreach (var name in names)
                 {
-                    var nameKey = SerializeEntityName(name);
-                    existingFolderByName.TryAdd(nameKey, (pair.Key, pair.Value.ConcurrencyTag));
+                    changedFolderKeys.Add(SerializeEntityName(name));
                 }
 
                 continue;
@@ -450,13 +444,13 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 for (var componentCount = 1; componentCount < name.Components.Length; componentCount++)
                 {
                     var prefixName = new EntityName(name.Components[..componentCount]);
-                    
+
                     // Skip "relationship" prefix - relationship entities use this prefix for their entity-id naming convention
                     if (prefixName.Components.Length == 1 && prefixName.Components[0] == "relationship")
                     {
                         continue;
                     }
-                    
+
                     requiredFolderNames[SerializeEntityName(prefixName)] = prefixName;
                 }
             }
@@ -468,9 +462,48 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             requiredFolderNames[SerializeEntityName(rootFolderName)] = rootFolderName;
         }
 
+        if (requiredFolderNames.Count == 0)
+        {
+            return nextOrder;
+        }
+
+        // Look up only the required folders: by name to discover which already
+        // exist as folder entities, and by their deterministic id to capture the
+        // concurrency tag needed to replace an existing folder.
+        var getEntityRequests = new List<GetEntityRequest>(requiredFolderNames.Count * 2);
+        foreach (var folderName in requiredFolderNames.Values)
+        {
+            getEntityRequests.Add(new GetEntityRequest { EntityName = folderName });
+            getEntityRequests.Add(new GetEntityRequest { EntityId = GetFolderEntityId(folderName) });
+        }
+
+        var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = getEntityRequests,
+                Timestamps = new Timestamp?[] { null },
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var concurrencyTagByEntityId = new Dictionary<EntityId, ConcurrencyTag?>();
+        var existingFolderKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entity in getResult.Batches.SelectMany(static batch => batch.Entities))
+        {
+            concurrencyTagByEntityId[entity.EntityId] = entity.ConcurrencyTag;
+            if (entity.Data is { ValueKind: JsonValueKind.Object } existingData
+                && this.IsFolderEntity(existingData))
+            {
+                foreach (var name in this.GetEntityNameValues(existingData))
+                {
+                    existingFolderKeys.Add(SerializeEntityName(name));
+                }
+            }
+        }
+
         foreach (var requiredFolder in requiredFolderNames)
         {
-            if (existingFolderByName.ContainsKey(requiredFolder.Key))
+            if (changedFolderKeys.Contains(requiredFolder.Key)
+                || existingFolderKeys.Contains(requiredFolder.Key))
             {
                 continue;
             }
@@ -478,7 +511,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             var folderEntityId = GetFolderEntityId(requiredFolder.Value);
             var existingConcurrencyTag = changesByEntityId.TryGetValue(folderEntityId, out var existingChange)
                 ? existingChange.ConcurrencyTag
-                : latestSnapshotsById.TryGetValue(folderEntityId, out var existingSnapshot) ? existingSnapshot.ConcurrencyTag : null;
+                : concurrencyTagByEntityId.TryGetValue(folderEntityId, out var existingTag) ? existingTag : null;
             this.UpsertChange(
                 changesByEntityId,
                 orderedChangesByEntityId,
@@ -646,31 +679,30 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return Array.Empty<EntityUpdateResult>();
         }
 
-        var latestSnapshotsById = await this.GetLatestSnapshotsByIdAsync(cancellationToken).ConfigureAwait(false);
-        var projectedEntitiesById = latestSnapshotsById.ToDictionary(
-            static pair => pair.Key,
-            static pair => pair.Value.Data);
-        foreach (var pair in changesByEntityId)
+        var folderNamesByEntityId = new Dictionary<EntityId, IReadOnlyCollection<EntityName>>();
+        var folderNames = new List<EntityName>();
+        foreach (var folderDeleteEntityId in folderDeleteEntityIds)
         {
-            projectedEntitiesById[pair.Key] = pair.Value.Data;
+            var folderData = currentSnapshotsById[folderDeleteEntityId].Data!.Value;
+            var names = this.GetEntityNameValues(folderData);
+            folderNamesByEntityId[folderDeleteEntityId] = names;
+            folderNames.AddRange(names);
         }
 
-        var projectedNames = projectedEntitiesById.Values
-            .Where(static data => data is { ValueKind: JsonValueKind.Object })
-            .SelectMany(data => this.GetEntityNameValues(data!.Value))
-            .ToArray();
+        // Determine the post-transaction descendant names by looking up only the
+        // descendants of the folders being deleted (a bounded subtree get) and
+        // overlaying the pending changes, instead of enumerating the whole store.
+        var projectedNames = await this.GetProjectedDescendantNamesAsync(
+            folderNames,
+            changesByEntityId,
+            cancellationToken).ConfigureAwait(false);
 
         var failures = new List<EntityUpdateResult>();
         foreach (var folderDeleteEntityId in folderDeleteEntityIds)
         {
             var currentSnapshot = currentSnapshotsById[folderDeleteEntityId];
-            if (currentSnapshot.Data is not { ValueKind: JsonValueKind.Object } folderData)
-            {
-                continue;
-            }
-
-            var folderNames = this.GetEntityNameValues(folderData);
-            var hasRemainingDescendants = folderNames.Any(
+            var deletedFolderNames = folderNamesByEntityId[folderDeleteEntityId];
+            var hasRemainingDescendants = deletedFolderNames.Any(
                 folderName => projectedNames.Any(name => IsDescendantName(name, folderName)));
             if (!hasRemainingDescendants)
             {
@@ -700,26 +732,44 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return failures;
     }
 
-    private async Task<Dictionary<EntityId, QueryEntitySnapshot>> GetLatestSnapshotsByIdAsync(
+    private async Task<IReadOnlyCollection<EntityName>> GetProjectedDescendantNamesAsync(
+        IReadOnlyCollection<EntityName> folderNames,
+        IReadOnlyDictionary<EntityId, EntityChange> changesByEntityId,
         CancellationToken cancellationToken)
     {
-        var latestById = new Dictionary<EntityId, QueryEntitySnapshot>();
-#pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
-#pragma warning restore CS0618
-        foreach (var batch in exportResult.ChangeBatches)
+        var projectedDataById = new Dictionary<EntityId, JsonElement?>();
+        if (folderNames.Count > 0)
         {
-            foreach (var entity in batch.Entities)
-            {
-                if (!latestById.TryGetValue(entity.EntityId, out var existing)
-                    || CompareTimestamp(entity.ModifiedTime, existing.ModifiedTime) > 0)
+            var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
+                new GetRequest
                 {
-                    latestById[entity.EntityId] = entity;
-                }
+                    Entities = folderNames
+                        .Select(static folderName => new GetEntityRequest
+                        {
+                            EntityName = folderName,
+                            EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+                        })
+                        .ToArray(),
+                    Timestamps = new Timestamp?[] { null },
+                },
+                cancellationToken).ConfigureAwait(false);
+            foreach (var entity in getResult.Batches.SelectMany(static batch => batch.Entities))
+            {
+                projectedDataById[entity.EntityId] = entity.Data;
             }
         }
 
-        return latestById;
+        // Overlay the pending changes so that entities being deleted are excluded
+        // and renames (into or out of the folder) are reflected in the result.
+        foreach (var pair in changesByEntityId)
+        {
+            projectedDataById[pair.Key] = pair.Value.Data;
+        }
+
+        return projectedDataById.Values
+            .Where(static data => data is { ValueKind: JsonValueKind.Object })
+            .SelectMany(data => this.GetEntityNameValues(data!.Value))
+            .ToArray();
     }
 
     private IReadOnlyCollection<JsonElement> ResolveEffectiveEntities(
@@ -1295,6 +1345,37 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return document.RootElement.Clone();
     }
 
+    private static bool TryParseEntityNameString(
+        string name,
+        out EntityName entityName)
+    {
+        if (name.StartsWith("[", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(name);
+                var parsedEntityName = document.RootElement.TryReadEntityName();
+                if (parsedEntityName is not null)
+                {
+                    entityName = parsedEntityName.Value;
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            entityName = default;
+            return false;
+        }
+
+        entityName = new EntityName(name);
+        return true;
+    }
+
     private IReadOnlyDictionary<string, List<JsonElement>> GetEntitiesByName(
         IEnumerable<JsonElement> entities)
     {
@@ -1325,13 +1406,26 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
         }
 
-        var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
-#pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
-#pragma warning restore CS0618
-        foreach (var batch in exportResult.ChangeBatches)
+        var getEntityRequests = new List<GetEntityRequest>();
+        foreach (var name in names)
         {
-            foreach (var entity in batch.Entities)
+            if (TryParseEntityNameString(name, out var parsedName))
+            {
+                getEntityRequests.Add(new GetEntityRequest { EntityName = parsedName });
+            }
+        }
+
+        var latestEntitiesById = new Dictionary<EntityId, JsonElement?>();
+        if (getEntityRequests.Count > 0)
+        {
+            var getResult = await this.UnderlyingDataAccessLayer.GetAsync(
+                new GetRequest
+                {
+                    Entities = getEntityRequests.ToArray(),
+                    Timestamps = new Timestamp?[] { null },
+                },
+                cancellationToken).ConfigureAwait(false);
+            foreach (var entity in getResult.Batches.SelectMany(static batch => batch.Entities))
             {
                 latestEntitiesById[entity.EntityId] = entity.Data;
             }
@@ -1478,7 +1572,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             $$"""
             {
               "entity-id": "{{relationshipEntityId}}",
-              "entity-types": ["relationship", "reference"],
+              "entity-types": ["entity", "relationship", "reference"],
               "$schema": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
               "participants": {
                 "source": "{{sourceEntityId}}",
@@ -1609,7 +1703,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["folder"],
+              "entity-types": ["entity", "folder"],
               "$schema": "{{FolderSchema}}",
               "names": {{serializedName}},
               "display-name": { "default": {{serializedTitle}} }
@@ -1638,16 +1732,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         }
 
         return names;
-    }
-
-    private static int CompareTimestamp(
-        Timestamp left,
-        Timestamp right)
-    {
-        var timeComparison = left.DateTime.CompareTo(right.DateTime);
-        return timeComparison != 0
-            ? timeComparison
-            : StringComparer.Ordinal.Compare(left.ChangeId, right.ChangeId);
     }
 
     private void CollectEntityIds(

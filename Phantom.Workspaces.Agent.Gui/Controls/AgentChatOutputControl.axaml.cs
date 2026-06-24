@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia;
 using Avalonia.Threading;
@@ -31,6 +32,9 @@ public partial class AgentChatOutputControl : UserControl
         this.Loaded += this.OnLoaded;
         this.Unloaded += this.OnUnloaded;
         this.SelectableOutputScrollViewer.ScrollChanged += this.OnSelectableOutputScrollChanged;
+        // Avalonia's ScrollViewer already pages with Page Up/Down; it does not handle Home/End, so add
+        // those (scroll to top/bottom). A bubble handler suffices because nothing else consumes them.
+        this.AddHandler(KeyDownEvent, this.OnSelectableOutputKeyDown, RoutingStrategies.Bubble);
         this.ApplyOutputModeVisibility();
     }
 
@@ -142,6 +146,29 @@ public partial class AgentChatOutputControl : UserControl
             this.SelectableOutputScrollViewer.Extent.Height - this.SelectableOutputScrollViewer.Viewport.Height);
         this.selectableOutputPinnedToBottom = maxVerticalOffset <= 0
             || this.SelectableOutputScrollViewer.Offset.Y >= maxVerticalOffset - 1;
+    }
+
+    private void OnSelectableOutputKeyDown(
+        object? sender,
+        KeyEventArgs e)
+    {
+        if (e.Handled || this.OutputMode != AgentChatOutputMode.SelectableTextBox)
+        {
+            return;
+        }
+
+        var scrollViewer = this.SelectableOutputScrollViewer;
+        var newOffset = SelectableOutputScrollMath.ComputeVerticalOffset(
+            e.Key,
+            scrollViewer.Viewport.Height,
+            scrollViewer.Extent.Height);
+        if (newOffset is not double targetY)
+        {
+            return;
+        }
+
+        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, targetY);
+        e.Handled = true;
     }
 
     private void ScheduleSelectableOutputScrollToBottom()

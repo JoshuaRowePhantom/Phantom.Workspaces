@@ -1,13 +1,16 @@
 {
   "entity-id": "f4e5e7fc-faa4-4338-be4c-57cc86d21d77",
+  "entity-display-order": 290,
   "entity-types": [
+    "entity",
     "entity-type",
+    "json-schema",
     "note"
   ],
   "names": [
     [
       "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/agent-definition.json"
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-definition.json"
     ],
     [
       "entity-types",

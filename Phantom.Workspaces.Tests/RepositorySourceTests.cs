@@ -40,4 +40,50 @@ public sealed class RepositorySourceTests
             }
         }
     }
+
+    [AvaloniaFact]
+    public void DevTunnelWeb_WithExplicitEndpoint_ProjectsToWebSourceUsingGitHubToken()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.DevTunnelWeb,
+                WebEndpoint = "https://example-5280.usw2.devtunnels.ms/",
+            },
+        };
+
+        var web = Assert.IsType<WebRepositorySource>(configuration.ToRepositorySource());
+        Assert.Equal("https://example-5280.usw2.devtunnels.ms/", web.Endpoint);
+        Assert.True(web.UseGitHubAuthToken);
+    }
+
+    [AvaloniaFact]
+    public void DevTunnelWeb_WithTunnelNameAndNoEndpoint_ProjectsToDevTunnelNameSource()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile { Mode = DataAccessMode.DevTunnelWeb },
+            DevTunnel = new DevTunnelConfiguration
+            {
+                TunnelName = "phantom-workspaces-playspace",
+                AccessMode = DevTunnelAccessMode.Private,
+            },
+        };
+
+        var source = Assert.IsType<DevTunnelNameRepositorySource>(configuration.ToRepositorySource());
+        Assert.Equal("phantom-workspaces-playspace", source.TunnelName);
+        Assert.Equal(DevTunnelAccessMode.Private, source.AccessMode);
+    }
+
+    [AvaloniaFact]
+    public void DevTunnelWeb_WithNeitherEndpointNorTunnelName_Throws()
+    {
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile { Mode = DataAccessMode.DevTunnelWeb },
+        };
+
+        Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
+    }
 }

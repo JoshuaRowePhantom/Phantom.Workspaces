@@ -80,6 +80,50 @@ public sealed class DiscoveryToolsTests
         Assert.Contains("\"home-directory\":\"C:\\\\Users\\\\test-user\"", discovered.Data?.GetRawText(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ComputerUserProfileDiscoveryTool_WithProfileOverride_DivergesProfileNameButKeepsRealComputerReference()
+    {
+        var provider = new FixedExecutionContextProvider(
+            computerName: "real-machine",
+            userName: "test-user",
+            operatingSystemName: "windows",
+            homeDirectoryPath: @"C:\Users\test-user",
+            effectiveComputerName: "override-machine");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(dataAccessLayer, provider);
+        var tool = new ComputerUserProfileDiscoveryTool(provider);
+
+        await tool.ExecuteAsync(context);
+
+        var overrideProfile = await GetEntityByNameAsync(
+            dataAccessLayer,
+            new EntityName(
+                "computer-user-profiles",
+                "users",
+                "username",
+                "test-user",
+                "computers",
+                "hostname",
+                "override-machine"));
+        Assert.NotNull(overrideProfile);
+
+        var rawText = overrideProfile.Data?.GetRawText();
+        Assert.Contains("[\"computers\",\"hostname\",\"real-machine\"]", rawText, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"computer-reference\":[\"computers\",\"hostname\",\"override-machine\"]", rawText, StringComparison.Ordinal);
+
+        var realProfile = await GetEntityByNameAsync(
+            dataAccessLayer,
+            new EntityName(
+                "computer-user-profiles",
+                "users",
+                "username",
+                "test-user",
+                "computers",
+                "hostname",
+                "real-machine"));
+        Assert.NotEqual(overrideProfile.EntityId, realProfile?.EntityId);
+    }
+
     private static async Task<WorkspaceToolExecutionContext> CreateExecutionContextAsync(
         IDataAccessLayer dataAccessLayer,
         FixedExecutionContextProvider provider)
@@ -90,7 +134,7 @@ public sealed class DiscoveryToolsTests
             $$"""
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-              "entity-types": ["computer"],
+              "entity-types": ["entity", "computer"],
               "names": [["computers", "hostname", "{{provider.ComputerName}}"]]
             }
             """,
@@ -101,7 +145,7 @@ public sealed class DiscoveryToolsTests
             $$"""
             {
               "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-              "entity-types": ["user"],
+              "entity-types": ["entity", "user"],
               "names": [["users", "username", "{{provider.UserName}}"]]
             }
             """,
@@ -112,7 +156,7 @@ public sealed class DiscoveryToolsTests
             $$"""
             {
               "entity-id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
-              "entity-types": ["user-computer-profile"],
+              "entity-types": ["entity", "user-computer-profile"],
               "names": [["computer-user-profiles", "users", "username", "{{provider.UserName}}", "computers", "hostname", "{{provider.ComputerName}}"]],
               "computer-reference": ["computers", "hostname", "{{provider.ComputerName}}"],
               "user-reference": ["users", "username", "{{provider.UserName}}"],
@@ -205,7 +249,8 @@ public sealed class DiscoveryToolsTests
         string computerName,
         string userName,
         string operatingSystemName,
-        string homeDirectoryPath) : ICurrentExecutionContextProvider
+        string homeDirectoryPath,
+        string? effectiveComputerName = null) : ICurrentExecutionContextProvider
     {
         public string ComputerName => computerName;
 
@@ -214,5 +259,7 @@ public sealed class DiscoveryToolsTests
         public string OperatingSystemName => operatingSystemName;
 
         public string HomeDirectoryPath => homeDirectoryPath;
+
+        public string EffectiveComputerName => effectiveComputerName ?? computerName;
     }
 }

@@ -88,8 +88,8 @@ public sealed class ShortcutManagerTests
             indentLevel: 0);
 
         var cardNode = viewEntity.EntityCardNode;
-        Assert.True(cardNode.ShowJsonButton);
-        Assert.True(cardNode.ShowDeleteButton);
+        Assert.True(cardNode.Card.ShowJsonButton);
+        Assert.True(cardNode.Card.ShowDeleteButton);
     }
 
     [AvaloniaFact]
@@ -100,7 +100,7 @@ public sealed class ShortcutManagerTests
             new TestShortcutHandler(
                 shouldApply: true,
                 handleResult: true,
-                supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Json.Name, Shortcut.Delete.Name]));
+                supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Delete.Name]));
         var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         var entity = CreateEntity("entity", _ => Task.CompletedTask);
 
@@ -111,11 +111,12 @@ public sealed class ShortcutManagerTests
             indentLevel: 0);
 
         var cardNode = viewEntity.EntityCardNode;
-        Assert.True(cardNode.HasShortcuts);
-        Assert.Equal(3, cardNode.Shortcuts.Count);
-        Assert.NotNull(cardNode.ActivateShortcutCommand);
-        Assert.False(cardNode.ShowJsonButton);
-        Assert.False(cardNode.ShowDeleteButton);
+        Assert.True(cardNode.Card.HasShortcuts);
+        Assert.Equal(2, cardNode.Card.Shortcuts.Count);
+        Assert.NotNull(cardNode.Card.ActivateShortcutCommand);
+        // The JSON toggle is a dedicated card button (no longer a shortcut-bar button), so it stays available.
+        Assert.True(cardNode.Card.ShowJsonButton);
+        Assert.False(cardNode.Card.ShowDeleteButton);
     }
 
     [AvaloniaFact]
@@ -179,7 +180,7 @@ public sealed class ShortcutManagerTests
             $$"""
             {
               "entity-id": "99999999-9999-9999-9999-999999999999",
-              "entity-types": ["{{entityType}}"],
+              "entity-types": ["entity", "{{entityType}}"],
               "names": [["tests", "{{entityType}}"]],
               "display-name": { "default": "Test {{entityType}}" }
             }

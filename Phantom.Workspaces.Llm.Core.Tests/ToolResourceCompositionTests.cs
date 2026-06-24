@@ -51,34 +51,43 @@ public sealed class ToolResourceCompositionTests
     };
 
     [Fact]
-    public void FixedToolResourceRepository_ExposesDefaultBuiltInToolsets()
+    public void FixedToolResourceRepository_ExposesSuppliedToolResources()
     {
-        var repository = new FixedToolResourceRepository();
+        var resources = new[]
+        {
+            ToolResource("fixed", "workspace-entity"),
+            ToolResource("fixed", "filesystem"),
+        };
+        var repository = new FixedToolResourceRepository(resources);
 
-        var names = repository.ToolResources.Select(static resource => resource.Name).ToArray();
-        Assert.Equal(FixedToolResources.DefaultNames, names);
-        Assert.All(
-            repository.ToolResources,
-            static resource => Assert.Equal(FixedToolResources.FixedToolResourceId, resource.Id));
+        Assert.Equal(
+            new[] { "workspace-entity", "filesystem" },
+            repository.ToolResources.Select(static resource => resource.Name).ToArray());
     }
 
     [Fact]
-    public async Task FixedToolResourceFactory_ResolvesWorkspaceEntityToCustomTool()
+    public async Task FixedToolResourceFactory_ResolvesFromSuppliedMapping()
     {
-        var factory = new FixedToolResourceFactory();
+        var workspaceTool = new CustomTool { Kind = "workspace-entity", Name = "workspace-entity" };
+        var factory = new FixedToolResourceFactory(
+            new Dictionary<(string Id, string Name), Tool>
+            {
+                [("fixed", "workspace-entity")] = workspaceTool,
+            });
 
-        var tool = await factory.ResolveToolResourceAsync(
-            ToolResource(FixedToolResources.FixedToolResourceId, FixedToolResources.WorkspaceEntity));
+        var tool = await factory.ResolveToolResourceAsync(ToolResource("fixed", "workspace-entity"));
 
-        var customTool = Assert.IsType<CustomTool>(tool);
-        Assert.Equal(FixedToolResources.WorkspaceEntity, customTool.Kind);
-        Assert.Equal(FixedToolResources.WorkspaceEntity, customTool.Name);
+        Assert.Same(workspaceTool, tool);
     }
 
     [Fact]
-    public async Task FixedToolResourceFactory_ReturnsNullForUnknownResource()
+    public async Task FixedToolResourceFactory_ReturnsNullForUnmappedResource()
     {
-        var factory = new FixedToolResourceFactory();
+        var factory = new FixedToolResourceFactory(
+            new Dictionary<(string Id, string Name), Tool>
+            {
+                [("fixed", "workspace-entity")] = new CustomTool { Kind = "workspace-entity", Name = "workspace-entity" },
+            });
 
         var tool = await factory.ResolveToolResourceAsync(
             ToolResource("mcp-server-entity", "github"));

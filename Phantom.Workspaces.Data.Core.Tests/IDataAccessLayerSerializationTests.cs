@@ -89,7 +89,7 @@ public sealed class IDataAccessLayerSerializationTests
                 {
                     EntityId = new EntityId("22222222-2222-2222-2222-222222222222"),
                     ConcurrencyTag = new ConcurrencyTag("etag-1"),
-                    Data = JsonDocument.Parse("""{ "entity-types": ["note"] }""").RootElement.Clone(),
+                    Data = JsonDocument.Parse("""{ "entity-types": ["entity", "note"] }""").RootElement.Clone(),
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
             ],

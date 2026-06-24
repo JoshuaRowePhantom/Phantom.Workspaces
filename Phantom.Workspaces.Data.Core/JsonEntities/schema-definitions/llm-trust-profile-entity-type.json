@@ -1,0 +1,31 @@
+{
+  "entity-id": "b2f1ae45-c63a-4f28-a2e9-4feac269a5c2",
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/llm-trust-profile.json"
+    ],
+    [
+      "entity-types",
+      "llm-trust-profile"
+    ]
+  ],
+  "display-name": {
+    "default": "LLM Trust Profile Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/llm-trust-profile-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/llm-trust-profile.json"
+  }
+}

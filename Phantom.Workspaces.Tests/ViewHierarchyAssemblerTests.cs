@@ -21,7 +21,7 @@ public sealed class ViewHierarchyAssemblerTests
         // their contextual parent via the 'reference' (target) relationship.
         await SeedAsync(dataAccessLayer, """
             {
-              "entity-types": ["entity-type-view"],
+              "entity-types": ["entity", "entity-type-view"],
               "names": [["entity-type-views","task"]],
               "traverse-relationships": [
                 { "relationship-type-ids": ["related"], "relationship-role-names": ["entities"], "max-depth": 1 }
@@ -30,7 +30,7 @@ public sealed class ViewHierarchyAssemblerTests
             """);
         await SeedAsync(dataAccessLayer, """
             {
-              "entity-types": ["entity-type-view"],
+              "entity-types": ["entity", "entity-type-view"],
               "names": [["entity-type-views","note"]],
               "parent-hierarchy-relationships": [
                 { "relationship-type-ids": ["reference"], "relationship-role-names": ["target"], "max-depth": 1 }
@@ -38,14 +38,14 @@ public sealed class ViewHierarchyAssemblerTests
             }
             """);
 
-        var taskId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","t"]], "display-name": { "default": "Do thing" } }""");
+        var taskId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","t"]], "display-name": { "default": "Do thing" } }""");
         var parentId = await SeedNoteAsync(dataAccessLayer, "folder", "Folder");
         var member1Id = await SeedNoteAsync(dataAccessLayer, "m1", "Member one");
         var member2Id = await SeedNoteAsync(dataAccessLayer, "m2", "Member two");
 
         await SeedAsync(dataAccessLayer, $$"""
             {
-              "entity-types": ["related","relationship"],
+              "entity-types": ["entity", "related","relationship"],
               "names": [["relationships","r-task-members"]],
               "participants": { "entities": ["{{taskId.Value}}", "{{member1Id.Value}}", "{{member2Id.Value}}"] }
             }
@@ -72,7 +72,7 @@ public sealed class ViewHierarchyAssemblerTests
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
 
-        var taskId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","flat"]], "display-name": { "default": "Flat" } }""");
+        var taskId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","flat"]], "display-name": { "default": "Flat" } }""");
 
         var roots = (await broker.GetEntitiesAsync([taskId], ct)).ToArray();
         var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
@@ -87,7 +87,7 @@ public sealed class ViewHierarchyAssemblerTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["notes","{{name}}"]],
               "display-name": { "default": {{JsonSerializer.Serialize(displayName)}} },
               "content": { "mime-type": "text/markdown", "content": { "text": {{JsonSerializer.Serialize(displayName)}} } }
@@ -99,7 +99,7 @@ public sealed class ViewHierarchyAssemblerTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["reference","relationship"],
+              "entity-types": ["entity", "reference","relationship"],
               "names": [["relationships","ref-{{source.Value}}-{{target.Value}}"]],
               "participants": { "source": "{{source.Value}}", "target": "{{target.Value}}" }
             }

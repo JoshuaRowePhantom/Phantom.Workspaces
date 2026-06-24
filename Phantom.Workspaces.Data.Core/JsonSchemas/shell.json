@@ -10,6 +10,9 @@
   "properties": {
     "entity-types": {
       "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
       "contains": {
         "const": "shell"
       }

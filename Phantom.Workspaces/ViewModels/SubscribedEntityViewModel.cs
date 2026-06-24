@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
@@ -14,17 +16,20 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     private bool deleted;
     private readonly Func<SubscribedEntityViewModel, Task>? deleteEntityAsync;
     private readonly Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync;
+    private readonly Func<SubscribedEntityViewModel, JsonElement, Task>? saveEntityAsync;
     private readonly List<EntityDisplayItemViewModel> displayItems = [];
 
     public SubscribedEntityViewModel(
         EntitySnapshot snapshot,
         Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null,
-        Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync = null)
+        Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync = null,
+        Func<SubscribedEntityViewModel, JsonElement, Task>? saveEntityAsync = null)
     {
         this.snapshot = snapshot;
         this.deleted = snapshot.Data is null;
         this.deleteEntityAsync = deleteEntityAsync;
         this.toggleInterestAsync = toggleInterestAsync;
+        this.saveEntityAsync = saveEntityAsync;
         this.displayItems.AddRange(EntityPresentation.GetDisplayItems(snapshot));
         this.DeleteEntityCommand = new RelayCommand(
             async _ => await this.DeleteEntityAsync(),
@@ -62,6 +67,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(this.ConcurrencyTag));
             this.RaisePropertyChanged(nameof(this.Data));
             this.RaisePropertyChanged(nameof(this.CanToggleRawJson));
+            this.RaisePropertyChanged(nameof(this.CanEditEntity));
             this.RaisePropertyChanged(nameof(this.Relationships));
             this.Deleted = value.Data is null;
             this.displayItems.Clear();
@@ -100,6 +106,52 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
     public bool CanToggleRawJson => !this.Deleted && this.Data is JsonElement;
 
+    public bool CanEditEntity => this.saveEntityAsync is not null && !this.Deleted && this.Data is JsonElement;
+
+    /// <summary>
+    /// Persists an edited entity snapshot through the data-access layer.
+    /// </summary>
+    public async Task SaveEditedEntityAsync(JsonElement data)
+    {
+        if (this.saveEntityAsync is null)
+        {
+            return;
+        }
+
+        await this.saveEntityAsync(this, data);
+    }
+
+    /// <summary>
+    /// Writes a new display name into the entity's <c>display-name</c> local-string, targeting the
+    /// current UI locale entry (or <c>default</c> for the invariant culture), and persists it.
+    /// </summary>
+    public Task SaveDisplayNameAsync(string newDisplayName)
+    {
+        if (this.Data is not JsonElement data || data.ValueKind != JsonValueKind.Object)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (JsonNode.Parse(data.GetRawText()) is not JsonObject entityNode)
+        {
+            return Task.CompletedTask;
+        }
+
+        var locale = CultureInfo.CurrentUICulture.Name;
+        var localeKey = string.IsNullOrEmpty(locale) ? "default" : locale;
+
+        if (entityNode["display-name"] is not JsonObject displayNameObject)
+        {
+            displayNameObject = new JsonObject();
+            entityNode["display-name"] = displayNameObject;
+        }
+
+        displayNameObject[localeKey] = newDisplayName;
+
+        using var document = JsonDocument.Parse(entityNode.ToJsonString());
+        return this.SaveEditedEntityAsync(document.RootElement.Clone());
+    }
+
     public bool Deleted
     {
         get => this.deleted;
@@ -117,6 +169,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
             this.RaisePropertyChanged(nameof(this.CanDeleteEntity));
             this.RaisePropertyChanged(nameof(this.CanToggleRawJson));
+            this.RaisePropertyChanged(nameof(this.CanEditEntity));
             this.ToggleRawJsonVisibilityCommand.RaiseCanExecuteChanged();
             this.DeleteEntityCommand.RaiseCanExecuteChanged();
         }

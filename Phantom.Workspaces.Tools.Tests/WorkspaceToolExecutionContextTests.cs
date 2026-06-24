@@ -17,7 +17,7 @@ public sealed class WorkspaceToolExecutionContextTests
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["computer"],
+              "entity-types": ["entity", "computer"],
               "names": [["computers", "hostname", "test-computer"]]
             }
             """,
@@ -29,7 +29,7 @@ public sealed class WorkspaceToolExecutionContextTests
             """
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
-              "entity-types": ["user"],
+              "entity-types": ["entity", "user"],
               "names": [["users", "username", "test-user"]]
             }
             """,
@@ -41,7 +41,7 @@ public sealed class WorkspaceToolExecutionContextTests
             """
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
-              "entity-types": ["user-computer-profile"],
+              "entity-types": ["entity", "user-computer-profile"],
               "names": [["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]],
               "computer-reference": ["computers", "hostname", "test-computer"],
               "user-reference": ["users", "username", "test-user"],

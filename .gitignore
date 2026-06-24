@@ -490,7 +490,7 @@ docs/nuget/research/
 **/Properties/launchSettings.json
 
 # Local playspace configuration
-playspace-config.json
+playspace-config*.json
 
 # mongo data started from the examples
 mongo-data

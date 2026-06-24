@@ -50,7 +50,7 @@ public sealed class BadgeToggleIntegrationTests
             EntityId = bogusId,
             ConcurrencyTag = null,
             ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
-            Data = JsonDocument.Parse("""{"entity-id":"00000000-0000-0000-0000-000000000000","entity-types":["task"]}""").RootElement.Clone(),
+            Data = JsonDocument.Parse("""{"entity-id":"00000000-0000-0000-0000-000000000000","entity-types":["entity", "task"]}""").RootElement.Clone(),
             Relationships = Array.Empty<EntitySnapshot>(),
         };
         
@@ -131,10 +131,10 @@ public sealed class BadgeToggleIntegrationTests
         var badgesViewModel = new BadgesViewModel(badgesModel);
 
         // Set up the badges
-        cardNode.SetBadges(badgesViewModel);
+        cardNode.Card.SetBadges(badgesViewModel);
 
-        Assert.NotNull(cardNode.ToggleInterestCommand);
-        Assert.True(cardNode.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
+        Assert.NotNull(cardNode.Card.ToggleInterestCommand);
+        Assert.True(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
     [AvaloniaFact]
@@ -156,10 +156,10 @@ public sealed class BadgeToggleIntegrationTests
         var badgesViewModel = new BadgesViewModel(badgesModel);
 
         // Set up the badges
-        cardNode.SetBadges(badgesViewModel);
+        cardNode.Card.SetBadges(badgesViewModel);
 
-        Assert.NotNull(cardNode.ToggleInterestCommand);
-        Assert.False(cardNode.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
+        Assert.NotNull(cardNode.Card.ToggleInterestCommand);
+        Assert.False(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
     private static async Task SeedTaskAsync(IDataAccessLayer dataAccessLayer, EntityId id)
@@ -168,7 +168,7 @@ public sealed class BadgeToggleIntegrationTests
             $$"""
             {
               "entity-id": "{{id.Value}}",
-              "entity-types": ["task"],
+              "entity-types": ["entity", "task"],
               "names": [["tasks", "test-task"]],
               "display-name": { "default": "Test Task" }
             }

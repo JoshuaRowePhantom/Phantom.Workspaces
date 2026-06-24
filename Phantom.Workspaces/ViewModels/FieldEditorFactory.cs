@@ -10,32 +10,43 @@ namespace Phantom.Workspaces.ViewModels;
 /// <summary>
 /// Factory for building field editors from entity data
 /// </summary>
-internal sealed class FieldEditorFactory
+public sealed class FieldEditorFactory
 {
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;
     private readonly EntityTypeViewCatalog entityTypeViewCatalog;
     private readonly IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews;
+    private readonly IEntityReferenceSearch? entityReferenceSearch;
+    private readonly Action<string>? openEntity;
+    private readonly CustomFieldEditorActivator customFieldEditorActivator;
 
     public FieldEditorFactory(
         EntityBroker entityBroker,
         EntityTypeViewCatalog entityTypeViewCatalog,
-        IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews = null)
+        IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews = null,
+        IEntityReferenceSearch? entityReferenceSearch = null,
+        Action<string>? openEntity = null)
     {
         this.schemaAccessor = new SchemaAccessor(entityBroker.EntityRepository.DataAccessLayer);
         this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
         this.entityTypeViewCatalog = entityTypeViewCatalog;
         this.viewSpecificEntityTypeViews = viewSpecificEntityTypeViews;
+        this.entityReferenceSearch = entityReferenceSearch;
+        this.openEntity = openEntity;
+        this.customFieldEditorActivator = new CustomFieldEditorActivator(
+            message => System.Diagnostics.Debug.WriteLine(message));
     }
 
     public async Task<IReadOnlyCollection<EntityFieldEditorViewModel>> BuildFieldEditorsAsync(
         JsonElement entityData,
-        string? entityTypeName = null)
+        string? entityTypeName = null,
+        bool expandAll = false)
     {
         // Check if there's an entity-type-view that specifies which fields to show
-        // Priority: view-specific > catalog > all fields
+        // Priority: view-specific > catalog > all fields. When expandAll is set, always use all
+        // fields (the entity-browser rendering) rather than the curated view.
         EntityTypeViewDefinition? entityTypeView = null;
-        if (entityTypeName is not null)
+        if (!expandAll && entityTypeName is not null)
         {
             // Check view-specific entity-type-views first
             if (this.viewSpecificEntityTypeViews?.TryGetValue(entityTypeName, out entityTypeView) != true)
@@ -48,9 +59,10 @@ internal sealed class FieldEditorFactory
         IReadOnlyList<IReadOnlyList<string>> fieldPaths;
         IReadOnlyDictionary<string, string?>? displayFormats = null;
         
-        if (entityTypeView?.Fields is { Count: > 0 } viewFields)
+        if (entityTypeView?.Fields is { } viewFields)
         {
-            // Use fields specified in entity-type-view
+            // Use fields specified in entity-type-view. A present-but-empty list means show no fields
+            // (the display name alone is enough); a null Fields means fall back to all schema fields.
             fieldPaths = viewFields.Select(f => f.FieldPath).ToArray();
             displayFormats = viewFields.ToDictionary(
                 f => string.Join(".", f.FieldPath),
@@ -59,7 +71,7 @@ internal sealed class FieldEditorFactory
         }
         else
         {
-            // Fall back to enumerating all fields from schema
+            // Fall back to enumerating all fields (union across the entity's entity types) from schema
             var fieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
                 entityData,
                 Array.Empty<string>(),
@@ -67,12 +79,121 @@ internal sealed class FieldEditorFactory
             fieldPaths = fieldNames.Select(name => (IReadOnlyList<string>)[name]).ToArray();
         }
 
+        fieldPaths = await this.OrderFieldPathsAsync(entityData, fieldPaths).ConfigureAwait(false);
+
         var fieldEditorTasks = fieldPaths
             .Select(fieldPath => this.CreateFieldEditorAsync(entityData, fieldPath, displayFormats))
             .ToArray();
 
         var fieldEditors = await Task.WhenAll(fieldEditorTasks).ConfigureAwait(false);
         return fieldEditors;
+    }
+
+    /// <summary>
+    /// Orders the supplied field paths by the entity-editor field ordering: absolute-ordered fields
+    /// (schema <c>x-absolute-entity-display-order</c>) first, then the remaining fields by relative
+    /// order and name. The contributing entity type name is taken from the entity's primary type.
+    /// </summary>
+    private async Task<IReadOnlyList<IReadOnlyList<string>>> OrderFieldPathsAsync(
+        JsonElement entityData,
+        IReadOnlyList<IReadOnlyList<string>> fieldPaths)
+    {
+        var primaryEntityTypeName = ReadPrimaryEntityTypeName(entityData);
+        var keyed = new List<(IReadOnlyList<string> FieldPath, FieldOrderingKey Key)>(fieldPaths.Count);
+        foreach (var fieldPath in fieldPaths)
+        {
+            var fieldName = fieldPath[^1];
+            var fieldValue = ResolveFieldValue(entityData, fieldPath);
+            var resolvedType = await this.fieldTypeResolver
+                .ResolveFieldTypeAsync(entityData, fieldPath, fieldValue)
+                .ConfigureAwait(false);
+            var key = FieldOrdering.ComputeKey(
+                string.Join(".", fieldPath),
+                resolvedType.AbsoluteEntityDisplayOrder,
+                resolvedType.RelativeEntityDisplayOrder,
+                primaryEntityTypeName,
+                entityTypeDisplayOrder: null);
+            keyed.Add((fieldPath, key));
+        }
+
+        return keyed.OrderBy(static item => item.Key).Select(static item => item.FieldPath).ToArray();
+    }
+
+    private static string ReadPrimaryEntityTypeName(JsonElement entityData)
+    {
+        if (entityData.ValueKind == JsonValueKind.Object
+            && entityData.TryGetProperty("entity-types", out var types)
+            && types.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var type in types.EnumerateArray())
+            {
+                if (type.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(type.GetString()))
+                {
+                    return type.GetString()!;
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static JsonElement ResolveFieldValue(JsonElement rootEntity, IReadOnlyList<string> fieldPath)
+    {
+        var current = rootEntity;
+        foreach (var component in fieldPath)
+        {
+            if (current.ValueKind == JsonValueKind.Object && current.TryGetProperty(component, out var next))
+            {
+                current = next;
+            }
+            else
+            {
+                using var nullDocument = JsonDocument.Parse("null");
+                return nullDocument.RootElement.Clone();
+            }
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Navigates the entity data along the full field path (object property and array index segments)
+    /// to obtain the field's value. Returns false when any segment cannot be resolved.
+    /// </summary>
+    private static bool TryNavigateToFieldValue(
+        JsonElement rootEntity,
+        IReadOnlyList<string> fieldPath,
+        out JsonElement fieldValue)
+    {
+        var current = rootEntity;
+        foreach (var segment in fieldPath)
+        {
+            if (current.ValueKind == JsonValueKind.Object)
+            {
+                if (!current.TryGetProperty(segment, out var next))
+                {
+                    fieldValue = default;
+                    return false;
+                }
+
+                current = next;
+            }
+            else if (current.ValueKind == JsonValueKind.Array
+                     && int.TryParse(segment, out var index)
+                     && index >= 0
+                     && index < current.GetArrayLength())
+            {
+                current = current[index];
+            }
+            else
+            {
+                fieldValue = default;
+                return false;
+            }
+        }
+
+        fieldValue = current;
+        return true;
     }
 
     private async Task<EntityFieldEditorViewModel> CreateFieldEditorAsync(
@@ -83,14 +204,58 @@ internal sealed class FieldEditorFactory
         var fieldName = fieldPath[^1];
         var fieldPathKey = string.Join(".", fieldPath);
         var displayFormat = displayFormats?.TryGetValue(fieldPathKey, out var format) == true ? format : null;
+        var isInline = string.Equals(displayFormat, "inline", StringComparison.Ordinal);
         
-        if (!rootEntity.TryGetProperty(fieldName, out var fieldValue))
+        if (!TryNavigateToFieldValue(rootEntity, fieldPath, out var fieldValue))
         {
             using var nullDocument = JsonDocument.Parse("null");
             fieldValue = nullDocument.RootElement.Clone();
         }
 
         var resolvedType = await Task.Run(() => this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue));
+
+        // 1. Custom editor selected by x-field-editor on the field/type schema.
+        if (this.customFieldEditorActivator.TryCreate(
+                resolvedType.FieldEditorTypeName,
+                new FieldEditorContext(fieldName, fieldValue, resolvedType, this.entityReferenceSearch),
+                out var customEditor)
+            && customEditor is not null)
+        {
+            return customEditor;
+        }
+
+        // 2. Entity-list editor for a list of entity-id references (core.json entity-id-list).
+        if (string.Equals(resolvedType.TypeName, "entity-id-list", StringComparison.Ordinal))
+        {
+            var entityIds = fieldValue.ValueKind == JsonValueKind.Array
+                ? fieldValue.EnumerateArray()
+                    .Where(static element => element.ValueKind == JsonValueKind.String)
+                    .Select(static element => element.GetString() ?? string.Empty)
+                    .ToArray()
+                : Array.Empty<string>();
+            var listEditor = new EntityListFieldEditorViewModel(
+                fieldName,
+                entityIds,
+                resolvedType.EntityTypes,
+                this.entityReferenceSearch,
+                this.openEntity);
+            await listEditor.ResolveDisplayNamesAsync().ConfigureAwait(true);
+            return listEditor;
+        }
+
+        // 3. Entity-reference editor when the field's schema declares allowed entity types.
+        if (resolvedType.EntityTypes.Count > 0)
+        {
+            var entityId = fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() : null;
+            var referenceEditor = new EntityReferenceFieldEditorViewModel(
+                fieldName,
+                entityId,
+                resolvedType.EntityTypes,
+                this.entityReferenceSearch,
+                this.openEntity);
+            await referenceEditor.ResolveCurrentValueAsync().ConfigureAwait(true);
+            return referenceEditor;
+        }
 
         switch (resolvedType.TypeName)
         {
@@ -116,7 +281,7 @@ internal sealed class FieldEditorFactory
             case "mime-attachment":
                 if (fieldValue.ValueKind == JsonValueKind.Object)
                 {
-                    if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, resolvedType.DefaultMimeType, out var localizedMimeEditor))
+                    if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, resolvedType.DefaultMimeType, isInline, out var localizedMimeEditor))
                     {
                         return localizedMimeEditor;
                     }
@@ -144,15 +309,15 @@ internal sealed class FieldEditorFactory
                         ? urlElement.GetString()
                         : null;
                     MimeAttachmentFieldEditorViewModel editor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
-                        ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
-                        : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+                        ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline)
+                        : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline);
                     return new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, editor);
                 }
 
                 var defaultMimeType = resolvedType.DefaultMimeType ?? "application/octet-stream";
                 MimeAttachmentFieldEditorViewModel defaultEditor = string.Equals(defaultMimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
-                    ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null)
-                    : new PlainMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null);
+                    ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null, isInline)
+                    : new PlainMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null, isInline);
                 return new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, defaultEditor);
             case "array":
                 if (fieldValue.ValueKind != JsonValueKind.Array)
@@ -215,6 +380,7 @@ internal sealed class FieldEditorFactory
         string fieldName,
         JsonElement fieldValue,
         string? defaultMimeType,
+        bool isInline,
         out EntityFieldEditorViewModel editor)
     {
         editor = null!;
@@ -227,7 +393,7 @@ internal sealed class FieldEditorFactory
         foreach (var property in fieldValue.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object
-                || !TryCreateSingleMimeAttachmentEditor(fieldName, property.Value, defaultMimeType, out var localizedEditor))
+                || !TryCreateSingleMimeAttachmentEditor(fieldName, property.Value, defaultMimeType, isInline, out var localizedEditor))
             {
                 localizedValues.Clear();
                 break;
@@ -249,6 +415,7 @@ internal sealed class FieldEditorFactory
         string fieldName,
         JsonElement fieldValue,
         string? defaultMimeType,
+        bool isInline,
         out MimeAttachmentFieldEditorViewModel editor)
     {
         editor = null!;
@@ -279,8 +446,8 @@ internal sealed class FieldEditorFactory
             ? urlElement.GetString()
             : null;
         editor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
-            ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
-            : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+            ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline)
+            : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline);
         return true;
     }
 
@@ -296,7 +463,7 @@ internal sealed class FieldEditorFactory
             return false;
         }
 
-        if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, defaultMimeType, out var localizedEditor))
+        if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, defaultMimeType, isInline: false, out var localizedEditor))
         {
             editor = localizedEditor;
             return true;

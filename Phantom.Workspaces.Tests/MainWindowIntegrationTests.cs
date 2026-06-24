@@ -32,7 +32,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task InMemoryRepository_SeedsGithubModelsAgentDefinition()
+    public async Task InMemoryRepository_SeedsGithubModelsAgentManifest()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
@@ -41,13 +41,13 @@ public sealed class MainWindowIntegrationTests
             snapshot => ReadEntityNames(snapshot.Value.Data).Any(
                 static entityName => entityName.Components.Length == 3
                     && string.Equals(entityName.Components[0], "defaults", StringComparison.Ordinal)
-                    && string.Equals(entityName.Components[1], "agent-definitions", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "agent-manifests", StringComparison.Ordinal)
                     && string.Equals(entityName.Components[2], "github-models", StringComparison.Ordinal)));
         Assert.Equal("GitHub Models Workspace Assistant", ReadDefaultDisplayName(githubModelsSnapshot.Value.Data));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task InMemoryRepository_SeedsWorkspacesAgentDefinitionDisplayName()
+    public async Task InMemoryRepository_SeedsWorkspacesAgentManifestDisplayName()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
         var snapshots = await repository.ExportEntitySnapshotsAsync();
@@ -56,7 +56,7 @@ public sealed class MainWindowIntegrationTests
             snapshot => ReadEntityNames(snapshot.Value.Data).Any(
                 static entityName => entityName.Components.Length == 3
                     && string.Equals(entityName.Components[0], "defaults", StringComparison.Ordinal)
-                    && string.Equals(entityName.Components[1], "agent-definitions", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "agent-manifests", StringComparison.Ordinal)
                     && string.Equals(entityName.Components[2], "workspaces", StringComparison.Ordinal)));
         Assert.Equal("Workspaces Assistant", ReadDefaultDisplayName(workspacesSnapshot.Value.Data));
     }
@@ -85,7 +85,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentDefinitionEntities()
+    public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -103,7 +103,7 @@ public sealed class MainWindowIntegrationTests
 
         Assert.Contains(
             sessionsView.Entities,
-            static entity => string.Equals(entity.EntityType, "agent-definition", StringComparison.Ordinal));
+            static entity => string.Equals(entity.EntityType, "agent-manifest", StringComparison.Ordinal));
         Assert.DoesNotContain(
             sessionsView.Entities,
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
@@ -129,7 +129,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": { "default": "Workspace Without Regions" }
             }
             """);
@@ -137,7 +137,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": { "default": "Workspace Without Regions" }
             }
             """);
@@ -185,7 +185,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "f95a86dc-f71f-43f8-abf5-31c6444f7a4e",
-              "entity-types": ["agent-definition"],
+              "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "local-echo"]],
               "display-name": { "default": "Local Echo" },
               "definition": {
@@ -232,6 +232,51 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentManifestShortcutHandler_LocalEchoManifest_CreatesAgentSessionTab()
+    {
+        var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentManifestEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("a1b2c3d4-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "a1b2c3d4-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-manifest"],
+              "names": [["tests", "agent-manifests", "local-echo"]],
+              "display-name": { "default": "Local Echo Manifest" },
+              "manifest": {
+                "name": "local-echo",
+                "displayName": "Local Echo Manifest",
+                "template": {
+                  "kind": "prompt",
+                  "name": "local-echo",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                },
+                "resources": [
+                  { "kind": "tool", "id": "fixed", "name": "workspace-entity" }
+                ]
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+
+        var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
+
+        Assert.True(handled);
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        Assert.NotNull(selectedTab.Agent);
+        Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -244,7 +289,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "b6731cc0-fb8a-4f8e-9f89-3f33a5db1b8a",
-              "entity-types": ["agent-definition"],
+              "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "workspace-entity-tool"]],
               "display-name": { "default": "Workspace Entity Tool Agent" },
               "definition": {

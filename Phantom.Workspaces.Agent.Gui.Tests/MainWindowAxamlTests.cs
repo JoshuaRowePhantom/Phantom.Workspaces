@@ -249,19 +249,19 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
         Assert.Contains(
             "Gesture=\"Cancel\" Command=\"{Binding InterruptCommand}\"",
-            outputControlContent,
+            editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "Gesture=\"Pause\" Command=\"{Binding InputQueue.ToggleHoldAllQueuesCommand}\"",
-            outputControlContent,
+            editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "Gesture=\"Shift+Pause\" Command=\"{Binding InputQueue.HoldAllQueuesCommand}\"",
-            outputControlContent,
+            editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "Gesture=\"Ctrl+Shift+Pause\" Command=\"{Binding InputQueue.UnholdAllQueuesCommand}\"",
-            outputControlContent,
+            editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "OutputMode=\"SelectableTextBox\"",

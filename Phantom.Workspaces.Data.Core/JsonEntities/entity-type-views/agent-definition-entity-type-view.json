@@ -1,0 +1,9 @@
+{
+  "entity-id": "2fc053f9-c863-4713-b3a9-a60c74154ae4",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "agent-definition"]],
+  "display-name": {
+    "default": "Agent Definition View"
+  },
+  "fields": []
+}

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
@@ -22,7 +24,96 @@ public sealed class ToolResultBrowserViewModelTests
         }
     }
 
+    /// <summary>
+    /// Completes <see cref="QueryAsync"/> on a thread-pool thread so that a caller which fails to
+    /// capture the synchronization context (for example via <c>ConfigureAwait(false)</c>) resumes
+    /// off that context.
+    /// </summary>
+    private sealed class PoolThreadQueryDataAccessLayer : BaseUpdateProcessingDataAccessLayer
+    {
+        public PoolThreadQueryDataAccessLayer(IDataAccessLayer underlyingDataAccessLayer)
+            : base(underlyingDataAccessLayer)
+        {
+        }
+
+        public override Task<QueryResult> QueryAsync(
+            QueryRequest request,
+            CancellationToken cancellationToken = default)
+            => Task.Run(() => base.QueryAsync(request, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// A single-threaded synchronization context that pumps posted callbacks on one dedicated
+    /// thread, modelling the UI thread for deterministic affinity assertions.
+    /// </summary>
+    private sealed class SingleThreadSynchronizationContext : SynchronizationContext, IDisposable
+    {
+        private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> queue = new();
+        private readonly Thread thread;
+
+        public SingleThreadSynchronizationContext()
+        {
+            this.thread = new Thread(this.PumpMessages) { IsBackground = true };
+            this.thread.Start();
+        }
+
+        public int ThreadId => this.thread.ManagedThreadId;
+
+        public override void Post(SendOrPostCallback callback, object? state)
+            => this.queue.Add((callback, state));
+
+        public Task Run(Func<Task> operation)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.Post(
+                async _ =>
+                {
+                    try
+                    {
+                        await operation();
+                        completion.SetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        completion.SetException(exception);
+                    }
+                },
+                null);
+            return completion.Task;
+        }
+
+        private void PumpMessages()
+        {
+            SynchronizationContext.SetSynchronizationContext(this);
+            foreach (var (callback, state) in this.queue.GetConsumingEnumerable())
+            {
+                callback(state);
+            }
+        }
+
+        public void Dispose() => this.queue.CompleteAdding();
+    }
+
     private static readonly string[] HostName = ["computer", "this-machine"];
+
+    [Fact]
+    public async Task RefreshAsync_MutatesHostsOnTheCapturedSynchronizationContext()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var writer = new ToolExecutionResultWriter(dataAccessLayer, new AdvancingTimeProvider());
+        await writer.StartAsync(HostName, "vector-indexer");
+
+        var browser = new ToolResultBrowserViewModel(new PoolThreadQueryDataAccessLayer(dataAccessLayer));
+
+        using var context = new SingleThreadSynchronizationContext();
+        var mutationThreadIds = new ConcurrentBag<int>();
+        browser.Hosts.CollectionChanged += (_, _) => mutationThreadIds.Add(Environment.CurrentManagedThreadId);
+
+        await context.Run(() => browser.RefreshAsync());
+
+        Assert.NotEmpty(mutationThreadIds);
+        Assert.All(mutationThreadIds, threadId => Assert.Equal(context.ThreadId, threadId));
+    }
 
     [Fact]
     public async Task RefreshAsync_BuildsHostToolRunTree_WithChildResults()

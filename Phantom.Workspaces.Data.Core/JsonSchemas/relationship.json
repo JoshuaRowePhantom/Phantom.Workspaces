@@ -20,10 +20,7 @@
             "$ref": "core.json#/$defs/entity-id"
           },
           {
-            "type": "array",
-            "items": {
-              "$ref": "core.json#/$defs/entity-id"
-            }
+            "$ref": "core.json#/$defs/entity-id-list"
           }
         ]
       }

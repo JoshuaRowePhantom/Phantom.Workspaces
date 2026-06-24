@@ -32,10 +32,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Task<EntityBroker> entityBrokerTask;
     private readonly WorkspacesConfiguration? configuration;
     private WorkspacesWebHost? webHost;
+    private Services.DevTunnel.IDevTunnelHostService? devTunnelHostService;
+    private Task? devTunnelHostStartTask;
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
     private EntityTypeViewCatalog? entityTypeViewCatalog;
+    private FieldEditorFactory? fieldEditorFactory;
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
@@ -59,7 +62,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
-        this.entityBrokerTask = EntityBroker.CreateInitializedAsync(repositorySource);
+        this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
+            repositorySource,
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         this.profileStore = ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
@@ -75,15 +80,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.CloseWorkspaceCommand = new RelayCommand(this.OnCloseWorkspace, this.CanCloseWorkspace);
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
-        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
-        this.shortcutManager.AddShortcutHandler(new ToggleJsonEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
@@ -218,6 +224,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal EntityBroker EntityBroker => this.entityBroker
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
+    /// <summary>
+    /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
+    /// results tree), or returns null if the workspace has not finished initializing.
+    /// </summary>
+    internal ScheduledTasksViewModel? TryCreateScheduledTasksViewModel()
+        => this.entityBroker is { } broker ? new ScheduledTasksViewModel(broker) : null;
+
     public async Task InitializeAsync()
     {
         this.entityBroker = await this.entityBrokerTask;
@@ -227,6 +240,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
         this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
         this.entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(this.entityBroker);
+        this.fieldEditorFactory = new FieldEditorFactory(
+            this.entityBroker,
+            this.entityTypeViewCatalog,
+            entityReferenceSearch: new EntityReferenceSearch(this.entityBroker),
+            openEntity: entityId => _ = this.OpenEntityByIdAsync(entityId));
         this.mainNavigationView = await this.LoadNavigationSubscriptionAsync();
         this.InitializeTopLevelViews();
         await this.ApplySelectedViewAsync();
@@ -255,6 +273,50 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
                 this.entityBroker.EntityRepository.DataAccessLayer);
+            this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
+            this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
+        }
+    }
+
+    private void StartDevTunnelHostIfConfigured(string? listenUrl)
+    {
+        var devTunnelConfiguration = this.configuration?.DevTunnel;
+        if (devTunnelConfiguration is null
+            || (string.IsNullOrWhiteSpace(devTunnelConfiguration.TunnelName)
+                && string.IsNullOrWhiteSpace(devTunnelConfiguration.TunnelId)))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(listenUrl) || !Uri.TryCreate(listenUrl, UriKind.Absolute, out var listenUri))
+        {
+            return;
+        }
+
+        this.ConnectionStatus?.SetTunnelName(devTunnelConfiguration.TunnelName);
+
+        var localPort = listenUri.Port;
+        var hostService = new Services.DevTunnel.DevTunnelServiceFactory().CreateHostService();
+        this.devTunnelHostService = hostService;
+        hostService.StatusChanged += (_, status) => Dispatcher.UIThread.Post(
+            () => this.ConnectionStatus?.SetDevTunnelStatus(status.State, status.AccessPointUrl, status.LastError));
+
+        // Hosting runs in the background and surfaces progress/errors through the status event, so a
+        // sign-in or relay failure never blocks GUI startup. The task is observed to avoid an
+        // unobserved-exception escalation; the Error status already carries the failure detail.
+        this.devTunnelHostStartTask = ObserveAsync(
+            hostService.StartAsync(localPort, devTunnelConfiguration));
+
+        static async Task ObserveAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Surfaced via DevTunnelHostStatus.Error.
+            }
         }
     }
 
@@ -440,7 +502,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             $$"""
             {
               "entity-id": "00000000-0000-0000-0000-000000000000",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": "{{displayName}}"
             }
             """);
@@ -731,6 +793,52 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             : Task.FromResult(false);
     }
 
+    /// <summary>
+    /// Opens the entity with the supplied id (used to navigate from a rendered entity-reference field,
+    /// for example a relationship's participants).
+    /// </summary>
+    public async Task OpenEntityByIdAsync(string entityId)
+    {
+        if (this.entityBroker is null || string.IsNullOrWhiteSpace(entityId))
+        {
+            return;
+        }
+
+        EntityId id;
+        try
+        {
+            id = new EntityId(entityId);
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentException)
+        {
+            return;
+        }
+
+        var entities = await this.entityBroker.GetEntitiesAsync(new[] { id });
+        var entity = entities.FirstOrDefault(candidate => candidate.EntityId == id) ?? entities.FirstOrDefault();
+        if (entity is not null)
+        {
+            await this.ActivateEntityClickAsync(entity);
+        }
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SubscribedEntityViewModel, EntityListNodeViewModel> cardNodesByEntity = new();
+
+    /// <summary>
+    /// Registers the card node that renders the supplied entity. Retained so card nodes can be
+    /// looked up by entity when needed.
+    /// </summary>
+    public void RegisterCardNode(SubscribedEntityViewModel entity, EntityListNodeViewModel cardNode)
+    {
+        this.cardNodesByEntity.AddOrUpdate(entity, cardNode);
+    }
+
+    /// <summary>Finds the card node currently rendering the supplied entity, if any.</summary>
+    public EntityListNodeViewModel? FindCardNode(SubscribedEntityViewModel entity)
+    {
+        return this.cardNodesByEntity.TryGetValue(entity, out var cardNode) ? cardNode : null;
+    }
+
     private async Task OnActivateEntityClickAsync(
         object? parameter)
     {
@@ -770,7 +878,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this,
             this.shortcutManager,
             indentLevel,
-            isParentContext);
+            isParentContext,
+            this.fieldEditorFactory);
     }
 
     /// <summary>
@@ -1990,6 +2099,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public async ValueTask DisposeAsync()
     {
+        if (this.devTunnelHostService is not null)
+        {
+            await this.devTunnelHostService.DisposeAsync();
+        }
+
         if (this.webHost is not null)
         {
             await this.webHost.DisposeAsync();

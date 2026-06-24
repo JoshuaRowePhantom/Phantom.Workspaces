@@ -1,0 +1,26 @@
+{
+  "entity-id": "d1e2f3a4-8b9c-4d0e-9f1a-7b8c9d0e1f2a",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "views",
+      "sessions",
+      "notes",
+      "agent-definitions"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Definitions"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Agent Definitions\n\nAgent definitions are concrete agent configurations with their tools already resolved. Discovered local GitHub Copilot CLI sessions appear here as agent definitions. Unlike manifests, definitions are not re-resolved against the current machine."
+      }
+    }
+  }
+}

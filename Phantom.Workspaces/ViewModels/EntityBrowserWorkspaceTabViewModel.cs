@@ -16,6 +16,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly EntityBroker entityBroker;
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;
+    private readonly EntityReferenceSearch entityReferenceSearch;
     private readonly SubscribedGet rootSubscribedGet;
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
@@ -29,6 +30,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         this.entityBroker = entityBroker;
         this.schemaAccessor = new SchemaAccessor(this.entityBroker.EntityRepository.DataAccessLayer);
         this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
+        this.entityReferenceSearch = new EntityReferenceSearch(this.entityBroker);
         this.rootSubscribedGet = subscribedGet;
         this.rootSubscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
         _ = this.RebuildTreeAsync();
@@ -481,7 +483,21 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         IReadOnlyList<string> fieldPath)
     {
         var resolvedType = await Task.Run(() => this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue));
-       
+
+        // Entity-reference editor when the field's schema declares allowed entity types, so the browser
+        // renders related entities (for example a relationship's participants) as their display names.
+        if (resolvedType.EntityTypes.Count > 0)
+        {
+            var referencedId = fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() : null;
+            var referenceEditor = new EntityReferenceFieldEditorViewModel(
+                fieldName,
+                referencedId,
+                resolvedType.EntityTypes,
+                this.entityReferenceSearch);
+            await referenceEditor.ResolveCurrentValueAsync();
+            return referenceEditor;
+        }
+
         switch (resolvedType.TypeName)
         {
             case "local-string":

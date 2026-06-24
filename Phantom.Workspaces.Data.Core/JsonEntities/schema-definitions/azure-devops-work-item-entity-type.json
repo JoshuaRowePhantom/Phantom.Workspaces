@@ -1,7 +1,10 @@
 {
   "entity-id": "a7b8c9d0-e1f2-a3b4-c5d6-e7f8a9b0c1d2",
+  "entity-display-order": 350,
   "entity-types": [
+    "entity",
     "entity-type",
+    "json-schema",
     "note"
   ],
   "names": [

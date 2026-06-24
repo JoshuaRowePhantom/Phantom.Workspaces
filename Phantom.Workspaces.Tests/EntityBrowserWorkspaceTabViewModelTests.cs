@@ -22,7 +22,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "11111111-1111-1111-1111-111111111111",
-                  "entity-types": ["folder"],
+                  "entity-types": ["entity", "folder"],
                   "names": [["entity-types"]],
                   "display-name": { "default": "Entity Types" }
                 }
@@ -35,7 +35,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "22222222-2222-2222-2222-222222222222",
-                  "entity-types": ["entity-type"],
+                  "entity-types": ["entity", "entity-type"],
                   "names": [["entity-types", "workspace"]],
                   "display-name": { "default": "Workspace" }
                 }
@@ -92,11 +92,88 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             item => string.Equals(item.ItemKey, "[\"entity-types\",\"workspace\"]", StringComparison.Ordinal));
         Assert.Equal(2, childItem.Level);
         Assert.Equal(parentItem.ItemKey, childItem.ParentItemKey);
-        Assert.Equal(EntityCardViewResolver.RawViewName, childItem.Node.CardViewName);
+        Assert.Equal(EntityCardViewResolver.RawViewName, childItem.Node.Card.CardViewName);
 
         Assert.Equal(0, rootItem.StickyRow);
         Assert.Equal(1, parentItem.StickyRow);
         Assert.Null(childItem.StickyRow);
+    }
+
+    [AvaloniaFact]
+    public async Task BrowserList_FolderItem_ExpandsViaItemToggleCommand()
+    {
+        var broker = await CreateBrokerAsync();
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("44444444-4444-4444-4444-444444444444"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "44444444-4444-4444-4444-444444444444",
+                  "entity-types": ["entity", "folder"],
+                  "names": [["tools"]],
+                  "display-name": { "default": "Tools" }
+                }
+                """));
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("55555555-5555-5555-5555-555555555555"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "1"),
+                """
+                {
+                  "entity-id": "55555555-5555-5555-5555-555555555555",
+                  "entity-types": ["entity", "tool"],
+                  "names": [["tools", "git-workspace-scan"]],
+                  "display-name": { "default": "Git Workspace Scan" }
+                }
+                """));
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-tab-folder",
+            Title = "Entity Browser",
+        };
+
+        // The folder must report it has children (so the expand affordance is shown) even though it
+        // is collapsed by default.
+        var folderItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"tools\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+        Assert.False(folderItem.IsExpanded);
+        Assert.True(folderItem.ToggleExpandCommand.CanExecute(null));
+
+        // Toggling via the item's command (the path the browser template binds) must expand it and
+        // reveal the child. Previously the expander toggled the node, whose expansion state the
+        // browser ignores on rebuild, so folders never expanded.
+        folderItem.ToggleExpandCommand.Execute(null);
+
+        var childItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"tools\",\"git-workspace-scan\"]", StringComparison.Ordinal));
+        Assert.Equal(folderItem.ItemKey, childItem.ParentItemKey);
     }
 
     [AvaloniaFact]
@@ -112,7 +189,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "33333333-3333-3333-3333-333333333333",
-                  "entity-types": ["note"],
+                  "entity-types": ["entity", "note"],
                   "names": [["documentation", "markdown-note"]],
                   "display-name": { "default": "Markdown Note" },
                   "content": {
@@ -182,7 +259,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "33333333-3333-3333-3333-333333333333",
-                  "entity-types": ["note"],
+                  "entity-types": ["entity", "note"],
                   "names": [["notes", "localized-mime"]],
                   "display-name": { "default": "Localized Mime" },
                   "content": {
@@ -252,7 +329,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "44444444-4444-4444-4444-444444444444",
-                  "entity-types": ["entity-type", "json-schema"],
+                  "entity-types": ["entity", "entity-type", "json-schema"],
                   "names": [["entity-types", "note"]],
                   "display-name": { "default": "Note Type" },
                   "schema": {

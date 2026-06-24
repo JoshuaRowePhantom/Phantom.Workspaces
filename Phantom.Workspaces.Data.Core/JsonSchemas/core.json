@@ -42,6 +42,13 @@
       },
       "minItems": 1
     },
+    "entity-id-list": {
+      "$comment": "An array of entity-id references. Constrain the allowed entity types of the members by placing x-entity-types as a sibling of the $ref to this def.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity-id"
+      }
+    },
     "entity-reference": {
       "anyOf": [
         {

@@ -46,15 +46,22 @@ The `tool-type` property identifies the C# implementation class that executes th
 The `configuration` property holds tool-specific configuration data. The structure varies by tool-type:
 
 **GitWorkspaceScanTool**:
+
+Works out of the box with no configuration — it scans **all local fixed drives** for Git
+repositories. The scan can optionally be narrowed/bounded with **top-level** properties (not nested
+under `configuration`):
+
 ```json
 {
   "tool-type": "git-workspace-scan",
-  "configuration": {
-    "scan-root": "C:\\dev",
-    "max-depth": 6
-  }
+  "scan-roots": ["C:\\dev", "D:\\work"],
+  "max-depth": 6
 }
 ```
+
+- `scan-root` (string) or `scan-roots` (array of strings): directories to scan instead of all local
+  drives. Omit both to scan every local fixed drive.
+- `max-depth` (number, default 6): how deep the scan descends.
 
 **EntityClassifierTool**:
 ```json
@@ -108,6 +115,10 @@ Tools are scheduled by creating a `tool-relationship` entity that links:
 1. A **tool entity** (via `participants.tool`)
 2. One or more **schedule entities** (via `participants.schedule` array)
 3. One or more **target entities** (via `participants.target` array)
+
+A tool does nothing until such a relationship exists — see the
+[Tool Relationship entity type](#related-entity-types) for why/when to create one, how to resolve the
+participant entity-ids, and worked examples.
 
 Example tool-relationship entity:
 ```json
@@ -177,9 +188,15 @@ Discovers git repositories in a directory tree and creates `git` entities.
 
 **When to use**: User wants to track their git repositories in the workspace.
 
-**Configuration**:
-- `scan-root`: Path to scan (e.g., `C:\\dev`, `/home/user/projects`)
-- `max-depth`: How deep to recurse (default: 6)
+**Out of the box**: With no configuration it scans **all local fixed drives**, so simply enabling the
+tool (creating a `tool-relationship` to a schedule and profile) is enough — the tool entity does not
+need to be edited.
+
+**Optional configuration** (top-level properties on the tool entity, not nested under
+`configuration`):
+- `scan-root`: a single path to scan instead of all drives (e.g. `C:\\dev`, `/home/user/projects`)
+- `scan-roots`: an array of paths to scan instead of all drives
+- `max-depth`: how deep to recurse (default: 6)
 
 ### Entity Classifier
 
@@ -250,6 +267,20 @@ tool-relationship {
 ## Disabling a Tool
 
 To disable a tool on a profile, delete the tool-relationship entity. Do not modify the tool or schedule entities - they remain available for future use or use by other relationships.
+
+## Related entity types
+
+- **Tool Relationship** (`tool-relationship` entity type,
+  `https://schemas.workspaces.phantom.to/workspaces/data/core/tool-relationship.json`,
+  [tool-relationship-schema.md](/JsonEntities/documentation/tool-relationship-schema.md)) — links this
+  tool to a schedule and targets to actually run it. **A tool only executes once a tool-relationship
+  references it.** See that doc for first-time creation examples and the reasoning on when to create a
+  relationship.
+- **Schedule** (`schedule` entity type,
+  [schedule-schema.md](/JsonEntities/documentation/schedule-schema.md)) — when the tool runs.
+- **Tool Execution Result** (`tool-execution-result` entity type,
+  [tool-execution-result-schema.md](/JsonEntities/documentation/tool-execution-result-schema.md)) —
+  per-run output, used for verification and troubleshooting.
 
 ## Troubleshooting
 

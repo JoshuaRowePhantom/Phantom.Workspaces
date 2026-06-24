@@ -1,6 +1,7 @@
 {
   "entity-id": "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0e",
   "entity-types": [
+    "entity",
     "agent-manifest"
   ],
   "names": [

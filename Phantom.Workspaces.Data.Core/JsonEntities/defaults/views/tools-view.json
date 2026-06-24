@@ -1,6 +1,6 @@
 {
   "entity-id": "e5f6a7b8-c9d0-4e5f-2a3b-4c5d6e7f8a9b",
-  "entity-types": ["view"],
+  "entity-types": ["entity", "view"],
   "names": [
     ["views", "tools"]
   ],
@@ -10,39 +10,49 @@
   "sub-views": [
     {
       "disposition": "expanded",
-      "query": {
-        "clauses": [
-          {
-            "clause-identifier": { "value": "tools" },
-            "clause": {
-              "clause-type": "entity-type",
-              "entity-type-names": {
-                "values": [
-                  "tool"
-                ]
-              }
-            }
-          }
-        ]
-      }
+      "get-entity": [
+        {
+          "entity-name": [
+            "views",
+            "tools",
+            "notes",
+            "tools"
+          ]
+        }
+      ]
     },
     {
       "disposition": "expanded",
-      "query": {
-        "clauses": [
-          {
-            "clause-identifier": { "value": "tool-relationships" },
-            "clause": {
-              "clause-type": "entity-type",
-              "entity-type-names": {
-                "values": [
-                  "tool-relationship"
-                ]
-              }
-            }
-          }
-        ]
-      }
+      "get-entity": [
+        {
+          "entity-type-names": [
+            "tool"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-name": [
+            "views",
+            "tools",
+            "notes",
+            "tool-relationships"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-type-names": [
+            "tool-relationship"
+          ]
+        }
+      ]
     }
   ]
 }

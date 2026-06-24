@@ -1,6 +1,7 @@
 {
   "entity-id": "c53535da-8889-4e69-8716-b8fa3be950f9",
   "entity-types": [
+    "entity",
     "schedule"
   ],
   "names": [

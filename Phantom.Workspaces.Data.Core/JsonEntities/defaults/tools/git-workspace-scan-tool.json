@@ -1,6 +1,6 @@
 {
   "entity-id": "f7a8b9c0-d1e2-4f5a-6b7c-8d9e0f1a2b3c",
-  "entity-types": ["tool"],
+  "entity-types": ["entity", "tool"],
   "names": [
     ["tools", "git-workspace-scan"]
   ],

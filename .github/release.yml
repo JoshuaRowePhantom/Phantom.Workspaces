@@ -1,0 +1,32 @@
+# Configures GitHub's auto-generated release notes. The changelog is built from
+# merged pull requests categorized by label, so releases need no tracked changelog file.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - dependencies
+    authors:
+      - dependabot
+  categories:
+    - title: Breaking Changes
+      labels:
+        - breaking-change
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+    - title: Bug Fixes
+      labels:
+        - bug
+        - fix
+    - title: Build, Packaging & Installation
+      labels:
+        - build
+        - packaging
+        - installer
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other Changes
+      labels:
+        - "*"

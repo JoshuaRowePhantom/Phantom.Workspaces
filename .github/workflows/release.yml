@@ -1,0 +1,100 @@
+name: Release
+
+# Tag-triggered release pipeline. Tagging vX.Y.Z is the single trigger that
+# builds, packages, signs, and publishes the GitHub Release whose assets the
+# in-app updater and tray notifier consume.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to (re-)release.
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, package, and publish release
+    runs-on: windows-latest
+    environment: release
+    env:
+      AVALONIA_UI_LICENSE_KEY: ${{ secrets.AVALONIA_UI_LICENSE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up build
+        uses: ./.github/actions/setup-build
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $ref = "${{ github.event.inputs.tag || github.ref_name }}"
+          $tag = $ref -replace '^refs/tags/', ''
+          if ($tag -notmatch '^v\d+\.\d+\.\d+') {
+            throw "Tag '$tag' is not a vX.Y.Z release tag."
+          }
+          $version = $tag.TrimStart('v')
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Releasing version $version (tag $tag)"
+
+      - name: Build (Release)
+        shell: pwsh
+        run: dotnet build Phantom.Workspaces.slnx -c Release --no-restore
+
+      - name: Run test suite (release gate)
+        shell: pwsh
+        run: .\scripts\run-tests.ps1 -Mode fast
+
+      - name: Upload test results log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results-log
+          path: scripts/test-results.log
+          if-no-files-found: warn
+
+      - name: Publish and package per architecture
+        id: package
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $output = Join-Path $env:RUNNER_TEMP 'release-assets'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          foreach ($rid in @('win-x64', 'win-arm64')) {
+            $publishDir = Join-Path $env:RUNNER_TEMP "publish/$rid"
+            dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj `
+              -c Release -r $rid `
+              -p:Version=$version -o $publishDir
+            if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
+            .\packaging\zip\New-ReleaseZip.ps1 `
+              -PublishDirectory $publishDir -Version $version `
+              -RuntimeIdentifier $rid -OutputDirectory $output
+          }
+          "assets=$output" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $assets = "${{ steps.package.outputs.assets }}"
+          $files = Get-ChildItem -LiteralPath $assets -File | ForEach-Object { $_.FullName }
+          gh release create $tag $files `
+            --title $tag `
+            --generate-notes `
+            --verify-tag

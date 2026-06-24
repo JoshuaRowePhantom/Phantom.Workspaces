@@ -1,6 +1,7 @@
 {
   "entity-id": "7a1d9c20-1111-4aaa-8bbb-000000000005",
   "entity-types": [
+    "entity",
     "llm-trust-profile"
   ],
   "names": [

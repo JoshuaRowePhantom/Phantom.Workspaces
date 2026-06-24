@@ -6,6 +6,28 @@ namespace Phantom.Workspaces.Data.Tests;
 public sealed class SchemaAccessorTests
 {
     [Fact]
+    public async Task ResolveSchemaByReferenceAsync_ResolvesStoredSchemaByName()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaId = new EntityId("2b8d9f41-5a3c-4f0e-9c1b-7d6e2f4a8c10");
+        const string schemaName = "https://schemas.workspaces.phantom.to/tests/stored-resolution.json";
+
+        var addStoredSchemaResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateSchemaChange(schemaId, null, schemaName, "string")));
+        Assert.DoesNotContain(addStoredSchemaResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+
+        // No request schemas are supplied, so the reference can only be resolved
+        // by getting the stored schema entity by name from the store.
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        var resolvedSchema = await schemaAccessor.ResolveSchemaByReferenceAsync(schemaName);
+        Assert.NotNull(resolvedSchema);
+        Assert.True(resolvedSchema.Value.TryGetProperty("schema", out var schemaNode));
+        Assert.Equal("string", schemaNode.GetProperty("properties").GetProperty("title").GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task ResolveSchemaByReferenceAsync_PrefersRequestSchemaOverStoredSchema()
     {
         var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
@@ -30,6 +52,40 @@ public sealed class SchemaAccessorTests
     }
 
     [Fact]
+    public async Task ResolveSchemaByReferenceAsync_IsSafeUnderConcurrentAccess()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        // Prime the loaded-schema caches once so every worker reaches the
+        // per-reference cache read/write path that previously corrupted the
+        // non-thread-safe Dictionary (InvalidOperationException at TryGetValue).
+        _ = await schemaAccessor.ResolveSchemaByReferenceAsync("priming-reference");
+
+        const int workerCount = 32;
+        const int iterationsPerWorker = 200;
+        using var startBarrier = new Barrier(workerCount);
+
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(workerIndex => Task.Run(async () =>
+            {
+                // Release all workers simultaneously to maximise contention,
+                // without relying on timing-based delays.
+                startBarrier.SignalAndWait();
+                for (var iteration = 0; iteration < iterationsPerWorker; iteration++)
+                {
+                    // Distinct references always miss the cache, forcing a write
+                    // on every call so concurrent writers collide.
+                    _ = await schemaAccessor.ResolveSchemaByReferenceAsync(
+                        $"missing-schema-{workerIndex}-{iteration}");
+                }
+            }))
+            .ToArray();
+
+        await Task.WhenAll(workers);
+    }
+
+    [Fact]
     public async Task BuildSchemaRegistryAsync_ReturnsCachedRegistryInstance()
     {
         var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
@@ -39,6 +95,47 @@ public sealed class SchemaAccessorTests
         var secondRegistry = await schemaAccessor.BuildSchemaRegistryAsync();
 
         Assert.Same(firstRegistry, secondRegistry);
+    }
+
+    [Fact]
+    public async Task BuildSchemaRegistryAsync_IncludesSchemaByJsonSchemaType_WhenNotUnderJsonSchemasFolder()
+    {
+        // Schema entities are discovered for the registry by the "json-schema" entity type,
+        // not by the "json-schemas" name folder, so a json-schema-tagged entity indexed only
+        // under "entity-types" must still be loaded into the registry by its $id.
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaId = new EntityId("3a9c5e7b-1d2f-4c8a-9e0b-6f4d2a8c1b30");
+        const string schemaUri = "https://schemas.workspaces.phantom.to/tests/type-indexed-only.json";
+
+        var addResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                new EntityChange
+                {
+                    EntityId = schemaId,
+                    Data = JsonDocument.Parse(
+                        $$"""
+                        {
+                          "entity-id": "{{schemaId}}",
+                          "entity-types": ["entity", "json-schema"],
+                          "names": [["entity-types", "type-indexed-only-schema"]],
+                          "schema": {
+                            "$id": "{{schemaUri}}",
+                            "type": "object",
+                            "properties": {
+                              "title": { "type": "string" }
+                            }
+                          }
+                        }
+                        """).RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                }));
+        Assert.DoesNotContain(addResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        var registry = await schemaAccessor.BuildSchemaRegistryAsync();
+
+        Assert.NotNull(registry.Get(new Uri(schemaUri, UriKind.Absolute)));
     }
 
     private static async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
@@ -77,15 +174,16 @@ public sealed class SchemaAccessorTests
             $$"""
             {
               "entity-id": "{{schemaEntityId}}",
-              "entity-types": ["entity-type"],
+              "entity-types": ["entity", "entity-type", "json-schema"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
                 "$id": "{{schemaName}}",
                 "type": "object",
                 "properties": {
-                  "title": { "type": "{{titleType}}" }
+                  "title": { "type": "{{titleType}}" },
+                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
                 },
-                "required": ["title"]
+                "required": ["title", "entity-types"]
               }
             }
             """);

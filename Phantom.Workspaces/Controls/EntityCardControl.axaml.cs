@@ -23,8 +23,8 @@ public partial class EntityCardControl : UserControl
 
         // Find the MainWindowViewModel by walking up the visual tree
         var mainWindow = this.FindAncestorOfType<MainWindow>();
-        if (mainWindow?.DataContext is MainWindowViewModel mainWindowViewModel && 
-            this.DataContext is SubscribedEntityViewModel entityViewModel)
+        if (mainWindow?.DataContext is MainWindowViewModel mainWindowViewModel &&
+            this.DataContext is EntityCardViewModel { Entity: { } entityViewModel })
         {
             if (mainWindowViewModel.ActivateEntityClickCommand.CanExecute(entityViewModel))
             {

@@ -20,11 +20,11 @@ public sealed class InterestViewQueryTests
     public async Task WorkstreamsView_AssemblesHierarchy_OfAssignedTasksRelatedMembersAndContextualParents()
     {
         var dataAccessLayer = (await EntityRepository.CreateAsync(new UnknownRepositorySource())).DataAccessLayer;
-        var alice = await SeedAsync(dataAccessLayer, """{ "entity-types": ["user"], "names": [["users","alice","alice"]] }""");
-        var bob = await SeedAsync(dataAccessLayer, """{ "entity-types": ["user"], "names": [["users","bob","bob"]] }""");
+        var alice = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "user"], "names": [["users","alice","alice"]] }""");
+        var bob = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "user"], "names": [["users","bob","bob"]] }""");
 
-        var assignedTask = await SeedAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","assigned"]], "display-name": { "default": "Alice Task" } }""");
-        var unassignedTask = await SeedAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","unassigned"]], "display-name": { "default": "Bob Task" } }""");
+        var assignedTask = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","assigned"]], "display-name": { "default": "Alice Task" } }""");
+        var unassignedTask = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","unassigned"]], "display-name": { "default": "Bob Task" } }""");
         await SeedAssignedToAsync(dataAccessLayer, assignedTask, alice);
         await SeedAssignedToAsync(dataAccessLayer, unassignedTask, bob);
 
@@ -287,7 +287,7 @@ public sealed class InterestViewQueryTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": {{namesJson}},
               "display-name": { "default": {{JsonSerializer.Serialize(displayName)}} },
               "content": { "mime-type": "text/markdown", "content": { "text": {{JsonSerializer.Serialize(displayName)}} } }
@@ -300,7 +300,7 @@ public sealed class InterestViewQueryTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["related","relationship"],
+              "entity-types": ["entity", "related","relationship"],
               "names": [["relationships","related-{{first.Value}}-{{second.Value}}"]],
               "participants": { "entities": ["{{first.Value}}", "{{second.Value}}"] }
             }
@@ -311,7 +311,7 @@ public sealed class InterestViewQueryTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["reference","relationship"],
+              "entity-types": ["entity", "reference","relationship"],
               "names": [["relationships","ref-{{source.Value}}-{{target.Value}}"]],
               "participants": { "source": "{{source.Value}}", "target": "{{target.Value}}" }
             }
@@ -322,7 +322,7 @@ public sealed class InterestViewQueryTests
             dataAccessLayer,
             """
             {
-              "entity-types": ["entity-type-view"],
+              "entity-types": ["entity", "entity-type-view"],
               "names": [["entity-type-views","note"]],
               "parent-hierarchy-relationships": [
                 { "relationship-type-ids": ["reference"], "relationship-role-names": ["target"], "max-depth": 1 }
@@ -335,12 +335,12 @@ public sealed class InterestViewQueryTests
     public async Task InboxView_PopulatesViewModels_WithCurrentUsersActionableItems()
     {
         var dataAccessLayer = (await EntityRepository.CreateAsync(new UnknownRepositorySource())).DataAccessLayer;
-        var alice = await SeedAsync(dataAccessLayer, """{ "entity-types": ["user"], "names": [["users","alice","alice"]] }""");
-        var bob = await SeedAsync(dataAccessLayer, """{ "entity-types": ["user"], "names": [["users","bob","bob"]] }""");
+        var alice = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "user"], "names": [["users","alice","alice"]] }""");
+        var bob = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "user"], "names": [["users","bob","bob"]] }""");
         // The inbox shows entities of any type, not just tasks.
-        var actionableNote = await SeedAsync(dataAccessLayer, """{ "entity-types": ["note"], "names": [["notes","n"]], "display-name": { "default": "Review PR" }, "content": { "mime-type": "text/markdown", "content": { "text": "Review the pull request" } } }""");
-        var actionableTask = await SeedAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","t"]], "display-name": { "default": "Do thing" } }""");
-        var bobsItem = await SeedAsync(dataAccessLayer, """{ "entity-types": ["note"], "names": [["notes","m"]], "display-name": { "default": "Bob note" }, "content": { "mime-type": "text/markdown", "content": { "text": "Bob's note" } } }""");
+        var actionableNote = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "note"], "names": [["notes","n"]], "display-name": { "default": "Review PR" }, "content": { "mime-type": "text/markdown", "content": { "text": "Review the pull request" } } }""");
+        var actionableTask = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","t"]], "display-name": { "default": "Do thing" } }""");
+        var bobsItem = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "note"], "names": [["notes","m"]], "display-name": { "default": "Bob note" }, "content": { "mime-type": "text/markdown", "content": { "text": "Bob's note" } } }""");
         await SeedActionableAsync(dataAccessLayer, actionableNote, alice);
         await SeedActionableAsync(dataAccessLayer, actionableTask, alice);
         await SeedActionableAsync(dataAccessLayer, bobsItem, bob);
@@ -413,7 +413,7 @@ public sealed class InterestViewQueryTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["assigned-to","relationship"],
+              "entity-types": ["entity", "assigned-to","relationship"],
               "names": [["relationships","assigned-{{target.Value}}"]],
               "participants": { "target": "{{target.Value}}", "user": "{{user.Value}}" }
             }
@@ -424,7 +424,7 @@ public sealed class InterestViewQueryTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["actionable","relationship"],
+              "entity-types": ["entity", "actionable","relationship"],
               "names": [["relationships","actionable-{{target.Value}}"]],
               "participants": { "target": "{{target.Value}}", "user": "{{user.Value}}" }
             }

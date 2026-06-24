@@ -1,5 +1,11 @@
 # Dev tunnels web access architecture
 
+> **Note:** The runtime hosting/port-forwarding mechanism has been redesigned to use the Microsoft
+> Dev Tunnels **management + connections SDK** in-process (no `devtunnel` CLI). See
+> [`dev-tunnel-host-service.md`](dev-tunnel-host-service.md), which supersedes the CLI-based
+> `DevTunnelManager` described below. This document remains the reference for the overall web-access
+> architecture, authentication model, and client behavior.
+
 ## Purpose
 
 Define how Phantom.Workspaces web access is exposed through Microsoft Dev Tunnels for development and controlled remote usage, including authentication behavior.

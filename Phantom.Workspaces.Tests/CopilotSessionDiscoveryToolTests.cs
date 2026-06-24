@@ -45,7 +45,42 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
     private WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
         WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            $$"""{ "entity-types": ["tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}} }""");
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}}, "mcp-config-path": {{JsonSerializer.Serialize(Path.Combine(this.sessionStateRoot, "nonexistent-mcp-config.json"))}} }""");
+
+    private WorkspaceToolExecutionContext ContextWithMcpConfig(IDataAccessLayer dataAccessLayer, string mcpConfigPath) =>
+        WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}}, "mcp-config-path": {{JsonSerializer.Serialize(mcpConfigPath)}} }""");
+
+    private string WriteMcpConfig(string json)
+    {
+        var path = Path.Combine(this.sessionStateRoot, "mcp-config-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, json);
+        return path;
+    }
+
+    private sealed class FakeExecutionContextProvider(string? effectiveComputerNameOverride = null) : ICurrentExecutionContextProvider
+    {
+        public string ComputerName => "test-machine";
+
+        public string UserName => "test-user";
+
+        public string OperatingSystemName => "windows";
+
+        public string HomeDirectoryPath => "C:/Users/test-user";
+
+        public string EffectiveComputerName => effectiveComputerNameOverride ?? this.ComputerName;
+    }
+
+    private static async Task<JsonElement?> GetEntityByNameAsync(IDataAccessLayer dataAccessLayer, EntityName entityName)
+    {
+        var result = await dataAccessLayer.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityName = entityName }],
+            Timestamps = [null],
+        });
+        return result.Batches.SelectMany(batch => batch.Entities).FirstOrDefault()?.Data;
+    }
 
     private static async Task<JsonElement?> GetEntityAsync(IDataAccessLayer dataAccessLayer, Guid entityId)
     {
@@ -70,7 +105,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         {
             var entity = await GetEntityAsync(dataAccessLayer, sessionId);
             Assert.NotNull(entity);
-            Assert.Equal("agent-definition", entity!.Value.GetProperty("entity-types")[0].GetString());
+            Assert.Contains("agent-definition", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
             var name = entity.Value.GetProperty("names")[0].EnumerateArray().Select(c => c.GetString()).ToArray();
             Assert.Equal("copilot", name[0]);
             Assert.Equal("sessions", name[1]);
@@ -124,6 +159,106 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
 
         var entity = await GetEntityAsync(repository.DataAccessLayer, sessionId);
         Assert.NotNull(entity);
-        Assert.Equal("agent-definition", entity!.Value.GetProperty("entity-types")[0].GetString());
+        Assert.Contains("agent-definition", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
+    }
+
+    [Fact]
+    public async Task Run_WithProfileOverride_PlacesMcpServerUnderOverriddenMachineProfile()
+    {
+        var mcpConfigPath = this.WriteMcpConfig(
+            """
+            {
+              "mcpServers": {
+                "github": { "url": "https://api.githubcopilot.com/mcp/" }
+              }
+            }
+            """);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        await new CopilotSessionDiscoveryTool(new FakeExecutionContextProvider("override-machine"))
+            .ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
+
+        var overriddenName = new EntityName(
+            "computer-user-profiles", "users", "username", "test-user",
+            "computers", "hostname", "override-machine", "copilot", "mcp-servers", "github");
+        var overriddenEntity = await GetEntityByNameAsync(dataAccessLayer, overriddenName);
+        Assert.NotNull(overriddenEntity);
+
+        var realEntity = await GetEntityByNameAsync(dataAccessLayer, MachineMcpServerName);
+        Assert.Null(realEntity);
+    }
+
+    private static readonly EntityName MachineMcpServerName = new(
+        "computer-user-profiles", "users", "username", "test-user",
+        "computers", "hostname", "test-machine", "copilot", "mcp-servers", "github");
+
+    [Fact]
+    public async Task Run_DiscoversRemoteMcpServer_AsMcpServerEntityUnderMachineProfile()
+    {
+        var mcpConfigPath = this.WriteMcpConfig(
+            """
+            {
+              "mcpServers": {
+                "github": { "url": "https://api.githubcopilot.com/mcp/" }
+              }
+            }
+            """);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        await new CopilotSessionDiscoveryTool(new FakeExecutionContextProvider())
+            .ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, MachineMcpServerName);
+        Assert.NotNull(entity);
+        Assert.Contains("mcp-server", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
+        var mcpServer = entity.Value.GetProperty("mcp-server");
+        Assert.Equal("github", mcpServer.GetProperty("serverName").GetString());
+        Assert.Equal("https://api.githubcopilot.com/mcp/", mcpServer.GetProperty("connection").GetProperty("endpoint").GetString());
+    }
+
+    [Fact]
+    public async Task Run_DiscoversStdioMcpServer_BuildsStdioEndpoint()
+    {
+        var mcpConfigPath = this.WriteMcpConfig(
+            """
+            {
+              "mcpServers": {
+                "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }
+              }
+            }
+            """);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        await new CopilotSessionDiscoveryTool(new FakeExecutionContextProvider())
+            .ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, MachineMcpServerName);
+        Assert.NotNull(entity);
+        var endpoint = entity!.Value.GetProperty("mcp-server").GetProperty("connection").GetProperty("endpoint").GetString();
+        Assert.StartsWith("stdio://?command=npx", endpoint);
+        Assert.Contains("arg=-y", endpoint);
+        Assert.Contains(Uri.EscapeDataString("@modelcontextprotocol/server-github"), endpoint);
+    }
+
+    [Fact]
+    public async Task Run_McpServerDiscovery_IsIdempotent()
+    {
+        var mcpConfigPath = this.WriteMcpConfig(
+            """
+            {
+              "mcpServers": {
+                "github": { "url": "https://api.githubcopilot.com/mcp/" }
+              }
+            }
+            """);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new CopilotSessionDiscoveryTool(new FakeExecutionContextProvider());
+
+        await tool.ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
+        await tool.ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
+
+        var export = await dataAccessLayer.ExportAsync(new ExportRequest());
+        var distinctEntities = export.ChangeBatches.SelectMany(b => b.Entities).Select(e => e.EntityId).Distinct().Count();
+        Assert.Equal(1, distinctEntities);
     }
 }

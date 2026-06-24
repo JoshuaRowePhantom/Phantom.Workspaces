@@ -12,14 +12,12 @@ namespace Phantom.Workspaces.Data;
 /// Schemas are loaded fresh for each update from the request payload and the underlying IDataAccessLayer.
 /// This class does not cache schema content between update calls.
 /// </remarks>
-public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
+public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer, IEntitySchemaComposer
 {
     private const string JsonSchemasNamePrefix = "json-schemas";
     private static readonly string[] EntitySchemaNameComponents = { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" };
     private static readonly string EntitySchemaName = JsonSerializer.Serialize(EntitySchemaNameComponents);
-    private const string JsonSchemaType = "json-schema";
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
-    private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
     private const string CustomEntityTypeKeyword = "x-entity-types";
 
     public SchemaValidatingDataAccessLayer(
@@ -65,6 +63,31 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Validates the supplied entity data against the composed schema for its entity types without
+    /// persisting anything, returning human-readable validation error messages. Shares the exact
+    /// composition and evaluation logic used during updates.
+    /// </summary>
+    public async Task<IReadOnlyCollection<string>> GetValidationErrorsAsync(
+        JsonElement entityData,
+        CancellationToken cancellationToken = default)
+    {
+        var schemaAccessor = this.CreateSchemaAccessor(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Validate entity." } },
+                Changes = Array.Empty<EntityChange>(),
+            });
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
+        var change = new EntityChange
+        {
+            Data = entityData,
+            EntityChangeMode = EntityChangeMode.Replace,
+        };
+        var errors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken).ConfigureAwait(false);
+        return errors.Select(static error => error.Message).ToArray();
     }
 
     protected virtual async Task<IReadOnlyCollection<UpdateError>> ValidateChangeAsync(
@@ -301,11 +324,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         foreach (var entityTypeName in this.GetExplicitEntityTypeNames(entityObject))
         {
             references.Add(JsonSerializer.Serialize(new[] { "entity-types", entityTypeName }));
-
-            if (string.Equals(entityTypeName, "entity-type", StringComparison.Ordinal))
-            {
-                references.Add(JsonSerializer.Serialize(new[] { "entity-types", JsonSchemaType }));
-            }
         }
 
         return references;
@@ -473,22 +491,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                         return data;
                     }
                 }
-            }
-        }
-
-#pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
-#pragma warning restore CS0618
-        foreach (var entity in exportResult.ChangeBatches.SelectMany(static batch => batch.Entities))
-        {
-            if (entity.Data is not { ValueKind: JsonValueKind.Object } data)
-            {
-                continue;
-            }
-
-            if (this.GetEntityNames(data).Intersect(schemaNames, StringComparer.Ordinal).Any())
-            {
-                return data;
             }
         }
 

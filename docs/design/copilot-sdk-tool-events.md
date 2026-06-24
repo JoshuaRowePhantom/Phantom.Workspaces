@@ -84,3 +84,19 @@ MapToolEvent(SessionEvent)` or `TryMapToolStart/Complete(...)`, and unit-test:
 
 The opt-in end-to-end BYOK test (`COPILOT_BYOK_E2E=1`) can additionally assert that a tool
 round-trip surfaces a call+result pair.
+
+## Live streaming (don't let the framework buffer tool events)
+
+Because the Copilot CLI invokes tools itself, the agent framework must use `CopilotSdkChatClient`
+**as-is** — without wrapping it in `FunctionInvokingChatClient`. That middleware buffers a streaming
+response to detect/await function calls, so the synthetic `FunctionCallContent` /
+`FunctionResultContent` we emit would only surface once the turn completes (appearing in the **history**
+view but never streaming live into the running/streaming view).
+
+`CopilotSdkChatClient` therefore implements the marker `ISelfInvokingToolChatClient`, and
+`AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride, resolvedClient)` sets
+`ChatClientAgentOptions.UseProvidedChatClientAsIs = true` for such clients (in addition to the existing
+test-`ClientOverride` case). With the middleware out of the path, the tool start/complete updates flow
+straight through `AgentChat`'s running-item accumulation and render live via the selectable tool
+expanders. Covered by `AgentChatTests` (`StreamingInProgress_SurfacesToolCallAndResultInRunningItemBeforeCompletion`,
+`ResolveUseProvidedChatClientAsIs_*`, `CopilotSdkChatClient_IsSelfInvokingToolChatClient`).

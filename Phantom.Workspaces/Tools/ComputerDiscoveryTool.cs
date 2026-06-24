@@ -17,7 +17,7 @@ public sealed class ComputerDiscoveryTool(
 
         var entityData = new JsonObject
         {
-            ["entity-types"] = new JsonArray("computer"),
+            ["entity-types"] = new JsonArray("entity", "computer"),
             ["names"] = new JsonArray(new JsonArray("computers", "hostname", computerName)),
             ["display-name"] = new JsonObject
             {

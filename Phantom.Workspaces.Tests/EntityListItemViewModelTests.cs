@@ -60,7 +60,7 @@ public sealed class EntityListItemViewModelTests
                 """
                 {
                   "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                  "entity-types": ["note"],
+                  "entity-types": ["entity", "note"],
                   "names": [["documentation","sample"]],
                   "display-name": { "default": "Sample" }
                 }
@@ -91,7 +91,7 @@ public sealed class EntityListItemViewModelTests
                 """
                 {
                   "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                  "entity-types": ["note"],
+                  "entity-types": ["entity", "note"],
                   "names": [["documentation","sample"]],
                   "display-name": { "default": "Sample" }
                 }

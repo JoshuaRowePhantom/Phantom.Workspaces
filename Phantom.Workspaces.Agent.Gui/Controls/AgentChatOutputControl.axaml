@@ -9,12 +9,6 @@
         <StyleInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/ChatDocumentStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/ChatSelectableTextBoxStyles.axaml" />
     </UserControl.Styles>
-    <UserControl.KeyBindings>
-        <KeyBinding Gesture="Cancel" Command="{Binding InterruptCommand}" />
-        <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
-    </UserControl.KeyBindings>
     <Grid>
         <FlowDocumentScrollViewer x:Name="HistoryDocument"
                                  Document="{Binding OutputDocument}"

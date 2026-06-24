@@ -16,7 +16,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
             """
             {
               "entity-id": "80ecfcbf-03ed-461d-9353-f06c7f9faab8",
-              "entity-types": ["entity-type", "note"],
+              "entity-types": ["entity", "entity-type", "note"],
               "names": [["entity-types", "agent-session"]],
               "default-name-prefixes": [["${USER}", "agent-sessions"]]
             }
@@ -45,7 +45,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
             """
             {
               "entity-id": "9e50e8d6-df48-4f7f-a33b-5d4915fd5960",
-              "entity-types": ["agent-session"],
+              "entity-types": ["entity", "agent-session"],
               "names": [["users", "id", "test-user-id", "agent-sessions", "session-001"]],
               "agent-session-id": "session-001"
             }
@@ -79,7 +79,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
             """
             {
               "entity-id": "8a5f64c9-4ece-43e2-a4c8-a04f66f31872",
-              "entity-types": ["entity-type", "note"],
+              "entity-types": ["entity", "entity-type", "note"],
               "names": [["entity-types", "note"]],
               "default-name-prefixes": []
             }
@@ -104,12 +104,12 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
         var assignedTask = new EntityId("aaaaaaaa-1111-1111-1111-111111111111");
         var otherTask = new EntityId("bbbbbbbb-2222-2222-2222-222222222222");
         var otherUser = new EntityId("cccccccc-3333-3333-3333-333333333333");
-        await UpsertEntityAsync(dataAccessLayer, assignedTask, """{ "entity-id": "aaaaaaaa-1111-1111-1111-111111111111", "entity-types": ["task"], "names": [["tasks","a"]] }""");
-        await UpsertEntityAsync(dataAccessLayer, otherTask, """{ "entity-id": "bbbbbbbb-2222-2222-2222-222222222222", "entity-types": ["task"], "names": [["tasks","b"]] }""");
+        await UpsertEntityAsync(dataAccessLayer, assignedTask, """{ "entity-id": "aaaaaaaa-1111-1111-1111-111111111111", "entity-types": ["entity", "task"], "names": [["tasks","a"]] }""");
+        await UpsertEntityAsync(dataAccessLayer, otherTask, """{ "entity-id": "bbbbbbbb-2222-2222-2222-222222222222", "entity-types": ["entity", "task"], "names": [["tasks","b"]] }""");
         await UpsertEntityAsync(dataAccessLayer, new EntityId("dddddddd-4444-4444-4444-444444444444"),
-            """{ "entity-id": "dddddddd-4444-4444-4444-444444444444", "entity-types": ["assigned-to","relationship"], "names": [["relationships","r1"]], "participants": { "target": "aaaaaaaa-1111-1111-1111-111111111111", "user": "11111111-1111-1111-1111-111111111111" } }""");
+            """{ "entity-id": "dddddddd-4444-4444-4444-444444444444", "entity-types": ["entity", "assigned-to","relationship"], "names": [["relationships","r1"]], "participants": { "target": "aaaaaaaa-1111-1111-1111-111111111111", "user": "11111111-1111-1111-1111-111111111111" } }""");
         await UpsertEntityAsync(dataAccessLayer, new EntityId("eeeeeeee-5555-5555-5555-555555555555"),
-            $$"""{ "entity-id": "eeeeeeee-5555-5555-5555-555555555555", "entity-types": ["assigned-to","relationship"], "names": [["relationships","r2"]], "participants": { "target": "bbbbbbbb-2222-2222-2222-222222222222", "user": "{{otherUser.Value}}" } }""");
+            $$"""{ "entity-id": "eeeeeeee-5555-5555-5555-555555555555", "entity-types": ["entity", "assigned-to","relationship"], "names": [["relationships","r2"]], "participants": { "target": "bbbbbbbb-2222-2222-2222-222222222222", "user": "{{otherUser.Value}}" } }""");
 
         var sessionDataAccessLayer = new WorkspaceEntitySessionDataAccessLayer(dataAccessLayer, workspaceEntitySession);
 
@@ -156,7 +156,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["user"],
+              "entity-types": ["entity", "user"],
               "names": [
                 ["users", "username", "test-user"],
                 ["users", "id", "test-user-id"]
@@ -169,7 +169,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
             """
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
-              "entity-types": ["computer"],
+              "entity-types": ["entity", "computer"],
               "names": [["computers", "hostname", "test-computer"]]
             }
             """);
@@ -179,7 +179,7 @@ public sealed class WorkspaceEntitySessionDataAccessLayerTests
             """
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
-              "entity-types": ["user-computer-profile"],
+              "entity-types": ["entity", "user-computer-profile"],
               "names": [["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]]
             }
             """);

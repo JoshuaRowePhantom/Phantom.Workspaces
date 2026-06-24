@@ -502,6 +502,15 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
+    <Style Selector="TextBlock.workspace-validation-status">
+        <Setter Property="Margin" Value="0,4,0,0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.workspace-validation-status.workspace-validation-error">
+        <Setter Property="Foreground" Value="#D32F2F" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
     <Style Selector="Button.workspace-entity-shortcut-button">
         <Setter Property="MinWidth" Value="28" />
         <Setter Property="MinHeight" Value="28" />

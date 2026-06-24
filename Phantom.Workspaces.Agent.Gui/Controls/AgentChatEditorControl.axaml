@@ -10,6 +10,12 @@
                    Command="{Binding ToggleReasoningVisibilityCommand}" />
         <KeyBinding Gesture="Ctrl+L"
                    Command="{Binding RequestOpenLogWindowCommand}" />
+        <!-- Interrupt / queue hold work from anywhere in the agent chat (input box or output),
+             so they are bound on this control which contains both. -->
+        <KeyBinding Gesture="Cancel" Command="{Binding InterruptCommand}" />
+        <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
     </UserControl.KeyBindings>
 
     <UserControl.Resources>

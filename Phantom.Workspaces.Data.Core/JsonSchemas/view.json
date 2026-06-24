@@ -3,6 +3,15 @@
   "description": "Schema for view entities that define query-driven workspace navigation and presentation.",
   "type": "object",
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "view"
+      }
+    },
     "title": {
       "$ref": "core.json#/$defs/local-string"
     },
@@ -21,6 +30,7 @@
     }
   },
   "required": [
+    "entity-types",
     "title",
     "sub-views"
   ],

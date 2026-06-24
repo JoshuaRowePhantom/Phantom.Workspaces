@@ -121,7 +121,7 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
-    public async Task Populate_SeedsDefaultAgentDefinitionsScheduleAndProfile()
+    public async Task Populate_SeedsDefaultAgentManifestsScheduleAndProfile()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
         var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
@@ -148,9 +148,9 @@ public sealed class SchemaPopulatorTests
 
         string[][] expectedDefaults =
         [
-            ["defaults", "agent-definitions", "workspaces"],
-            ["defaults", "agent-definitions", "github-copilot"],
-            ["defaults", "agent-definitions", "github-models"],
+            ["defaults", "agent-manifests", "workspaces"],
+            ["defaults", "agent-manifests", "github-copilot"],
+            ["defaults", "agent-manifests", "github-models"],
             ["defaults", "profiles", "default"],
             ["schedule", "every-day-at-09"],
         ];
@@ -161,6 +161,92 @@ public sealed class SchemaPopulatorTests
                 seededNames,
                 components => components.SequenceEqual(expected, StringComparer.Ordinal));
         }
+    }
+
+    [Fact]
+    public async Task ToolRelationship_ForGitWorkspaceScan_TargetingSeededProfile_PassesValidation()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var populateErrors = await schemaPopulator.Populate();
+        Assert.True(
+            populateErrors.Count == 0,
+            string.Join(Environment.NewLine, populateErrors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var seededNameToId = await GetSeededNameToIdAsync(inMemoryDataAccessLayer);
+        var toolId = seededNameToId["tools/git-workspace-scan"];
+        var scheduleId = seededNameToId["schedule/every-day-at-09"];
+        // The default profile declares entity-types ["workspaces-profile"] (it does not explicitly list
+        // "entity"); the tool-relationship target requires x-entity-types ["entity"], which every entity
+        // implicitly satisfies. This reproduces the bug where the implicit base "entity" type was not
+        // considered when validating typed references.
+        var targetProfileId = seededNameToId["defaults/profiles/default"];
+
+        var relationshipId = new EntityId("c1d2e3f4-a5b6-47c8-9d0e-1f2a3b4c5d6e");
+        using var relationshipDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{relationshipId.Value}}",
+              "entity-types": ["entity", "relationship", "tool-relationship"],
+              "names": [["tool-relationships", "git-workspace-scan-on-default-profile"]],
+              "participants": {
+                "tool": "{{toolId.Value}}",
+                "schedule": ["{{scheduleId.Value}}"],
+                "target": ["{{targetProfileId.Value}}"]
+              },
+              "note": "Enable git workspace scanning on the default profile."
+            }
+            """);
+
+        var result = await validatedDataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Create git workspace scan tool relationship." } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = relationshipId,
+                    Data = relationshipDocument.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        var failures = result.EntityResults
+            .SelectMany(entityResult => entityResult.Errors)
+            .Select(error => error.Message)
+            .ToArray();
+        Assert.True(failures.Length == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    private static async Task<IReadOnlyDictionary<string, EntityId>> GetSeededNameToIdAsync(InMemoryDataAccessLayer store)
+    {
+        var export = await store.ExportAsync(new ExportRequest());
+        var nameToId = new Dictionary<string, EntityId>(StringComparer.Ordinal);
+        foreach (var entity in export.ChangeBatches.SelectMany(static batch => batch.Entities))
+        {
+            if (entity.Data is not JsonElement data
+                || !data.TryGetProperty("names", out var names)
+                || names.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var name in names.EnumerateArray())
+            {
+                if (name.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var key = string.Join("/", name.EnumerateArray().Select(static part => part.GetString()));
+                nameToId[key] = entity.EntityId;
+            }
+        }
+
+        return nameToId;
     }
 
     [Fact]
@@ -201,7 +287,7 @@ public sealed class SchemaPopulatorTests
             && entityTypes.EnumerateArray().Any(type =>
                 type.ValueKind == JsonValueKind.String
                 && string.Equals(type.GetString(), "entity-type", StringComparison.Ordinal))
-            && !entityTypes.EnumerateArray().Any(type =>
+            && entityTypes.EnumerateArray().Any(type =>
                 type.ValueKind == JsonValueKind.String
                 && string.Equals(type.GetString(), "json-schema", StringComparison.Ordinal))
             && entityTypeSchema.TryGetProperty("schema", out var schema)
@@ -567,7 +653,7 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
-    public async Task Populate_WhenEntityTypesFolderIsDeletedInUnderlyingStore_RecreatesFolder()
+    public async Task Update_WhenAncestorFolderMissing_WritingDescendantRecreatesFolder()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
         var pipelineDataAccessLayer = new MergeProcessingDataAccessLayer(
@@ -644,23 +730,50 @@ public sealed class SchemaPopulatorTests
                             && entityName.Value.Components.SequenceEqual(["entity-types"], StringComparer.Ordinal);
                     }));
 
-        var secondPopulateErrors = await schemaPopulator.Populate();
-        Assert.True(
-            secondPopulateErrors.Count == 0,
-            string.Join(
-                Environment.NewLine,
-                secondPopulateErrors.Select(
-                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+        // Folder maintenance is scoped to entities being written: writing a new
+        // entity under the (now missing) "entity-types" folder must recreate that
+        // ancestor folder, without scanning the entire store.
+        var healMarkerEntityId = new EntityId("c3f1a2b4-9d8e-4f7a-8b6c-1a2b3c4d5e6f");
+        using var healMarkerDocument = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "c3f1a2b4-9d8e-4f7a-8b6c-1a2b3c4d5e6f",
+              "entity-types": ["entity"],
+              "names": [["entity-types", "heal-marker"]],
+              "display-name": { "default": "Heal Marker" }
+            }
+            """);
+        var healResult = await pipelineDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Write a descendant entity under the missing folder.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = healMarkerEntityId,
+                        Data = healMarkerDocument.RootElement.Clone(),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+        Assert.DoesNotContain(healResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
 
-        var secondExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
-        var latestAfterRepopulate = secondExport.ChangeBatches
+        var afterWriteExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var latestAfterWrite = afterWriteExport.ChangeBatches
             .SelectMany(static batch => batch.Entities)
             .GroupBy(static snapshot => snapshot.EntityId)
             .ToDictionary(
                 static group => group.Key,
                 static group => group.Last());
         Assert.Contains(
-            latestAfterRepopulate.Values,
+            latestAfterWrite.Values,
             snapshot =>
                 snapshot.Data is JsonElement data
                 && IsFolderEntity(data)

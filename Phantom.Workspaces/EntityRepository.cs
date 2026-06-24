@@ -40,10 +40,11 @@ public sealed class EntityRepository
     }
 
     public static async Task<EntityRepository> CreateAsync(
-        RepositorySource repositorySource)
+        RepositorySource repositorySource,
+        string? userComputerProfileOverride = null)
     {
         var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource).ConfigureAwait(false);
-        var isWebSource = repositorySource is WebRepositorySource;
+        var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
         var coreDataAccessLayer = isWebSource
             ? underlyingDataAccessLayer
             : new MergeProcessingDataAccessLayer(
@@ -54,49 +55,9 @@ public sealed class EntityRepository
             await EnsureSeedDataIfNeededAsync(coreDataAccessLayer).ConfigureAwait(false);
         }
 
-        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer).ConfigureAwait(false);
+        var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer, userComputerProfileOverride).ConfigureAwait(false);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;
-    }
-
-    public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        var exportResult = await this.DataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
-        return exportResult.ChangeBatches
-            .SelectMany(static batch => batch.Entities)
-            .GroupBy(static snapshot => snapshot.EntityId)
-            .ToDictionary(
-                static group => group.Key,
-                static group => (EntitySnapshot)group
-                    .OrderByDescending(static snapshot => snapshot.ModifiedTime.DateTime)
-                    .ThenByDescending(static snapshot => snapshot.ModifiedTime.ChangeId, StringComparer.Ordinal)
-                    .First());
-    }
-
-    public EntitySnapshot? TryGetEntityByName(
-        IReadOnlyDictionary<EntityId, EntitySnapshot> snapshots,
-        EntityName entityName)
-    {
-        foreach (var snapshot in snapshots.Values)
-        {
-            if (snapshot.Data is not JsonElement data)
-            {
-                continue;
-            }
-
-            if (!TryGetEntityNames(data, out var names))
-            {
-                continue;
-            }
-
-            if (names.Any(name => name == entityName))
-            {
-                return snapshot;
-            }
-        }
-
-        return null;
     }
 
     private static async Task<IDataAccessLayer> CreateUnderlyingDataAccessLayerAsync(
@@ -105,6 +66,7 @@ public sealed class EntityRepository
         return repositorySource switch
         {
             WebRepositorySource web => CreateWebDataAccessLayer(web),
+            DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(devTunnel).ConfigureAwait(false),
             LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
             MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo).ConfigureAwait(false),
             _ => new InMemoryDataAccessLayer(),
@@ -125,6 +87,31 @@ public sealed class EntityRepository
             : null;
 
         return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken);
+    }
+
+    private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
+        DevTunnelNameRepositorySource repositorySource)
+    {
+        // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
+        // on a connection drop the reconnecting layer re-resolves the tunnel (picking up a changed
+        // port) and reconnects with bounded backoff, without restarting the workspace. Token access
+        // uses the resolved pre-shared token; Private access reuses the GitHub identity token as the
+        // X-Tunnel-Authorization, matching the explicit-endpoint dev tunnel scheme.
+        var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
+            .CreateEndpointResolver(repositorySource.AccessTokenSource);
+
+        var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
+            resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
+                repositorySource.TunnelName,
+                repositorySource.AccessMode,
+                cancellationToken),
+            buildDataAccessLayer: resolution => new WebClientDataAccessLayer(
+                resolution.BaseUri.ToString(),
+                resolution.TunnelAuthToken ?? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
+            delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
+
+        await reconnectingDataAccessLayer.StartAsync().ConfigureAwait(false);
+        return reconnectingDataAccessLayer;
     }
 
     private static async Task<IDataAccessLayer> CreateMongoDbDataAccessLayerAsync(
@@ -168,30 +155,5 @@ public sealed class EntityRepository
 
         throw new InvalidOperationException(
             $"Failed to populate repository schemas: {string.Join(" | ", errors.Select(static error => error.Message))}");
-    }
-
-    private static bool TryGetEntityNames(
-        JsonElement entityData,
-        out IReadOnlyCollection<EntityName> names)
-    {
-        var resolved = new List<EntityName>();
-        if (!entityData.TryGetProperty("names", out var namesElement)
-            || namesElement.ValueKind != JsonValueKind.Array)
-        {
-            names = resolved;
-            return false;
-        }
-
-        foreach (var nameElement in namesElement.EnumerateArray())
-        {
-            var parsedEntityName = nameElement.TryReadEntityName();
-            if (parsedEntityName is not null)
-            {
-                resolved.Add(parsedEntityName.Value);
-            }
-        }
-
-        names = resolved;
-        return resolved.Count > 0;
     }
 }

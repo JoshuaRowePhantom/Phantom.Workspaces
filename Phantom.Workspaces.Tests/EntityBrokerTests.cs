@@ -480,7 +480,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "c1c1c1c1-0000-0000-0000-000000000001",
-              "entity-types": ["task"],
+              "entity-types": ["entity", "task"],
               "names": [["tasks", "actionable-one"]],
               "display-name": { "default": "Actionable Task" }
             }
@@ -491,7 +491,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "c2c2c2c2-0000-0000-0000-000000000002",
-              "entity-types": ["user"],
+              "entity-types": ["entity", "user"],
               "names": [["users", "current", "one"]],
               "display-name": { "default": "Current User" }
             }
@@ -502,7 +502,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "c3c3c3c3-0000-0000-0000-000000000003",
-              "entity-types": ["actionable", "relationship"],
+              "entity-types": ["entity", "actionable", "relationship"],
               "participants": {
                 "target": "c1c1c1c1-0000-0000-0000-000000000001",
                 "user": "c2c2c2c2-0000-0000-0000-000000000002"
@@ -568,7 +568,7 @@ public sealed class EntityBrokerTests
                         Data = JsonDocument.Parse("""
                             {
                               "entity-id": "e1e1e1e1-0000-0000-0000-000000000001",
-                              "entity-types": ["agent-session"],
+                              "entity-types": ["entity", "agent-session"],
                               "names": [["test-sessions", "session-1"]],
                               "agent-session-id": "session-1"
                             }
@@ -631,7 +631,7 @@ public sealed class EntityBrokerTests
                         Data = JsonDocument.Parse("""
                             {
                               "entity-id": "e2e2e2e2-0000-0000-0000-000000000002",
-                              "entity-types": ["agent-session"],
+                              "entity-types": ["entity", "agent-session"],
                               "names": [["test-sessions", "session-2"]],
                               "agent-session-id": "session-2"
                             }
@@ -675,7 +675,7 @@ public sealed class EntityBrokerTests
                         Data = JsonDocument.Parse("""
                             {
                               "entity-id": "f1f1f1f1-0000-0000-0000-000000000001",
-                              "entity-types": ["agent-session"],
+                              "entity-types": ["entity", "agent-session"],
                               "names": [["test-sessions", "session-1"]],
                               "agent-session-id": "session-1"
                             }
@@ -688,7 +688,7 @@ public sealed class EntityBrokerTests
                         Data = JsonDocument.Parse("""
                             {
                               "entity-id": "f2f2f2f2-0000-0000-0000-000000000002",
-                              "entity-types": ["agent-session"],
+                              "entity-types": ["entity", "agent-session"],
                               "names": [["test-sessions", "session-2"]],
                               "agent-session-id": "session-2"
                             }

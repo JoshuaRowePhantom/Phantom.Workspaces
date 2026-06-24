@@ -58,12 +58,12 @@ public sealed class ScheduledToolsRunningViewModelTests
         var scheduleId = Guid.NewGuid();
         var relationshipId = Guid.NewGuid();
 
-        await AddEntityAsync(dataAccessLayer, userId, $$"""{ "entity-id": "{{userId}}", "entity-types": ["user"], "names": [["users","username","test-user"]] }""");
-        await AddEntityAsync(dataAccessLayer, computerId, $$"""{ "entity-id": "{{computerId}}", "entity-types": ["computer"], "names": [["computers","hostname","this-machine"]] }""");
-        await AddEntityAsync(dataAccessLayer, hostId, $$"""{ "entity-id": "{{hostId}}", "entity-types": ["user-computer-profile"], "names": [["computer-user-profiles","users","username","test-user","computers","hostname","this-machine"]], "user-reference": ["users","username","test-user"], "computer-reference": ["computers","hostname","this-machine"] }""");
-        await AddEntityAsync(dataAccessLayer, toolId, $$"""{ "entity-id": "{{toolId}}", "entity-types": ["tool"], "names": [["tools","stub"]], "tool-type": "stub" }""");
-        await AddEntityAsync(dataAccessLayer, scheduleId, $$"""{ "entity-id": "{{scheduleId}}", "entity-types": ["schedule"], "names": [["schedule","s"]], "repeat": { "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] } }""");
-        await AddEntityAsync(dataAccessLayer, relationshipId, $$"""{ "entity-id": "{{relationshipId}}", "entity-types": ["tool-relationship"], "names": [["tool-relationships","r"]], "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] } }""");
+        await AddEntityAsync(dataAccessLayer, userId, $$"""{ "entity-id": "{{userId}}", "entity-types": ["entity", "user"], "names": [["users","username","test-user"]] }""");
+        await AddEntityAsync(dataAccessLayer, computerId, $$"""{ "entity-id": "{{computerId}}", "entity-types": ["entity", "computer"], "names": [["computers","hostname","this-machine"]] }""");
+        await AddEntityAsync(dataAccessLayer, hostId, $$"""{ "entity-id": "{{hostId}}", "entity-types": ["entity", "user-computer-profile"], "names": [["computer-user-profiles","users","username","test-user","computers","hostname","this-machine"]], "user-reference": ["users","username","test-user"], "computer-reference": ["computers","hostname","this-machine"] }""");
+        await AddEntityAsync(dataAccessLayer, toolId, $$"""{ "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "tool-type": "stub" }""");
+        await AddEntityAsync(dataAccessLayer, scheduleId, $$"""{ "entity-id": "{{scheduleId}}", "entity-types": ["entity", "schedule"], "names": [["schedule","s"]], "repeat": { "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] } }""");
+        await AddEntityAsync(dataAccessLayer, relationshipId, $$"""{ "entity-id": "{{relationshipId}}", "entity-types": ["entity", "tool-relationship"], "names": [["tool-relationships","r"]], "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] } }""");
 
         var tool = new GatedTool();
         var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());

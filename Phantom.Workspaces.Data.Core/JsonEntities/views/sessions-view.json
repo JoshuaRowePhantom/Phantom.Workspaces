@@ -1,6 +1,7 @@
 {
   "entity-id": "441f53e1-9a08-422b-bf09-675985d8dfe8",
   "entity-types": [
+    "entity",
     "view"
   ],
   "names": [
@@ -17,8 +18,57 @@
       "disposition": "expanded",
       "get-entity": [
         {
+          "entity-name": [
+            "views",
+            "sessions",
+            "notes",
+            "agent-manifests"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-type-names": [
+            "agent-manifest"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-name": [
+            "views",
+            "sessions",
+            "notes",
+            "agent-definitions"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
           "entity-type-names": [
             "agent-definition"
+          ]
+        }
+      ]
+    },
+    {
+      "disposition": "expanded",
+      "get-entity": [
+        {
+          "entity-name": [
+            "views",
+            "sessions",
+            "notes",
+            "agent-sessions"
           ]
         }
       ]

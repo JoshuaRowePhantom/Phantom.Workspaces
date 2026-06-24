@@ -25,7 +25,9 @@ public static class EntityPresentation
     }
 
     /// <summary>
-    /// Gets the primary entity type for display purposes.
+    /// Gets the primary entity type for display purposes. The base "entity" type that every
+    /// entity declares is skipped so the domain type is returned; "entity" is returned only
+    /// when it is the entity's sole declared type.
     /// </summary>
     /// <remarks>
     /// Do not use this for entity-type membership checks because an entity can have multiple types.
@@ -41,7 +43,8 @@ public static class EntityPresentation
             foreach (var type in types.EnumerateArray())
             {
                 if (type.ValueKind == JsonValueKind.String
-                    && !string.IsNullOrWhiteSpace(type.GetString()))
+                    && !string.IsNullOrWhiteSpace(type.GetString())
+                    && !string.Equals(type.GetString(), "entity", StringComparison.Ordinal))
                 {
                     return type.GetString()!;
                 }

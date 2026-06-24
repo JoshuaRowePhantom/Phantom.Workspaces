@@ -21,6 +21,7 @@ public sealed class EntityListItemViewModel : ViewModelBase
     {
         this.Node = node;
         this.Node.PropertyChanged += this.OnNodePropertyChanged;
+        this.Node.Card.PropertyChanged += this.OnCardPropertyChanged;
         this.Order = order;
         this.Level = level;
         this.ItemKey = itemKey;
@@ -33,6 +34,8 @@ public sealed class EntityListItemViewModel : ViewModelBase
     }
 
     public EntityListNodeViewModel Node { get; }
+
+    public EntityCardViewModel Card => this.Node.Card;
 
     public int Order { get; }
 
@@ -52,56 +55,56 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public Thickness IndentMargin => new(this.Level * 22, 0, 0, 4);
 
-    public string DisplayName => this.Node.DisplayName;
+    public string DisplayName => this.Card.DisplayName;
 
-    public string EntityType => this.Node.EntityType;
+    public string EntityType => this.Card.EntityType;
 
-    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.Node.DisplayItems;
+    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.Card.DisplayItems;
 
-    public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.Node.FieldEditors;
+    public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.Card.FieldEditors;
 
-    public bool IsEditMode => this.Node.IsEditMode;
+    public bool IsEditMode => this.Card.IsEditMode;
 
-    public RelayCommand ToggleEditModeCommand => this.Node.ToggleEditModeCommand;
+    public RelayCommand ToggleEditModeCommand => this.Card.ToggleEditModeCommand;
 
-    public RelayCommand SaveEditModeCommand => this.Node.SaveEditModeCommand;
+    public RelayCommand SaveEditModeCommand => this.Card.SaveEditModeCommand;
 
-    public RelayCommand DiscardEditModeCommand => this.Node.DiscardEditModeCommand;
+    public RelayCommand DiscardEditModeCommand => this.Card.DiscardEditModeCommand;
 
-    public string EditModeGlyph => this.Node.EditModeGlyph;
+    public string EditModeGlyph => this.Card.EditModeGlyph;
 
-    public bool ShowEditIndicator => this.Node.ShowEditIndicator;
+    public bool ShowEditIndicator => this.Card.ShowEditIndicator;
 
-    public bool ShowEditActions => this.Node.ShowEditActions;
+    public bool ShowEditActions => this.Card.ShowEditActions;
 
-    public RelayCommand ToggleJsonViewCommand => this.Node.ToggleJsonViewCommand;
+    public RelayCommand ToggleJsonViewCommand => this.Card.ToggleJsonViewCommand;
 
-    public bool ShowJsonButton => this.Node.ShowJsonButton;
+    public bool ShowJsonButton => this.Card.ShowJsonButton;
 
-    public bool ShowDeleteButton => this.Node.ShowDeleteButton;
+    public bool ShowDeleteButton => this.Card.ShowDeleteButton;
 
-    public RelayCommand DeleteEntityCommand => this.Node.DeleteEntityCommand;
+    public RelayCommand DeleteEntityCommand => this.Card.DeleteEntityCommand;
 
-    public IReadOnlyCollection<EntityShortcutViewModel> Shortcuts => this.Node.Shortcuts;
+    public IReadOnlyCollection<EntityShortcutViewModel> Shortcuts => this.Card.Shortcuts;
 
-    public bool HasShortcuts => this.Node.HasShortcuts;
+    public bool HasShortcuts => this.Card.HasShortcuts;
 
-    public RelayCommand? ActivateShortcutCommand => this.Node.ActivateShortcutCommand;
+    public RelayCommand? ActivateShortcutCommand => this.Card.ActivateShortcutCommand;
 
-    public bool IsDeleted => this.Node.IsDeleted;
+    public bool IsDeleted => this.Card.IsDeleted;
 
-    public bool IsInteractive => this.Node.IsInteractive;
+    public bool IsInteractive => this.Card.IsInteractive;
 
-    public bool ShowRawJsonEditor => this.Node.ShowRawJsonEditor;
+    public bool ShowRawJsonEditor => this.Card.ShowRawJsonEditor;
 
-    public bool IsRawJsonReadOnly => this.Node.IsRawJsonReadOnly;
+    public bool IsRawJsonReadOnly => this.Card.IsRawJsonReadOnly;
 
-    public string JsonButtonText => this.Node.JsonButtonText;
+    public string JsonButtonText => this.Card.JsonButtonText;
 
     public string RawJsonText
     {
-        get => this.Node.RawJsonText;
-        set => this.Node.RawJsonText = value;
+        get => this.Card.RawJsonText;
+        set => this.Card.RawJsonText = value;
     }
 
     public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
@@ -131,66 +134,93 @@ public sealed class EntityListItemViewModel : ViewModelBase
         object? sender,
         PropertyChangedEventArgs e)
     {
-        if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.FieldEditors), StringComparison.Ordinal))
+        if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.DisplayName), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.DisplayName));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.EntityType), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.EntityType));
+        }
+    }
+
+    private void OnCardPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.FieldEditors), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.FieldEditors));
+            this.RaisePropertyChanged(nameof(this.DisplayItems));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsEditMode), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.DisplayItems), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.DisplayItems));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.DisplayName), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.DisplayName));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.EntityType), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.EntityType));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.IsEditMode), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.IsEditMode));
             this.RaisePropertyChanged(nameof(this.EditModeGlyph));
             this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
             this.RaisePropertyChanged(nameof(this.ShowEditActions));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.EditModeGlyph), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.EditModeGlyph), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.EditModeGlyph));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowEditIndicator), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.ShowEditIndicator), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowEditActions), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.ShowEditActions), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowEditActions));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowRawJsonEditor), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.ShowRawJsonEditor), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowRawJsonEditor));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowJsonButton), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.ShowJsonButton), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowJsonButton));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ShowDeleteButton), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.ShowDeleteButton), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.HasShortcuts), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.HasShortcuts), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.HasShortcuts));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsDeleted), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.IsDeleted), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.IsDeleted));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsInteractive), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.IsInteractive), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.IsInteractive));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.ActivateShortcutCommand), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.ActivateShortcutCommand), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.IsRawJsonReadOnly), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.IsRawJsonReadOnly), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.RawJsonText), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.RawJsonText), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.RawJsonText));
         }
-        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.JsonButtonText), StringComparison.Ordinal))
+        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.JsonButtonText), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.JsonButtonText));
         }

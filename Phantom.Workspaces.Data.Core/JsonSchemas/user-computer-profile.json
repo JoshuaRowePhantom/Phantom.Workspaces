@@ -8,6 +8,15 @@
   ],
   "type": "object",
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "user-computer-profile"
+      }
+    },
     "computer-reference": {
       "type": "array",
       "minItems": 3,
@@ -53,6 +62,7 @@
     }
   },
   "required": [
+    "entity-types",
     "computer-reference",
     "user-reference"
   ]

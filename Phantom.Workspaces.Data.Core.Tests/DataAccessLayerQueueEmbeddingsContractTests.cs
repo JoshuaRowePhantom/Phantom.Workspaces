@@ -192,7 +192,7 @@ public abstract class DataAccessLayerQueueEmbeddingsContractTests
             $$"""
             {
               "entity-id": "{{guid}}",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": {{namesJson}},
               "content": { "text": {{JsonSerializer.Serialize(text)}} }
             }

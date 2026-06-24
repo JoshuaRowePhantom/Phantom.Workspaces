@@ -12,19 +12,21 @@ internal static class WorkspaceEntitySessionBootstrapper
 {
     public static async Task<WorkspaceEntitySession> InitializeAsync(
         IDataAccessLayer dataAccessLayer,
+        string? userComputerProfileOverride = null,
         CancellationToken cancellationToken = default)
     {
-        var currentExecutionContextProvider = new CurrentExecutionContextProvider();
+        var currentExecutionContextProvider = new CurrentExecutionContextProvider(userComputerProfileOverride);
         var userEntityName = new EntityName("users", "username", currentExecutionContextProvider.UserName);
         var computerEntityName = new EntityName("computers", "hostname", currentExecutionContextProvider.ComputerName);
+        var profileComputerEntityName = new EntityName("computers", "hostname", currentExecutionContextProvider.EffectiveComputerName);
         var userComputerProfileEntityName = new EntityName(
             "computer-user-profiles",
             userEntityName.Components[0],
             userEntityName.Components[1],
             userEntityName.Components[2],
-            computerEntityName.Components[0],
-            computerEntityName.Components[1],
-            computerEntityName.Components[2]);
+            profileComputerEntityName.Components[0],
+            profileComputerEntityName.Components[1],
+            profileComputerEntityName.Components[2]);
 
         var userDiscoveryTool = new UserDiscoveryTool(currentExecutionContextProvider);
         await userDiscoveryTool.ExecuteAsync(CreateExecutionContext(dataAccessLayer, cancellationToken));

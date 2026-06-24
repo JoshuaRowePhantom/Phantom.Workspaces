@@ -21,7 +21,7 @@ namespace Phantom.Workspaces.Llm;
 /// itself, while the agent framework continues to record history for
 /// presentation and persistence.
 /// </remarks>
-public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable
+public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient
 {
     private readonly string modelId;
     private readonly string displayName;

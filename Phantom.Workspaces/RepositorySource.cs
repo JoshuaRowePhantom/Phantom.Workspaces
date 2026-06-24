@@ -23,6 +23,22 @@ public sealed record UnknownRepositorySource : RepositorySource;
 /// </param>
 public sealed record WebRepositorySource(string Endpoint, bool UseGitHubAuthToken = false) : RepositorySource;
 
+/// <summary>
+/// A remote Phantom.Workspaces web endpoint reached through a dev tunnel located by name. The relay
+/// endpoint (and forwarded port) is discovered at connect time from the tunnel name, so the host can
+/// change its listening port without the client reconfiguring.
+/// </summary>
+/// <param name="TunnelName">The dev tunnel name to resolve.</param>
+/// <param name="AccessMode">The tunnel access mode (governs whether a pre-shared token is used).</param>
+/// <param name="AccessTokenSource">
+/// For <see cref="Configuration.DevTunnelAccessMode.Token"/> access, the name of the source (for
+/// example, an environment variable) supplying the pre-shared tunnel token. Never the raw token.
+/// </param>
+public sealed record DevTunnelNameRepositorySource(
+    string TunnelName,
+    Configuration.DevTunnelAccessMode AccessMode,
+    string? AccessTokenSource = null) : RepositorySource;
+
 /// <summary>A local Git-backed repository at the given path.</summary>
 public sealed record LocalGitRepositorySource(string Path) : RepositorySource;
 

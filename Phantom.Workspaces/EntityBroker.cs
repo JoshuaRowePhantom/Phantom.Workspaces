@@ -28,9 +28,10 @@ public sealed class EntityBroker
 
     public static async Task<EntityBroker> CreateInitializedAsync(
         RepositorySource repositorySource,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? userComputerProfileOverride = null)
     {
-        var repository = await EntityRepository.CreateAsync(repositorySource);
+        var repository = await EntityRepository.CreateAsync(repositorySource, userComputerProfileOverride);
         cancellationToken.ThrowIfCancellationRequested();
 
         var broker = new EntityBroker(repository);
@@ -109,13 +110,6 @@ public sealed class EntityBroker
         await subscribedQuery.RefreshAsync(cancellationToken);
         return subscribedQuery;
     }
-
-    public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        return await this.entityRepository.ExportEntitySnapshotsAsync(cancellationToken);
-    }
-
 
     public bool TryGetReferencedEntity(
         JsonElement element,
@@ -396,7 +390,8 @@ public sealed class EntityBroker
         var newEntity = new SubscribedEntityViewModel(
             snapshot,
             this.DeleteSubscribedEntityAsync,
-            this.ToggleInterestAsync);
+            this.ToggleInterestAsync,
+            this.SaveSubscribedEntityAsync);
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(newEntity);
         return newEntity;
     }
@@ -420,7 +415,8 @@ public sealed class EntityBroker
         var created = new SubscribedEntityViewModel(
             snapshot,
             this.DeleteSubscribedEntityAsync,
-            this.ToggleInterestAsync);
+            this.ToggleInterestAsync,
+            this.SaveSubscribedEntityAsync);
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(created);
         changedEntityIds?.Add(snapshot.EntityId);
         return created;
@@ -453,6 +449,33 @@ public sealed class EntityBroker
                         EntityId = entity.EntityId,
                         ConcurrencyTag = entity.Snapshot.ConcurrencyTag,
                         Data = null,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+    }
+
+    private async Task SaveSubscribedEntityAsync(
+        SubscribedEntityViewModel entity,
+        System.Text.Json.JsonElement data)
+    {
+        await this.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = $"Edit entity {entity.DisplayName} from entity card action.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entity.EntityId,
+                        ConcurrencyTag = entity.Snapshot.ConcurrencyTag,
+                        Data = data,
                         EntityChangeMode = EntityChangeMode.Replace,
                     },
                 ],

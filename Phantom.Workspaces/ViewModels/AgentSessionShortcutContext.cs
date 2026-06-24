@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Globalization;
+using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
@@ -17,13 +18,16 @@ public sealed class AgentSessionShortcutContext
 {
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
     private readonly Func<DateTimeOffset> currentTimeProvider;
+    private readonly string? userComputerProfileOverride;
     private Task<IAgentPersistenceStore>? agentPersistenceStoreTask;
 
     public AgentSessionShortcutContext(
-        Func<DateTimeOffset>? currentTimeProvider = null)
+        Func<DateTimeOffset>? currentTimeProvider = null,
+        string? userComputerProfileOverride = null)
     {
         this.currentTimeProvider = currentTimeProvider
             ?? (() => DateTimeOffset.UtcNow);
+        this.userComputerProfileOverride = userComputerProfileOverride;
     }
 
     public async Task<AgentServices> CreateAgentServicesAsync(
@@ -40,13 +44,13 @@ public sealed class AgentSessionShortcutContext
             AgentPersistenceStoreOverride = agentPersistenceStore,
             LoggerFactory = loggerFactory,
             ToolsetFactory = workspaceEntityToolsetFactory,
-            ToolResourceFactory = CreateToolResourceFactory(dataAccessLayer),
+            ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
         };
     }
 
-    private static IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)
+    private IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)
     {
-        var executionContext = new CurrentExecutionContextProvider();
+        var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
         var machineProfilePrefix = new EntityName(
             "computer-user-profiles",
             "users",
@@ -54,18 +58,25 @@ public sealed class AgentSessionShortcutContext
             executionContext.UserName,
             "computers",
             "hostname",
-            executionContext.ComputerName,
+            executionContext.EffectiveComputerName,
             "copilot",
             "mcp-servers");
 
         return new ComposingToolResourceFactory(
-            new FixedToolResourceFactory(),
-            new McpServerToolResourceFactory(
+            new FixedToolResourceFactory(CreateFixedToolMapping()),
+            new McpServerEntityToolResourceFactory(
                 dataAccessLayer,
                 [
                     machineProfilePrefix,
                     new EntityName("defaults", "mcp-servers"),
                 ]));
+    }
+
+    private static IReadOnlyDictionary<(string Id, string Name), Tool> CreateFixedToolMapping()
+    {
+        return FixedToolResources.DefaultNames.ToDictionary(
+            name => (FixedToolResources.FixedToolResourceId, name),
+            name => (Tool)new CustomTool { Kind = name, Name = name });
     }
 
     public async Task<SubscribedEntityViewModel?> CreateAgentSessionEntityAsync(
@@ -169,7 +180,7 @@ public sealed class AgentSessionShortcutContext
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["agent-session"],
+              "entity-types": ["entity", "agent-session"],
               "names": [{{namesJson}}],
               "display-name": { "default": "{{agentDisplayName}} session" },
               "agent-definition-entity-id": "{{agentDefinitionEntityId}}",

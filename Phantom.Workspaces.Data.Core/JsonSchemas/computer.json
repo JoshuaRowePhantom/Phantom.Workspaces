@@ -7,7 +7,19 @@
     }
   ],
   "type": "object",
+  "required": [
+    "entity-types"
+  ],
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "computer"
+      }
+    },
     "os": {
       "type": "string",
       "description": "Operating system identifier (e.g., 'windows', 'linux', 'macos')"

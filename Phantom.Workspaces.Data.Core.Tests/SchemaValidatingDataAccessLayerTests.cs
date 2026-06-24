@@ -92,7 +92,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{entityId}}",
-                              "entity-types": ["profile"],
+                              "entity-types": ["entity", "profile"],
                               "names": [["unknown-typed-entity"]]
                             }
                             """).RootElement.Clone(),
@@ -124,7 +124,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             """
                             {
                               "entity-id": "1ac2b418-c4bf-4df9-9f25-6b3d9ab2d7f7",
-                              "entity-types": ["note"],
+                              "entity-types": ["entity", "note"],
                               "names": [["documentation","localized-note"]],
                               "display-name": "Localized Note",
                               "content": {
@@ -277,15 +277,16 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{schemaEntityId}}",
-                              "entity-types": ["entity-type"],
+                              "entity-types": ["entity", "entity-type", "json-schema"],
                               "names": [["json-schemas", "{{schemaName}}"]],
                               "schema": {
                                 "$id": "{{schemaName}}",
                                 "type": "object",
                                 "properties": {
-                                  "title": { "type": "string" }
+                                  "title": { "type": "string" },
+                                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
                                 },
-                                "required": ["title"]
+                                "required": ["title", "entity-types"]
                               }
                             }
                             """).RootElement.Clone(),
@@ -414,13 +415,15 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{entityTypeEntityId}}",
-                              "entity-types": ["entity-type"],
+                              "entity-types": ["entity", "entity-type", "json-schema"],
                               "names": [["entity-types","sample-entity-type"]],
                               "schema": {
                                 "type": "object",
                                 "properties": {
-                                  "title": { "type": "string" }
-                                }
+                                  "title": { "type": "string" },
+                                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                                },
+                                "required": ["entity-types"]
                               },
                               "unexpected-property": "should-fail"
                             }
@@ -453,8 +456,121 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{entityTypeEntityId}}",
-                              "entity-types": ["entity-type"],
+                              "entity-types": ["entity", "entity-type", "json-schema"],
                               "names": [["entity-types","sample-entity-type"]],
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "title": { "type": "string" },
+                                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                                },
+                                "required": ["entity-types"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var entityResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
+        Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenEntityOmitsBaseEntityType()
+    {
+        // Every entity must declare the base "entity" type; entity.json enforces this via
+        // entity-types contains "entity".
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("c0a4d0f9-6d2b-4d2e-8e6d-7d8e0a4f1b2c");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity missing the base entity type"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": [],
+                              "names": [["missing-base-entity-type"]]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var failedResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("entity-types", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenEntityTypeDefinitionOmitsJsonSchemaType()
+    {
+        // entity-type.json composes json-schema.json, which requires every entity-type
+        // definition to declare the base "json-schema" type.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity-type definition missing the json-schema type"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": ["entity", "entity-type"],
+                              "names": [["entity-types","sample-missing-json-schema"]],
+                              "schema": {
+                                "type": "object",
+                                "properties": {
+                                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                                },
+                                "required": ["entity-types"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var failedResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("json-schema", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenEntityTypeSchemaOmitsSelfTypeRule()
+    {
+        // The entity-type.json meta-rule requires every entity-type schema's inline schema to
+        // enforce its own type via required entity-types and a entity-types contains.const.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("d2e3f4a5-6b7c-4d8e-9f0a-1b2c3d4e5f60");
+
+        var result = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity-type definition whose schema lacks the self-type rule"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": ["entity", "entity-type", "json-schema"],
+                              "names": [["entity-types","sample-missing-self-rule"]],
                               "schema": {
                                 "type": "object",
                                 "properties": {
@@ -466,10 +582,9 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                         EntityChangeMode.Replace),
                 }));
 
-        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
-        var entityResult = result.EntityResults.Single();
-        Assert.Equal(UpdateState.Added, entityResult.UpdateState);
-        Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState);
+        var failedResult = Assert.Single(result.EntityResults);
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -527,7 +642,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{viewEntityId}}",
-                              "entity-types": ["view"],
+                              "entity-types": ["entity", "view"],
                               "names": [["views","invalid-view-by-type"]],
                               "sub-views": []
                             }
@@ -551,7 +666,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{viewEntityId}}",
-                              "entity-types": ["view"],
+                              "entity-types": ["entity", "view"],
                               "names": [["views","valid-view-by-type"]],
                               "title": { "default": "Valid View" },
                               "sub-views": []
@@ -580,7 +695,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             """
                             {
                               "entity-id": "24a2ab29-2d0e-4a0c-9f0e-2a1a5c37e5a5",
-                              "entity-types": ["workspace"],
+                              "entity-types": ["entity", "workspace"],
                               "names": [["workspaces/workspace-one"]],
                               "display-name": "Workspace One",
                               "regions": [
@@ -639,7 +754,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{profileEntityId}}",
-                              "entity-types": ["user-computer-profile"],
+                              "entity-types": ["entity", "user-computer-profile"],
                               "names": [
                                 ["computer-user-profiles", "users", "username", "sample-user", "computers", "hostname", "sample-computer"]
                               ],
@@ -674,7 +789,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{profileEntityId}}",
-                              "entity-types": ["user-computer-profile"],
+                              "entity-types": ["entity", "user-computer-profile"],
                               "names": [
                                 ["computer-user-profiles", "users", "username", "sample-user", "computers", "hostname", "sample-computer"]
                               ],
@@ -709,7 +824,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{userEntityId}}",
-                              "entity-types": ["user"],
+                              "entity-types": ["entity", "user"],
                               "names": [
                                 ["users","upn","user@example.com"],
                                 ["users","web","github.com","user@github.com"]
@@ -744,7 +859,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{userEntityId}}",
-                              "entity-types": ["user"],
+                              "entity-types": ["entity", "user"],
                               "names": [
                                 ["people","upn","user@example.com"]
                               ]
@@ -784,15 +899,16 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity-type"],
+              "entity-types": ["entity", "entity-type", "json-schema"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
                 "$id": "{{schemaName}}",
                 "type": "object",
                 "properties": {
-                  "title": { "type": "{{titleType}}" }
+                  "title": { "type": "{{titleType}}" },
+                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
                 },
-                "required": ["title"]
+                "required": ["title", "entity-types"]
               }
             }
             """);

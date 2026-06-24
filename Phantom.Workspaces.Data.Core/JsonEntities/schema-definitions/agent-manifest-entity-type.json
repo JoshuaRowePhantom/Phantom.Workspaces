@@ -1,13 +1,16 @@
 {
   "entity-id": "a8b9c7de-1234-5678-90ab-cdef12345678",
+  "entity-display-order": 300,
   "entity-types": [
+    "entity",
     "entity-type",
+    "json-schema",
     "note"
   ],
   "names": [
     [
       "json-schemas",
-      "https://schemas.workspaces.phantom.to/workspaces/data/agent-manifest.json"
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-manifest.json"
     ],
     [
       "entity-types",

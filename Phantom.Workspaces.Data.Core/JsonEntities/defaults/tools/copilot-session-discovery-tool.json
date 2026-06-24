@@ -1,6 +1,6 @@
 {
   "entity-id": "c0d1e2f3-a4b5-4c6d-9e0f-1a2b3c4d5e6f",
-  "entity-types": ["tool"],
+  "entity-types": ["entity", "tool"],
   "names": [
     ["tools", "copilot-session-discovery"]
   ],

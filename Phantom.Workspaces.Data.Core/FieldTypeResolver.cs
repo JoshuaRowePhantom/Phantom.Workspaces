@@ -37,6 +37,9 @@ public sealed class FieldTypeResolver
             DefaultMimeType = ReadDefaultMimeType(schemaNode.Value),
             EntityTypes = ReadEntityTypes(schemaNode.Value),
             SchemaNode = schemaNode,
+            FieldEditorTypeName = ReadFieldEditorTypeName(schemaNode.Value),
+            AbsoluteEntityDisplayOrder = ReadDoubleKeyword(schemaNode.Value, "x-absolute-entity-display-order"),
+            RelativeEntityDisplayOrder = ReadDoubleKeyword(schemaNode.Value, "x-relative-entity-display-order") ?? 0,
         };
     }
 
@@ -70,6 +73,8 @@ public sealed class FieldTypeResolver
         CancellationToken cancellationToken)
     {
         var schemaReferences = this.GetSchemaReferencesForEntity(rootEntity);
+        JsonElement? bestSchema = null;
+        var bestSpecificity = int.MinValue;
         foreach (var schemaReference in schemaReferences)
         {
             var schemaEntity = await this.schemaAccessor.ResolveSchemaByReferenceAsync(schemaReference, cancellationToken).ConfigureAwait(false);
@@ -88,16 +93,23 @@ public sealed class FieldTypeResolver
                 rootSchemaNode.Value,
                 fieldPath,
                 0,
+                specificity: 0,
                 currentSchemaId: GetSchemaId(schemaEntity.Value),
                 visitedReferences: new HashSet<string>(StringComparer.Ordinal),
                 cancellationToken).ConfigureAwait(false);
-            if (resolved is not null)
+
+            // Prefer the most-specific match across all of the entity's schemas: a derived type that
+            // resolves a field through a direct `properties` entry wins over a base type that only
+            // matches the same path through an `additionalProperties` fallback. This keeps field-type
+            // resolution independent of the order of the entity's entity-types.
+            if (resolved is not null && resolved.Value.Specificity > bestSpecificity)
             {
-                return resolved;
+                bestSchema = resolved.Value.Schema;
+                bestSpecificity = resolved.Value.Specificity;
             }
         }
 
-        return null;
+        return bestSchema;
     }
 
     private async Task<IReadOnlyCollection<JsonElement>> ResolveFieldSchemasAsync(
@@ -125,22 +137,26 @@ public sealed class FieldTypeResolver
                 rootSchemaNode.Value,
                 fieldPath,
                 0,
+                specificity: 0,
                 currentSchemaId: GetSchemaId(schemaEntity.Value),
                 visitedReferences: new HashSet<string>(StringComparer.Ordinal),
                 cancellationToken).ConfigureAwait(false);
             if (resolved is not null)
             {
-                resolvedSchemas.Add(resolved.Value);
+                resolvedSchemas.Add(resolved.Value.Schema);
             }
         }
 
         return resolvedSchemas;
     }
 
-    private async Task<JsonElement?> TryResolvePathInSchemaNodeAsync(
+    private readonly record struct FieldSchemaMatch(JsonElement Schema, int Specificity);
+
+    private async Task<FieldSchemaMatch?> TryResolvePathInSchemaNodeAsync(
         JsonElement schemaNode,
         IReadOnlyList<string> path,
         int pathIndex,
+        int specificity,
         string? currentSchemaId,
         ISet<string> visitedReferences,
         CancellationToken cancellationToken)
@@ -152,7 +168,7 @@ public sealed class FieldTypeResolver
 
         if (pathIndex >= path.Count)
         {
-            return schemaNode;
+            return new FieldSchemaMatch(schemaNode, specificity);
         }
 
         var dereferencedNode = await this.ResolveReferenceNodeAsync(
@@ -171,10 +187,13 @@ public sealed class FieldTypeResolver
             && properties.ValueKind == JsonValueKind.Object
             && properties.TryGetProperty(segment, out var directPropertySchema))
         {
+            // A direct `properties` match is the most specific; reward it so a derived schema's
+            // explicit property wins over a base schema's `additionalProperties` fallback.
             var directResult = await this.TryResolvePathInSchemaNodeAsync(
                 directPropertySchema,
                 path,
                 pathIndex + 1,
+                specificity + 2,
                 currentSchemaId,
                 visitedReferences,
                 cancellationToken).ConfigureAwait(false);
@@ -191,6 +210,7 @@ public sealed class FieldTypeResolver
                 additionalProperties,
                 path,
                 pathIndex + 1,
+                specificity,
                 currentSchemaId,
                 visitedReferences,
                 cancellationToken).ConfigureAwait(false);
@@ -214,6 +234,7 @@ public sealed class FieldTypeResolver
                     compositionSchema,
                     path,
                     pathIndex,
+                    specificity,
                     currentSchemaId,
                     visitedReferences,
                     cancellationToken).ConfigureAwait(false);
@@ -364,6 +385,11 @@ public sealed class FieldTypeResolver
                 return "local-string";
             }
 
+            if (referenceValue.Contains("core.json#/$defs/entity-id-list", StringComparison.OrdinalIgnoreCase))
+            {
+                return "entity-id-list";
+            }
+
             if (referenceValue.Contains("mime-attachment", StringComparison.OrdinalIgnoreCase))
             {
                 return "mime-attachment";
@@ -443,6 +469,26 @@ public sealed class FieldTypeResolver
         return schemaNode.TryGetProperty("x-default-mime-type", out var defaultMimeType)
                && defaultMimeType.ValueKind == JsonValueKind.String
             ? defaultMimeType.GetString()
+            : null;
+    }
+
+    private static string? ReadFieldEditorTypeName(
+        JsonElement schemaNode)
+    {
+        return schemaNode.TryGetProperty("x-field-editor", out var fieldEditor)
+               && fieldEditor.ValueKind == JsonValueKind.String
+               && !string.IsNullOrWhiteSpace(fieldEditor.GetString())
+            ? fieldEditor.GetString()
+            : null;
+    }
+
+    private static double? ReadDoubleKeyword(
+        JsonElement schemaNode,
+        string keyword)
+    {
+        return schemaNode.TryGetProperty(keyword, out var value)
+               && value.ValueKind == JsonValueKind.Number
+            ? value.GetDouble()
             : null;
     }
 

@@ -138,7 +138,7 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["shell"],
+              "entity-types": ["entity", "shell"],
               "names": [{{namesJson}}],
               "display-name": { "default": "Default Shell" },
               "command": "{{defaultCommand}}",
@@ -158,7 +158,7 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
             $$"""
             {
               "entity-id": "{{relationshipEntityId}}",
-              "entity-types": ["relationship", "owned-by"],
+              "entity-types": ["entity", "relationship", "owned-by"],
               "names": [["relationship", "{{relationshipEntityId}}"]],
               "participants": {
                 "owner": "{{ownerEntityId}}",

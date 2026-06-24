@@ -6,7 +6,7 @@
                 Classes.workspace-entity-deleted="{Binding IsDeleted}"
                 IsEnabled="{Binding IsInteractive}">
         <Border Classes="entity-card"
-                CornerRadius="{Binding ContentCornerRadius}"
+                CornerRadius="6"
                 Tapped="OnEntityCardTapped">
             <StackPanel Classes="workspace-entity-card-content">
                 <Grid ColumnDefinitions="*,Auto">
@@ -17,6 +17,7 @@
                     <StackPanel Grid.Column="1"
                                 Classes="workspace-entity-actions-row">
                         <ItemsControl IsVisible="{Binding HasBadges}"
+                                      IsEnabled="{Binding AreBadgesEnabled}"
                                       ItemsSource="{Binding Badges.Badges}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -40,6 +41,7 @@
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}" />
                         <ItemsControl IsVisible="{Binding HasShortcuts}"
+                                      IsEnabled="{Binding AreShortcutsEnabled}"
                                       ItemsSource="{Binding Shortcuts}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -77,16 +79,11 @@
                          IsVisible="{Binding ShowRawJsonEditor}"
                          IsReadOnly="{Binding IsRawJsonReadOnly}"
                          Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
+                <TextBlock Text="{Binding Validation.StatusText}"
+                           IsVisible="{Binding ShowEditActions}"
+                           Classes="workspace-validation-status"
+                           Classes.workspace-validation-error="{Binding Validation.HasError}" />
             </StackPanel>
-        </Border>
-        <Border IsVisible="{Binding HasChildren}"
-                Classes="entity-card-expand-section"
-                CornerRadius="{Binding ExpandSectionCornerRadius}">
-            <Button Classes="entity-card-expand-button"
-                    Content="{Binding ExpandArrow}"
-                    HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Center"
-                    Command="{Binding ToggleExpandCommand}" />
         </Border>
     </StackPanel>
 </UserControl>
