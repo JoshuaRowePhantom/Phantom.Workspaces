@@ -17,9 +17,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private const string JsonSchemasNamePrefix = "json-schemas";
     private static readonly string[] EntitySchemaNameComponents = { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" };
     private static readonly string EntitySchemaName = JsonSerializer.Serialize(EntitySchemaNameComponents);
-    private const string JsonSchemaType = "json-schema";
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
-    private const string EntityTypeSchemaName = "[\"entity-types\",\"entity\"]";
     private const string CustomEntityTypeKeyword = "x-entity-types";
 
     public SchemaValidatingDataAccessLayer(
@@ -326,11 +324,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         foreach (var entityTypeName in this.GetExplicitEntityTypeNames(entityObject))
         {
             references.Add(JsonSerializer.Serialize(new[] { "entity-types", entityTypeName }));
-
-            if (string.Equals(entityTypeName, "entity-type", StringComparison.Ordinal))
-            {
-                references.Add(JsonSerializer.Serialize(new[] { "entity-types", JsonSchemaType }));
-            }
         }
 
         return references;

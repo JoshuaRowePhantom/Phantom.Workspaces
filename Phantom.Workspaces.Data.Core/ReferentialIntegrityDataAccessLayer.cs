@@ -15,7 +15,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     private const string FolderType = "folder";
     private const string EntityTypeType = "entity-type";
     private const string JsonSchemaType = "json-schema";
-    private const string ImplicitBaseEntityType = "entity";
     private const string FolderSchema = "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json";
 
     public ReferentialIntegrityDataAccessLayer(
@@ -627,13 +626,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     candidate =>
                     {
                         var targetTypes = this.GetEntityTypeNames(candidate);
-                        // Every entity is implicitly an "entity" (the base entity schema always applies),
-                        // so a required "entity" type is satisfied even when it is not listed explicitly
-                        // in the candidate's entity-types.
-                        return reference.RequiredTypes.Any(
-                            requiredType =>
-                                string.Equals(requiredType, ImplicitBaseEntityType, StringComparison.Ordinal)
-                                || targetTypes.Contains(requiredType));
+                        return reference.RequiredTypes.Any(targetTypes.Contains);
                     });
                 if (!hasMatchingType)
                 {
@@ -1579,7 +1572,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             $$"""
             {
               "entity-id": "{{relationshipEntityId}}",
-              "entity-types": ["relationship", "reference"],
+              "entity-types": ["entity", "relationship", "reference"],
               "$schema": "https://schemas.workspaces.phantom.to/workspaces/data/core/reference.json",
               "participants": {
                 "source": "{{sourceEntityId}}",
@@ -1710,7 +1703,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["folder"],
+              "entity-types": ["entity", "folder"],
               "$schema": "{{FolderSchema}}",
               "names": {{serializedName}},
               "display-name": { "default": {{serializedTitle}} }
