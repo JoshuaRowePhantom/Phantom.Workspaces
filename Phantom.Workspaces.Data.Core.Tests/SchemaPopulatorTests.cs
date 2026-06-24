@@ -653,7 +653,7 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
-    public async Task Populate_WhenEntityTypesFolderIsDeletedInUnderlyingStore_RecreatesFolder()
+    public async Task Update_WhenAncestorFolderMissing_WritingDescendantRecreatesFolder()
     {
         var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
         var pipelineDataAccessLayer = new MergeProcessingDataAccessLayer(
@@ -730,23 +730,50 @@ public sealed class SchemaPopulatorTests
                             && entityName.Value.Components.SequenceEqual(["entity-types"], StringComparer.Ordinal);
                     }));
 
-        var secondPopulateErrors = await schemaPopulator.Populate();
-        Assert.True(
-            secondPopulateErrors.Count == 0,
-            string.Join(
-                Environment.NewLine,
-                secondPopulateErrors.Select(
-                    error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+        // Folder maintenance is scoped to entities being written: writing a new
+        // entity under the (now missing) "entity-types" folder must recreate that
+        // ancestor folder, without scanning the entire store.
+        var healMarkerEntityId = new EntityId("c3f1a2b4-9d8e-4f7a-8b6c-1a2b3c4d5e6f");
+        using var healMarkerDocument = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "c3f1a2b4-9d8e-4f7a-8b6c-1a2b3c4d5e6f",
+              "entity-types": ["entity"],
+              "names": [["entity-types", "heal-marker"]],
+              "display-name": { "default": "Heal Marker" }
+            }
+            """);
+        var healResult = await pipelineDataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "Write a descendant entity under the missing folder.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = healMarkerEntityId,
+                        Data = healMarkerDocument.RootElement.Clone(),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
+        Assert.DoesNotContain(healResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
 
-        var secondExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
-        var latestAfterRepopulate = secondExport.ChangeBatches
+        var afterWriteExport = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var latestAfterWrite = afterWriteExport.ChangeBatches
             .SelectMany(static batch => batch.Entities)
             .GroupBy(static snapshot => snapshot.EntityId)
             .ToDictionary(
                 static group => group.Key,
                 static group => group.Last());
         Assert.Contains(
-            latestAfterRepopulate.Values,
+            latestAfterWrite.Values,
             snapshot =>
                 snapshot.Data is JsonElement data
                 && IsFolderEntity(data)
