@@ -304,26 +304,39 @@ public interface ISteerableChatClient
 **`AgentChat` changes:**
 
 In `RunProcessLoopAsync`, after starting a Copilot run, poll the input queue for new
-items concurrently with the provider stream. When an item arrives while the run is
-active and the active client implements `ISteerableChatClient`:
+items concurrently with the provider stream. The queue immediacy state determines routing:
 
-1. Dequeue the item.
+- **`Immediate` or `Queue` (non-held)** — eligible for mid-turn steering. When an item
+  arrives from one of these queues while the run is active and the client implements
+  `ISteerableChatClient`, dequeue it and call `steerableClient.SteerAsync(item.Text)`.
+- **`Held`** — not eligible for steering. Items in held queues must remain in the queue
+  and are not forwarded mid-turn, regardless of whether the client supports steering.
+  They are processed normally once the held state is cleared and a new turn begins.
+
+The existing `AgentInputQueueManager.TryDequeueNextImmediate` and
+`TryDequeueNextImmediateOrQueued` methods already respect the `Held` state (held queues
+are filtered out in `TryDequeueNext`), so the steering poll can reuse the same
+dequeue methods — only items that would have been dequeued normally are candidates for
+steering. The poll runs concurrently with the provider stream loop:
+
+1. Dequeue the next non-held item (using `TryDequeueNextImmediateOrQueued`).
 2. Call `steerableClient.SteerAsync(item.Text)`.
 3. Do **not** add the item to history separately — the steered text will appear in the
    session's event stream as a `UserMessageEvent` and flow through the existing
    `PartialResponseConflator` path.
 4. If the client does **not** implement `ISteerableChatClient` (non-Copilot providers),
-   leave the item in the queue; it will be dequeued normally when the current run ends.
+   leave dequeued items in a local buffer; re-enqueue them after the run completes so
+   they are processed as normal follow-up turns.
 
 This is analogous to the existing `WasCanceledBeforeCompletingAsync` racing pattern: add
 a second `Task.WhenAny` arm that watches the `queueStateSignal` semaphore alongside the
 provider read.
 
-**Held-queue fix:**
-Any code that sets the default `AgentChatQueue` to `Held` during a Copilot run should
-either: (a) not hold the default queue for Copilot agents, or (b) automatically clear the
-held state when the current run completes, so queued steering text is delivered on the
-next turn.
+**Held-queue behavior:**
+Items in `Held` queues are intentionally withheld from the agent — that is the purpose of
+the held state. They are not steered mid-turn and are not processed after the current run
+finishes until the held state is explicitly cleared. This behavior is correct and
+unchanged; no fix is needed for held queues specifically.
 
 ---
 
@@ -333,8 +346,8 @@ next turn.
 | --- | --- | --- |
 | Ctrl+Break doesn't stop CLI | `session.AbortAsync` never called on cancellation | Call `AbortAsync` + invalidate session in `CopilotSdkChatClient` `finally`/cancel path |
 | Stale session reused after interrupt | `copilotSession` not nulled on interrupt | Null `copilotSession` + `currentSessionSignature` when aborting (same fix as above) |
-| Steering text not delivered mid-turn | `turnLock` blocks concurrent `SendAsync`; `AgentChat` loop is serial | Add `ISteerableChatClient.SteerAsync` that bypasses `turnLock`; use `Mode = "immediate"` SDK feature; `AgentChat` polls queue concurrently with active run |
-| Held queue blocks steering post-turn | Held state not cleared on turn completion | Auto-clear held state when Copilot run ends, or avoid holding the default queue |
+| Steering text not delivered mid-turn | `turnLock` blocks concurrent `SendAsync`; `AgentChat` loop is serial | Add `ISteerableChatClient.SteerAsync` bypassing `turnLock`; use `Mode = "immediate"`; `AgentChat` polls non-held queues concurrently with active run |
+| Held queue items incorrectly steered | N/A — held queues must not be steered | By design: `TryDequeueNextImmediateOrQueued` already excludes held queues; steering poll reuses the same dequeue path |
 
 
 
