@@ -53,6 +53,61 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(viewModel.HasScheduledTasks);
     }
 
+    [AvaloniaFact]
+    public async Task TogglePause_PersistsHostPauseState_AndUpdatesButtonText()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var hostId = new EntityId("b2c3d4e5-1111-2222-3333-444455556666");
+        await SeedAsync(broker, $$"""
+            {
+              "entity-id": "{{hostId}}",
+              "entity-types": ["entity", "user-computer-profile"],
+              "names": [["computer-user-profiles","users","username","test-user","computers","hostname","this-machine"]],
+              "user-reference": ["users","username","test-user"],
+              "computer-reference": ["computers","hostname","this-machine"]
+            }
+            """);
+
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var host = new Phantom.Workspaces.ScheduledTools.ScheduledToolHost(
+            dataAccessLayer,
+            new Phantom.Workspaces.ScheduledTools.ScheduledToolRegistry([]));
+        var pauseStateService = new Phantom.Workspaces.ScheduledTools.ScheduledToolPauseStateService(
+            dataAccessLayer,
+            host);
+
+        var viewModel = new ScheduledTasksViewModel(broker, pauseStateService, hostId);
+
+        Assert.True(viewModel.HasPauseControl);
+        Assert.False(viewModel.IsPaused);
+        Assert.Equal("Stop all / Pause", viewModel.PauseButtonText);
+
+        await viewModel.TogglePauseAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(viewModel.IsPaused);
+        Assert.Equal("Resume scheduled tools", viewModel.PauseButtonText);
+
+        // A fresh service instance reads back the persisted flag (survives across instances).
+        var restarted = new Phantom.Workspaces.ScheduledTools.ScheduledToolPauseStateService(dataAccessLayer, host);
+        Assert.True(await restarted.RefreshAsync(hostId, TestContext.Current.CancellationToken));
+    }
+
+    [AvaloniaFact]
+    public async Task HasPauseControl_IsFalse_WhenNoPauseServiceSupplied()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var viewModel = new ScheduledTasksViewModel(broker);
+
+        Assert.False(viewModel.HasPauseControl);
+        Assert.False(viewModel.IsPaused);
+    }
+
     private static async Task SeedAsync(
         EntityBroker broker,
         string json)

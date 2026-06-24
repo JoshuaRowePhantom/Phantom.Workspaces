@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.ScheduledTools;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -46,14 +47,32 @@ public sealed class ScheduledTasksViewModel : ViewModelBase
 
     private readonly EntityBroker entityBroker;
     private readonly EntityReferenceSearch entityReferenceSearch;
+    private readonly ScheduledToolPauseStateService? pauseStateService;
+    private readonly EntityId hostEntityId;
+    private readonly Action<Action> dispatch;
     private bool isLoading;
+    private bool isToggleInProgress;
 
     public ScheduledTasksViewModel(
-        EntityBroker entityBroker)
+        EntityBroker entityBroker,
+        ScheduledToolPauseStateService? pauseStateService = null,
+        EntityId hostEntityId = default,
+        Action<Action>? dispatch = null)
     {
         this.entityBroker = entityBroker ?? throw new ArgumentNullException(nameof(entityBroker));
         this.entityReferenceSearch = new EntityReferenceSearch(entityBroker);
         this.ToolResults = new ToolResultBrowserViewModel(entityBroker.EntityRepository.DataAccessLayer);
+        this.pauseStateService = pauseStateService;
+        this.hostEntityId = hostEntityId;
+        this.dispatch = dispatch ?? (action => action());
+        this.TogglePauseCommand = new RelayCommand(
+            _ => _ = this.TogglePauseAsync(),
+            _ => this.CanTogglePause);
+
+        if (this.pauseStateService is not null)
+        {
+            this.pauseStateService.PauseStateChanged += this.OnPauseStateChanged;
+        }
     }
 
     /// <summary>The scheduled tool-relationships.</summary>
@@ -61,6 +80,50 @@ public sealed class ScheduledTasksViewModel : ViewModelBase
 
     /// <summary>The currently running and recently completed tool executions.</summary>
     public ToolResultBrowserViewModel ToolResults { get; }
+
+    /// <summary>Whether the host-wide pause control should be shown at all.</summary>
+    public bool HasPauseControl => this.pauseStateService is not null;
+
+    /// <summary>Whether the host-wide "Stop all / Pause" toggle is available.</summary>
+    public bool CanTogglePause => this.pauseStateService is not null && !this.isToggleInProgress;
+
+    /// <summary>Whether scheduled tools are currently paused on the host.</summary>
+    public bool IsPaused => this.pauseStateService?.IsPaused ?? false;
+
+    /// <summary>The label for the host-wide pause/resume button.</summary>
+    public string PauseButtonText => this.IsPaused ? "Resume scheduled tools" : "Stop all / Pause";
+
+    /// <summary>Toggles the persisted host-wide pause state (the "Stop all / Pause" action).</summary>
+    public RelayCommand TogglePauseCommand { get; }
+
+    /// <summary>Toggles the persisted host-wide pause state.</summary>
+    public async Task TogglePauseAsync(CancellationToken cancellationToken = default)
+    {
+        if (this.pauseStateService is not { } service)
+        {
+            return;
+        }
+
+        this.isToggleInProgress = true;
+        this.TogglePauseCommand.RaiseCanExecuteChanged();
+        this.RaisePropertyChanged(nameof(this.CanTogglePause));
+        try
+        {
+            await service.SetPausedAsync(this.hostEntityId, !this.IsPaused, cancellationToken).ConfigureAwait(true);
+        }
+        finally
+        {
+            this.isToggleInProgress = false;
+            this.TogglePauseCommand.RaiseCanExecuteChanged();
+            this.RaisePropertyChanged(nameof(this.CanTogglePause));
+        }
+    }
+
+    private void OnPauseStateChanged(object? sender, EventArgs e) => this.dispatch(() =>
+    {
+        this.RaisePropertyChanged(nameof(this.IsPaused));
+        this.RaisePropertyChanged(nameof(this.PauseButtonText));
+    });
 
     public bool IsLoading
     {

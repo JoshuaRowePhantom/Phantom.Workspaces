@@ -67,8 +67,8 @@
 
                 <Button Grid.Column="3"
                         Classes="settings-gear"
-                        Content="⏱"
-                        ToolTip.Tip="Scheduled tasks"
+                        Content="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
+                        ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
                         Click="OnOpenScheduledTasksClicked" />
 
                 <Button Grid.Column="4"

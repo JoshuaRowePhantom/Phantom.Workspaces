@@ -55,6 +55,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private bool showHiddenItems;
     private readonly WorkspaceDockFactory dockFactory;
     private IRootDock? layout;
+    private ScheduledTools.ScheduledToolHost? scheduledToolHost;
+    private ScheduledTools.ScheduledToolPauseStateService? scheduledToolPauseStateService;
+    private ScheduledTools.ScheduledToolRunner? scheduledToolRunner;
+    private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -225,11 +229,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
     /// <summary>
+    /// Reflects the persisted scheduled-tools pause state on the clock / scheduled-tools button, and
+    /// toggles it. Null until <see cref="InitializeAsync"/> has composed the scheduled-tools runtime.
+    /// </summary>
+    public ScheduledToolsPauseIndicatorViewModel? ScheduledToolsPause
+    {
+        get => this.scheduledToolsPause;
+        private set => this.SetProperty(ref this.scheduledToolsPause, value);
+    }
+
+    /// <summary>
     /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
     /// results tree), or returns null if the workspace has not finished initializing.
     /// </summary>
     internal ScheduledTasksViewModel? TryCreateScheduledTasksViewModel()
-        => this.entityBroker is { } broker ? new ScheduledTasksViewModel(broker) : null;
+        => this.entityBroker is { } broker
+            ? new ScheduledTasksViewModel(broker, this.scheduledToolPauseStateService, this.HostProfileEntityId)
+            : null;
+
+    private EntityId HostProfileEntityId =>
+        this.entityBroker?.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
+        ?? default;
 
     public async Task InitializeAsync()
     {
@@ -253,6 +273,80 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.OpenStartupWorkspaceAsync();
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
+        await this.InitializeScheduledToolsAsync();
+    }
+
+    /// <summary>
+    /// Composes the scheduled-tools runtime for the current <c>user-computer-profile</c> host: builds
+    /// the registry of built-in scheduled tools, the host, the persisted pause-state service (which
+    /// also surfaces the pause indicator), and starts the periodic runner. The runner stops on
+    /// <see cref="DisposeAsync"/>. (See <c>docs/design/scheduled-tools.md</c>.)
+    /// </summary>
+    private async Task InitializeScheduledToolsAsync()
+    {
+        if (this.entityBroker is not { } broker)
+        {
+            return;
+        }
+
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var hostEntityId = this.HostProfileEntityId;
+        var hostNameComponents = await this.ResolveHostNameComponentsAsync(hostEntityId);
+
+        var registry = new ScheduledTools.ScheduledToolRegistry(
+        [
+            new Tools.VectorIndexerTool(),
+            new Tools.GitWorkspaceScanTool(),
+            new Tools.CopilotSessionDiscoveryTool(),
+        ]);
+        this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(dataAccessLayer, registry);
+        this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(
+            dataAccessLayer,
+            this.scheduledToolHost);
+        await this.scheduledToolPauseStateService.RefreshAsync(hostEntityId);
+        this.ScheduledToolsPause = new ScheduledToolsPauseIndicatorViewModel(
+            this.scheduledToolPauseStateService,
+            hostEntityId,
+            action => Dispatcher.UIThread.Post(action));
+
+        this.scheduledToolRunner = ScheduledTools.ScheduledToolRunner.Create(
+            this.scheduledToolHost,
+            hostEntityId,
+            hostNameComponents,
+            pollInterval: TimeSpan.FromMinutes(1));
+        this.scheduledToolRunner.Start();
+    }
+
+    private async Task<IReadOnlyList<string>> ResolveHostNameComponentsAsync(EntityId hostEntityId)
+    {
+        if (this.entityBroker is not { } broker)
+        {
+            return [];
+        }
+
+        var getResult = await broker.EntityRepository.DataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = hostEntityId }],
+                Timestamps = [null],
+            });
+        var snapshot = getResult.Batches
+            .SelectMany(batch => batch.Entities)
+            .FirstOrDefault(entity => entity.EntityId == hostEntityId);
+        if (snapshot?.Data is { } data
+            && data.TryGetProperty("names", out var names)
+            && names.ValueKind == JsonValueKind.Array
+            && names.GetArrayLength() > 0
+            && names[0].ValueKind == JsonValueKind.Array)
+        {
+            return names[0]
+                .EnumerateArray()
+                .Where(component => component.ValueKind == JsonValueKind.String)
+                .Select(component => component.GetString()!)
+                .ToArray();
+        }
+
+        return [];
     }
 
     private async Task InitializeWebHostAsync()
@@ -2127,6 +2221,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public async ValueTask DisposeAsync()
     {
+        if (this.scheduledToolRunner is not null)
+        {
+            await this.scheduledToolRunner.DisposeAsync();
+        }
+
+        this.scheduledToolsPause?.Dispose();
+
         if (this.devTunnelHostService is not null)
         {
             await this.devTunnelHostService.DisposeAsync();
