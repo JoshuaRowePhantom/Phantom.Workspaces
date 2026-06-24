@@ -25,6 +25,14 @@
       "type": "string",
       "format": "uuid",
       "description": "Entity ID of the user-computer-profile hosting this agent session."
+    },
+    "agent-definition-reference": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      },
+      "description": "Entity-name reference to the agent-definition this session runs, used to reconstruct the definition when the session is resumed."
     }
   },
   "required": [
