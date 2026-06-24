@@ -30,6 +30,40 @@ public sealed class SchemaAccessorTests
     }
 
     [Fact]
+    public async Task ResolveSchemaByReferenceAsync_IsSafeUnderConcurrentAccess()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        // Prime the loaded-schema caches once so every worker reaches the
+        // per-reference cache read/write path that previously corrupted the
+        // non-thread-safe Dictionary (InvalidOperationException at TryGetValue).
+        _ = await schemaAccessor.ResolveSchemaByReferenceAsync("priming-reference");
+
+        const int workerCount = 32;
+        const int iterationsPerWorker = 200;
+        using var startBarrier = new Barrier(workerCount);
+
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(workerIndex => Task.Run(async () =>
+            {
+                // Release all workers simultaneously to maximise contention,
+                // without relying on timing-based delays.
+                startBarrier.SignalAndWait();
+                for (var iteration = 0; iteration < iterationsPerWorker; iteration++)
+                {
+                    // Distinct references always miss the cache, forcing a write
+                    // on every call so concurrent writers collide.
+                    _ = await schemaAccessor.ResolveSchemaByReferenceAsync(
+                        $"missing-schema-{workerIndex}-{iteration}");
+                }
+            }))
+            .ToArray();
+
+        await Task.WhenAll(workers);
+    }
+
+    [Fact]
     public async Task BuildSchemaRegistryAsync_ReturnsCachedRegistryInstance()
     {
         var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Json.Schema;
 using Phantom.Workspaces.Data.Serialization;
@@ -8,7 +9,9 @@ public sealed class SchemaAccessor : ISchemaAccessor
 {
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Dictionary<string, JsonElement> requestSchemasByName;
-    private readonly Dictionary<string, JsonElement?> schemasByReference = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, JsonElement?> schemasByReference = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim loadGate = new(1, 1);
+    private readonly SemaphoreSlim registryGate = new(1, 1);
     private Dictionary<string, JsonElement>? schemaEntitiesByName;
     private Dictionary<string, JsonElement>? schemaEntitiesById;
     private SchemaRegistry? schemaRegistry;
@@ -70,53 +73,66 @@ public sealed class SchemaAccessor : ISchemaAccessor
         }
 
         await this.EnsureSchemasLoadedAsync(cancellationToken).ConfigureAwait(false);
-        var schemaRegistry = new SchemaRegistry();
-        var requestSchemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var schemaEntity in this.requestSchemasByName.Values)
+        await this.registryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (!TryGetSchemaPayloadId(schemaEntity, out var schemaId)
-                || !Uri.TryCreate(schemaId, UriKind.Absolute, out _))
+            if (this.schemaRegistry is not null)
             {
-                continue;
+                return this.schemaRegistry;
             }
 
-            requestSchemasById[schemaId] = schemaEntity;
-        }
-
-        foreach (var pair in requestSchemasById)
-        {
-            if (!Uri.TryCreate(pair.Key, UriKind.Absolute, out var schemaUri))
+            var schemaRegistry = new SchemaRegistry();
+            var requestSchemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var schemaEntity in this.requestSchemasByName.Values)
             {
-                continue;
-            }
-
-            _ = JsonSchema.FromText(
-                GetSchemaText(pair.Value),
-                new BuildOptions
+                if (!TryGetSchemaPayloadId(schemaEntity, out var schemaId)
+                    || !Uri.TryCreate(schemaId, UriKind.Absolute, out _))
                 {
-                    SchemaRegistry = schemaRegistry,
-                },
-                schemaUri);
-        }
+                    continue;
+                }
 
-        foreach (var pair in this.schemaEntitiesById!)
-        {
-            if (requestSchemasById.ContainsKey(pair.Key))
-            {
-                continue;
+                requestSchemasById[schemaId] = schemaEntity;
             }
 
-            _ = JsonSchema.FromText(
-                GetSchemaText(pair.Value),
-                new BuildOptions
+            foreach (var pair in requestSchemasById)
+            {
+                if (!Uri.TryCreate(pair.Key, UriKind.Absolute, out var schemaUri))
                 {
-                    SchemaRegistry = schemaRegistry,
-                },
-                new Uri(pair.Key, UriKind.Absolute));
-        }
+                    continue;
+                }
 
-        this.schemaRegistry = schemaRegistry;
-        return schemaRegistry;
+                _ = JsonSchema.FromText(
+                    GetSchemaText(pair.Value),
+                    new BuildOptions
+                    {
+                        SchemaRegistry = schemaRegistry,
+                    },
+                    schemaUri);
+            }
+
+            foreach (var pair in this.schemaEntitiesById!)
+            {
+                if (requestSchemasById.ContainsKey(pair.Key))
+                {
+                    continue;
+                }
+
+                _ = JsonSchema.FromText(
+                    GetSchemaText(pair.Value),
+                    new BuildOptions
+                    {
+                        SchemaRegistry = schemaRegistry,
+                    },
+                    new Uri(pair.Key, UriKind.Absolute));
+            }
+
+            this.schemaRegistry = schemaRegistry;
+            return schemaRegistry;
+        }
+        finally
+        {
+            this.registryGate.Release();
+        }
     }
 
     private async Task EnsureSchemasLoadedAsync(
@@ -127,37 +143,50 @@ public sealed class SchemaAccessor : ISchemaAccessor
             return;
         }
 
-        var schemasByName = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        var schemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        await this.loadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (this.schemaEntitiesByName is not null && this.schemaEntitiesById is not null)
+            {
+                return;
+            }
+
+            var schemasByName = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            var schemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
 #pragma warning disable CS0618
-        var exportResult = await this.dataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
+            var exportResult = await this.dataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
 #pragma warning restore CS0618
 
-        foreach (var entityData in exportResult.ChangeBatches
-                     .SelectMany(static batch => batch.Entities)
-                     .Select(static entity => entity.Data)
-                     .Where(static data => data is { ValueKind: JsonValueKind.Object })
-                     .Select(static data => data!.Value))
-        {
-            if (!IsSchemaEntity(entityData))
+            foreach (var entityData in exportResult.ChangeBatches
+                         .SelectMany(static batch => batch.Entities)
+                         .Select(static entity => entity.Data)
+                         .Where(static data => data is { ValueKind: JsonValueKind.Object })
+                         .Select(static data => data!.Value))
             {
-                continue;
+                if (!IsSchemaEntity(entityData))
+                {
+                    continue;
+                }
+
+                foreach (var name in GetEntityNames(entityData))
+                {
+                    schemasByName[name] = entityData;
+                }
+
+                if (TryGetSchemaPayloadId(entityData, out var schemaId)
+                    && Uri.TryCreate(schemaId, UriKind.Absolute, out _))
+                {
+                    schemasById[schemaId] = entityData;
+                }
             }
 
-            foreach (var name in GetEntityNames(entityData))
-            {
-                schemasByName[name] = entityData;
-            }
-
-            if (TryGetSchemaPayloadId(entityData, out var schemaId)
-                && Uri.TryCreate(schemaId, UriKind.Absolute, out _))
-            {
-                schemasById[schemaId] = entityData;
-            }
+            this.schemaEntitiesByName = schemasByName;
+            this.schemaEntitiesById = schemasById;
         }
-
-        this.schemaEntitiesByName = schemasByName;
-        this.schemaEntitiesById = schemasById;
+        finally
+        {
+            this.loadGate.Release();
+        }
     }
 
     private Dictionary<string, JsonElement> GetSchemasFromRequest(
