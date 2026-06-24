@@ -516,6 +516,46 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task StreamingUsageContent_AccumulatesTokenTotalsAndRaisesUsageChanged()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new TextContent("usage "),
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 1000,
+                OutputTokenCount = 25,
+            }),
+        ]));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new TextContent("tracked"),
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 234,
+                OutputTokenCount = 31,
+            }),
+        ])
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = CreateChat(client);
+        var usageChangedCount = 0;
+        chat.UsageChanged += (_, _) => usageChangedCount++;
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2,
+            "streaming usage response to complete");
+
+        Assert.Equal(1234, chat.TotalInputTokenCount);
+        Assert.Equal(56, chat.TotalOutputTokenCount);
+        Assert.Equal(2, usageChangedCount);
+    }
+
+    [Fact]
     public async Task StreamingInProgress_UsesRunningItemBeforeCompletion()
     {
         var client = new DeterministicTestChatClient();

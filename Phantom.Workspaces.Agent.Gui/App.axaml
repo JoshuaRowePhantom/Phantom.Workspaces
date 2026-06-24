@@ -6,5 +6,6 @@
         <FluentTheme />
         <StyleInclude Source="avares://Avalonia.Controls.RichTextEditor/Themes/Default.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
     </Application.Styles>
 </Application>

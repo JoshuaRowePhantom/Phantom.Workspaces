@@ -29,6 +29,31 @@
     <UserControl.DataTemplates>
         <DataTemplate DataType="vm:AgentChatConversationDetailViewModel">
             <DockPanel>
+                <Border DockPanel.Dock="Bottom"
+                        Classes="agent-chat-status-line"
+                        IsVisible="{Binding StatusLine.HasVisibleContent}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Classes="agent-chat-status-line-brain"
+                                   FontFamily="Segoe UI Emoji"
+                                   Text="🧠"
+                                   IsVisible="{Binding StatusLine.IsThinking}"/>
+                        <TextBlock Classes="agent-chat-status-line-value"
+                                   Text="{Binding StatusLine.ModelDisplay}"
+                                   IsVisible="{Binding StatusLine.HasModel}"/>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   IsVisible="{Binding StatusLine.HasProvider}"/>
+                        <TextBlock Classes="agent-chat-status-line-label"
+                                   Text="{Binding StatusLine.ProviderDisplay}"
+                                   IsVisible="{Binding StatusLine.HasProvider}"/>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   IsVisible="{Binding StatusLine.HasTokens}"/>
+                        <TextBlock Classes="agent-chat-status-line-label"
+                                   Text="{Binding StatusLine.TokensDisplay}"
+                                   IsVisible="{Binding StatusLine.HasTokens}"/>
+                    </StackPanel>
+                </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"/>
                 <controls:AgentChatOutputControl DataContext="{Binding Agent}"

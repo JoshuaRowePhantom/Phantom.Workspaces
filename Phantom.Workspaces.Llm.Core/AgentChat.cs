@@ -204,6 +204,8 @@ public sealed class AgentChat : IAsyncDisposable
 
     public event EventHandler? ToolsChanged;
 
+    public event EventHandler? UsageChanged;
+
     /// <summary>Completed conversation turns, in order.</summary>
     public AgentChatHistoryCollection History => this.history;
 
@@ -234,6 +236,10 @@ public sealed class AgentChat : IAsyncDisposable
     public string AgentSessionId => this.agentSessionId;
 
     public AgentDefinition? AgentDefinition => this.agentDefinition;
+
+    public long? TotalInputTokenCount { get; private set; }
+
+    public long? TotalOutputTokenCount { get; private set; }
 
     public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
 
@@ -711,6 +717,7 @@ public sealed class AgentChat : IAsyncDisposable
                             break;
                         }
 
+                        this.AccumulateUsage(providerEnumerator.Current);
                         partialResponses.Notify(providerEnumerator.Current);
                     }
 
@@ -834,6 +841,48 @@ public sealed class AgentChat : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private void AccumulateUsage(AgentResponseUpdate update)
+    {
+        var inputTokenCountToAdd = 0L;
+        var outputTokenCountToAdd = 0L;
+        var hasInputTokenCount = false;
+        var hasOutputTokenCount = false;
+
+        foreach (var usageContent in update.Contents.OfType<UsageContent>())
+        {
+            if (usageContent.Details.InputTokenCount is long inputTokenCount)
+            {
+                inputTokenCountToAdd += inputTokenCount;
+                hasInputTokenCount = true;
+            }
+
+            if (usageContent.Details.OutputTokenCount is long outputTokenCount)
+            {
+                outputTokenCountToAdd += outputTokenCount;
+                hasOutputTokenCount = true;
+            }
+        }
+
+        var previousInputTokenCount = this.TotalInputTokenCount;
+        var previousOutputTokenCount = this.TotalOutputTokenCount;
+
+        if (hasInputTokenCount)
+        {
+            this.TotalInputTokenCount = (this.TotalInputTokenCount ?? 0L) + inputTokenCountToAdd;
+        }
+
+        if (hasOutputTokenCount)
+        {
+            this.TotalOutputTokenCount = (this.TotalOutputTokenCount ?? 0L) + outputTokenCountToAdd;
+        }
+
+        if (this.TotalInputTokenCount != previousInputTokenCount
+            || this.TotalOutputTokenCount != previousOutputTokenCount)
+        {
+            this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
