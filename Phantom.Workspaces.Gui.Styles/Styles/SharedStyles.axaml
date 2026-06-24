@@ -588,11 +588,13 @@
     </Style>
     <Style Selector="Control.workspace-markdown-viewer">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-viewer /template/ ScrollViewer">
+        <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
     <Style Selector="Control.workspace-markdown-editor">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="MinHeight" Value="120" />
     </Style>
     <Style Selector="Control.workspace-json-schema-viewer">
         <Setter Property="MinHeight" Value="180" />
