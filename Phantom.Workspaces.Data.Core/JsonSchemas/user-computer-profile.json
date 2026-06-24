@@ -59,6 +59,10 @@
     "home-directory": {
       "type": "string",
       "description": "Home directory path for this user on this computer"
+    },
+    "scheduled-tools-paused": {
+      "type": "boolean",
+      "description": "When true, the scheduled tools host on this profile starts no new runs and stops in-flight runs (persisted Stop all / Pause state)."
     }
   },
   "required": [

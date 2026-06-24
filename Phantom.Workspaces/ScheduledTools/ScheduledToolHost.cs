@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
@@ -23,6 +25,7 @@ public sealed class ScheduledToolHost
     private readonly TimeProvider timeProvider;
     private readonly HashSet<EntityId> runningRelationships = new();
     private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
+    private readonly Dictionary<EntityId, CancellationTokenSource> runningCancellations = new();
     private readonly object runningLock = new();
 
     public ScheduledToolHost(
@@ -61,11 +64,24 @@ public sealed class ScheduledToolHost
         ArgumentNullException.ThrowIfNull(hostNameComponents);
 
         var now = this.timeProvider.GetUtcNow();
+
+        // The persisted host pause/stop-all state gates every run on this host.
+        if (await this.IsHostPausedAsync(hostEntityId, cancellationToken).ConfigureAwait(false))
+        {
+            return 0;
+        }
+
         var relationships = await this.DiscoverToolRelationshipsForHostAsync(hostEntityId, cancellationToken).ConfigureAwait(false);
 
         var ranCount = 0;
         foreach (var relationship in relationships)
         {
+            // A relationship that is individually paused is skipped even when its schedule is due.
+            if (relationship.Paused)
+            {
+                continue;
+            }
+
             // Do not start a relationship that is already running.
             lock (this.runningLock)
             {
@@ -77,10 +93,13 @@ public sealed class ScheduledToolHost
 
             try
             {
-                if (!await this.IsDueAsync(relationship, hostNameComponents, now, cancellationToken).ConfigureAwait(false))
+                if (!await this.IsDueAsync(relationship, now, cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
+
+                // Mark the start before launching so the next evaluation sees the new last-started.
+                await this.UpdateLastStartedAsync(relationship.RelationshipId, now, cancellationToken).ConfigureAwait(false);
 
                 if (await this.RunToolAsync(relationship, hostEntityId, hostNameComponents, cancellationToken).ConfigureAwait(false))
                 {
@@ -97,6 +116,24 @@ public sealed class ScheduledToolHost
         }
 
         return ranCount;
+    }
+
+    /// <summary>
+    /// Requests cancellation of every scheduled tool execution currently running on this host.
+    /// New runs remain blocked while the persisted <c>scheduled-tools-paused</c> flag is set.
+    /// </summary>
+    public void StopAllRunningExecutions()
+    {
+        CancellationTokenSource[] sources;
+        lock (this.runningLock)
+        {
+            sources = this.runningCancellations.Values.ToArray();
+        }
+
+        foreach (var source in sources)
+        {
+            source.Cancel();
+        }
     }
 
     private async Task<IReadOnlyList<ToolRelationship>> DiscoverToolRelationshipsForHostAsync(
@@ -137,13 +174,9 @@ public sealed class ScheduledToolHost
 
     private async Task<bool> IsDueAsync(
         ToolRelationship relationship,
-        IReadOnlyList<string> hostNameComponents,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var toolName = await this.ResolveToolNameAsync(relationship.ToolEntityId, cancellationToken).ConfigureAwait(false);
-        var lastExecution = await this.FindLastExecutionTimeAsync(hostNameComponents, toolName, cancellationToken).ConfigureAwait(false);
-
         foreach (var scheduleEntityId in relationship.ScheduleEntityIds)
         {
             var scheduleData = (await this.ReadEntitySnapshotAsync(scheduleEntityId, cancellationToken).ConfigureAwait(false))?.Data;
@@ -162,13 +195,51 @@ public sealed class ScheduledToolHost
                 continue;
             }
 
-            if (ScheduleEvaluator.IsDue(schedule, lastExecution, now))
+            if (ScheduleEvaluator.IsDue(schedule, relationship.LastStarted, now))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private async Task<bool> IsHostPausedAsync(EntityId hostEntityId, CancellationToken cancellationToken)
+    {
+        var data = (await this.ReadEntitySnapshotAsync(hostEntityId, cancellationToken).ConfigureAwait(false))?.Data;
+        return data is { } hostData
+            && hostData.TryGetProperty("scheduled-tools-paused", out var pausedElement)
+            && pausedElement.ValueKind == JsonValueKind.True;
+    }
+
+    private async Task UpdateLastStartedAsync(EntityId relationshipId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var snapshot = await this.ReadEntitySnapshotAsync(relationshipId, cancellationToken).ConfigureAwait(false);
+        if (snapshot?.Data is not { } data)
+        {
+            return;
+        }
+
+        var node = JsonNode.Parse(data.GetRawText())!.AsObject();
+        node["last-started"] = now.ToString("o", CultureInfo.InvariantCulture);
+        var updated = JsonSerializer.SerializeToElement(node);
+
+        await this.dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "scheduled-tools: mark last-started" } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = relationshipId,
+                        ConcurrencyTag = snapshot.ConcurrencyTag,
+                        Data = updated,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> RunToolAsync(
@@ -188,14 +259,16 @@ public sealed class ScheduledToolHost
             return false;
         }
 
-        var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, cancellationToken).ConfigureAwait(false);
+        var executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, executionCancellation.Token).ConfigureAwait(false);
         if (executionContext is null)
         {
+            executionCancellation.Dispose();
             return false;
         }
 
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
-        this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents);
+        this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents, executionCancellation);
         try
         {
             await tool.ExecuteAsync(executionContext).ConfigureAwait(false);
@@ -214,7 +287,11 @@ public sealed class ScheduledToolHost
         }
     }
 
-    private void AddRunningExecution(EntityId relationshipId, string toolType, IReadOnlyList<string> hostNameComponents)
+    private void AddRunningExecution(
+        EntityId relationshipId,
+        string toolType,
+        IReadOnlyList<string> hostNameComponents,
+        CancellationTokenSource executionCancellation)
     {
         lock (this.runningLock)
         {
@@ -223,6 +300,7 @@ public sealed class ScheduledToolHost
                 toolType,
                 hostNameComponents,
                 this.timeProvider.GetUtcNow());
+            this.runningCancellations[relationshipId] = executionCancellation;
         }
 
         this.RunningExecutionsChanged?.Invoke(this, EventArgs.Empty);
@@ -231,69 +309,19 @@ public sealed class ScheduledToolHost
     private void RemoveRunningExecution(EntityId relationshipId)
     {
         bool removed;
+        CancellationTokenSource? executionCancellation;
         lock (this.runningLock)
         {
             removed = this.runningExecutions.Remove(relationshipId);
+            this.runningCancellations.Remove(relationshipId, out executionCancellation);
         }
+
+        executionCancellation?.Dispose();
 
         if (removed)
         {
             this.RunningExecutionsChanged?.Invoke(this, EventArgs.Empty);
         }
-    }
-
-    private async Task<string> ResolveToolNameAsync(EntityId toolEntityId, CancellationToken cancellationToken)
-    {
-        var data = (await this.ReadEntitySnapshotAsync(toolEntityId, cancellationToken).ConfigureAwait(false))?.Data;
-        return data is { } toolData && TryReadToolType(toolData, out var toolType) ? toolType : "tool";
-    }
-
-    private async Task<DateTimeOffset?> FindLastExecutionTimeAsync(
-        IReadOnlyList<string> hostNameComponents,
-        string toolName,
-        CancellationToken cancellationToken)
-    {
-        var prefix = hostNameComponents
-            .Append(ToolExecutionResultWriter.ToolExecutionsSegment)
-            .Append(toolName)
-            .ToArray();
-
-        var queryResult = await this.dataAccessLayer.QueryAsync(
-            new QueryRequest
-            {
-                Clauses =
-                [
-                    new TopLevelQueryClause
-                    {
-                        ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
-                        Clause = new EntityTypeQueryClause
-                        {
-                            EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
-                        },
-                    },
-                ],
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        DateTimeOffset? latest = null;
-        foreach (var snapshot in queryResult.Batches.SelectMany(batch => batch.Entities))
-        {
-            if (snapshot.Data is not { } data
-                || !HasNamePrefix(data, prefix)
-                || !data.TryGetProperty("start-time", out var startTimeElement)
-                || startTimeElement.ValueKind != JsonValueKind.String
-                || !DateTimeOffset.TryParse(startTimeElement.GetString(), out var startTime))
-            {
-                continue;
-            }
-
-            if (latest is null || startTime > latest.Value)
-            {
-                latest = startTime;
-            }
-        }
-
-        return latest;
     }
 
     private async Task<WorkspaceToolExecutionContext?> CreateExecutionContextAsync(
@@ -386,31 +414,6 @@ public sealed class ScheduledToolHost
             .FirstOrDefault(snapshot => snapshot.EntityId == entityId);
     }
 
-    private static bool HasNamePrefix(JsonElement entity, IReadOnlyList<string> prefix)
-    {
-        if (!entity.TryGetProperty("names", out var names) || names.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
-
-        foreach (var name in names.EnumerateArray())
-        {
-            if (name.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            var components = name.EnumerateArray().Select(component => component.GetString()).ToArray();
-            if (components.Length >= prefix.Count
-                && prefix.Select((segment, index) => string.Equals(segment, components[index], StringComparison.Ordinal)).All(matched => matched))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static bool TryReadToolType(JsonElement toolEntity, out string toolType)
     {
         toolType = string.Empty;
@@ -442,7 +445,17 @@ public sealed class ScheduledToolHost
             return false;
         }
 
-        relationship = new ToolRelationship(relationshipId, toolEntityId, scheduleEntityIds, targetEntityIds);
+        var paused = data.TryGetProperty("paused", out var pausedElement)
+            && pausedElement.ValueKind == JsonValueKind.True;
+        DateTimeOffset? lastStarted = null;
+        if (data.TryGetProperty("last-started", out var lastStartedElement)
+            && lastStartedElement.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(lastStartedElement.GetString(), out var parsedLastStarted))
+        {
+            lastStarted = parsedLastStarted;
+        }
+
+        relationship = new ToolRelationship(relationshipId, toolEntityId, scheduleEntityIds, targetEntityIds, paused, lastStarted);
         return true;
     }
 
@@ -523,7 +536,9 @@ public sealed class ScheduledToolHost
         EntityId RelationshipId,
         EntityId ToolEntityId,
         IReadOnlyList<EntityId> ScheduleEntityIds,
-        IReadOnlyList<EntityId> TargetEntityIds);
+        IReadOnlyList<EntityId> TargetEntityIds,
+        bool Paused,
+        DateTimeOffset? LastStarted);
 }
 
 /// <summary>A scheduled tool that is currently running on a host.</summary>
