@@ -1,0 +1,15 @@
+# Default owner for everything in the repository.
+*                       @JoshuaRowePhantom
+
+# Design documents.
+/docs/design/           @JoshuaRowePhantom
+
+# CI/CD workflows, composite actions, and release skills.
+/.github/workflows/     @JoshuaRowePhantom
+/.github/actions/       @JoshuaRowePhantom
+/.github/skills/        @JoshuaRowePhantom
+
+# Packaging and install scripts.
+/packaging/             @JoshuaRowePhantom
+/install.ps1            @JoshuaRowePhantom
+/scripts/               @JoshuaRowePhantom
