@@ -246,30 +246,78 @@ being dequeued even after the run completes. If any code places the default queu
 `Held` state during a Copilot run, steering text is silently retained but never forwarded,
 even across multiple turns, until the held state is cleared.
 
-**Options for mid-turn steering:**
+**SDK support: `MessageOptions.Mode`**
 
-The Copilot SDK does not expose an API to inject additional text into a session while
-`SendAsync` is pending. The two viable approaches are:
+The Copilot SDK `MessageOptions` has a `Mode` string property that accepts two values:
 
-**Option A — Interrupt-and-resubmit (recommended):**
-Monitor the input queue for new immediate-queue or default-queue items while a Copilot run
-is active. When new text arrives:
-1. Call `AgentChat.Interrupt()` to cancel the current run (which now correctly calls
-   `session.AbortAsync` per Issue 1's fix).
-2. Accumulate the steering text alongside whatever partial context is available.
-3. Re-submit a combined message (original prompt + steering note) as a new turn.
+- `"enqueue"` — the default; the message is queued and processed in order.
+- `"immediate"` — the message is injected into the live session without waiting for the
+  current agentic loop to finish. The CLI treats it as steering input: the model receives
+  the new text in-context while still processing the previous turn.
 
-`RunProcessLoopAsync` would need a second `Task.WhenAny` arm that watches for new
-immediate-queue items alongside `WasCanceledBeforeCompletingAsync`. When that arm fires,
-the loop performs the interrupt-and-resubmit. The `WasCanceledBeforeCompletingAsync`
-helper already races the run against a cancellation signal; a queue-wakeup signal can be
-added in parallel.
+This is exactly the in-band steering mechanism needed. The problem is not missing SDK
+support — it is that `CopilotSdkChatClient` holds `turnLock` for the entire duration of
+`GetStreamingResponseAsync`, blocking any concurrent `SendAsync` call, including a
+steering call with `Mode = "immediate"`.
 
-**Option B — Session-level injection (future SDK capability):**
-If the Copilot SDK adds a `SendAdditionalInputAsync` or `SteerAsync` API in a future
-release, `CopilotSdkChatClient` could forward queued steering text to the live session
-without interrupting the current run. This requires no change to `AgentChat`. Track as a
-future enhancement once the SDK supports it.
+**Proposed fix:**
+
+Add a steering path to `CopilotSdkChatClient` that bypasses `turnLock`:
+
+```csharp
+/// <summary>
+/// Sends a steering message to the active Copilot session using
+/// <c>MessageOptions.Mode = "immediate"</c>. Safe to call while
+/// <see cref="GetStreamingResponseAsync"/> is in progress; the steering
+/// text arrives in-context in the ongoing streaming response.
+/// Does nothing if no session is currently active.
+/// </summary>
+public async Task SteerAsync(string text, CancellationToken cancellationToken = default)
+{
+    var session = this.copilotSession;
+    if (session is null || string.IsNullOrWhiteSpace(text))
+    {
+        return;
+    }
+
+    await session.SendAsync(
+        new MessageOptions { Prompt = text, Mode = "immediate" },
+        cancellationToken).ConfigureAwait(false);
+}
+```
+
+No lock is needed: `session.SendAsync` with `Mode = "immediate"` is designed to be called
+concurrently with an in-progress turn.
+
+Expose this capability through a new interface so `AgentChat` can call it without a
+compile-time dependency on `CopilotSdkChatClient`:
+
+```csharp
+public interface ISteerableChatClient
+{
+    Task SteerAsync(string text, CancellationToken cancellationToken = default);
+}
+```
+
+`CopilotSdkChatClient` implements `ISteerableChatClient`. Other providers do not.
+
+**`AgentChat` changes:**
+
+In `RunProcessLoopAsync`, after starting a Copilot run, poll the input queue for new
+items concurrently with the provider stream. When an item arrives while the run is
+active and the active client implements `ISteerableChatClient`:
+
+1. Dequeue the item.
+2. Call `steerableClient.SteerAsync(item.Text)`.
+3. Do **not** add the item to history separately — the steered text will appear in the
+   session's event stream as a `UserMessageEvent` and flow through the existing
+   `PartialResponseConflator` path.
+4. If the client does **not** implement `ISteerableChatClient` (non-Copilot providers),
+   leave the item in the queue; it will be dequeued normally when the current run ends.
+
+This is analogous to the existing `WasCanceledBeforeCompletingAsync` racing pattern: add
+a second `Task.WhenAny` arm that watches the `queueStateSignal` semaphore alongside the
+provider read.
 
 **Held-queue fix:**
 Any code that sets the default `AgentChatQueue` to `Held` during a Copilot run should
@@ -285,7 +333,7 @@ next turn.
 | --- | --- | --- |
 | Ctrl+Break doesn't stop CLI | `session.AbortAsync` never called on cancellation | Call `AbortAsync` + invalidate session in `CopilotSdkChatClient` `finally`/cancel path |
 | Stale session reused after interrupt | `copilotSession` not nulled on interrupt | Null `copilotSession` + `currentSessionSignature` when aborting (same fix as above) |
-| Steering text not delivered mid-turn | Serial `AgentChat` loop; no SDK mid-turn injection | Option A: interrupt-and-resubmit when immediate/default-queue item arrives during run |
+| Steering text not delivered mid-turn | `turnLock` blocks concurrent `SendAsync`; `AgentChat` loop is serial | Add `ISteerableChatClient.SteerAsync` that bypasses `turnLock`; use `Mode = "immediate"` SDK feature; `AgentChat` polls queue concurrently with active run |
 | Held queue blocks steering post-turn | Held state not cleared on turn completion | Auto-clear held state when Copilot run ends, or avoid holding the default queue |
 
 
