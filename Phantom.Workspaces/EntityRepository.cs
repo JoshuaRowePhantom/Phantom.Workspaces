@@ -63,6 +63,10 @@ public sealed class EntityRepository
     public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
         CancellationToken cancellationToken = default)
     {
+        // This is the repository's "load the whole store" primitive: it returns the
+        // latest snapshot of every entity so the GUI can present all entities and
+        // callers can look any of them up by name. There is no bounded key set to
+        // get or query for, so exporting the full store is the correct mechanism.
         var exportResult = await this.DataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
         return exportResult.ChangeBatches
             .SelectMany(static batch => batch.Entities)

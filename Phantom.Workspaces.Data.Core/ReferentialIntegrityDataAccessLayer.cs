@@ -710,6 +710,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     private async Task<Dictionary<EntityId, QueryEntitySnapshot>> GetLatestSnapshotsByIdAsync(
         CancellationToken cancellationToken)
     {
+        // Folder-prefix maintenance and folder-delete validation both reason over
+        // the entire store: they compute the required folder hierarchy from every
+        // named entity and check whether a folder being deleted still has any
+        // descendant anywhere. There is no bounded key set to get or query for, so
+        // a full enumeration is the correct mechanism here.
         var latestById = new Dictionary<EntityId, QueryEntitySnapshot>();
 #pragma warning disable CS0618
         var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
