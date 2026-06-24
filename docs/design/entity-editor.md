@@ -60,6 +60,8 @@ This document also covers two supporting data-model changes:
 7. **Editable fields.** Every field editor in the list is editable in edit mode (text
    boxes, locale editors, MIME editors, nested object/array editors), reusing the
    existing `EntityFieldEditorViewModel` hierarchy.
+   - Boolean fields are edited with a left-right toggle button control (off/on), rather
+     than a free-form text box.
 8. **Default expander state.** Expanders within the field list start **expanded** by
    default, **except** localized-content sub-entries whose locale is neither the current
    UI locale nor `default` (those collapse by default to keep non-relevant locales out of
@@ -518,6 +520,8 @@ For each field, `CreateFieldEditorAsync` resolves the editor in this order:
 - Object/array/localized expanders default to expanded.
 - A localized value whose locale is neither current UI culture nor `default` defaults to
   collapsed.
+- Boolean fields render with the left-right toggle control and emit canonical JSON boolean
+  values (`true` / `false`).
 
 ### x-field-editor
 

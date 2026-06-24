@@ -25,11 +25,16 @@ Scheduled tools reuse the existing entity / relationship model (see the entity-t
    - `schedule` — one or more `schedule` entities controlling when it runs.
    - `target` — exactly one host entity id (typically a `user-computer-profile`), not an array of
      hosts.
+   - `paused` — optional boolean (default `false`). When true, this relationship is skipped even if
+     its schedule is due.
    - `last-started` — optional RFC 3339 UTC date-time set by the host immediately before a run is
      launched; this is the due-check indicator for whether to start a new run.
 4. **`tool-execution-result` entity** — a record of a single tool run, with a start time, end
    time, the tool name, and arbitrary content. A `tool-execution-result` may have child
    `tool-execution-result` entities to log sub-tasks and progress.
+5. **Host scheduler state (persisted on the host profile entity)** — add
+   `scheduled-tools-paused: boolean` (default `false`). This is the persisted pause/stop-all state
+   controlled from the scheduled tools tab.
 
 ### Execution-result storage path
 
@@ -62,19 +67,26 @@ host, the host process is the **`Phantom.Workspaces` executable**.
 
 1. On startup (and periodically), the host queries for `tool-relationship` entities whose
    `target` equals the host entity id.
-2. For each relationship, it evaluates the bound `schedule` entities against
+2. Before due-checking, the host reads `scheduled-tools-paused` from the current host profile
+   entity; if paused, it starts no new runs.
+3. For each relationship, if `tool-relationship.paused = true`, it is skipped.
+4. For each non-paused relationship, it evaluates the bound `schedule` entities against
    `tool-relationship.last-started` to decide whether a new run is due.
-3. When a run is due, the host first updates `tool-relationship.last-started = now` (with normal
+5. When a run is due, the host first updates `tool-relationship.last-started = now` (with normal
    concurrency checks), then starts the run.
-4. Due tools are executed; each run creates a `tool-execution-result` under the host and updates
+6. Due tools are executed; each run creates a `tool-execution-result` under the host and updates
    it (or appends child results) as the run progresses.
-5. Tool execution honors the workspace **trust model**: a scheduled tool runs under the trust
+7. Tool execution honors the workspace **trust model**: a scheduled tool runs under the trust
    profile resolved for its tool/agent definition, and on the host's client instance (see
    `docs/design/trust-models.md`). Tools that drive an agent use `ITrustedExecutor` to construct
    the agent on the correct (local or remote) client instance.
-6. Tools that are currently running when their schedule evaluates shall not be started again;
+8. Tools that are currently running when their schedule evaluates shall not be started again;
    the current tool run is allowed to complete first, and the next run will start at the
    next evaluation time.
+9. The scheduled tools tab exposes a persisted **Stop all / Pause** action:
+   - sets `scheduled-tools-paused = true` on the host profile entity,
+   - requests cancellation for all currently running scheduled tool executions,
+   - keeps the scheduler paused across app restart until resumed.
 
 ## Tool progress
 
@@ -90,6 +102,14 @@ A dedicated **tool result browser** lets users inspect runs:
 2. For a selected host, present a tree rooted at `[ host..., "tool-executions" ]` and navigate by
    relationship into per-tool, per-run results and their child progress entries.
 3. Surface start/end times, status, and content for each result; refresh live as runs update.
+4. Provide a persisted **Stop all / Pause** toggle button in the scheduled tools tab:
+   - **Pause**: persist `scheduled-tools-paused = true`, stop current runs, and block new runs.
+   - **Resume**: persist `scheduled-tools-paused = false`; normal scheduling resumes on next tick.
+5. When paused, the main window clock/scheduled-tools button shows a pause icon state.
+6. Each scheduled tool relationship row exposes a persisted per-relationship pause toggle bound to
+   `tool-relationship.paused`.
+7. Boolean fields (including `scheduled-tools-paused` and `tool-relationship.paused`) are edited
+   with a left-right toggle button control in field-list editing UIs.
 
 ## Default setup note
 
@@ -165,6 +185,9 @@ resumes where the previous run stopped.
    - Concrete scheduled tools (the latter is detailed in vector-search.md).
 6. `ToolResultBrowserViewModel`
    - GUI view model enumerating hosts and navigating execution-result trees.
+7. `ScheduledToolPauseStateService` (or equivalent)
+   - Reads/writes persisted `scheduled-tools-paused` on the host profile entity and exposes current
+     pause state to the runner and UI.
 
 ## Key integration points
 
@@ -174,11 +197,15 @@ resumes where the previous run stopped.
    - Creates and starts a scheduler loop service (for example `ScheduledToolRunner`) that invokes
      `RunDueToolsAsync(currentProfileEntityId, hostNameComponents)` immediately on startup and then
      periodically.
+   - Wires a pause-state service that reads persisted `scheduled-tools-paused` and publishes state
+     changes to both scheduler runtime and UI.
    - Stops the scheduler loop when the main window/view model is disposed so no background runs
      continue after shutdown.
 2. `IDataAccessLayer`
    - Query due `tool-relationship`s; read tool/schedule/target entities; update
      `tool-relationship.last-started`; write `tool-execution-result`s.
+     - Read/write both pause flags: host `scheduled-tools-paused` and relationship
+       `tool-relationship.paused`.
 3. Trust model (`docs/design/trust-models.md`)
    - Tools (especially agent-driven ones) execute via `ITrustedExecutor` under the resolved trust
      profile and client instance.
@@ -186,6 +213,10 @@ resumes where the previous run stopped.
    - The vector indexer and entity classifier consume the `ProcessQueue` API and vector queries.
 5. GUI shell
    - Adds the tool result browser as a workspace tab / window.
+   - Binds the main-window clock/scheduled-tools button icon to scheduler state:
+     running/idle normally, pause icon when `scheduled-tools-paused` is true.
+   - Updates `tool-relationship` entity-type view to include editable `paused` (toggle) and
+     `last-started` fields for scheduled relationship inspection.
 
 ## Startup / run-loop integration points
 
@@ -200,11 +231,17 @@ The host runtime must be explicitly started by the `Phantom.Workspaces` process.
    - Use a single loop instance per opened workspace host.
    - Trigger one immediate run on startup, then repeat at a fixed poll interval.
    - Serialize invocations so the loop never overlaps its own `RunDueToolsAsync` calls.
+   - Check persisted pause state each tick and skip starting runs while paused.
+   - Support a stop-all path that cancels in-flight scheduled tool executions.
 3. Shutdown/disposal
    - Cancel and dispose the loop from `MainWindowViewModel.DisposeAsync` (or equivalent window
     teardown path).
    - Ensure cancellation is cooperative so in-flight tools can complete or stop according to their
     cancellation token handling.
+4. Scheduled tasks tab actions
+   - Pause/resume buttons update persisted pause state on the host profile entity.
+   - Pause action issues stop-all cancellation through the scheduler host/runner.
+   - Per-relationship pause/resume toggles update `tool-relationship.paused` directly.
 
 ## Test tasks
 
@@ -218,6 +255,16 @@ The host runtime must be explicitly started by the `Phantom.Workspaces` process.
 4. `EntityClassifierTool` tests — per-entity prompt assembly order; queue token advances per batch;
    no chat history recorded.
 5. Tool result browser view-model tests — enumerates hosts and builds the execution-result tree.
+6. Pause-state tests — persisted `scheduled-tools-paused` survives restart and controls due-run
+   behavior.
+7. Stop-all tests — pause command cancels running tools and prevents new starts while paused.
+8. Main-window indicator tests — clock/scheduled-tools button shows pause icon whenever paused.
+9. Per-relationship pause tests — `tool-relationship.paused = true` prevents due runs for that
+   relationship while leaving other relationships runnable.
+10. Relationship-view tests — `tool-relationship` entity-type view includes editable `paused` and
+    visible `last-started`.
+11. Boolean editor tests — boolean fields render/edit with the left-right toggle control and persist
+    true/false transitions correctly.
 
 ## Non-goals
 
