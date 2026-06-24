@@ -77,11 +77,12 @@ will be executed under.
 
 1. If `trust-profile` is a `$ref` → resolved via `ITrustProfileProvider` at session creation time.
 2. If `trust-profile` is an inline object → used directly; no entity lookup.
-3. If `trust-profile` is omitted → the subagent inherits the parent's effective trust profile
-   (same restrictions, no widening).
-4. **In all cases** the resolved subagent profile is composed with the parent's effective
-   profile using restrictive intersection (`TrustProfileComposer`). A subagent can never
-   exceed the parent's permissions.
+3. If `trust-profile` is omitted → the subagent uses the parent's effective trust profile
+   directly. No composition step; the subagent runs under exactly the same restrictions
+   as the parent.
+4. When a `trust-profile` **is** specified (inline or `$ref`), the resolved profile is
+   composed with the parent's effective profile using restrictive intersection
+   (`TrustProfileComposer`). A subagent can never exceed the parent's permissions.
 
 ### Agent manifest support
 
@@ -404,20 +405,30 @@ The trust enforcement follows the existing three-layer model from `trust-models.
    `DockerContainerTrustProfileMaterializer` enforces mounts/network/proxy at subagent
    session start. This is immutable for the session's lifetime.
 
-**No privilege escalation:** the effective subagent profile is always the restrictive
-intersection of (a) the declared subagent trust profile and (b) the parent's own
-effective trust profile. This is enforced in `AgentFactory.CreateAgentChatAsync` at
-subagent creation time, before any `AgentChat` is constructed.
+**No privilege escalation:** when a subagent specifies a trust profile, the effective
+profile is always the restrictive intersection of (a) the declared subagent trust profile
+and (b) the parent's own effective trust profile. When no trust profile is declared, the
+parent's effective profile is used directly. Either way, a subagent can never exceed the
+parent's permissions. This is enforced in `SubagentManager.CreateAsync` before any
+`AgentChat` is constructed.
 
 ```csharp
 // In SubagentManager.CreateAsync:
-var subagentRawProfile = await trustProfileProvider.ResolveAsync(
-    definition.TrustProfile, ct);
-var parentEffectiveProfile = currentSessionContext.EffectiveTrustProfile;
-var composedProfile = TrustProfileComposer.Compose(
-    parentEffectiveProfile,
-    subagentRawProfile,
-    mode: InheritanceMode.Restrictive);   // always restrictive for privilege containment
+LlmTrustProfile effectiveProfile;
+if (definition.TrustProfile is null)
+{
+    // No trust profile declared — use parent's directly.
+    effectiveProfile = parentEffectiveProfile;
+}
+else
+{
+    var subagentRawProfile = await trustProfileProvider.ResolveAsync(
+        definition.TrustProfile, ct);
+    effectiveProfile = TrustProfileComposer.Compose(
+        parentEffectiveProfile,
+        subagentRawProfile,
+        mode: InheritanceMode.Restrictive);
+}
 ```
 
 ---
