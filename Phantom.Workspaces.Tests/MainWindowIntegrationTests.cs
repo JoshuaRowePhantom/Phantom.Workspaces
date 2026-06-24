@@ -85,6 +85,45 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WhenAlreadyOpening_SecondRequestIsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "concurrent-open"]],
+              "display-name": { "default": "Concurrent Open Workspace" },
+              "regions": []
+            }
+            """);
+
+        var request = new GetEntityRequest { EntityId = workspaceId };
+
+        // The first open runs synchronously until its first await (creating the loading pane);
+        // the second open must observe the in-progress load and be a no-op so the workspace is
+        // only opened once (issue #23).
+        var firstOpen = viewModel.OpenWorkspaceAsync(request);
+        var secondOpen = viewModel.OpenWorkspaceAsync(request);
+        await Task.WhenAll(firstOpen, secondOpen);
+
+        Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
+    }
+
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());

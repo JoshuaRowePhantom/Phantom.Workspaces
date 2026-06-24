@@ -1067,8 +1067,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal async Task OpenWorkspaceAsync(
         GetEntityRequest workspaceRequest)
     {
-        var loadingWorkspacePane = this.GetOrCreateLoadingWorkspacePane(workspaceRequest);
+        var (loadingWorkspacePane, alreadyOpening) = this.GetOrCreateLoadingWorkspacePane(workspaceRequest);
         this.SelectedWorkspacePane = loadingWorkspacePane;
+
+        // If a load for this same workspace request is already in progress, ignore the
+        // duplicate open request so the workspace is only opened once (see issue #23).
+        if (alreadyOpening)
+        {
+            return;
+        }
 
         var workspaceSnapshot = await this.LoadSingleEntitySnapshotAsync(workspaceRequest);
         if (workspaceSnapshot?.Data is not JsonElement workspaceData)
@@ -1217,7 +1224,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
        }
     }
 
-    private WorkspacePaneViewModel GetOrCreateLoadingWorkspacePane(
+    private (WorkspacePaneViewModel Pane, bool AlreadyOpening) GetOrCreateLoadingWorkspacePane(
         GetEntityRequest workspaceRequest)
     {
         var paneId = $"{LoadingWorkspaceIdPrefix}{GetWorkspaceRequestKey(workspaceRequest)}";
@@ -1225,7 +1232,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             pane => string.Equals(pane.Id, paneId, StringComparison.Ordinal));
         if (existingPane is not null)
         {
-            return existingPane;
+            return (existingPane, true);
         }
 
         var placeholderPane = this.WorkspacePanes.FirstOrDefault(
@@ -1238,7 +1245,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var displayName = $"Loading {GetWorkspaceRequestDisplayText(workspaceRequest)}...";
         var loadingPane = this.CreatePlaceholderWorkspacePane(paneId, displayName, this.CloseWorkspaceCommand);
         this.WorkspacePanes.Add(loadingPane);
-        return loadingPane;
+        return (loadingPane, false);
     }
 
     internal async Task OpenEntityTabAsync(
