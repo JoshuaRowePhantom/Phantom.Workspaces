@@ -139,6 +139,36 @@ public sealed class SelectableTextBlockChatOutputModelsTests
         Assert.Contains("\"ok\": true", GetSpanText(dataSpanAfter));
     }
 
+    [AvaloniaFact]
+    public void Message_RendersDiagnosticAsCollapsibleExpander()
+    {
+        var item = new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents =
+            [
+                new TextContent("Opened toolset 'workspace-entity'. Loaded tools:\n- a\n- b"),
+            ],
+        };
+
+        var model = new ChatMessageSelectableInlineModel(item, () => false);
+
+        // Rendered as a collapsible tool-style span, collapsed by default with no body inlines.
+        var diagnosticSpan = FindToolSpan(model.Span);
+        var dataSpan = (Span)diagnosticSpan.Inlines[1];
+        Assert.Empty(dataSpan.Inlines);
+
+        var toggle = (ToggleButton)((InlineUIContainer)diagnosticSpan.Inlines[0]).Child!;
+        Assert.Contains("Opened toolset 'workspace-entity'. Loaded tools:", toggle.Content?.ToString(), StringComparison.Ordinal);
+
+        // Expanding reveals the remaining lines (everything after the header line).
+        toggle.IsChecked = true;
+        var bodyText = GetSpanText(dataSpan);
+        Assert.Contains("- a", bodyText, StringComparison.Ordinal);
+        Assert.Contains("- b", bodyText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Opened toolset", bodyText, StringComparison.Ordinal);
+    }
+
     private static Span FindToolSpan(Span messageSpan)
         => messageSpan.Inlines
             .OfType<Span>()

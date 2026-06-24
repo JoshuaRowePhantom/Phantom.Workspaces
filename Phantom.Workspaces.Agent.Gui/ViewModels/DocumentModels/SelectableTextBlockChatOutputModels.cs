@@ -392,6 +392,10 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
             ? "agent-chat-selectable-user-message"
             : "agent-chat-selectable-assistant-message");
         var roleLabel = this.source.Role.Value;
+        var isDiagnostic = string.Equals(
+            roleLabel,
+            AgentChatHistoryItem.DiagnosticChatRole.Value,
+            StringComparison.OrdinalIgnoreCase);
 
         this.AppendLine($"[{roleLabel}]", "agent-chat-selectable-role-label");
 
@@ -407,6 +411,9 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
             {
                 case TextReasoningContent reasoningContent:
                     this.AppendLine(reasoningContent.Text, "agent-chat-selectable-reasoning");
+                    break;
+                case TextContent textContent when isDiagnostic && !string.IsNullOrWhiteSpace(textContent.Text):
+                    this.AppendDiagnosticContent(index, textContent.Text);
                     break;
                 case TextContent textContent:
                     this.AppendLine(textContent.Text);
@@ -462,6 +469,37 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
         this.Span.Inlines.Add(toolModel.Inline);
     }
 
+    private void AppendDiagnosticContent(int index, string text)
+    {
+        // Render diagnostic text as a collapsible region (collapsed by default) like tool content:
+        // the first line is the always-visible header and the remainder is revealed when expanded.
+        var trimmed = text.TrimEnd();
+        var newlineIndex = trimmed.IndexOf('\n');
+        string header;
+        string body;
+        if (newlineIndex >= 0)
+        {
+            header = trimmed[..newlineIndex].TrimEnd('\r');
+            body = trimmed[(newlineIndex + 1)..];
+        }
+        else
+        {
+            header = trimmed;
+            body = string.Empty;
+        }
+
+        var stateKey = $"diagnostic:{index}";
+        var initiallyExpanded = this.toolExpansionState.TryGetValue(stateKey, out var expanded) && expanded;
+        var diagnosticModel = new ToolContentSelectableInlineModel(
+            header,
+            () => body,
+            initiallyExpanded,
+            isExpanded => this.toolExpansionState[stateKey] = isExpanded,
+            dataClassName: null);
+        this.toolModels.Add(diagnosticModel);
+        this.Span.Inlines.Add(diagnosticModel.Inline);
+    }
+
     private void ClearToolModels()
     {
         for (var index = 0; index < this.toolModels.Count; index++)
@@ -508,6 +546,7 @@ internal sealed class ToolContentSelectableInlineModel : IDisposable
     private readonly Func<string> dataTextFactory;
     private readonly Action<bool>? expandedChanged;
     private readonly string headerLabel;
+    private readonly string? dataClassName;
     private readonly Span dataSpan = new();
     private readonly ToggleButton toggleButton;
 
@@ -519,17 +558,22 @@ internal sealed class ToolContentSelectableInlineModel : IDisposable
         string headerLabel,
         Func<string> dataTextFactory,
         bool initiallyExpanded,
-        Action<bool>? expandedChanged = null)
+        Action<bool>? expandedChanged = null,
+        string? dataClassName = "agent-chat-selectable-monospace")
     {
         ArgumentNullException.ThrowIfNull(headerLabel);
         ArgumentNullException.ThrowIfNull(dataTextFactory);
         this.headerLabel = headerLabel;
         this.dataTextFactory = dataTextFactory;
         this.expandedChanged = expandedChanged;
+        this.dataClassName = dataClassName;
         this.isExpanded = initiallyExpanded;
 
         this.dataSpan.Classes.Add("agent-chat-selectable-tool-data");
-        this.dataSpan.Classes.Add("agent-chat-selectable-monospace");
+        if (!string.IsNullOrWhiteSpace(dataClassName))
+        {
+            this.dataSpan.Classes.Add(dataClassName);
+        }
 
         this.toggleButton = new ToggleButton
         {
@@ -608,8 +652,17 @@ internal sealed class ToolContentSelectableInlineModel : IDisposable
         }
 
         this.cachedDataText ??= this.dataTextFactory() ?? string.Empty;
+        if (string.IsNullOrEmpty(this.cachedDataText))
+        {
+            return;
+        }
+
         var run = new Run(this.cachedDataText);
-        run.Classes.Add("agent-chat-selectable-monospace");
+        if (!string.IsNullOrWhiteSpace(this.dataClassName))
+        {
+            run.Classes.Add(this.dataClassName);
+        }
+
         this.dataSpan.Inlines.Add(run);
         this.dataSpan.Inlines.Add(new LineBreak());
     }
