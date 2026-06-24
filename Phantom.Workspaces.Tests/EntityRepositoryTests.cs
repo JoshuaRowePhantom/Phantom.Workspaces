@@ -38,7 +38,7 @@ public sealed class EntityRepositoryTests
             """
             {
               "entity-id": "55555555-5555-5555-5555-555555555555",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["tests", "export-version"]],
               "display-name": { "default": "Version 1" }
             }
@@ -50,7 +50,7 @@ public sealed class EntityRepositoryTests
             """
             {
               "entity-id": "55555555-5555-5555-5555-555555555555",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["tests", "export-version"]],
               "display-name": { "default": "Version 2" }
             }

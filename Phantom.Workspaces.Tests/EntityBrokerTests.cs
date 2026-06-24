@@ -32,7 +32,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["loaded-entity"]],
               "display-name": { "default": "Loaded" }
             }
@@ -46,7 +46,7 @@ public sealed class EntityBrokerTests
         var entity = Assert.Single(entities);
         Assert.Equal(entityId, entity.EntityId);
         Assert.Equal("Loaded", entity.DisplayName);
-        Assert.Equal("entity", entity.EntityType);
+        Assert.Equal("task", entity.EntityType);
     }
 
     [AvaloniaFact]
@@ -61,7 +61,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["loaded-entity"]],
               "display-name": { "default": "Loaded" }
             }
@@ -73,7 +73,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["loaded-entity"]],
               "display-name": { "default": "Updated" }
             }
@@ -105,7 +105,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["collected-entity"]],
               "display-name": { "default": "Collected" }
             }
@@ -117,7 +117,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["collected-entity"]],
               "display-name": { "default": "Updated" }
             }
@@ -148,7 +148,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "44444444-4444-4444-4444-444444444444",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["live-updated-entity"]],
               "display-name": { "default": "Before Update" }
             }
@@ -207,7 +207,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "55555555-5555-5555-5555-555555555555",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "first"]],
                   "display-name": { "default": "First" }
                 }
@@ -220,7 +220,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "66666666-6666-6666-6666-666666666666",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "second"]],
                   "display-name": { "default": "Second" }
                 }
@@ -262,7 +262,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "77777777-7777-7777-7777-777777777777",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "first"]],
                   "display-name": { "default": "First" }
                 }
@@ -294,7 +294,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "77777777-7777-7777-7777-777777777777",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "other", "first"]],
                   "display-name": { "default": "First (moved)" }
                 }
@@ -308,7 +308,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "88888888-8888-8888-8888-888888888888",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "second"]],
                   "display-name": { "default": "Second" }
                 }
@@ -337,7 +337,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "99999999-9999-9999-9999-999999999999",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "first"]],
                   "display-name": { "default": "First" }
                 }
@@ -374,7 +374,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "99999999-9999-9999-9999-999999999999",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "other", "first"]],
                   "display-name": { "default": "First (moved)" }
                 }
@@ -388,7 +388,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "second"]],
                   "display-name": { "default": "Second" }
                 }
@@ -416,7 +416,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "stable"]],
                   "display-name": { "default": "Stable" }
                 }
@@ -451,7 +451,7 @@ public sealed class EntityBrokerTests
                 """
                 {
                   "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                  "entity-types": ["entity"],
+                  "entity-types": ["entity", "task"],
                   "names": [["subscriptions", "views", "stable"]],
                   "display-name": { "default": "Stable (updated)" }
                 }

@@ -738,7 +738,7 @@ public sealed class SchemaPopulatorTests
             """
             {
               "entity-id": "c3f1a2b4-9d8e-4f7a-8b6c-1a2b3c4d5e6f",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["entity-types", "heal-marker"]],
               "display-name": { "default": "Heal Marker" }
             }

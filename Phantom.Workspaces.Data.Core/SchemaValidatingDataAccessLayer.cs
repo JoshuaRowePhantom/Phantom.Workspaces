@@ -134,6 +134,13 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return errors;
         }
 
+        var onlyAbstractTypesError = this.GetOnlyAbstractEntityTypesError(resolvedSchemas, change.EntityId);
+        if (onlyAbstractTypesError is not null)
+        {
+            errors.Add(onlyAbstractTypesError);
+            return errors;
+        }
+
         var shouldCloseUnevaluatedProperties = resolvedSchemas.Any(
             schema => !this.IsBaseEntitySchema(schema));
 
@@ -680,6 +687,47 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             return false;
         }
+    }
+
+    private UpdateError? GetOnlyAbstractEntityTypesError(
+        IReadOnlyList<ApplicableSchema> resolvedSchemas,
+        EntityId? entityId)
+    {
+        var entityTypeSchemas = resolvedSchemas
+            .Where(schema => this.IsEntityTypeSchemaReference(schema.SchemaReference))
+            .ToArray();
+        if (entityTypeSchemas.Length == 0)
+        {
+            return null;
+        }
+
+        if (entityTypeSchemas.Any(static schema => !IsAbstractEntityType(schema.SchemaEntity)))
+        {
+            return null;
+        }
+
+        var typeNames = entityTypeSchemas
+            .Select(static schema => GetEntityTypeNameFromSchemaReference(schema.SchemaReference));
+        return new UpdateError
+        {
+            Message = $"Entity declares only abstract entity types [{string.Join(", ", typeNames)}]. At least one concrete (non-abstract) entity type is required.",
+            RelatedEntityId = entityId,
+        };
+    }
+
+    private static bool IsAbstractEntityType(
+        JsonElement? schemaEntity)
+    {
+        return schemaEntity is { ValueKind: JsonValueKind.Object } entity
+            && entity.TryGetProperty("abstract", out var abstractValue)
+            && abstractValue.ValueKind == JsonValueKind.True;
+    }
+
+    private static string GetEntityTypeNameFromSchemaReference(
+        string schemaReference)
+    {
+        using var document = JsonDocument.Parse(schemaReference);
+        return document.RootElement[1].GetString() ?? string.Empty;
     }
 
     private bool TryGetSchemaPayloadId(
