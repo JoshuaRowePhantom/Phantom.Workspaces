@@ -24,8 +24,21 @@ internal sealed class ToolResultSteeringMiddleware : IChatClient
         this.queueManager = queueManager;
     }
 
+    /// <summary>
+    /// Raised after steering messages are injected into the model call so the owning
+    /// <c>AgentChat</c> can record them in its visible chat history.
+    /// </summary>
+    internal event Action<IReadOnlyList<ChatMessage>>? MessagesInjected;
+
     public object? GetService(Type serviceType, object? serviceKey = null)
-        => this.inner.GetService(serviceType, serviceKey);
+    {
+        if (serviceKey is null && serviceType == typeof(ToolResultSteeringMiddleware))
+        {
+            return this;
+        }
+
+        return this.inner.GetService(serviceType, serviceKey);
+    }
 
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -65,13 +78,20 @@ internal sealed class ToolResultSteeringMiddleware : IChatClient
         }
 
         List<ChatMessage>? augmented = null;
+        List<ChatMessage>? injected = null;
         while (this.queueManager.TryDequeueNextImmediateOrQueued(out var item))
         {
             augmented ??= [.. messageList];
             foreach (var message in item.Messages ?? [])
             {
                 augmented.Add(message);
+                (injected ??= []).Add(message);
             }
+        }
+
+        if (injected is not null)
+        {
+            this.MessagesInjected?.Invoke(injected);
         }
 
         return augmented ?? messageList;

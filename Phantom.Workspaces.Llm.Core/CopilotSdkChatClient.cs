@@ -39,6 +39,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private int disposeStarted;
 
     /// <summary>
+    /// Raised when a steering message is forwarded to the live Copilot session so the owning
+    /// <c>AgentChat</c> can record it in its visible chat history.
+    /// </summary>
+    internal event Action<ChatMessage>? SteeringMessageForwarded;
+
+    /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
     /// </summary>
     /// <param name="modelId">The Copilot model identifier (for example, <c>gpt-5</c>).</param>
@@ -283,6 +289,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         message.Contents.OfType<TextContent>().Select(content => content.Text));
                     if (!string.IsNullOrWhiteSpace(text))
                     {
+                        // Record the forwarded steering message in history before sending it.
+                        this.SteeringMessageForwarded?.Invoke(message);
+
                         // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
                         // returns promptly. Errors are non-fatal for steering.
                         _ = session.SendAsync(

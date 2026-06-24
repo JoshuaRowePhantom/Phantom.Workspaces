@@ -99,6 +99,43 @@ public sealed class ToolResultSteeringMiddlewareTests
         Assert.Single(inner.LastMessages!);
     }
 
+    [Fact]
+    public async Task MessagesInjected_RaisedWithInjectedSteeringMessages()
+    {
+        var (_, middleware, queueManager) = CreateMiddleware();
+        Enqueue(queueManager, queueManager.ImmediateQueue, "steered");
+        var messages = new List<ChatMessage> { ToolResultMessage() };
+        IReadOnlyList<ChatMessage>? raised = null;
+        middleware.MessagesInjected += injected => raised = injected;
+
+        await middleware.GetResponseAsync(messages);
+
+        Assert.NotNull(raised);
+        Assert.Single(raised!);
+        Assert.Equal("steered", TextOf(raised![0]));
+    }
+
+    [Fact]
+    public async Task MessagesInjected_NotRaised_WhenNoItemsInjected()
+    {
+        var (_, middleware, _) = CreateMiddleware();
+        var messages = new List<ChatMessage> { ToolResultMessage() };
+        var raisedCount = 0;
+        middleware.MessagesInjected += _ => raisedCount++;
+
+        await middleware.GetResponseAsync(messages);
+
+        Assert.Equal(0, raisedCount);
+    }
+
+    [Fact]
+    public void GetService_ReturnsSelf_ForMiddlewareType()
+    {
+        var (_, middleware, _) = CreateMiddleware();
+
+        Assert.Same(middleware, middleware.GetService(typeof(ToolResultSteeringMiddleware)));
+    }
+
     private static (CapturingChatClient Inner, ToolResultSteeringMiddleware Middleware, AgentInputQueueManager QueueManager) CreateMiddleware()
     {
         var inner = new CapturingChatClient();

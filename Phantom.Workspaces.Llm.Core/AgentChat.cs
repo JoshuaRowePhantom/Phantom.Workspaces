@@ -145,6 +145,20 @@ public sealed class AgentChat : IAsyncDisposable
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
 
+       // Steering messages are injected into the model call deep in the chat-client pipeline
+       // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
+       // Copilot session by CopilotSdkChatClient). Subscribe so those injected messages are also
+       // recorded in the visible chat history (issue #17).
+       if (resolvedClient.GetService(typeof(ToolResultSteeringMiddleware)) is ToolResultSteeringMiddleware steeringMiddleware)
+       {
+           steeringMiddleware.MessagesInjected += injected => this.AppendUserMessagesToHistory(injected);
+       }
+
+       if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
+       {
+           copilotChatClient.SteeringMessageForwarded += message => this.AppendUserMessagesToHistory([message]);
+       }
+
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)
        {
            this.RegisterOwnedResource(asyncDisposableClient);
