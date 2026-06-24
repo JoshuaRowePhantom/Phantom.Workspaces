@@ -128,9 +128,12 @@ public sealed class AgentChat : IAsyncDisposable
 
        this.agentDefinition = resolvedAgentDefinition;
        var clientInfo = this.request.ClientOverride is not null
-           ? (this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : AgentFactory.CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
-       var resolvedClient = clientInfo.Item1;
+           ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
+           : AgentFactory.CreateChatClient(
+               resolvedAgentDefinition,
+               this.request.AgentServices,
+               queueManager: this.queueManager);
+       var resolvedClient = clientInfo.ChatClient;
        var useProvidedChatClientAsIs = ResolveUseProvidedChatClientAsIs(
            this.request.ClientOverride is not null,
            resolvedClient);
@@ -140,7 +143,7 @@ public sealed class AgentChat : IAsyncDisposable
        }
 
        this.client = resolvedClient;
-       this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.Item2;
+       this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
 
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)
        {

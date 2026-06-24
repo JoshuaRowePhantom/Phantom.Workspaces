@@ -162,18 +162,24 @@ public static class AgentFactory
     /// <param name="agent">The agent definition to create a client from.</param>
     /// <returns>A tuple of (ChatClient, display name).</returns>
     /// <exception cref="InvalidOperationException">If the agent is invalid or provider is unsupported.</exception>
-    public static (IChatClient client, string displayName) CreateChatClient(AgentDefinition agent)
-        => CreateChatClient(agent, services: null);
+    public static ChatClientResult CreateChatClient(AgentDefinition agent)
+        => CreateChatClient(agent, services: null, queueManager: null);
 
     /// <summary>
     /// Creates a ChatClient from an AgentDefinition, resolving provider and optional service integrations.
     /// </summary>
     /// <param name="agent">The agent definition to create a client from.</param>
     /// <param name="services">Optional service integrations for runtime behavior.</param>
-    /// <returns>A tuple of (ChatClient, display name).</returns>
-    public static (IChatClient client, string displayName) CreateChatClient(
+    /// <param name="queueManager">
+    /// Optional input-queue manager enabling tool-result steering. When supplied, non-self-invoking
+    /// providers are wrapped with <see cref="ToolResultSteeringMiddleware"/> and the GitHub Copilot
+    /// client receives it directly for its <c>QueueStateChanged</c> steering path.
+    /// </param>
+    /// <returns>The resolved chat client and its display name.</returns>
+    public static ChatClientResult CreateChatClient(
         AgentDefinition agent,
-        AgentServices? services)
+        AgentServices? services,
+        AgentInputQueueManager? queueManager = null)
     {
         var model = (agent as PromptAgent)?.Model;
         if (model is null || string.IsNullOrEmpty(model.Id))
@@ -183,21 +189,50 @@ public static class AgentFactory
 
         if (string.Equals(model.Id, "test", StringComparison.OrdinalIgnoreCase))
         {
-            return (new TestProviderChatClient(), "Test Chat Client");
+            return new ChatClientResult(new TestProviderChatClient(), "Test Chat Client");
         }
 
         var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
         return provider switch
         {
-            "echo" => (new EchoChatClient(), "Echo Chat Client"),
-            "github-models" => CreateGitHubModelsClient(model),
-            "github-copilot" => CreateGitHubCopilotClient(model, services),
-            "ollama" => CreateOllamaClient(model, services),
+            "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
+            "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model), queueManager),
+            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager),
+            "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
                 $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, ollama, openai, azure"),
         };
+    }
+
+    // Wraps the inner client with ToolResultSteeringMiddleware when a queue manager is provided.
+    // Never wraps self-invoking clients — they drive their own tool loop and GetStreamingResponseAsync
+    // is never re-called with FunctionResultContent, so the middleware would never inject anything;
+    // worse, delegating GetService would make the framework suppress its FunctionInvocationMiddleware.
+    private static ChatClientResult WrapWithMiddleware(
+        (IChatClient client, string displayName) inner,
+        AgentInputQueueManager? queueManager)
+    {
+        if (queueManager is null
+            || inner.client is ISelfInvokingToolChatClient
+            || inner.client.GetService(typeof(ISelfInvokingToolChatClient)) is not null)
+        {
+            return new ChatClientResult(inner.client, inner.displayName);
+        }
+
+        return new ChatClientResult(
+            new ToolResultSteeringMiddleware(inner.client, queueManager),
+            inner.displayName);
+    }
+
+    private static ChatClientResult CreateGitHubCopilotResult(
+        Model model,
+        AgentServices? services,
+        AgentInputQueueManager? queueManager)
+    {
+        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager);
+        return new ChatClientResult(client, displayName);
     }
 
     /// <summary>
@@ -443,7 +478,8 @@ public static class AgentFactory
 
     private static (IChatClient client, string displayName) CreateGitHubCopilotClient(
         Model model,
-        AgentServices? services)
+        AgentServices? services,
+        AgentInputQueueManager? queueManager = null)
     {
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub Copilot provider requires a model id.");
@@ -464,7 +500,8 @@ public static class AgentFactory
             modelId,
             displayName,
             gitHubToken,
-            services?.LoggerFactory);
+            services?.LoggerFactory,
+            queueManager: queueManager);
 
         return (client, displayName);
     }

@@ -29,6 +29,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly ILoggerFactory? loggerFactory;
     private readonly CopilotByokOptions? byokOptions;
     private readonly string? cliPath;
+    private readonly AgentInputQueueManager? queueManager;
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
@@ -52,13 +53,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// OpenAI-compatible endpoint instead of GitHub's hosted models.
     /// </param>
     /// <param name="cliPath">Optional explicit path to the Copilot CLI executable.</param>
+    /// <param name="queueManager">
+    /// Optional input-queue manager. When supplied, items added to non-held queues during a streaming
+    /// turn are forwarded to the live Copilot session as immediate steering input.
+    /// </param>
     public CopilotSdkChatClient(
         string modelId,
         string displayName,
         string? gitHubToken,
         ILoggerFactory? loggerFactory,
         CopilotByokOptions? byokOptions = null,
-        string? cliPath = null)
+        string? cliPath = null,
+        AgentInputQueueManager? queueManager = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -69,6 +75,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.loggerFactory = loggerFactory;
         this.byokOptions = byokOptions;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? null : cliPath;
+        this.queueManager = queueManager;
     }
 
     /// <summary>
@@ -259,6 +266,38 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
         });
 
+        // While a turn is running, forward any non-held queue items as immediate steering input.
+        // SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
+        void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+        {
+            if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
+            {
+                return;
+            }
+
+            while (this.queueManager!.TryDequeueNextImmediateOrQueued(out var item))
+            {
+                foreach (var message in item.Messages ?? [])
+                {
+                    var text = string.Concat(
+                        message.Contents.OfType<TextContent>().Select(content => content.Text));
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
+                        // returns promptly. Errors are non-fatal for steering.
+                        _ = session.SendAsync(
+                            new MessageOptions { Prompt = text, Mode = "immediate" },
+                            CancellationToken.None);
+                    }
+                }
+            }
+        }
+
+        if (this.queueManager is not null)
+        {
+            this.queueManager.QueueStateChanged += OnQueueChanged;
+        }
+
         try
         {
             await session.SendAsync(
@@ -272,6 +311,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
         finally
         {
+            if (this.queueManager is not null)
+            {
+                this.queueManager.QueueStateChanged -= OnQueueChanged;
+            }
+
             this.turnLock.Release();
         }
     }
