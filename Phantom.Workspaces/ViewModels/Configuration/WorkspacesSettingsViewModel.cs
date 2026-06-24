@@ -31,7 +31,9 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     public WorkspacesSettingsViewModel(
         ConfigurationPersistenceService persistenceService,
         WorkspacesConfiguration configuration,
-        IProfileAppearanceController? profileAppearance = null)
+        IProfileAppearanceController? profileAppearance = null,
+        Services.Updates.IUpdateController? updateController = null,
+        Action<Action>? updateDispatch = null)
     {
         ArgumentNullException.ThrowIfNull(persistenceService);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -62,6 +64,14 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
             sections.Add(new SettingsSectionViewModel("Profile", this.ProfileAppearance));
         }
 
+        // The Updates section is likewise only meaningful for a running, installed application that
+        // has a live update controller; the installation wizard has nothing to update.
+        if (updateController is not null)
+        {
+            this.Updates = new UpdateSettingsViewModel(updateController, configuration.Update, updateDispatch);
+            sections.Add(new SettingsSectionViewModel("Updates", this.Updates));
+        }
+
         this.Sections = sections;
         this.selectedSection = this.Sections[0];
     }
@@ -80,6 +90,12 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     /// application (the installation wizard has no running profile to control).
     /// </summary>
     public ProfileAppearanceSettingsViewModel? ProfileAppearance { get; }
+
+    /// <summary>
+    /// Application updates section, present only when the dialog is opened from the running, installed
+    /// application (the installation wizard has nothing to update).
+    /// </summary>
+    public UpdateSettingsViewModel? Updates { get; }
 
     /// <summary>The settings sections shown in the dialog's master-detail layout.</summary>
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }
@@ -114,6 +130,9 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         RemoteHosting = this.RemoteAccess.ToRemoteHostingSettings(),
         DevTunnel = this.RemoteAccess.ToDevTunnelConfiguration(this.baseConfiguration.DevTunnel),
         Visual = this.baseConfiguration.Visual with { Theme = this.Appearance.Theme },
+        Update = this.Updates is null
+            ? this.baseConfiguration.Update
+            : this.Updates.ToSettings(this.baseConfiguration.Update),
         UserComputerProfileOverride = string.IsNullOrWhiteSpace(this.RemoteAccess.UserComputerProfileOverride)
             ? null
             : this.RemoteAccess.UserComputerProfileOverride,

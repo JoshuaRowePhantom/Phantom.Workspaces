@@ -1,0 +1,43 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.UpdateSettingsView"
+             x:DataType="vm:UpdateSettingsViewModel">
+    <StackPanel Spacing="12">
+        <TextBlock Text="Updates" FontWeight="Bold" />
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Current version" />
+            <TextBlock Text="{Binding RunningVersion}" FontFamily="Consolas,monospace" />
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Automatic updates" />
+            <ComboBox ItemsSource="{Binding Modes}"
+                      SelectedItem="{Binding SelectedMode}"
+                      HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:UpdateModeOption">
+                        <TextBlock Text="{Binding Display}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+        </StackPanel>
+
+        <CheckBox Content="Start Phantom Workspaces when I sign in"
+                  IsChecked="{Binding RunAtStartup}" />
+
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Check for updates"
+                    Command="{Binding CheckForUpdatesNowCommand}" />
+            <Button Content="Install update"
+                    Command="{Binding InstallUpdateNowCommand}"
+                    IsVisible="{Binding IsUpdateAvailable}" />
+        </StackPanel>
+
+        <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" Opacity="0.8" />
+    </StackPanel>
+</UserControl>

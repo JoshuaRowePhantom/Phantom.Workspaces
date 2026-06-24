@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.ViewModels;
@@ -39,7 +40,12 @@ public partial class MainWindow : Window
             ? await persistenceService.LoadAsync()
             : new WorkspacesConfiguration();
 
-        var settingsViewModel = new WorkspacesSettingsViewModel(persistenceService, configuration, viewModel);
+        var settingsViewModel = new WorkspacesSettingsViewModel(
+            persistenceService,
+            configuration,
+            viewModel,
+            (Application.Current as App)?.UpdateController,
+            action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
 
         await settingsWindow.ShowDialog(this);

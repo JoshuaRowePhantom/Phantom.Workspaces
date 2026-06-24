@@ -1,11 +1,14 @@
+using System;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
@@ -14,6 +17,17 @@ namespace Phantom.Workspaces;
 
 public partial class App : Application
 {
+    private TrayIconController? trayIconController;
+    private UpdateController? updateController;
+    private bool isExiting;
+
+    /// <summary>
+    /// The live update controller for the running, installed application, or <c>null</c> when the
+    /// process is not running from an install layout. Shared by the tray icon and the Updates
+    /// settings section so both reflect the same state.
+    /// </summary>
+    public IUpdateController? UpdateController => this.updateController;
+
     public App()
     {
         // Enables the shared "copyable-text" TextBox style's copy button across this app's windows
@@ -99,6 +113,98 @@ public partial class App : Application
         guard.StartActivationListener();
     }
 
+    /// <summary>
+    /// Builds the live update controller (when running from an install layout), shows the tray icon
+    /// wired to it, starts the periodic background update check, and installs close-to-tray behaviour
+    /// on the main window. When the process is not installed (e.g. a development run) this is a no-op
+    /// beyond leaving the window to close normally.
+    /// </summary>
+    private void WireTrayAndUpdates(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        Window mainWindow,
+        WorkspacesConfiguration configuration)
+    {
+        void RequestShutdown() => Dispatcher.UIThread.Post(() =>
+        {
+            this.isExiting = true;
+            desktop.Shutdown();
+        });
+
+        this.updateController = UpdateControllerFactory.TryCreate(configuration, RequestShutdown);
+        if (this.updateController is null)
+        {
+            return;
+        }
+
+        this.trayIconController = new TrayIconController(
+            this.updateController,
+            openWindow: () => RestoreMainWindow(mainWindow),
+            openSettings: () => _ = OpenSettingsFromTrayAsync(mainWindow),
+            exit: RequestShutdown,
+            dispatch: action => Dispatcher.UIThread.Post(action));
+
+        this.updateController.StartPeriodicChecks();
+        this.InstallCloseToTray(mainWindow, configuration);
+
+        desktop.Exit += (_, _) =>
+        {
+            this.trayIconController?.Dispose();
+            this.updateController?.Dispose();
+        };
+    }
+
+    private void InstallCloseToTray(Window mainWindow, WorkspacesConfiguration configuration)
+    {
+        mainWindow.Closing += (_, eventArgs) =>
+        {
+            if (this.isExiting || !configuration.Update.CloseToTray)
+            {
+                return;
+            }
+
+            eventArgs.Cancel = true;
+            mainWindow.Hide();
+        };
+    }
+
+    private static void RestoreMainWindow(Window window)
+    {
+        if (!window.IsVisible)
+        {
+            window.Show();
+        }
+
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
+
+        window.Activate();
+    }
+
+    private static async System.Threading.Tasks.Task OpenSettingsFromTrayAsync(Window mainWindow)
+    {
+        RestoreMainWindow(mainWindow);
+        if (mainWindow.DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        var persistenceService = new ConfigurationPersistenceService();
+        var configuration = persistenceService.ConfigurationExists()
+            ? await persistenceService.LoadAsync()
+            : new WorkspacesConfiguration();
+
+        var settingsViewModel = new WorkspacesSettingsViewModel(
+            persistenceService,
+            configuration,
+            viewModel,
+            (Current as App)?.UpdateController,
+            action => Dispatcher.UIThread.Post(action));
+        var settingsWindow = new SettingsDialogWindow(settingsViewModel);
+        await settingsWindow.ShowDialog(mainWindow);
+    }
+
     public override async void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -151,6 +257,8 @@ public partial class App : Application
             desktop.MainWindow = mainWindow;
             mainWindow.Show();
             loadingWindow.Close();
+
+            this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration());
             return;
         }
 

@@ -126,6 +126,44 @@ public sealed record VisualSettings
     public string Theme { get; init; } = "Fluent";
 }
 
+/// <summary>How the application applies updates discovered from the GitHub Releases feed.</summary>
+public enum AutomaticUpdateMode
+{
+    /// <summary>Never check or apply updates automatically.</summary>
+    Off = 0,
+
+    /// <summary>Check periodically and notify, but do not download or install automatically.</summary>
+    NotifyOnly = 1,
+
+    /// <summary>Check periodically and download/install newer releases automatically.</summary>
+    DownloadAndInstall = 2,
+}
+
+/// <summary>In-app auto-update preferences, persisted across runs.</summary>
+public sealed record UpdateSettings
+{
+    /// <summary>How updates are applied. Defaults to notify-only.</summary>
+    public AutomaticUpdateMode Mode { get; init; } = AutomaticUpdateMode.NotifyOnly;
+
+    /// <summary>
+    /// Whether the application registers a per-user logon scheduled task to run at startup. Mirrors
+    /// the Windows scheduled task state; the task is the source of truth at runtime.
+    /// </summary>
+    public bool RunAtStartup { get; init; }
+
+    /// <summary>The instant the last update check completed, when one has run.</summary>
+    public DateTimeOffset? LastCheckUtc { get; init; }
+
+    /// <summary>An optional pinned version that suppresses updates past it. Null means unpinned.</summary>
+    public string? PinnedVersion { get; init; }
+
+    /// <summary>
+    /// Whether closing the main window hides it to the tray (keeping background update checks
+    /// running) rather than exiting. Defaults to on, matching run-at-startup usage.
+    /// </summary>
+    public bool CloseToTray { get; init; } = true;
+}
+
 /// <summary>
 /// Root persisted configuration model for installation and runtime settings.
 /// </summary>
@@ -145,6 +183,9 @@ public sealed record WorkspacesConfiguration
 
     /// <summary>Visual / application preferences.</summary>
     public VisualSettings Visual { get; init; } = new();
+
+    /// <summary>In-app auto-update preferences.</summary>
+    public UpdateSettings Update { get; init; } = new();
 
     /// <summary>
     /// Testing only: overrides the computer identity used when composing this instance's
