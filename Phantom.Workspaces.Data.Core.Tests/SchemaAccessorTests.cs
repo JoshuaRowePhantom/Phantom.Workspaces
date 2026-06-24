@@ -6,6 +6,28 @@ namespace Phantom.Workspaces.Data.Tests;
 public sealed class SchemaAccessorTests
 {
     [Fact]
+    public async Task ResolveSchemaByReferenceAsync_ResolvesStoredSchemaByName()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaId = new EntityId("2b8d9f41-5a3c-4f0e-9c1b-7d6e2f4a8c10");
+        const string schemaName = "https://schemas.workspaces.phantom.to/tests/stored-resolution.json";
+
+        var addStoredSchemaResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                CreateSchemaChange(schemaId, null, schemaName, "string")));
+        Assert.DoesNotContain(addStoredSchemaResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+
+        // No request schemas are supplied, so the reference can only be resolved
+        // by getting the stored schema entity by name from the store.
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        var resolvedSchema = await schemaAccessor.ResolveSchemaByReferenceAsync(schemaName);
+        Assert.NotNull(resolvedSchema);
+        Assert.True(resolvedSchema.Value.TryGetProperty("schema", out var schemaNode));
+        Assert.Equal("string", schemaNode.GetProperty("properties").GetProperty("title").GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task ResolveSchemaByReferenceAsync_PrefersRequestSchemaOverStoredSchema()
     {
         var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();

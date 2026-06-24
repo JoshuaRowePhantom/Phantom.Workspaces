@@ -12,7 +12,6 @@ public sealed class SchemaAccessor : ISchemaAccessor
     private readonly ConcurrentDictionary<string, JsonElement?> schemasByReference = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim loadGate = new(1, 1);
     private readonly SemaphoreSlim registryGate = new(1, 1);
-    private Dictionary<string, JsonElement>? schemaEntitiesByName;
     private Dictionary<string, JsonElement>? schemaEntitiesById;
     private SchemaRegistry? schemaRegistry;
 
@@ -44,7 +43,6 @@ public sealed class SchemaAccessor : ISchemaAccessor
             return cachedSchema;
         }
 
-        await this.EnsureSchemasLoadedAsync(cancellationToken).ConfigureAwait(false);
         foreach (var schemaName in GetSchemaEntityNames(schemaReference))
         {
             if (this.requestSchemasByName.TryGetValue(schemaName, out var requestSchema))
@@ -53,10 +51,27 @@ public sealed class SchemaAccessor : ISchemaAccessor
                 return requestSchema;
             }
 
-            if (this.schemaEntitiesByName!.TryGetValue(schemaName, out var storedSchema))
+            if (!TryParseEntityName(schemaName, out var parsedSchemaName))
             {
-                this.schemasByReference[schemaReference] = storedSchema;
-                return storedSchema;
+                continue;
+            }
+
+            var getResult = await this.dataAccessLayer.GetAsync(
+                new GetRequest
+                {
+                    Entities = [new GetEntityRequest { EntityName = parsedSchemaName }],
+                    Timestamps = new Timestamp?[] { null },
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var entity in getResult.Batches.SelectMany(static batch => batch.Entities))
+            {
+                if (entity.Data is { ValueKind: JsonValueKind.Object } storedSchema
+                    && IsSchemaEntity(storedSchema))
+                {
+                    this.schemasByReference[schemaReference] = storedSchema;
+                    return storedSchema;
+                }
             }
         }
 
@@ -138,7 +153,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
     private async Task EnsureSchemasLoadedAsync(
         CancellationToken cancellationToken)
     {
-        if (this.schemaEntitiesByName is not null && this.schemaEntitiesById is not null)
+        if (this.schemaEntitiesById is not null)
         {
             return;
         }
@@ -146,13 +161,18 @@ public sealed class SchemaAccessor : ISchemaAccessor
         await this.loadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (this.schemaEntitiesByName is not null && this.schemaEntitiesById is not null)
+            if (this.schemaEntitiesById is not null)
             {
                 return;
             }
 
-            var schemasByName = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
             var schemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            // BuildSchemaRegistryAsync needs every schema entity so JSON Schema
+            // "$ref" URIs can resolve against the full set. Schema entities are
+            // identified by three independent forms (schema payload, explicit
+            // "json-schema" entity type, or "$id"), and the query API has no
+            // field-existence operator, so a full enumeration is the only
+            // faithful way to collect them all.
 #pragma warning disable CS0618
             var exportResult = await this.dataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
 #pragma warning restore CS0618
@@ -168,11 +188,6 @@ public sealed class SchemaAccessor : ISchemaAccessor
                     continue;
                 }
 
-                foreach (var name in GetEntityNames(entityData))
-                {
-                    schemasByName[name] = entityData;
-                }
-
                 if (TryGetSchemaPayloadId(entityData, out var schemaId)
                     && Uri.TryCreate(schemaId, UriKind.Absolute, out _))
                 {
@@ -180,13 +195,43 @@ public sealed class SchemaAccessor : ISchemaAccessor
                 }
             }
 
-            this.schemaEntitiesByName = schemasByName;
             this.schemaEntitiesById = schemasById;
         }
         finally
         {
             this.loadGate.Release();
         }
+    }
+
+    private static bool TryParseEntityName(
+        string name,
+        out EntityName entityName)
+    {
+        if (name.StartsWith("[", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(name);
+                var parsedEntityName = document.RootElement.TryReadEntityName();
+                if (parsedEntityName is not null)
+                {
+                    entityName = parsedEntityName.Value;
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            entityName = default;
+            return false;
+        }
+
+        entityName = new EntityName(name);
+        return true;
     }
 
     private Dictionary<string, JsonElement> GetSchemasFromRequest(
