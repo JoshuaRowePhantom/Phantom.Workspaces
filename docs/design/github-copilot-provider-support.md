@@ -289,123 +289,118 @@ public async Task SteerAsync(string text, CancellationToken cancellationToken = 
 No lock is needed: `session.SendAsync` with `Mode = "immediate"` is designed to be called
 concurrently with an in-progress turn.
 
-Expose this capability through a new interface so `AgentChat` can call it without a
-compile-time dependency on `CopilotSdkChatClient`:
+**Unified `ISteerableChatClient` abstraction:**
+
+`ISteerableChatClient` is a required dependency of `AgentChat`, not an optional interface
+to check at runtime. `AgentChat` always calls `SteerAsync` on the steerable client it was
+given — there is no `is` check in the loop:
 
 ```csharp
-public interface ISteerableChatClient
+public interface ISteerableChatClient : IChatClient
 {
     Task SteerAsync(string text, CancellationToken cancellationToken = default);
 }
 ```
 
-`CopilotSdkChatClient` implements `ISteerableChatClient`. Other providers do not.
+The factory decides which implementation to construct, keeping all provider-specific logic
+out of `AgentChat`:
+
+- **Copilot** → `CopilotSdkSteeringAdapter` wraps `CopilotSdkChatClient` and implements
+  `SteerAsync` using `Mode = "immediate"` (see above). This is the in-band, mid-stream
+  path.
+- **All other providers** → `ToolResultSteeringMiddleware` wraps the inner `IChatClient`
+  and implements `SteerAsync` by buffering the text; it injects it as a `User` message at
+  the next tool-result boundary (see below).
 
 **`AgentChat` changes:**
 
-In `RunProcessLoopAsync`, after starting a Copilot run, poll the input queue for new
-items concurrently with the provider stream. The queue immediacy state determines routing:
+`AgentChat` receives an `ISteerableChatClient` at construction and uses it for all LLM
+calls. In `RunProcessLoopAsync`, a second concurrent task polls the non-held input queue
+alongside the provider stream:
 
-- **`Immediate` or `Queue` (non-held)** — eligible for mid-turn steering. When an item
-  arrives from one of these queues while the run is active and the client implements
-  `ISteerableChatClient`, dequeue it and call `steerableClient.SteerAsync(item.Text)`.
-- **`Held`** — not eligible for steering. Items in held queues must remain in the queue
-  and are not forwarded mid-turn, regardless of whether the client supports steering.
-  They are processed normally once the held state is cleared and a new turn begins.
+- **`Immediate` or `Queue` (non-held)** — dequeue and call `steerableClient.SteerAsync(item.Text)`.
+- **`Held`** — remain in the queue; not forwarded mid-turn regardless of provider. They
+  are processed normally once the held state is cleared and a new turn begins.
 
-The existing `AgentInputQueueManager.TryDequeueNextImmediate` and
-`TryDequeueNextImmediateOrQueued` methods already respect the `Held` state (held queues
-are filtered out in `TryDequeueNext`), so the steering poll can reuse the same
-dequeue methods — only items that would have been dequeued normally are candidates for
-steering. The poll runs concurrently with the provider stream loop:
+`TryDequeueNextImmediateOrQueued` already excludes held queues, so the steering poll
+naturally only sees eligible items. Steps:
 
-1. Dequeue the next non-held item (using `TryDequeueNextImmediateOrQueued`).
+1. Dequeue the next non-held item.
 2. Call `steerableClient.SteerAsync(item.Text)`.
-3. Do **not** add the item to history separately — the steered text will appear in the
-   session's event stream as a `UserMessageEvent` and flow through the existing
-   `PartialResponseConflator` path.
-4. If the client does **not** implement `ISteerableChatClient` (non-Copilot providers),
-   inject the steering text via a **tool-result injection middleware** instead of
-   buffering for re-enqueue (see below).
+3. For the `CopilotSdkSteeringAdapter` path, the steered text appears as a
+   `UserMessageEvent` in the ongoing session stream and flows through the existing
+   `PartialResponseConflator` path — no separate history insertion needed.
+4. For the `ToolResultSteeringMiddleware` path, the text is buffered and injected at
+   the next tool boundary (see below).
 
-This is analogous to the existing `WasCanceledBeforeCompletingAsync` racing pattern: add
-a second `Task.WhenAny` arm that watches the `queueStateSignal` semaphore alongside the
-provider read.
+This follows the same `Task.WhenAny` racing pattern as `WasCanceledBeforeCompletingAsync`.
 
 **Held-queue behavior:**
 Items in `Held` queues are intentionally withheld from the agent — that is the purpose of
-the held state. They are not steered mid-turn and are not processed after the current run
-finishes until the held state is explicitly cleared. This behavior is correct and
-unchanged; no fix is needed for held queues specifically.
+the held state. They are not steered mid-turn and are not processed until the held state
+is explicitly cleared. This is correct by design; no fix is needed.
 
 ---
 
-**Tool-result injection middleware (provider-agnostic steering)**
+**`ToolResultSteeringMiddleware` (provider-agnostic steering)**
 
-For providers that do not expose an in-band steering API, an `IChatClient` middleware can
-approximate the same effect by injecting pending steering text into tool call results at
-the next model attention boundary.
+For providers without an in-band steering API, this middleware approximates the same
+effect by inserting pending steering text as a proper `User`-role message at the next
+model attention boundary.
 
 Agentic loops alternate between two phases:
 
 1. **Model reasoning** — the client streams tokens and optionally emits tool-call requests.
-2. **Tool execution** — the host executes the requested tools and calls
-   `GetStreamingResponseAsync` again with the results as `FunctionResultContent` messages.
+2. **Tool execution** — the host executes tools and calls `GetStreamingResponseAsync`
+   again with `FunctionResultContent` messages as the last turn.
 
-Phase 2 is a natural seam: the model is about to read tool results anyway, so appending
-a short user annotation there adds no latency compared to waiting for the whole run.
+Phase 2 is a natural seam: the model is about to read tool results anyway, so inserting a
+`User` message immediately after them adds no latency over waiting for the whole run.
 
-The middleware intercepts `GetStreamingResponseAsync`. When the incoming message list ends
-with one or more `FunctionResultContent` items (i.e., this is a tool-result-return call),
-it checks the non-held input queue. If an item is available, it appends a labelled user
-note to the last function result before forwarding to the inner client:
+`SteerAsync` enqueues the text into a local pending buffer. `GetStreamingResponseAsync`
+drains the buffer when it detects a tool-result-return call, appending each pending item
+as a `ChatMessage(ChatRole.User, text)` after the function-result messages:
 
 ```csharp
+public Task SteerAsync(string text, CancellationToken ct = default)
+{
+    _pendingSteering.Enqueue(text);
+    return Task.CompletedTask;
+}
+
 public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
     IList<ChatMessage> messages, ChatOptions? options,
     [EnumeratorCancellation] CancellationToken ct)
 {
-    if (messages.LastOrDefault()?.Contents.OfType<FunctionResultContent>().Any() == true
-        && _queue.TryDequeueNextImmediateOrQueued(out var item))
+    if (messages.LastOrDefault()?.Contents.OfType<FunctionResultContent>().Any() == true)
     {
-        messages = InjectUserNote(messages, item.Text);
+        var augmented = messages.ToList();
+        while (_pendingSteering.TryDequeue(out var text))
+            augmented.Add(new ChatMessage(ChatRole.User, text));
+        messages = augmented;
     }
     await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct))
         yield return update;
 }
-
-private static IList<ChatMessage> InjectUserNote(IList<ChatMessage> messages, string note)
-{
-    // Append a text annotation to the last message's content list.
-    // The label keeps the note visually distinct in serialized history.
-    var copy = messages.ToList();
-    var last = copy[^1];
-    var contents = last.Contents.ToList();
-    contents.Add(new TextContent($"[User note: {note}]"));
-    copy[^1] = new ChatMessage(last.Role, contents);
-    return copy;
-}
 ```
 
-**Trade-offs vs. `ISteerableChatClient`:**
+Using `ChatRole.User` means the model sees the steering text as a first-class user turn,
+not as an annotation embedded inside a tool result. Models that support multi-turn
+interleaving handle this naturally.
 
-| | `ISteerableChatClient` (Copilot) | Tool-result injection (generic) |
+**Trade-offs:**
+
+| | `CopilotSdkSteeringAdapter` | `ToolResultSteeringMiddleware` |
 |---|---|---|
-| Delivery timing | Immediately, mid-stream via `Mode = "immediate"` | At next tool-result return (boundary-based) |
-| Works during pure text generation | Yes (interrupts stream) | No — no tool calls = no injection point |
-| Provider-specific | Yes (Copilot SDK only) | No — any `IChatClient` |
-| Model awareness | SDK routes as a `UserMessageEvent` | Appears as an annotation inside tool results |
-| Queue types | Non-held only | Non-held only (same `TryDequeueNextImmediateOrQueued`) |
+| Delivery timing | Immediately mid-stream (`Mode = "immediate"`) | At next tool-result return (boundary-based) |
+| Works during pure text generation | Yes | No — falls through to next turn |
+| Provider-specific | Yes (Copilot SDK) | No — any `IChatClient` |
+| Injected as | SDK `UserMessageEvent` | `ChatMessage(ChatRole.User, ...)` |
+| Queue types eligible | Non-held | Non-held |
 
-The two approaches can coexist: `AgentChat` first checks for `ISteerableChatClient` and
-uses `SteerAsync` if available; otherwise it relies on the middleware to pick up queued
-items at the next tool boundary. The middleware is registered unconditionally in the
-`IChatClient` pipeline and is a no-op for `ISteerableChatClient` clients where `AgentChat`
-already drained the queue.
-
-If a run produces no tool calls at all (pure generation), injected items are not consumed
-by the middleware. They remain in the queue and become the first input of the next turn,
-which is equivalent to the old re-enqueue behaviour and is acceptable for that edge case.
+If a run produces no tool calls (pure generation), `ToolResultSteeringMiddleware` never
+fires. Buffered items remain in `_pendingSteering` and are injected at the very first tool
+boundary of the next turn — equivalent to early re-enqueue, acceptable as a fallback.
 
 ---
 
@@ -415,7 +410,7 @@ which is equivalent to the old re-enqueue behaviour and is acceptable for that e
 | --- | --- | --- |
 | Ctrl+Break doesn't stop CLI | `session.AbortAsync` never called on cancellation | Call `AbortAsync` + invalidate session in `CopilotSdkChatClient` `finally`/cancel path |
 | Stale session reused after interrupt | `copilotSession` not nulled on interrupt | Null `copilotSession` + `currentSessionSignature` when aborting (same fix as above) |
-| Steering text not delivered mid-turn | `turnLock` blocks concurrent `SendAsync`; `AgentChat` loop is serial | Add `ISteerableChatClient.SteerAsync` bypassing `turnLock`; use `Mode = "immediate"`; for non-Copilot providers, inject via tool-result middleware at next tool boundary |
+| Steering text not delivered mid-turn | `turnLock` blocks concurrent `SendAsync`; `AgentChat` loop is serial | Unified `ISteerableChatClient` required dep; Copilot uses `CopilotSdkSteeringAdapter` (`Mode = "immediate"`); others use `ToolResultSteeringMiddleware` (User-role message at next tool boundary); factory chooses |
 | Held queue items incorrectly steered | N/A — held queues must not be steered | By design: `TryDequeueNextImmediateOrQueued` already excludes held queues; steering poll reuses the same dequeue path |
 
 
