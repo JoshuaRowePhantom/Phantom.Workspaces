@@ -148,6 +148,29 @@ public sealed class SharedStylesTests
             "InnerLeftContent setter must wrap control content in <Template>.");
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void StatusThemeResources_AreSolidColorBrushes()
+    {
+        var sharedStyles = LoadSharedStyles();
+
+        var expectedKeys = new List<string>
+        {
+            "Theme.Status.Good",
+            "Theme.Status.Bad",
+            "Theme.Status.Foreground",
+        };
+        for (var index = 0; index < 6; index++)
+        {
+            expectedKeys.Add($"Theme.Status.Palette.{index}");
+        }
+
+        foreach (var key in expectedKeys)
+        {
+            Assert.True(sharedStyles.Resources.TryGetValue(key, out var value), $"Expected resource key '{key}' to exist.");
+            _ = Assert.IsAssignableFrom<ISolidColorBrush>(value);
+        }
+    }
+
     private static DirectoryInfo FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);

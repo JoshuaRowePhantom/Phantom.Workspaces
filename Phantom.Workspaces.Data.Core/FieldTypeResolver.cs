@@ -40,6 +40,7 @@ public sealed class FieldTypeResolver
             FieldEditorTypeName = ReadFieldEditorTypeName(schemaNode.Value),
             AbsoluteEntityDisplayOrder = ReadDoubleKeyword(schemaNode.Value, "x-absolute-entity-display-order"),
             RelativeEntityDisplayOrder = ReadDoubleKeyword(schemaNode.Value, "x-relative-entity-display-order") ?? 0,
+            FieldStatus = ReadFieldStatus(schemaNode.Value),
         };
     }
 
@@ -480,6 +481,36 @@ public sealed class FieldTypeResolver
                && !string.IsNullOrWhiteSpace(fieldEditor.GetString())
             ? fieldEditor.GetString()
             : null;
+    }
+
+    private static FieldStatus? ReadFieldStatus(
+        JsonElement schemaNode)
+    {
+        if (!schemaNode.TryGetProperty("x-field-status", out var fieldStatus)
+            || fieldStatus.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new FieldStatus(
+            ReadStringArray(fieldStatus, "good-status-values"),
+            ReadStringArray(fieldStatus, "bad-status-values"));
+    }
+
+    private static IReadOnlyCollection<string> ReadStringArray(
+        JsonElement node,
+        string propertyName)
+    {
+        if (!node.TryGetProperty(propertyName, out var array)
+            || array.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return array.EnumerateArray()
+            .Where(static value => value.ValueKind == JsonValueKind.String && value.GetString() is not null)
+            .Select(static value => value.GetString()!)
+            .ToArray();
     }
 
     private static double? ReadDoubleKeyword(

@@ -107,6 +107,27 @@
     "hosted-on-computer": {
       "$comment": "Base type for entities that are hosted on or associated with a computer. Requires either 'computer' or 'computer-user-profile' in the names array.",
       "type": "object"
+    },
+    "field-status": {
+      "description": "Annotation for a field whose value represents a status. Declares which status values are 'good' (rendered green) and which are 'bad' (rendered red). Any other value gets a stable, distinct color derived by hashing the value.",
+      "type": "object",
+      "properties": {
+        "good-status-values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Status values rendered green (e.g. complete, closed)."
+        },
+        "bad-status-values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Status values rendered red (e.g. blocked, abandoned)."
+        }
+      },
+      "unevaluatedProperties": false
     }
   }
 }

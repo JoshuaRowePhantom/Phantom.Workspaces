@@ -52,6 +52,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.rawJsonText = BuildRawJsonText(entity.Data);
         this.validation = new JsonValidationViewModel(schemaComposer);
         this.Badges = new BadgesViewModel(new BadgesModel());
+        this.StatusBadges = new StatusBadgesViewModel(new StatusBadgesModel());
         this.SetFieldEditorEditMode(false);
         this.RefreshDisplayItems();
         entity.PropertyChanged += this.OnEntityPropertyChanged;
@@ -83,6 +84,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.rawJsonText = string.Empty;
         this.validation = new JsonValidationViewModel();
         this.Badges = new BadgesViewModel(new BadgesModel());
+        this.StatusBadges = new StatusBadgesViewModel(new StatusBadgesModel());
         this.SetFieldEditorEditMode(false);
         this.ToggleEditModeCommand = new RelayCommand(
             _ => this.EnterEditMode(),
@@ -115,6 +117,8 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public BadgesViewModel Badges { get; private set; }
 
+    public StatusBadgesViewModel StatusBadges { get; private set; }
+
     public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
 
     public RelayCommand? ActivateShortcutCommand { get; private set; }
@@ -132,6 +136,8 @@ public sealed class EntityCardViewModel : ViewModelBase
     public RelayCommand DeleteEntityCommand { get; }
 
     public bool HasBadges => this.Badges.Badges.Count > 0;
+
+    public bool HasStatusBadges => this.StatusBadges.Badges.Count > 0;
 
     public bool HasShortcuts => this.Shortcuts.Count > 0;
 
@@ -268,6 +274,29 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.Badges));
         this.RaisePropertyChanged(nameof(this.ToggleInterestCommand));
         this.RaisePropertyChanged(nameof(this.HasBadges));
+    }
+
+    /// <summary>
+    /// Sets the status badges shown on the card. Status badges are display-only colored pills (one per
+    /// annotated status field across the entity's entity types); they carry no command. The status
+    /// badges are discovered asynchronously, so the card listens for collection changes to keep
+    /// <see cref="HasStatusBadges"/> in sync as badges arrive.
+    /// </summary>
+    public void SetStatusBadges(
+        StatusBadgesViewModel statusBadges)
+    {
+        this.StatusBadges.Badges.CollectionChanged -= this.OnStatusBadgesChanged;
+        this.StatusBadges = statusBadges;
+        this.StatusBadges.Badges.CollectionChanged += this.OnStatusBadgesChanged;
+        this.RaisePropertyChanged(nameof(this.StatusBadges));
+        this.RaisePropertyChanged(nameof(this.HasStatusBadges));
+    }
+
+    private void OnStatusBadgesChanged(
+        object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        this.RaisePropertyChanged(nameof(this.HasStatusBadges));
     }
 
     /// <summary>

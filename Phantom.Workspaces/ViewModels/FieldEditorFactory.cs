@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
@@ -14,6 +15,7 @@ public sealed class FieldEditorFactory
 {
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;
+    private readonly StatusColorSelector statusColorSelector = new();
     private readonly EntityTypeViewCatalog entityTypeViewCatalog;
     private readonly IReadOnlyDictionary<string, EntityTypeViewDefinition>? viewSpecificEntityTypeViews;
     private readonly IEntityReferenceSearch? entityReferenceSearch;
@@ -87,6 +89,22 @@ public sealed class FieldEditorFactory
 
         var fieldEditors = await Task.WhenAll(fieldEditorTasks).ConfigureAwait(false);
         return fieldEditors;
+    }
+
+    /// <summary>
+    /// Builds the status badges for an entity by scanning its fields (across all its entity types)
+    /// for the <c>x-field-status</c> annotation. Returns one badge per annotated status field whose
+    /// value is a non-empty string.
+    /// </summary>
+    public Task<IReadOnlyList<StatusBadgeModel>> BuildStatusBadgesAsync(
+        JsonElement entityData,
+        CancellationToken cancellationToken = default)
+    {
+        return StatusBadgeProjector.ProjectAsync(
+            this.fieldTypeResolver,
+            this.statusColorSelector,
+            entityData,
+            cancellationToken);
     }
 
     /// <summary>

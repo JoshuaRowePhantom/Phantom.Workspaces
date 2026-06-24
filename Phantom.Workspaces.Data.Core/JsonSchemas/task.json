@@ -29,7 +29,16 @@
         "blocked",
         "cancelled"
       ],
-      "description": "Current status of the task"
+      "description": "Current status of the task",
+      "x-field-status": {
+        "good-status-values": [
+          "completed"
+        ],
+        "bad-status-values": [
+          "blocked",
+          "cancelled"
+        ]
+      }
     },
     "assigned-to": {
       "type": "string",

@@ -1,7 +1,11 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="using:Phantom.Workspaces.Converters"
              x:CompileBindings="False"
              x:Class="Phantom.Workspaces.Controls.EntityCardControl">
+    <UserControl.Resources>
+        <converters:StatusBrushKeyConverter x:Key="StatusBrushKeyConverter" />
+    </UserControl.Resources>
     <StackPanel Classes="workspace-entity-node-root"
                 Classes.workspace-entity-deleted="{Binding IsDeleted}"
                 IsEnabled="{Binding IsInteractive}">
@@ -32,6 +36,25 @@
                                             Classes.workspace-entity-badge-active="{Binding IsActive}"
                                             Command="{Binding $parent[ItemsControl].DataContext.ToggleInterestCommand}"
                                             CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <ItemsControl IsVisible="{Binding HasStatusBadges}"
+                                      IsEnabled="{Binding AreBadgesEnabled}"
+                                      ItemsSource="{Binding StatusBadges.Badges}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Classes="status-badge"
+                                            Background="{Binding BrushKey, Converter={StaticResource StatusBrushKeyConverter}}"
+                                            ToolTip.Tip="{Binding Tooltip}">
+                                        <TextBlock Text="{Binding StatusValue}"
+                                                   Classes="status-badge-text" />
+                                    </Border>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

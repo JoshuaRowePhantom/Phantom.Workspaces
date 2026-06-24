@@ -69,6 +69,48 @@ public sealed class FieldTypeResolverTests
         Assert.Equal("int", resolvedType.TypeName);
     }
 
+    [Fact]
+    public async Task ResolveFieldTypeAsync_PopulatesFieldStatusFromTaskStatusAnnotation()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "31554ca4-f952-4f4e-a62a-e517844f9bb2",
+              "entity-types": ["entity", "task"],
+              "status": "completed"
+            }
+            """);
+
+        var resolver = new FieldTypeResolver(new SchemaAccessor(dataAccessLayer));
+        var statusValue = document.RootElement.GetProperty("status");
+        var resolvedType = await resolver.ResolveFieldTypeAsync(document.RootElement, ["status"], statusValue);
+
+        Assert.NotNull(resolvedType.FieldStatus);
+        Assert.Equal(["completed"], resolvedType.FieldStatus!.GoodStatusValues);
+        Assert.Equal(["blocked", "cancelled"], resolvedType.FieldStatus.BadStatusValues);
+    }
+
+    [Fact]
+    public async Task ResolveFieldTypeAsync_LeavesFieldStatusNullForUnannotatedField()
+    {
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "31554ca4-f952-4f4e-a62a-e517844f9bb2",
+              "entity-types": ["entity", "task"],
+              "assigned-to": "someone"
+            }
+            """);
+
+        var resolver = new FieldTypeResolver(new SchemaAccessor(dataAccessLayer));
+        var assignedTo = document.RootElement.GetProperty("assigned-to");
+        var resolvedType = await resolver.ResolveFieldTypeAsync(document.RootElement, ["assigned-to"], assignedTo);
+
+        Assert.Null(resolvedType.FieldStatus);
+    }
+
     private static async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
