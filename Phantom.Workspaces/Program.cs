@@ -14,6 +14,14 @@ class Program
     public static void Main(string[] args)
     {
         StartupArguments = args;
+
+        var managementExitCode = ManagementModeDispatcher.TryRun(args);
+        if (managementExitCode is { } exitCode)
+        {
+            Environment.Exit(exitCode);
+            return;
+        }
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 

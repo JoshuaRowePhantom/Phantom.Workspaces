@@ -46,6 +46,7 @@
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Client\Phantom.Workspaces.Data.Web.Client.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Server\Phantom.Workspaces.Data.Web.Server.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Styles\Phantom.Workspaces.Gui.Styles.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Install\Phantom.Workspaces.Install.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Web.Server\Phantom.Workspaces.Web.Server.csproj" />
   </ItemGroup>
   <ItemGroup>
