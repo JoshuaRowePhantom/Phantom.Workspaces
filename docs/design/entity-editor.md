@@ -10,6 +10,9 @@ to an `EditEntityShortcut`, drives the card into an editing experience that mirr
 the entity-browser card (field list + JSON), live-validates the edited JSON against
 the available schemas, and persists the result.
 
+This document also adds a `Clone` shortcut that opens a clone editor tab seeded
+from the source entity, with optional relationship cloning.
+
 This document also covers two supporting data-model changes:
 
 - An optional `entity-display-order` (float) on the **entity-type** entity, used to
@@ -23,35 +26,81 @@ This document also covers two supporting data-model changes:
    when the `EditEntityShortcut` applies to the entity (the entity is editable: it
    has a data snapshot, is not deleted, and the data-access layer permits update).
    Clicking it enters edit mode.
-2. **Edit mode chrome.**
+2. **Clone button.** Each entity card also shows a `Clone` shortcut (for cloneable
+   entities). Clicking it opens a dedicated clone editor **tab** prepopulated from the
+   source entity:
+   - A freshly generated `entity-id` is prefilled.
+   - Entity properties/data are copied identically from the source entity.
+   - Entity names are prefilled with a derived "copy" name set (see clone behavior).
+   - Relationships are listed as selectable items so the user can choose which
+     relationships to clone.
+   - **Save** creates the new entity (and selected cloned relationships).
+   - **Cancel** closes the clone tab and creates nothing.
+3. **Edit mode chrome.**
    - While editing, every other shortcut button and every interest badge on the card
      is disabled (greyed, non-interactive).
    - The JSON toggle button (`{}`) is **enabled** while editing (it is the one control,
      besides Save/Discard, that stays live) so the user can switch between the field
      list and the raw JSON editor.
    - Save (`💾`) and Discard (`✖`) actions appear.
-3. **Live JSON validation.** While editing, the working JSON is continuously validated
+4. **Live JSON validation.** While editing, the working JSON is continuously validated
    on every change against (a) JSON syntax and (b) the composed schema for the entity's
    entity types. A validation status line is shown:
    - Valid: the text `👍 Valid` in normal (non-error) styling.
    - Invalid: a red `(!)` followed by the validation error text (syntax error message,
      or the first schema evaluation error).
    - Save is disabled while the JSON is invalid.
-4. **Field list (non-JSON mode).** When not in JSON mode, the entity snapshot is turned
+5. **Field list (non-JSON mode).** When not in JSON mode, the entity snapshot is turned
    into an editable field list "as per the current view": the same field selection and
    display formats the current view's `entity-type-view` defines (falling back to the
    full schema field set when the view does not constrain fields).
-5. **Expand-to-all-fields.** A `>` expander is added to the card (matching the
+6. **Expand-to-all-fields.** A `>` expander is added to the card (matching the
    entity-browser card). Collapsed, the card shows the view's curated fields; expanded,
    it shows **all** fields of the entity (the entity-browser rendering).
-6. **Editable fields.** Every field editor in the list is editable in edit mode (text
+7. **Editable fields.** Every field editor in the list is editable in edit mode (text
    boxes, locale editors, MIME editors, nested object/array editors), reusing the
    existing `EntityFieldEditorViewModel` hierarchy.
-7. **Default expander state.** Expanders within the field list start **expanded** by
+8. **Default expander state.** Expanders within the field list start **expanded** by
    default, **except** localized-content sub-entries whose locale is neither the current
    UI locale nor `default` (those collapse by default to keep non-relevant locales out of
    the way). This applies to `local-string` "Other locales" expanders and
    `mime-attachment` localized maps.
+
+## Clone shortcut behavior
+
+The clone flow is draft-first and save-gated:
+
+1. Clicking `Clone` opens a dedicated clone editor tab/view-model.
+2. The tab edits a **draft clone** only; no entity is written on open.
+3. Save writes the clone; cancel/dispose writes nothing.
+
+### Draft initialization
+
+When the draft is created:
+
+1. `entity-id` is generated (GUID) immediately and shown/editable in the tab.
+2. Data/properties are copied from the source entity snapshot.
+3. Names are derived from the source names:
+   - keep all leading name components,
+   - derive the terminal component by appending `-copy`,
+   - if that name already exists, append/increment a numeric suffix
+     (`-copy-2`, `-copy-3`, ...).
+
+### Optional relationship cloning
+
+The clone editor tab shows direct relationships involving the source entity as selectable
+items (checkbox list), including relationship type/name and participant summary.
+
+On save:
+
+1. Always create the cloned entity with the draft `entity-id`, names, and data.
+2. For each selected relationship, create a cloned relationship entity:
+   - copy the relationship data/properties,
+   - generate a new relationship `entity-id`,
+   - rewrite any participant reference equal to the source entity id to the clone id,
+   - keep other participant references unchanged.
+3. Submit entity creation + selected relationship creations in one update operation when
+   supported so clone save is atomic from the user's perspective.
 
 ## Data-model changes
 
@@ -264,10 +313,13 @@ editor selected by `TypeName`. Resolution rules:
 
 ## Architecture / code changes
 
-### New: `EditEntityShortcut` + handler
+### New: `EditEntityShortcut` + `CloneEntityShortcut` + handlers
 
 - **`Shortcut.Edit`** (`Phantom.Workspaces/ViewModels/Shortcut.cs`): new static
   `Shortcut("Edit", "✎")` with hover text "Edit entity"; added to
+  `ShortcutManager.shortcuts`.
+- **`Shortcut.Clone`** (`Phantom.Workspaces/ViewModels/Shortcut.cs`): new static
+  `Shortcut("Clone", "⧉")` with hover text "Clone entity"; added to
   `ShortcutManager.shortcuts`.
 - **`EditEntityShortcutHandler`** (new,
   `Phantom.Workspaces/ViewModels/EditEntityShortcutHandler.cs`): derives from
@@ -276,13 +328,40 @@ editor selected by `TypeName`. Resolution rules:
     `entityViewModel.CanEditEntity`.
   - `Handle` invokes the card node's `EnterEditMode` for the entity (routed through the
     `MainWindowViewModel`/owning node) and returns `true`.
+- **`CloneEntityShortcutHandler`** (new,
+  `Phantom.Workspaces/ViewModels/CloneEntityShortcutHandler.cs`): derives from
+  `ShortcutHandler`.
+  - `ShouldApplyTo` returns `true` when `shortcut == Shortcut.Clone` and
+    `entityViewModel.CanEditEntity` (clone requires create/update capability and snapshot data).
+  - `Handle` opens `CloneEntityEditorViewModel` in a new tab and returns `true`.
+  - The handler does not write data directly; writes occur only from clone-tab Save.
   - Registered in `MainWindowViewModel` alongside the other handlers
-    (`AddShortcutHandler(new EditEntityShortcutHandler())`).
+    (`AddShortcutHandler(new EditEntityShortcutHandler())`,
+    `AddShortcutHandler(new CloneEntityShortcutHandler())`).
 - **`SubscribedEntityViewModel`** (`.../SubscribedEntityViewModel.cs`): add
   `bool CanEditEntity` (data is a `JsonElement`, not deleted, and update is supported by
   the data-access layer), raising `PropertyChanged` from the same places that raise
   `CanToggleRawJson`/`CanDeleteEntity`. Add `Task SaveEditedEntityAsync(JsonElement data)`
   that pushes the merged update through the data-access layer.
+
+### New: clone editor view model + tab
+
+- **`CloneEntityEditorViewModel`** (new,
+  `Phantom.Workspaces/ViewModels/CloneEntityEditorViewModel.cs`):
+  - Holds clone draft state (`CloneEntityId`, `CloneNames`, copied data/properties).
+  - Exposes `ObservableCollection<CloneRelationshipSelectionItemViewModel>`
+    for relationship checkboxes.
+  - Exposes `SaveCloneCommand` / `CancelCommand`.
+  - `SaveCloneCommand` builds create/update changes for clone entity + selected relationships.
+  - `CancelCommand` closes the tab with no persistence.
+- **`CloneRelationshipSelectionItemViewModel`** (new):
+  - `bool IsSelected`, relationship identity, display label, and participant summary.
+- **`CloneEntityWorkspaceTabViewModel`** (new,
+  `Phantom.Workspaces/ViewModels/CloneEntityWorkspaceTabViewModel.cs`):
+  - workspace-tab wrapper for `CloneEntityEditorViewModel`.
+- **`CloneEntityEditorView.axaml`** (new):
+  - hosted inside the clone tab (entity fields + relationship selector list + Save/Cancel).
+  - Save persists clone and closes/redirects tab per UX decision; Cancel closes without writing.
 
 ### Touched: `EntityListNodeViewModel`
 
@@ -364,6 +443,7 @@ implementation (no duplicated schema logic).
 ### Touched: `MainWindowViewModel`
 
 - Register `EditEntityShortcutHandler`.
+- Register `CloneEntityShortcutHandler`.
 - Provide the `IEntitySchemaComposer` (and `CustomFieldEditorActivator`) to the card-node
   / `FieldEditorFactory` construction paths.
 
@@ -392,6 +472,20 @@ For each field, `CreateFieldEditorAsync` resolves the editor in this order:
 - `ShortcutManager.GetShortcutsFor` includes `Edit` for an editable entity and excludes it
   for a non-editable one.
 - `Handle` puts the corresponding card node into edit mode.
+
+### CloneEntityShortcut
+
+- `CloneEntityShortcutHandler.ShouldApplyTo` is `true` for `Shortcut.Clone` when
+  `CanEditEntity` and source snapshot data is available.
+- `ShortcutManager.GetShortcutsFor` includes `Clone` for a cloneable entity and excludes it
+  for a non-cloneable one.
+- `Handle` opens a new clone editor tab prepopulated with:
+  - new GUID `entity-id`,
+  - copied data/properties,
+  - derived clone names.
+- Cancel closes the tab and performs **no** update/create operations.
+- Save creates the clone entity and only the selected relationships.
+- Selected relationship clones rewrite source-entity participant references to the clone id.
 
 ### Edit-mode chrome (`EntityListNodeViewModel`)
 
