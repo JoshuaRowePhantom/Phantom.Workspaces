@@ -631,6 +631,95 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task Completion_WritesFullyCoalescedStreamingResponseToHistory()
+    {
+        // Streaming updates are conflated (intermediate frames may be skipped while a coalesce is in
+        // flight), but the run must not complete until the final accumulated frame has been fully
+        // processed. Otherwise the running item would be committed to history while still partial,
+        // producing duplicate/flickering content. Releasing the final fragments only after the first
+        // is shown forces the final frame to arrive immediately before completion.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "alpha "));
+        var blockedSecond = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "beta "),
+            isReady: false);
+        var blockedThird = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "gamma.")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        var blockedComplete = stream.Complete(isReady: false);
+
+        await using var chat = CreateChat(client);
+        chat.EnqueueUserMessage("go");
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 1
+                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("alpha", StringComparison.Ordinal)),
+            "running item to appear after the first streamed fragment");
+
+        blockedSecond.MarkReady();
+        blockedThird.MarkReady();
+        blockedComplete.MarkReady();
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0 && chat.History.Count == 2,
+            "run to complete and commit the assistant response to history");
+
+        // At the moment the history is updated, the full coalesced response must be present.
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        Assert.Equal("alpha beta gamma.", GetText(chat.History[1].Contents));
+        Assert.Empty(chat.RunningItems);
+    }
+
+    [Fact]
+    public async Task Interrupt_CommitsStreamedContentBeforeInterruptedDiagnostic()
+    {
+        // On interrupt the latest streamed frame must be drained before the diagnostic is recorded, so
+        // the committed history shows the streamed content first and the "Interrupted" message last
+        // (no late frame clobbering the diagnostic, no duplicate content).
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "partial answer "));
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "more")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        stream.Complete(isReady: false);
+
+        await using var chat = CreateChat(client);
+        chat.EnqueueUserMessage("hello");
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 1
+                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("partial answer", StringComparison.Ordinal)),
+            "run to start and stream initial content");
+
+        chat.Interrupt();
+
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 3
+                && chat.History[^1].Role == AgentChatHistoryItem.DiagnosticChatRole,
+            "interrupt to commit streamed content followed by the interrupted diagnostic");
+
+        Assert.Equal(3, chat.History.Count);
+        Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        Assert.Contains("partial answer", GetText(chat.History[1].Contents), StringComparison.Ordinal);
+        Assert.Equal(AgentChatHistoryItem.DiagnosticChatRole, chat.History[2].Role);
+        Assert.Contains("Interrupted", GetText(chat.History[2].Contents), StringComparison.Ordinal);
+        Assert.Empty(chat.RunningItems);
+    }
+
+    [Fact]
     public void ResolveUseProvidedChatClientAsIs_TrueForOverride_SelfInvoking_OrServiceDiscovered()
     {
         var normalClient = new DeterministicTestChatClient();
