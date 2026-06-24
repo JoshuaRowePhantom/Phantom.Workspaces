@@ -116,6 +116,10 @@ Tools are scheduled by creating a `tool-relationship` entity that links:
 2. One or more **schedule entities** (via `participants.schedule` array)
 3. One or more **target entities** (via `participants.target` array)
 
+A tool does nothing until such a relationship exists — see the
+[Tool Relationship entity type](#related-entity-types) for why/when to create one, how to resolve the
+participant entity-ids, and worked examples.
+
 Example tool-relationship entity:
 ```json
 {
@@ -263,6 +267,20 @@ tool-relationship {
 ## Disabling a Tool
 
 To disable a tool on a profile, delete the tool-relationship entity. Do not modify the tool or schedule entities - they remain available for future use or use by other relationships.
+
+## Related entity types
+
+- **Tool Relationship** (`tool-relationship` entity type,
+  `https://schemas.workspaces.phantom.to/workspaces/data/core/tool-relationship.json`,
+  [tool-relationship-schema.md](/JsonEntities/documentation/tool-relationship-schema.md)) — links this
+  tool to a schedule and targets to actually run it. **A tool only executes once a tool-relationship
+  references it.** See that doc for first-time creation examples and the reasoning on when to create a
+  relationship.
+- **Schedule** (`schedule` entity type,
+  [schedule-schema.md](/JsonEntities/documentation/schedule-schema.md)) — when the tool runs.
+- **Tool Execution Result** (`tool-execution-result` entity type,
+  [tool-execution-result-schema.md](/JsonEntities/documentation/tool-execution-result-schema.md)) —
+  per-run output, used for verification and troubleshooting.
 
 ## Troubleshooting
 
