@@ -20,6 +20,100 @@ directly and use its existing `TryDequeueNextImmediateOrQueued` method:
 
 ---
 
+## Middleware placement in the `IChatClient` stack
+
+Understanding where `ToolResultSteeringMiddleware` sits is critical to its correctness.
+
+### Stack for non-Copilot providers (e.g. `github-models`)
+
+```
+ChatClientAgent
+  └─ FunctionInvocationMiddleware          ← added by framework (UseProvidedChatClientAsIs=false)
+       └─ LoggingMiddleware                ← added by AgentChat.InitializeAsync when LogChat=true
+            └─ ToolResultSteeringMiddleware ← wraps raw LLM client; added by AgentFactory
+                 └─ raw LLM IChatClient   (e.g. OpenAI / GitHub Models client)
+```
+
+The framework's `FunctionInvocationMiddleware` is what executes `AIFunction` tool calls
+and then re-calls `GetStreamingResponseAsync` with `FunctionResultContent` messages
+appended. `ToolResultSteeringMiddleware` is BELOW this layer, so it sees exactly those
+re-calls and can inject queued items at the right moment.
+
+**If the middleware were placed above `FunctionInvocationMiddleware`**, it would only see
+the model's initial call (which returns `FunctionCallContent`), never the tool-result
+return. It would never find `FunctionResultContent` in the last message and would never
+inject anything.
+
+### Stack for Copilot (`CopilotSdkChatClient`)
+
+```
+ChatClientAgent
+  └─ LoggingMiddleware                     ← if LogChat=true
+       └─ CopilotSdkChatClient             ← UseProvidedChatClientAsIs=true; no FunctionInvocationMiddleware
+```
+
+`CopilotSdkChatClient` implements `ISelfInvokingToolChatClient`, so
+`ResolveUseProvidedChatClientAsIs` returns `true` and the framework does NOT add
+`FunctionInvocationMiddleware`. The Copilot CLI drives the tool loop itself and never
+re-calls `GetStreamingResponseAsync` with tool results. Therefore
+**`ToolResultSteeringMiddleware` is not used for Copilot at all** — the factory returns
+the raw `CopilotSdkChatClient`, not a wrapped version. Steering for Copilot uses the
+`QueueStateChanged` subscription path instead.
+
+### How the factory ensures correct placement
+
+The factory wraps the raw LLM client at the bottom of the chain:
+
+```csharp
+// In AgentFactory.WrapWithMiddleware:
+var mw = new ToolResultSteeringMiddleware(rawLlmClient, queueManager);
+return new ChatClientResult(mw, displayName);
+// AgentChat.InitializeAsync may then add LoggingMiddleware on top of mw.
+// ChatClientAgent adds FunctionInvocationMiddleware on top of that.
+```
+
+`AgentFactory` produces the innermost layers; the calling code and framework add outer
+layers. This ordering is automatic and does not require any special coordination.
+
+### `GetService` delegation and `ISelfInvokingToolChatClient`
+
+`ResolveUseProvidedChatClientAsIs` is called with `resolvedClient` — which, for
+non-Copilot providers, IS the `ToolResultSteeringMiddleware`. The check calls
+`resolvedClient.GetService(typeof(ISelfInvokingToolChatClient))`. The middleware's
+`GetService` delegates to its inner client. For non-Copilot inner clients this returns
+`null`, so the check correctly resolves to `false` and the framework adds
+`FunctionInvocationMiddleware` as expected.
+
+Because `GetService` is delegated, if a future inner client implements
+`ISelfInvokingToolChatClient`, wrapping it with `ToolResultSteeringMiddleware` would
+cause `ResolveUseProvidedChatClientAsIs` to return `true`, suppressing the framework
+middleware — and then `ToolResultSteeringMiddleware` would never see tool results.
+In practice this situation means the inner client drives its own tool loop (like
+Copilot), in which case `ToolResultSteeringMiddleware` should not have been applied
+in the first place. The factory should guard against this:
+
+```csharp
+private static ChatClientResult WrapWithMiddleware(
+    (IChatClient client, string displayName) inner,
+    AgentInputQueueManager? queueManager)
+{
+    // Never wrap a self-invoking client with ToolResultSteeringMiddleware —
+    // it handles its own tool loop and never produces FunctionResultContent calls.
+    if (queueManager is null
+        || inner.client is ISelfInvokingToolChatClient
+        || inner.client.GetService(typeof(ISelfInvokingToolChatClient)) is not null)
+    {
+        return new ChatClientResult(inner.client, inner.displayName);
+    }
+
+    return new ChatClientResult(
+        new ToolResultSteeringMiddleware(inner.client, queueManager),
+        inner.displayName);
+}
+```
+
+---
+
 ## New files in `Phantom.Workspaces.Llm.Core`
 
 ### `ChatClientResult.cs`
@@ -275,13 +369,15 @@ public static ChatClientResult CreateChatClient(
 }
 
 // Wraps the inner client with ToolResultSteeringMiddleware when a queue manager is
-// provided. When queueManager is null (e.g. test providers or no steering desired),
-// returns the inner client unwrapped.
+// provided. Never wraps self-invoking clients — they drive their own tool loop and
+// GetStreamingResponseAsync is never re-called with FunctionResultContent.
 private static ChatClientResult WrapWithMiddleware(
     (IChatClient client, string displayName) inner,
     AgentInputQueueManager? queueManager)
 {
-    if (queueManager is null)
+    if (queueManager is null
+        || inner.client is ISelfInvokingToolChatClient
+        || inner.client.GetService(typeof(ISelfInvokingToolChatClient)) is not null)
     {
         return new ChatClientResult(inner.client, inner.displayName);
     }
