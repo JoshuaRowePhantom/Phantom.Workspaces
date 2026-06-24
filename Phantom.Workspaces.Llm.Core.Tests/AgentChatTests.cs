@@ -93,15 +93,17 @@ public sealed class AgentChatTests
         Func<bool> condition,
         string description)
     {
-        if (condition())
-        {
-            return;
-        }
-
+        // The agent mutates its observable collections on its foreground scheduler and raises
+        // CollectionChanged on that thread, so evaluating the predicate from within the handler is
+        // race-free. The initial sample runs on the test thread and may observe a collection while
+        // the agent is mutating it on another thread; ConditionMet swallows the resulting transient
+        // enumeration error and relies on the next (race-free) CollectionChanged to complete the
+        // wait. Subscribing before the post-subscription sample guarantees no notification is missed,
+        // so a condition that becomes true only via a mutation is always observed.
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
-            if (condition())
+            if (ConditionMet(condition))
             {
                 signal.TrySetResult();
             }
@@ -110,7 +112,7 @@ public sealed class AgentChatTests
         collection.CollectionChanged += OnCollectionChanged;
         try
         {
-            if (condition())
+            if (ConditionMet(condition))
             {
                 return;
             }
@@ -120,6 +122,21 @@ public sealed class AgentChatTests
         finally
         {
             collection.CollectionChanged -= OnCollectionChanged;
+        }
+    }
+
+    private static bool ConditionMet(Func<bool> condition)
+    {
+        try
+        {
+            return condition();
+        }
+        catch (InvalidOperationException)
+        {
+            // Transient "Collection was modified; enumeration operation may not execute." raised when
+            // the predicate samples a collection the agent is concurrently mutating on its foreground
+            // thread. Treat as not-yet-satisfied; the next CollectionChanged re-evaluates safely.
+            return false;
         }
     }
 
@@ -631,10 +648,111 @@ public sealed class AgentChatTests
         await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to complete");
     }
 
+    [Fact]
+    public async Task StreamingRun_SerializesRunningItemMutationsOnForegroundScheduler()
+    {
+        // The agent must mutate its running-item collections on a single serialized foreground
+        // scheduler: the processing loop's lifecycle operations (create/update/complete) and the
+        // partial-response conflator's population must never run concurrently, otherwise a consumer
+        // enumerating RunningItems -> Items -> Contents (as the GUI data templates and the test
+        // helpers do) could observe "Collection was modified; enumeration operation may not execute."
+        // This asserts that CollectionChanged notifications are never raised concurrently and that a
+        // foreground-thread reader (the notification handler) never observes a torn collection.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Let me check. "));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Looking it up. "));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new FunctionCallContent("call-1", "search", new Dictionary<string, object?> { ["q"] = "widgets" }),
+        ]));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Tool, [
+            new FunctionResultContent("call-1", "found 3 widgets"),
+        ]));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "There are 3 "));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "widgets. "));
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "Done.")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            });
+        stream.Complete();
+
+        await using var chat = CreateChat(client);
+
+        var activeNotifications = 0;
+        var maximumConcurrentNotifications = 0;
+        Exception? enumerationFailure = null;
+
+        void OnRunningItemsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            var current = System.Threading.Interlocked.Increment(ref activeNotifications);
+            UpdateMaximum(ref maximumConcurrentNotifications, current);
+            try
+            {
+                // Deep-enumerate exactly as the GUI data templates and existing assertions do; on the
+                // buggy code a concurrent mutation on another thread surfaces here.
+                foreach (var runningItem in chat.RunningItems)
+                {
+                    foreach (var item in runningItem.Items)
+                    {
+                        foreach (var content in item.Contents)
+                        {
+                            _ = content;
+                        }
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                System.Threading.Volatile.Write(ref enumerationFailure, exception);
+            }
+            finally
+            {
+                System.Threading.Interlocked.Decrement(ref activeNotifications);
+            }
+        }
+
+        var runningItemsNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems;
+        runningItemsNotifications.CollectionChanged += OnRunningItemsChanged;
+        try
+        {
+            chat.EnqueueUserMessage("search please");
+
+            await WaitForConditionAsync(
+                chat.RunningItems,
+                () => chat.RunningItems.Count == 0
+                    && chat.History.Any(item => item.Role == ChatRole.Assistant
+                        && GetText(item.Contents).Contains("Done.", StringComparison.Ordinal)),
+                "streaming run to complete");
+        }
+        finally
+        {
+            runningItemsNotifications.CollectionChanged -= OnRunningItemsChanged;
+        }
+
+        Assert.Null(System.Threading.Volatile.Read(ref enumerationFailure));
+        Assert.Equal(1, System.Threading.Volatile.Read(ref maximumConcurrentNotifications));
+    }
+
+    private static void UpdateMaximum(ref int target, int candidate)
+    {
+        int observed;
+        do
+        {
+            observed = System.Threading.Volatile.Read(ref target);
+            if (candidate <= observed)
+            {
+                return;
+            }
+        }
+        while (System.Threading.Interlocked.CompareExchange(ref target, candidate, observed) != observed);
+    }
+
     private static IEnumerable<AIContent> RunningItemContents(AgentChat chat)
         => chat.RunningItems
             .SelectMany(runningItem => runningItem.Items)
             .SelectMany(item => item.Contents);
+
 
     [Fact]
     public async Task Interrupt_DuringRun_RecordsInterruptedDiagnosticAndCompletes()
