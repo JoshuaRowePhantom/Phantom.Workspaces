@@ -1,0 +1,9 @@
+{
+  "entity-id": "f67c1874-93be-44e7-894c-c662a0a8d9c9",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "agent-manifest"]],
+  "display-name": {
+    "default": "Agent Manifest View"
+  },
+  "fields": []
+}

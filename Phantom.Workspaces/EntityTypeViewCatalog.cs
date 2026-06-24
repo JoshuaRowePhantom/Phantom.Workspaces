@@ -11,11 +11,13 @@ namespace Phantom.Workspaces;
 
 /// <summary>
 /// Metadata for an entity type view, including which fields should be displayed and how.
+/// <see cref="Fields"/> is <see langword="null"/> when the view does not specify a <c>fields</c>
+/// array (so all schema fields are shown); a present-but-empty list means show no fields.
 /// </summary>
 public sealed record EntityTypeViewDefinition(
     string EntityTypeName,
     string? ViewName,
-    IReadOnlyList<EntityFieldViewDefinition> Fields);
+    IReadOnlyList<EntityFieldViewDefinition>? Fields);
 
 /// <summary>
 /// Definition of how a field should be displayed in an entity card.
@@ -190,11 +192,11 @@ public sealed class EntityTypeViewCatalog : IDisposable
         return false;
     }
 
-    private static IReadOnlyList<EntityFieldViewDefinition> ReadFields(JsonElement data)
+    private static IReadOnlyList<EntityFieldViewDefinition>? ReadFields(JsonElement data)
     {
         if (!data.TryGetProperty("fields", out var fieldsArray) || fieldsArray.ValueKind != JsonValueKind.Array)
         {
-            return Array.Empty<EntityFieldViewDefinition>();
+            return null;
         }
 
         var fields = new List<EntityFieldViewDefinition>();
