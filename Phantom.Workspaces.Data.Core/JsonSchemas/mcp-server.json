@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/mcp-server.json",
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/mcp-server.json",
   "description": "Schema for mcp-server entities that register Model Context Protocol servers. The 'mcp-server' property describes how to connect to and use the server.",
   "allOf": [
     {
@@ -10,6 +10,9 @@
   "properties": {
     "entity-types": {
       "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
       "contains": {
         "const": "mcp-server"
       }

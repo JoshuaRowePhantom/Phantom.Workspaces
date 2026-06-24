@@ -9,7 +9,6 @@
   "type": "object",
   "properties": {
     "entity-types": {
-      "description": "Must include the 'tool-execution-result' entity type.",
       "type": "array",
       "items": {
         "$ref": "core.json#/$defs/entity-type-id"
@@ -43,6 +42,7 @@
     }
   },
   "required": [
+    "entity-types",
     "tool-name",
     "start-time"
   ]

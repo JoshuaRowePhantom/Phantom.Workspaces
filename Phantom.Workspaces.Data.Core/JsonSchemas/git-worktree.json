@@ -10,5 +10,18 @@
     }
   ],
   "type": "object",
-  "properties": {}
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "git-worktree"
+      }
+    }
+  }
 }

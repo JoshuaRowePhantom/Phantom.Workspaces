@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/agent-definition.json",
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-definition.json",
   "description": "Schema for agent definition entities that store reusable agent configuration documents.",
   "allOf": [
     {
@@ -10,6 +10,9 @@
   "properties": {
     "entity-types": {
       "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
       "contains": {
         "const": "agent-definition"
       }

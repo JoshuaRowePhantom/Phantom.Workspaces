@@ -7,7 +7,19 @@
     }
   ],
   "type": "object",
+  "required": [
+    "entity-types"
+  ],
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "entity-type-view"
+      }
+    },
     "base-entity-type-field-entity-id": {
       "$ref": "core.json#/$defs/entity-id"
     },

@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/agent-manifest.json",
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-manifest.json",
   "description": "Schema for agent manifest entities that store declarative agent configurations with tool resource references. Tool resources are resolved at runtime based on execution context (user, machine, workspace).",
   "allOf": [
     {
@@ -10,6 +10,9 @@
   "properties": {
     "entity-types": {
       "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
       "contains": {
         "const": "agent-manifest"
       }

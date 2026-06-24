@@ -3,14 +3,17 @@
   "description": "Schema for workspace entities that represent top-level workspace containers and metadata.",
   "type": "object",
   "properties": {
-    "entity-id": {
-      "$ref": "core.json#/$defs/entity-id"
-    },
     "entity-types": {
       "type": "array",
       "items": {
         "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "workspace"
       }
+    },
+    "entity-id": {
+      "$ref": "core.json#/$defs/entity-id"
     },
     "names": {
       "type": "array",
@@ -32,6 +35,7 @@
     }
   },
   "required": [
+    "entity-types",
     "regions"
   ],
   "$defs": {

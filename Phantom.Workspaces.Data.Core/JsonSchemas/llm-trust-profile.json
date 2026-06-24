@@ -4,12 +4,7 @@
   "$comment": "Entity-semantic trust profile definition used for authoring and composition into runtime LLM trust profiles.",
   "type": "object",
   "properties": {
-    "entity-id": {
-      "$comment": "Stable id for the trust profile entity.",
-      "$ref": "core.json#/$defs/entity-id"
-    },
     "entity-types": {
-      "$comment": "Must include llm-trust-profile.",
       "type": "array",
       "items": {
         "$ref": "core.json#/$defs/entity-type-id"
@@ -17,6 +12,10 @@
       "contains": {
         "const": "llm-trust-profile"
       }
+    },
+    "entity-id": {
+      "$comment": "Stable id for the trust profile entity.",
+      "$ref": "core.json#/$defs/entity-id"
     },
     "names": {
       "$comment": "Optional index names for lookup and references.",
@@ -84,6 +83,7 @@
     }
   },
   "required": [
+    "entity-types",
     "hosting-workspaces-client-instances",
     "mount-points",
     "network-access-policy",

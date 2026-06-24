@@ -13,7 +13,19 @@
     }
   ],
   "type": "object",
+  "required": [
+    "entity-types"
+  ],
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "azure-devops-work-item"
+      }
+    },
     "work-item-id": {
       "type": "string",
       "description": "The Azure DevOps work item ID"

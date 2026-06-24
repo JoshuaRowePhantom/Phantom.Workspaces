@@ -1,5 +1,19 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git.json",
   "description": "Schema for git repository entities and repository-level metadata used by workspace tooling.",
-  "type": "object"
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "git"
+      }
+    }
+  }
 }

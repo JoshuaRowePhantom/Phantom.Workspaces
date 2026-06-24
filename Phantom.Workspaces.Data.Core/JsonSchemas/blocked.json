@@ -7,6 +7,9 @@
     }
   ],
   "type": "object",
+  "required": [
+    "entity-types"
+  ],
   "properties": {
     "entity-types": {
       "type": "array",

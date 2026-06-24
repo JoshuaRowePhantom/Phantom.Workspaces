@@ -3,6 +3,15 @@
   "description": "Schema for related relationship entities that represent general-purpose relatedness links.",
   "type": "object",
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "related"
+      }
+    },
     "participants": {
       "type": "object",
       "properties": {
@@ -21,6 +30,7 @@
     }
   },
   "required": [
+    "entity-types",
     "participants"
   ]
 }

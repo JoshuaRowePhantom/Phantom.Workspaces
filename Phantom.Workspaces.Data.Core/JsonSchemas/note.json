@@ -3,6 +3,15 @@
   "description": "Schema for note entities containing human-readable documentation and markdown content.",
   "type": "object",
   "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "note"
+      }
+    },
     "title": {
       "$ref": "core.json#/$defs/local-string"
     },
@@ -12,6 +21,7 @@
     }
   },
   "required": [
+    "entity-types",
     "content"
   ]
 }
