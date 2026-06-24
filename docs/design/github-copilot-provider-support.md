@@ -291,6 +291,9 @@ concurrently with an in-progress turn.
 
 **`ISteerableChatClient` interface:**
 
+> See [steerable-chat-implementation.md](steerable-chat-implementation.md) for the
+> full implementation design, including all new/modified files and test specifications.
+
 `ISteerableChatClient` is a narrow, independent interface — it does not extend `IChatClient`.
 It carries only the ability to accept in-flight steering text:
 
