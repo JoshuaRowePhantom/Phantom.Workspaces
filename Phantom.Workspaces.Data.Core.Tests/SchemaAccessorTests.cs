@@ -97,6 +97,47 @@ public sealed class SchemaAccessorTests
         Assert.Same(firstRegistry, secondRegistry);
     }
 
+    [Fact]
+    public async Task BuildSchemaRegistryAsync_IncludesSchemaByJsonSchemaType_WhenNotUnderJsonSchemasFolder()
+    {
+        // Schema entities are discovered for the registry by the "json-schema" entity type,
+        // not by the "json-schemas" name folder, so a json-schema-tagged entity indexed only
+        // under "entity-types" must still be loaded into the registry by its $id.
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+        var schemaId = new EntityId("3a9c5e7b-1d2f-4c8a-9e0b-6f4d2a8c1b30");
+        const string schemaUri = "https://schemas.workspaces.phantom.to/tests/type-indexed-only.json";
+
+        var addResult = await dataAccessLayer.UpdateAsync(
+            CreateUpdateRequest(
+                new EntityChange
+                {
+                    EntityId = schemaId,
+                    Data = JsonDocument.Parse(
+                        $$"""
+                        {
+                          "entity-id": "{{schemaId}}",
+                          "entity-types": ["entity", "json-schema"],
+                          "names": [["entity-types", "type-indexed-only-schema"]],
+                          "schema": {
+                            "$id": "{{schemaUri}}",
+                            "type": "object",
+                            "properties": {
+                              "title": { "type": "string" }
+                            }
+                          }
+                        }
+                        """).RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                }));
+        Assert.DoesNotContain(addResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
+
+        var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+
+        var registry = await schemaAccessor.BuildSchemaRegistryAsync();
+
+        Assert.NotNull(registry.Get(new Uri(schemaUri, UriKind.Absolute)));
+    }
+
     private static async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Data;
 
 public sealed class SchemaAccessor : ISchemaAccessor
 {
-    private const string SchemaEntityNamePrefix = "json-schemas";
+    private const string SchemaEntityType = "json-schema";
 
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Dictionary<string, JsonElement> requestSchemasByName;
@@ -169,25 +169,28 @@ public sealed class SchemaAccessor : ISchemaAccessor
             }
 
             var schemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-            // Schema entities all live under the "json-schemas" folder, so the
-            // registry can be built from a bounded Get of that folder's
-            // descendants instead of enumerating the entire store.
-            var getResult = await this.dataAccessLayer.GetAsync(
-                new GetRequest
+            // Schema entities are tagged with the "json-schema" entity type, so the
+            // registry can be built from a bounded type query instead of enumerating
+            // the entire store.
+            var queryResult = await this.dataAccessLayer.QueryAsync(
+                new QueryRequest
                 {
-                    Entities =
+                    Clauses =
                     [
-                        new GetEntityRequest
+                        new TopLevelQueryClause
                         {
-                            EntityName = new EntityName(SchemaEntityNamePrefix),
-                            EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+                            ClauseIdentifier = new QueryClauseIdentifier(SchemaEntityType),
+                            Clause = new EntityTypeQueryClause
+                            {
+                                EntityTypeNames = new EntityTypeNameSet([SchemaEntityType]),
+                            },
                         },
                     ],
                     Timestamps = new Timestamp?[] { null },
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            foreach (var entityData in getResult.Batches
+            foreach (var entityData in queryResult.Batches
                          .SelectMany(static batch => batch.Entities)
                          .Select(static entity => entity.Data)
                          .Where(static data => data is { ValueKind: JsonValueKind.Object })
