@@ -501,22 +501,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             }
         }
 
-#pragma warning disable CS0618
-        var exportResult = await this.UnderlyingDataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
-#pragma warning restore CS0618
-        foreach (var entity in exportResult.ChangeBatches.SelectMany(static batch => batch.Entities))
-        {
-            if (entity.Data is not { ValueKind: JsonValueKind.Object } data)
-            {
-                continue;
-            }
-
-            if (this.GetEntityNames(data).Intersect(schemaNames, StringComparer.Ordinal).Any())
-            {
-                return data;
-            }
-        }
-
         return null;
     }
 
