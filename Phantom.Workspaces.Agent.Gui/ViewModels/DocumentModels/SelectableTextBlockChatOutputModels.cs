@@ -699,6 +699,7 @@ internal sealed class ToolContentSelectableInlineModel : IDisposable
         this.Span = new Span();
         this.Span.Classes.Add("agent-chat-selectable-tool");
         this.Span.Inlines.Add(new InlineUIContainer(this.toggleButton));
+        this.Span.Inlines.Add(new LineBreak());
         this.Span.Inlines.Add(this.dataSpan);
 
         this.ApplyExpansion();
