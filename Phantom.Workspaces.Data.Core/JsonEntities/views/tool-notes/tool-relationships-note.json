@@ -1,0 +1,26 @@
+{
+  "entity-id": "c342619d-a235-411e-8e70-45c3d32ce8aa",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "views",
+      "tools",
+      "notes",
+      "tool-relationships"
+    ]
+  ],
+  "display-name": {
+    "default": "Tool Relationships"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Tool Relationships\n\nTool relationships connect a tool to the entities it acts on, optionally on a schedule. Each relationship names the tool to invoke, the target entities it operates over, and the schedule that governs when it runs."
+      }
+    }
+  }
+}

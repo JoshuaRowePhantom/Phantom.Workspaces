@@ -59,9 +59,10 @@ public sealed class FieldEditorFactory
         IReadOnlyList<IReadOnlyList<string>> fieldPaths;
         IReadOnlyDictionary<string, string?>? displayFormats = null;
         
-        if (entityTypeView?.Fields is { Count: > 0 } viewFields)
+        if (entityTypeView?.Fields is { } viewFields)
         {
-            // Use fields specified in entity-type-view
+            // Use fields specified in entity-type-view. A present-but-empty list means show no fields
+            // (the display name alone is enough); a null Fields means fall back to all schema fields.
             fieldPaths = viewFields.Select(f => f.FieldPath).ToArray();
             displayFormats = viewFields.ToDictionary(
                 f => string.Join(".", f.FieldPath),
@@ -155,6 +156,46 @@ public sealed class FieldEditorFactory
         return current;
     }
 
+    /// <summary>
+    /// Navigates the entity data along the full field path (object property and array index segments)
+    /// to obtain the field's value. Returns false when any segment cannot be resolved.
+    /// </summary>
+    private static bool TryNavigateToFieldValue(
+        JsonElement rootEntity,
+        IReadOnlyList<string> fieldPath,
+        out JsonElement fieldValue)
+    {
+        var current = rootEntity;
+        foreach (var segment in fieldPath)
+        {
+            if (current.ValueKind == JsonValueKind.Object)
+            {
+                if (!current.TryGetProperty(segment, out var next))
+                {
+                    fieldValue = default;
+                    return false;
+                }
+
+                current = next;
+            }
+            else if (current.ValueKind == JsonValueKind.Array
+                     && int.TryParse(segment, out var index)
+                     && index >= 0
+                     && index < current.GetArrayLength())
+            {
+                current = current[index];
+            }
+            else
+            {
+                fieldValue = default;
+                return false;
+            }
+        }
+
+        fieldValue = current;
+        return true;
+    }
+
     private async Task<EntityFieldEditorViewModel> CreateFieldEditorAsync(
         JsonElement rootEntity,
         IReadOnlyList<string> fieldPath,
@@ -163,8 +204,9 @@ public sealed class FieldEditorFactory
         var fieldName = fieldPath[^1];
         var fieldPathKey = string.Join(".", fieldPath);
         var displayFormat = displayFormats?.TryGetValue(fieldPathKey, out var format) == true ? format : null;
+        var isInline = string.Equals(displayFormat, "inline", StringComparison.Ordinal);
         
-        if (!rootEntity.TryGetProperty(fieldName, out var fieldValue))
+        if (!TryNavigateToFieldValue(rootEntity, fieldPath, out var fieldValue))
         {
             using var nullDocument = JsonDocument.Parse("null");
             fieldValue = nullDocument.RootElement.Clone();
@@ -182,7 +224,26 @@ public sealed class FieldEditorFactory
             return customEditor;
         }
 
-        // 2. Entity-reference editor when the field's schema declares allowed entity types.
+        // 2. Entity-list editor for a list of entity-id references (core.json entity-id-list).
+        if (string.Equals(resolvedType.TypeName, "entity-id-list", StringComparison.Ordinal))
+        {
+            var entityIds = fieldValue.ValueKind == JsonValueKind.Array
+                ? fieldValue.EnumerateArray()
+                    .Where(static element => element.ValueKind == JsonValueKind.String)
+                    .Select(static element => element.GetString() ?? string.Empty)
+                    .ToArray()
+                : Array.Empty<string>();
+            var listEditor = new EntityListFieldEditorViewModel(
+                fieldName,
+                entityIds,
+                resolvedType.EntityTypes,
+                this.entityReferenceSearch,
+                this.openEntity);
+            await listEditor.ResolveDisplayNamesAsync().ConfigureAwait(true);
+            return listEditor;
+        }
+
+        // 3. Entity-reference editor when the field's schema declares allowed entity types.
         if (resolvedType.EntityTypes.Count > 0)
         {
             var entityId = fieldValue.ValueKind == JsonValueKind.String ? fieldValue.GetString() : null;
@@ -220,7 +281,7 @@ public sealed class FieldEditorFactory
             case "mime-attachment":
                 if (fieldValue.ValueKind == JsonValueKind.Object)
                 {
-                    if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, resolvedType.DefaultMimeType, out var localizedMimeEditor))
+                    if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, resolvedType.DefaultMimeType, isInline, out var localizedMimeEditor))
                     {
                         return localizedMimeEditor;
                     }
@@ -248,15 +309,15 @@ public sealed class FieldEditorFactory
                         ? urlElement.GetString()
                         : null;
                     MimeAttachmentFieldEditorViewModel editor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
-                        ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
-                        : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+                        ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline)
+                        : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline);
                     return new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, editor);
                 }
 
                 var defaultMimeType = resolvedType.DefaultMimeType ?? "application/octet-stream";
                 MimeAttachmentFieldEditorViewModel defaultEditor = string.Equals(defaultMimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
-                    ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null)
-                    : new PlainMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null);
+                    ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null, isInline)
+                    : new PlainMimeAttachmentFieldEditorViewModel(fieldName, defaultMimeType, null, null, isInline);
                 return new LocalizedMimeAttachmentFieldEditorViewModel(fieldName, defaultEditor);
             case "array":
                 if (fieldValue.ValueKind != JsonValueKind.Array)
@@ -319,6 +380,7 @@ public sealed class FieldEditorFactory
         string fieldName,
         JsonElement fieldValue,
         string? defaultMimeType,
+        bool isInline,
         out EntityFieldEditorViewModel editor)
     {
         editor = null!;
@@ -331,7 +393,7 @@ public sealed class FieldEditorFactory
         foreach (var property in fieldValue.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object
-                || !TryCreateSingleMimeAttachmentEditor(fieldName, property.Value, defaultMimeType, out var localizedEditor))
+                || !TryCreateSingleMimeAttachmentEditor(fieldName, property.Value, defaultMimeType, isInline, out var localizedEditor))
             {
                 localizedValues.Clear();
                 break;
@@ -353,6 +415,7 @@ public sealed class FieldEditorFactory
         string fieldName,
         JsonElement fieldValue,
         string? defaultMimeType,
+        bool isInline,
         out MimeAttachmentFieldEditorViewModel editor)
     {
         editor = null!;
@@ -383,8 +446,8 @@ public sealed class FieldEditorFactory
             ? urlElement.GetString()
             : null;
         editor = string.Equals(mimeType, "text/markdown", StringComparison.OrdinalIgnoreCase)
-            ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url)
-            : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url);
+            ? new MarkdownMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline)
+            : new PlainMimeAttachmentFieldEditorViewModel(fieldName, mimeType, textContent, url, isInline);
         return true;
     }
 
@@ -400,7 +463,7 @@ public sealed class FieldEditorFactory
             return false;
         }
 
-        if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, defaultMimeType, out var localizedEditor))
+        if (TryCreateLocalizedMimeAttachmentEditor(fieldName, fieldValue, defaultMimeType, isInline: false, out var localizedEditor))
         {
             editor = localizedEditor;
             return true;

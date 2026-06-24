@@ -1,0 +1,26 @@
+{
+  "entity-id": "bd1956e3-ac4a-46a2-9fc6-8c62f375430c",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "views",
+      "tools",
+      "notes",
+      "tools"
+    ]
+  ],
+  "display-name": {
+    "default": "Tools"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Tools\n\nTools are capabilities an agent can invoke, such as MCP servers or built-in functions. Each tool entity describes a single capability that can be made available to agents. The tools below are the capabilities currently known to this workspace."
+      }
+    }
+  }
+}

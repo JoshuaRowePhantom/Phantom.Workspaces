@@ -16,10 +16,7 @@
       "type": "object",
       "properties": {
         "entities": {
-          "type": "array",
-          "items": {
-            "$ref": "core.json#/$defs/entity-id"
-          },
+          "$ref": "core.json#/$defs/entity-id-list",
           "minItems": 2
         }
       },

@@ -23,10 +23,7 @@
       "$ref": "core.json#/$defs/entity-id"
     },
     "opened-workspaces": {
-      "type": "array",
-      "items": {
-        "$ref": "core.json#/$defs/entity-id"
-      },
+      "$ref": "core.json#/$defs/entity-id-list",
       "uniqueItems": true
     }
   },

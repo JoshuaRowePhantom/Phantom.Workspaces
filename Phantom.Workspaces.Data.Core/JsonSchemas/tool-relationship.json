@@ -32,27 +32,13 @@
           "x-entity-types": ["tool"]
         },
         "schedule": {
-          "type": "array",
-          "items": {
-            "allOf": [
-              {
-                "$ref": "core.json#/$defs/entity-id"
-              }
-            ],
-            "x-entity-types": ["schedule"]
-          },
+          "$ref": "core.json#/$defs/entity-id-list",
+          "x-entity-types": ["schedule"],
           "minItems": 1
         },
         "target": {
-          "type": "array",
-          "items": {
-            "allOf": [
-              {
-                "$ref": "core.json#/$defs/entity-id"
-              }
-            ],
-            "x-entity-types": ["entity"]
-          },
+          "$ref": "core.json#/$defs/entity-id-list",
+          "x-entity-types": ["entity"],
           "minItems": 1
         }
       },

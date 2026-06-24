@@ -1,0 +1,19 @@
+{
+  "entity-id": "8c162b28-16f0-4a88-9380-54e2128fe429",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "tool-relationship"]],
+  "display-name": {
+    "default": "Tool Relationship View"
+  },
+  "fields": [
+    {
+      "field-path": ["participants", "schedule"]
+    },
+    {
+      "field-path": ["participants", "target"]
+    },
+    {
+      "field-path": ["participants", "tool"]
+    }
+  ]
+}

@@ -41,10 +41,7 @@
       "$ref": "core.json#/$defs/local-string"
     },
     "related-entity-ids": {
-      "type": "array",
-      "items": {
-        "$ref": "core.json#/$defs/entity-id"
-      }
+      "$ref": "core.json#/$defs/entity-id-list"
     },
     "relationship-roles": {
       "type": "array",
@@ -58,10 +55,7 @@
       "$ref": "core.json#/$defs/entity-id"
     },
     "^.*entity-ids$": {
-      "type": "array",
-      "items": {
-        "$ref": "core.json#/$defs/entity-id"
-      }
+      "$ref": "core.json#/$defs/entity-id-list"
     }
   },
   "allOf": [

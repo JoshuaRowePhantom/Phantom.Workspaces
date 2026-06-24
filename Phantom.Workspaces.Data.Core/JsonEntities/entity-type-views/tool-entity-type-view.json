@@ -1,0 +1,9 @@
+{
+  "entity-id": "43d3346a-5c45-40c7-b5e0-c8ed2ce6cd68",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "tool"]],
+  "display-name": {
+    "default": "Tool View"
+  },
+  "fields": []
+}
