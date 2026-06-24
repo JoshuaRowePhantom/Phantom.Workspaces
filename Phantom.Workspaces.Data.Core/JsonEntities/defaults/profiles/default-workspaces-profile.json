@@ -1,6 +1,7 @@
 {
   "entity-id": "d9c0a75b-51a4-4c18-ae3f-3f3dd1d9f2ad",
   "entity-types": [
+    "entity",
     "workspaces-profile"
   ],
   "names": [

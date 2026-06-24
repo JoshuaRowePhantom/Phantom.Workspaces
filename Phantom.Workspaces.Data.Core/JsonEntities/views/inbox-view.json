@@ -1,6 +1,7 @@
 {
   "entity-id": "6fb49878-7905-4fb8-9032-ec9fd53d6b84",
   "entity-types": [
+    "entity",
     "view"
   ],
   "names": [

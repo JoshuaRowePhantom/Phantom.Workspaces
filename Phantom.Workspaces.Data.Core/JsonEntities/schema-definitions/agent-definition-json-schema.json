@@ -1,6 +1,7 @@
 {
   "entity-id": "219d6c43-fd1e-458e-a08e-67e41d2dd506",
   "entity-types": [
+    "entity",
     "json-schema",
     "note"
   ],
