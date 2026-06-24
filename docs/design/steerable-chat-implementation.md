@@ -114,7 +114,130 @@ private static ChatClientResult WrapWithMiddleware(
 
 ---
 
-## New files in `Phantom.Workspaces.Llm.Core`
+## Stack construction walkthrough
+
+This section traces the exact sequence of calls in `AgentChat.InitializeAsync` that
+build the final `IChatClient` stack, showing where each layer is added and which object
+is held at each step.
+
+### Step 1 — Factory produces the innermost layers
+
+```csharp
+// AgentChat.InitializeAsync (modified)
+var chatClientResult = this.request.ClientOverride is not null
+    ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
+    : AgentFactory.CreateChatClient(
+        resolvedAgentDefinition,
+        this.request.AgentServices,
+        queueManager: this.queueManager);   // ← new argument
+```
+
+For a `github-models` agent, `AgentFactory.CreateChatClient` calls `WrapWithMiddleware`:
+
+```
+chatClientResult.ChatClient =
+    ToolResultSteeringMiddleware(
+        inner: OpenAIClient(...)            ← raw LLM client
+        queueManager: this.queueManager)
+```
+
+For a `github-copilot` agent, no wrapping occurs:
+
+```
+chatClientResult.ChatClient =
+    CopilotSdkChatClient(
+        ...
+        queueManager: this.queueManager)   ← receives queue manager directly
+```
+
+### Step 2 — `ResolveUseProvidedChatClientAsIs` inspects the stack
+
+```csharp
+var resolvedClient = chatClientResult.ChatClient;
+var useProvidedChatClientAsIs = ResolveUseProvidedChatClientAsIs(
+    this.request.ClientOverride is not null,
+    resolvedClient);
+```
+
+`ResolveUseProvidedChatClientAsIs` calls `resolvedClient.GetService(typeof(ISelfInvokingToolChatClient))`.
+
+- **github-models**: `resolvedClient` is `ToolResultSteeringMiddleware`. Its `GetService`
+  delegates to `OpenAIClient`, which returns `null`. Result: `false` — the framework
+  WILL add `FunctionInvocationMiddleware`. ✓
+- **github-copilot**: `resolvedClient` is `CopilotSdkChatClient`, which implements
+  `ISelfInvokingToolChatClient`. Result: `true` — the framework will NOT add
+  `FunctionInvocationMiddleware`. ✓
+
+This check is performed on the factory-returned client, before any additional wrapping,
+so the result is always based on the true inner client.
+
+### Step 3 — Optional logging wrapper
+
+```csharp
+if (this.request.AgentServices?.LogChat == true)
+{
+    resolvedClient = resolvedClient.AsBuilder()
+        .UseLogging(this.request.AgentServices.LoggerFactory)
+        .Build();
+}
+```
+
+`AsBuilder().UseLogging().Build()` inserts a `LoggingChatClient` (a
+`DelegatingChatClient`) on top of whatever `resolvedClient` currently is. The
+`DelegatingChatClient` propagates `GetService` to its inner, so the `ISelfInvokingToolChatClient`
+identity can still be discovered if needed (though in practice this check is already done
+in Step 2 before this wrapping).
+
+After this step, for `github-models` with logging:
+
+```
+resolvedClient =
+    LoggingChatClient(
+        inner: ToolResultSteeringMiddleware(
+                   inner: OpenAIClient(...)))
+```
+
+### Step 4 — `ChatClientAgent` adds `FunctionInvocationMiddleware`
+
+```csharp
+this.chatClientAgent = new ChatClientAgent(resolvedClient, this.chatOptions);
+// chatOptions.UseProvidedChatClientAsIs was computed in Step 2
+```
+
+When `UseProvidedChatClientAsIs = false` (non-Copilot), `ChatClientAgent` wraps
+`resolvedClient` with its own `FunctionInvocationMiddleware` internally. The final
+runtime stack the agent uses becomes:
+
+```
+ChatClientAgent
+  └─ FunctionInvocationMiddleware      ← framework; re-calls with FunctionResultContent
+       └─ LoggingChatClient            ← if LogChat=true
+            └─ ToolResultSteeringMiddleware  ← dequeues from queueManager here
+                 └─ OpenAIClient(...)
+```
+
+When `UseProvidedChatClientAsIs = true` (Copilot), `ChatClientAgent` uses `resolvedClient`
+directly — there is no `FunctionInvocationMiddleware`, and `ToolResultSteeringMiddleware`
+is not in the stack at all:
+
+```
+ChatClientAgent
+  └─ LoggingChatClient            ← if LogChat=true
+       └─ CopilotSdkChatClient   ← subscribes to queueManager.QueueStateChanged during streaming
+```
+
+### Summary — what each component owns
+
+| Component | Role | Holds `queueManager`? |
+|---|---|---|
+| `AgentChat` | Passes `queueManager` to factory; no steering logic | Owns it |
+| `AgentFactory` | Routes `queueManager` to the right provider; wraps non-self-invoking clients | Passes through |
+| `ToolResultSteeringMiddleware` | Dequeues at tool boundaries; sits below `FunctionInvocationMiddleware` | Yes |
+| `CopilotSdkChatClient` | Subscribes to `QueueStateChanged` during streaming | Yes |
+| `ChatClientAgent` / framework | Adds `FunctionInvocationMiddleware`; unaware of steering | No |
+
+---
+
 
 ### `ChatClientResult.cs`
 
