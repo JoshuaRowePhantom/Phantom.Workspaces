@@ -102,7 +102,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": {{serializedNames}}
             }
             """);
@@ -131,7 +131,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [
                 ["entity-types", "custom-type"],
                 ["json-schemas", "https://schemas.workspaces.phantom.to/workspaces/custom/custom-type.json"]
@@ -428,7 +428,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     [Fact]
     public async Task AddEntityAndRelationship_WithMissingReferencedEntities_Fails()
     {
-        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerWithReferenceHolderAsync();
         var entityId = new EntityId("c30108d2-4e17-4e8c-98d6-31ebf54db8de");
         var relationshipEntityId = new EntityId("24c03916-f515-497e-af7b-96e3874eb6ec");
         var missingTargetEntityId = new EntityId("f73dc6ec-432c-46e7-af03-cd53c423f5b3");
@@ -476,7 +476,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     [Fact]
     public async Task UpdateEntityAndRelationship_WithMissingReferencedEntities_Fails()
     {
-        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerWithReferenceHolderAsync();
         var sourceEntityId = new EntityId("d1594aac-208f-4eb6-a88e-4897be2d8cb6");
         var targetEntityId = new EntityId("4fb7bd08-cc2a-4178-b7bf-cdca9f70c1df");
         var otherParticipantEntityId = new EntityId("331f56a2-f15e-4cd3-9740-29df9f274516");
@@ -580,7 +580,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     [Fact]
     public async Task ReferenceRelationship_IsRemovedOnlyWhenAllReferencesAreGone()
     {
-        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerWithReferenceHolderAsync();
         var sourceEntityId = new EntityId("b82d6a9c-157f-4f2f-a2cd-3f96035e3585");
         var targetEntityId = new EntityId("60a52352-f9fc-4d15-9ca4-a59e4dbafe1f");
 
@@ -665,7 +665,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
     private EntityChange CreateEntityChange(
         EntityId entityId,
         string name,
-        string entityType = "entity")
+        string entityType = "task")
     {
         using var document = JsonDocument.Parse(
             $$"""
@@ -749,7 +749,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "$schema": "{{schemaName}}",
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["{{name}}"]],
               "target-entity-id": "{{targetEntityId}}"
             }
@@ -810,12 +810,69 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             {
               "$schema": "{{schemaName}}",
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["{{name}}"]],
               "target-entity-name": ["{{targetName}}"]
             }
             """);
         return CreateEntityChange(entityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
+    }
+
+    private const string ReferenceHolderSchemaName =
+        "https://schemas.workspaces.phantom.to/workspaces/tests/reference-holder.json";
+
+    private async Task<IDataAccessLayer> CreatePopulatedDataAccessLayerWithReferenceHolderAsync()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Create reference-holder schema"),
+                new[]
+                {
+                    this.CreateReferenceHolderSchemaChange(
+                        new EntityId("a7f1d2c4-0b3e-4f5a-9c6d-1e2f3a4b5c6d")),
+                }));
+        return dataAccessLayer;
+    }
+
+    private EntityChange CreateReferenceHolderSchemaChange(
+        EntityId schemaEntityId)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{schemaEntityId}}",
+              "entity-types": ["entity", "entity-type", "json-schema"],
+              "names": [
+                ["json-schemas", "{{ReferenceHolderSchemaName}}"],
+                ["entity-types", "reference-holder"]
+              ],
+              "schema": {
+                "$id": "{{ReferenceHolderSchemaName}}",
+                "type": "object",
+                "properties": {
+                  "entity-types": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-type-id"
+                    },
+                    "contains": { "const": "reference-holder" }
+                  },
+                  "first-entity-id": {
+                    "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-id",
+                    "x-entity-types": ["entity"]
+                  },
+                  "second-entity-id": {
+                    "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-id",
+                    "x-entity-types": ["entity"]
+                  }
+                },
+                "required": ["entity-types"]
+              }
+            }
+            """);
+        return CreateEntityChange(schemaEntityId, null, document.RootElement.Clone(), EntityChangeMode.Replace);
     }
 
     private EntityChange CreateEntityWithMultipleReferencesChange(
@@ -828,7 +885,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "reference-holder"],
               "names": [["{{name}}"]],
               "first-entity-id": "{{firstReferenceEntityId}}",
               "second-entity-id": "{{secondReferenceEntityId}}"
@@ -847,7 +904,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "reference-holder"],
               "names": [["{{name}}"]],
               "first-entity-id": "{{referenceEntityId}}"
             }
@@ -864,7 +921,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "reference-holder"],
               "names": [["{{name}}"]]
             }
             """);
@@ -969,7 +1026,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": {{serializedName}}
             }
             """);
