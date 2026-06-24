@@ -7,6 +7,8 @@ namespace Phantom.Workspaces.Data;
 
 public sealed class SchemaAccessor : ISchemaAccessor
 {
+    private const string SchemaEntityNamePrefix = "json-schemas";
+
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Dictionary<string, JsonElement> requestSchemasByName;
     private readonly ConcurrentDictionary<string, JsonElement?> schemasByReference = new(StringComparer.Ordinal);
@@ -167,27 +169,30 @@ public sealed class SchemaAccessor : ISchemaAccessor
             }
 
             var schemasById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-            // BuildSchemaRegistryAsync needs every schema entity so JSON Schema
-            // "$ref" URIs can resolve against the full set. Schema entities are
-            // identified by three independent forms (schema payload, explicit
-            // "json-schema" entity type, or "$id"), and the query API has no
-            // field-existence operator, so a full enumeration is the only
-            // faithful way to collect them all.
-#pragma warning disable CS0618
-            var exportResult = await this.dataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken).ConfigureAwait(false);
-#pragma warning restore CS0618
+            // Schema entities all live under the "json-schemas" folder, so the
+            // registry can be built from a bounded Get of that folder's
+            // descendants instead of enumerating the entire store.
+            var getResult = await this.dataAccessLayer.GetAsync(
+                new GetRequest
+                {
+                    Entities =
+                    [
+                        new GetEntityRequest
+                        {
+                            EntityName = new EntityName(SchemaEntityNamePrefix),
+                            EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+                        },
+                    ],
+                    Timestamps = new Timestamp?[] { null },
+                },
+                cancellationToken).ConfigureAwait(false);
 
-            foreach (var entityData in exportResult.ChangeBatches
+            foreach (var entityData in getResult.Batches
                          .SelectMany(static batch => batch.Entities)
                          .Select(static entity => entity.Data)
                          .Where(static data => data is { ValueKind: JsonValueKind.Object })
                          .Select(static data => data!.Value))
             {
-                if (!IsSchemaEntity(entityData))
-                {
-                    continue;
-                }
-
                 if (TryGetSchemaPayloadId(entityData, out var schemaId)
                     && Uri.TryCreate(schemaId, UriKind.Absolute, out _))
                 {
