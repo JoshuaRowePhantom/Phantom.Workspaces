@@ -181,6 +181,83 @@ Initial strategy:
 This factory is combined after `WorkspaceVisualizerFactory` so workspace-specific rendering wins
 for known local tools.
 
+## GitHub CLI (`gh`) tool output shapes
+
+The agent uses `gh` to interact with GitHub. These commands are invoked through the shell tool
+(PowerShell). The `CopilotToolVisualizerFactory` should recognize `gh` invocations in the shell
+tool's command argument and produce targeted call/result summaries rather than raw JSON dumps.
+
+### `gh release`
+
+| Command | Key flags / args | JSON fields returned |
+| --- | --- | --- |
+| `gh release list` | `--limit <n>` | array of `{tagName, isDraft, isPrerelease, publishedAt, name}` |
+| `gh release view [<tag>]` | `--json <fields>` | `tagName`, `isDraft`, `isPrerelease`, `publishedAt`, `assets[]` |
+| `gh release view [<tag>]` | `--json assets --jq '.assets[].name'` | plain list of asset filenames |
+| `gh release create <tag> <files…>` | `--title`, `--generate-notes`, `--verify-tag` | URL of the created release |
+| `gh release edit <tag>` | `--prerelease` / `--latest` | (no JSON output; exit code) |
+
+**`assets` element shape** (from `--json assets`):
+
+```json
+{
+  "name": "Phantom.Workspaces-v1.2.3-win-x64.zip",
+  "downloadUrl": "https://github.com/…",
+  "size": 12345678
+}
+```
+
+**Stable-channel rule**: a release counts for the stable in-app updater only when
+`isDraft == false` and `isPrerelease == false`.
+
+**Expected per-release asset set**: `win-x64` zip + `.sha256`, `win-arm64` zip + `.sha256`
+(four files total).
+
+**Call summary hint**: `gh release view <tag>` → `Inspect release <tag>`  
+**Result summary hint**: show `tagName`, stable/pre-release status, asset count.
+
+### `gh run`
+
+| Command | Key flags / args | Notable output fields |
+| --- | --- | --- |
+| `gh run list` | `--workflow release.yml --limit <n>` | `databaseId`, `status`, `conclusion`, `workflowName`, `headBranch`, `event`, `createdAt` |
+| `gh run view` | `--log` (or `<run-id>`) | full log text (large); `status`, `conclusion` in structured form |
+| `gh run watch` | `--workflow <name>` | real-time status stream; final `conclusion` on completion |
+
+`status` values: `queued`, `in_progress`, `completed`.  
+`conclusion` values (when completed): `success`, `failure`, `cancelled`, `skipped`.
+
+**Call summary hint**: `gh run list --workflow release.yml` → `List release pipeline runs`  
+**Result summary hint**: show most recent run status and conclusion.
+
+### `gh pr`
+
+| Command | Key flags / args | Notable output fields |
+| --- | --- | --- |
+| `gh pr list` | `--state merged --search "merged:>=<date>" --limit <n>` | `number`, `title`, `state`, `mergedAt`, `labels[]`, `url` |
+
+**Call summary hint**: `gh pr list …` → `List merged PRs since <date>`  
+**Result summary hint**: PR count, date range.
+
+### `gh api`
+
+| Command | Key flags / args | Notable output fields |
+| --- | --- | --- |
+| `gh api repos/:owner/:repo/releases/generate-notes` | `-f tag_name`, `-f previous_tag_name`, `--jq '.body'` | markdown release notes body |
+
+**Call summary hint**: `gh api … generate-notes` → `Generate release notes for <tag>`  
+**Result summary hint**: first line of notes body (truncated).
+
+### Heuristics for `CopilotToolVisualizerFactory`
+
+When the shell tool command string contains `gh `:
+
+1. Match `gh release (view|list|create|edit)` → route to release summary renderer.
+2. Match `gh run (list|view|watch)` → route to run status renderer.
+3. Match `gh pr list` → route to PR list renderer.
+4. Match `gh api .*/generate-notes` → route to release notes preview renderer.
+5. Any other `gh` invocation → generic shell fallback (show command + exit code).
+
 ## Renderer integration points
 
 Add a single visualization interpreter used by both output modes:
@@ -296,6 +373,289 @@ To build a high-quality Copilot visualizer, capture and classify real Copilot to
 4. Document naming inconsistencies (same operation, different tool names) and required heuristics.
 5. Add fixture-driven tests for every captured shape before implementing mapping logic.
 6. Re-run fixture capture after Copilot SDK upgrades and compare diffs.
+
+## GitHub Copilot CLI built-in tool catalog
+
+Captured from session `c115e131-bc5c-40df-a4ef-e59ea5365949` events.jsonl (`tool.execution_start` /
+`tool.execution_complete`). This catalog feeds the `CopilotToolVisualizerFactory` mapping table and
+fixture corpus (TODOs 2–5 above).
+
+Result content is always a plain string returned in `result.content`; `result.detailedContent` adds
+the original query/command as a header prefix when present.
+
+### File system tools
+
+#### `view`
+
+Read a file (or a range of lines within a file).
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `path` | `string` | absolute path |
+| `view_range` | `[number, number]` | optional; `[start, end]` 1-based lines; `-1` end = file end |
+| `forceReadLargeFiles` | `bool` | optional; bypasses 50 KB truncation guard |
+
+Result: file content with `N. ` line-number prefixes per line.
+
+Example call summary: `Read C:\repo\Program.cs (lines 1–65)`
+Example result summary: `Read C:\repo\Program.cs`
+
+#### `edit`
+
+Replace exactly one occurrence of a string in an existing file.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `path` | `string` | absolute path |
+| `old_str` | `string` | exact substring to replace (must be unique in file) |
+| `new_str` | `string` | replacement text |
+
+Result: `File <path> updated with changes.`
+
+Example call summary: `Edit C:\repo\Program.cs`
+Example result summary: `C:\repo\Program.cs updated`
+
+#### `create`
+
+Create a new file (fails if the file already exists).
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `path` | `string` | absolute path; parent directories must exist |
+| `file_text` | `string` | full file content |
+
+Result: `Created file <path> with <N> characters`
+
+Example call summary: `Create C:\repo\NewFile.cs`
+Example result summary: `C:\repo\NewFile.cs created`
+
+#### `glob`
+
+Find files by name pattern.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `pattern` | `string` | glob pattern, e.g. `**/*.cs`, `src/**/*.{ts,tsx}` |
+| `paths` | `string \| string[]` | optional root directory/directories; defaults to cwd |
+
+Result: matching absolute paths, one per line (empty if no matches).
+
+Example call summary: `Glob **/*.md in C:\repo`
+Example result summary: `N file(s) matched`
+
+#### `grep`
+
+Search file contents using ripgrep.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `pattern` | `string` | regex pattern |
+| `output_mode` | `string` | `"files_with_matches"` (default) \| `"content"` \| `"count"` |
+| `-n` | `bool` | show line numbers (requires `output_mode: "content"`) |
+| `-C` | `number` | context lines before and after match |
+| `-B` | `number` | context lines before match |
+| `-A` | `number` | context lines after match |
+| `-i` | `bool` | case-insensitive |
+| `glob` | `string` | file glob filter, e.g. `"*.cs"` |
+| `type` | `string` | ripgrep file-type filter, e.g. `"cs"`, `"ts"` |
+| `paths` | `string \| string[]` | search root(s); defaults to cwd |
+| `head_limit` | `number` | limit output to first N results |
+| `multiline` | `bool` | enable multiline matching |
+
+Result: ripgrep output matching the chosen `output_mode`.
+
+Example call summary: `Grep "schemasByReference" in *.cs`
+Example result summary: `N match(es)` / list of file paths / annotated lines
+
+### Shell execution tools
+
+#### `powershell`
+
+Run a PowerShell command in an interactive session.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `command` | `string` | PowerShell command string |
+| `description` | `string` | human-readable label (displayed in UI) |
+| `mode` | `string` | `"sync"` (default) \| `"async"` |
+| `initial_wait` | `number` | seconds to wait for initial output before backgrounding (sync mode) |
+| `shellId` | `string` | optional; reuse an existing session |
+| `detach` | `bool` | async only; process persists after session shutdown |
+
+Result (sync / completed async): command stdout/stderr text.
+Result (async, still running): shell session ID string.
+
+Example call summary: `Run: dotnet build`
+Example result summary: command output (first N lines)
+
+#### `stop_powershell`
+
+Terminate a running PowerShell session by ID.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `shellId` | `string` | ID returned by a prior `powershell` async call |
+
+Result: `<command with id: <shellId> stopped>`
+
+### Web tool
+
+#### `web_fetch`
+
+Fetch a URL and return it as markdown or raw HTML.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `url` | `string` | URL to fetch |
+| `raw` | `bool` | optional; `true` = raw HTML, `false` (default) = simplified markdown |
+| `max_length` | `number` | optional; character limit (default 5000, max 20000) |
+| `start_index` | `number` | optional; pagination offset |
+
+Result: page content prefixed with `Contents of <url>:`.
+
+Example call summary: `Fetch https://example.com`
+Example result summary: `Fetched https://example.com`
+
+### Agent / orchestration tools
+
+#### `task`
+
+Launch a specialized sub-agent in a separate context window.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `name` | `string` | short agent name (used to generate human-readable agent ID) |
+| `prompt` | `string` | full task description with all required context |
+| `agent_type` | `string` | `"explore"` \| `"task"` \| `"general-purpose"` \| `"code-review"` \| `"research"` |
+| `description` | `string` | 3–5 word display label |
+| `mode` | `string` | optional; `"sync"` \| `"background"` |
+| `model` | `string` | optional model override |
+
+Result: agent summary text (brief on success, full output on failure).
+
+Example call summary: `Task: implement-entity-status-badges`
+Example result summary: agent completion summary paragraph
+
+#### `task_complete`
+
+Signal task completion from within a sub-agent, returning a summary to the orchestrator.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `summary` | `string` | completion summary delivered back to the calling agent |
+
+Result: the `summary` string echoed back.
+
+#### `ask_user`
+
+Pause and present a question to the human user.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `question` | `string` | question text |
+| `choices` | `string[]` | optional list of presented options |
+
+Result: user's free-text or choice response.
+
+Example call summary: `Ask user: <first 60 chars of question>…`
+Example result summary: `User responded: <first 60 chars of answer>…`
+
+#### `skill`
+
+Invoke a named skill (loads skill context into the session).
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `skill` | `string` | skill name, e.g. `"run-tests"` |
+
+Result: `Skill "<name>" loaded successfully. Follow the instructions in the skill context.`
+
+Example call summary: `Invoke skill: run-tests`
+Example result summary: `Skill run-tests loaded`
+
+### Memory / data tools
+
+#### `sql`
+
+Execute SQL against the per-session SQLite database or the global read-only session store.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `description` | `string` | 2–5 word human label |
+| `query` | `string` | SQLite-compatible SQL |
+| `database` | `string` | optional; `"session"` (default) \| `"session_store"` |
+
+Result: tabular markdown (`N row(s) returned:\n\n| col | … |`) or `N row(s) inserted/updated.`
+`detailedContent` prepends the full query text.
+
+Example call summary: `SQL: Insert extracted todos`
+Example result summary: `3 row(s) inserted` / `5 row(s) returned`
+
+#### `session_store_sql`
+
+Execute a read-only SQL query against the global historical session store (all past sessions).
+Functionally equivalent to `sql` with `database: "session_store"` but a distinct tool name.
+
+Arguments: identical to `sql` (`description`, `query`).
+
+Result: same tabular format; rows include a `_query_source` column (`"cloud"` \| `"local"`).
+
+#### `store_memory`
+
+Persist a durable fact to the agent memory store.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `subject` | `string` | topic label |
+| `fact` | `string` | the fact text to store |
+| `reason` | `string` | why this fact is worth storing |
+| `citations` | `string` | optional; source quotes |
+| `scope` | `string` | optional; e.g. `"repository"` |
+
+Result: `Memory stored successfully.`
+
+#### `vote_memory`
+
+Up- or down-vote a previously stored memory to adjust its reliability weight.
+
+Arguments:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `direction` | `string` | `"upvote"` \| `"downvote"` |
+| `fact` | `string` | exact fact text being voted on |
+| `reason` | `string` | justification for the vote |
+| `scope` | `string` | optional |
+
+Result: `Vote recorded successfully.`
 
 ## Non-goals
 
