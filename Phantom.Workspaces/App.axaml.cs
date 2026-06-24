@@ -64,6 +64,41 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// Subscribes the primary instance's activation signal (raised when a duplicate launch for the
+    /// same configuration file occurs) to restoring and foregrounding the current main window. The
+    /// signal arrives on a background listener thread, so the restore is marshalled to the UI thread.
+    /// </summary>
+    private static void WireSingleInstanceActivation(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        if (Program.InstanceGuard is not { } guard)
+        {
+            return;
+        }
+
+        guard.ActivationRequested += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (desktop.MainWindow is not { } window)
+            {
+                return;
+            }
+
+            if (!window.IsVisible)
+            {
+                window.Show();
+            }
+
+            if (window.WindowState == WindowState.Minimized)
+            {
+                window.WindowState = WindowState.Normal;
+            }
+
+            window.Activate();
+        });
+
+        guard.StartActivationListener();
+    }
+
     public override async void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -82,6 +117,8 @@ public partial class App : Application
             desktop.MainWindow = loadingWindow;
 
             base.OnFrameworkInitializationCompleted();
+
+            WireSingleInstanceActivation(desktop);
 
             loadingViewModel.StatusText = "Reading startup configuration.";
             var persistenceService = CommandLineOptions.TryGetConfigurationFilePath(Program.StartupArguments, out var configurationFilePath)
