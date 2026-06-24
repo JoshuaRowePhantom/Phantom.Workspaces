@@ -2,41 +2,30 @@
 
 This document is the concrete implementation plan for the steerable-chat feature
 described in [github-copilot-provider-support.md](github-copilot-provider-support.md).
-It covers every file to create or modify, the expected shape of each type, and the
-tests that must pass.
+
+## Design summary
+
+No new interfaces are introduced. Both providers receive the `AgentInputQueueManager`
+directly and use its existing `TryDequeueNextImmediateOrQueued` method:
+
+- **`CopilotSdkChatClient`** subscribes to `AgentInputQueueManager.QueueStateChanged`
+  during streaming and, when items arrive, drains and forwards them via
+  `session.SendAsync(Mode = "immediate")`.
+- **`ToolResultSteeringMiddleware`** wraps the inner `IChatClient` and calls
+  `TryDequeueNextImmediateOrQueued` directly at each tool-result boundary, appending
+  dequeued messages before forwarding to the inner client.
+
+`AgentChat` does not change its processing loop. It passes `this.queueManager` to
+`AgentFactory.CreateChatClient` at construction time; everything else is provider-internal.
 
 ---
 
 ## New files in `Phantom.Workspaces.Llm.Core`
 
-### `ISteerableChatClient.cs`
-
-A narrow, standalone interface. Does not extend `IChatClient`.
-
-```csharp
-namespace Phantom.Workspaces.Llm;
-
-/// <summary>
-/// Accepts in-flight steering text for an active agent run. Implementations are
-/// provider-specific and do not carry any <see cref="IChatClient"/> semantics.
-/// </summary>
-public interface ISteerableChatClient
-{
-    /// <summary>
-    /// Forwards <paramref name="text"/> to the running model session.
-    /// The call must be safe to make concurrently with an in-progress
-    /// <see cref="IChatClient.GetStreamingResponseAsync"/> on the same provider.
-    /// </summary>
-    Task SteerAsync(string text, CancellationToken cancellationToken = default);
-}
-```
-
----
-
 ### `ChatClientResult.cs`
 
-The return type of `AgentFactory.CreateChatClient`. Carries the chat client, its
-display name, and the optional steerable side-channel.
+Named return type for `AgentFactory.CreateChatClient`. Replaces the existing anonymous
+tuple `(IChatClient client, string displayName)`.
 
 ```csharp
 namespace Phantom.Workspaces.Llm;
@@ -44,118 +33,101 @@ namespace Phantom.Workspaces.Llm;
 /// <summary>
 /// The result of <see cref="AgentFactory.CreateChatClient"/>.
 /// </summary>
-/// <param name="ChatClient">The primary LLM client for this provider.</param>
-/// <param name="DisplayName">Human-readable name shown in the UI.</param>
-/// <param name="Steerable">
-/// If non-<see langword="null"/>, mid-run steering is supported and
-/// <see cref="AgentChat"/> will activate the steering poll task.
-/// </param>
-public sealed record ChatClientResult(
-    IChatClient ChatClient,
-    string DisplayName,
-    ISteerableChatClient? Steerable);
+public sealed record ChatClientResult(IChatClient ChatClient, string DisplayName);
 ```
 
 ---
 
 ### `ToolResultSteeringMiddleware.cs`
 
-Implements both `IChatClient` and `ISteerableChatClient`. Used for all providers
-other than `github-copilot`. The factory returns the same instance as both
-`ChatClientResult.ChatClient` and `ChatClientResult.Steerable`.
+Wraps any `IChatClient`. At each tool-result-return call (when the last message contains
+`FunctionResultContent`), drains the queue and appends dequeued messages before
+forwarding to the inner client. No buffer is maintained — items come directly from the
+`AgentInputQueueManager`.
 
 ```csharp
 namespace Phantom.Workspaces.Llm;
 
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 
 /// <summary>
-/// An <see cref="IChatClient"/> middleware that implements provider-agnostic
-/// steering by buffering text queued via <see cref="SteerAsync"/> and injecting it
-/// as a <see cref="ChatRole.User"/> message immediately after any
-/// <see cref="FunctionResultContent"/> messages on the next model call.
+/// An <see cref="IChatClient"/> middleware that injects pending steering input at
+/// tool-result boundaries. At each model call where the last message contains
+/// <see cref="FunctionResultContent"/>, any non-held items available in the
+/// <see cref="AgentInputQueueManager"/> are dequeued and appended to the message
+/// list before forwarding to the inner client.
 /// </summary>
-internal sealed class ToolResultSteeringMiddleware : IChatClient, ISteerableChatClient
+internal sealed class ToolResultSteeringMiddleware : IChatClient
 {
     private readonly IChatClient inner;
-    private readonly ConcurrentQueue<string> pending = new();
+    private readonly AgentInputQueueManager queueManager;
 
-    public ToolResultSteeringMiddleware(IChatClient inner)
+    public ToolResultSteeringMiddleware(IChatClient inner, AgentInputQueueManager queueManager)
     {
         ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(queueManager);
         this.inner = inner;
+        this.queueManager = queueManager;
     }
 
-    /// <inheritdoc/>
     public ChatClientMetadata Metadata => this.inner.Metadata;
 
-    /// <inheritdoc/>
     public TService? GetService<TService>(object? key = null) where TService : class
-        => this.inner.GetService<TService>(key) ?? (this as TService);
+        => this.inner.GetService<TService>(key);
 
-    /// <inheritdoc/>
-    public Task SteerAsync(string text, CancellationToken cancellationToken = default)
-    {
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            this.pending.Enqueue(text);
-        }
-        return Task.CompletedTask;
-    }
-
-    /// <inheritdoc/>
     public async Task<ChatResponse> GetResponseAsync(
         IList<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        messages = this.InjectPendingIfToolResult(messages);
-        return await this.inner.GetResponseAsync(messages, options, cancellationToken)
+        return await this.inner
+            .GetResponseAsync(this.InjectQueuedIfToolResult(messages), options, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    /// <inheritdoc/>
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IList<ChatMessage> messages,
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        messages = this.InjectPendingIfToolResult(messages);
         await foreach (var update in this.inner
-            .GetStreamingResponseAsync(messages, options, cancellationToken)
+            .GetStreamingResponseAsync(this.InjectQueuedIfToolResult(messages), options, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return update;
         }
     }
 
-    /// <inheritdoc/>
     public void Dispose() => this.inner.Dispose();
 
-    // Drains the pending steering buffer if the last message in the list carries
-    // FunctionResultContent, appending each item as a ChatRole.User message.
-    // Returns the original list unchanged when there is nothing to inject.
-    private IList<ChatMessage> InjectPendingIfToolResult(IList<ChatMessage> messages)
+    // If the last message carries FunctionResultContent, drain available non-held queue
+    // items and append them as additional messages before the model call.
+    private IList<ChatMessage> InjectQueuedIfToolResult(IList<ChatMessage> messages)
     {
-        var lastMessage = messages.Count > 0 ? messages[^1] : null;
-        if (lastMessage is null
-            || !lastMessage.Contents.OfType<FunctionResultContent>().Any()
-            || this.pending.IsEmpty)
+        if (messages.Count == 0
+            || !messages[^1].Contents.OfType<FunctionResultContent>().Any())
         {
             return messages;
         }
 
-        var augmented = new List<ChatMessage>(messages);
-        while (this.pending.TryDequeue(out var text))
+        List<ChatMessage>? augmented = null;
+        while (this.queueManager.TryDequeueNextImmediateOrQueued(out var item))
         {
-            augmented.Add(new ChatMessage(ChatRole.User, text));
+            augmented ??= new List<ChatMessage>(messages);
+            foreach (var message in item.Messages ?? [])
+            {
+                augmented.Add(message);
+            }
         }
-        return augmented;
+
+        return augmented ?? messages;
     }
 }
 ```
+
+`TryDequeueNextImmediateOrQueued` already excludes `Held` queues — no extra filter is
+needed. The method is CAS-based and thread-safe, so concurrent drains (if any) are safe.
 
 ---
 
@@ -163,225 +135,221 @@ internal sealed class ToolResultSteeringMiddleware : IChatClient, ISteerableChat
 
 ### `CopilotSdkChatClient.cs`
 
-Add `ISteerableChatClient` to the class declaration and implement `SteerAsync`.
-The method reads `this.copilotSession` without acquiring `turnLock`, which is safe
-because `Mode = "immediate"` is explicitly designed for concurrent delivery.
+#### Constructor — add optional queue manager
 
 ```csharp
-// Class declaration
-public sealed class CopilotSdkChatClient
-    : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient, ISteerableChatClient
+private readonly AgentInputQueueManager? queueManager;
+
+public CopilotSdkChatClient(
+    string modelId,
+    string displayName,
+    string? gitHubToken,
+    ILoggerFactory? loggerFactory,
+    CopilotByokOptions? byokOptions = null,
+    string? cliPath = null,
+    AgentInputQueueManager? queueManager = null)   // ← new optional param
+{
+    // ... existing assignments ...
+    this.queueManager = queueManager;
+}
 ```
 
+#### `GetStreamingResponseAsync` — subscribe to queue changes during streaming
+
+After setting up `session.On(...)` and before calling `session.SendAsync`, register a
+`QueueStateChanged` handler. When items arrive on non-held queues, drain them and call
+`session.SendAsync(Mode = "immediate")`. Unsubscribe in `finally`.
+
 ```csharp
-/// <inheritdoc/>
-public async Task SteerAsync(string text, CancellationToken cancellationToken = default)
+public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+    IEnumerable<ChatMessage> messages,
+    ChatOptions? options = null,
+    [EnumeratorCancellation] CancellationToken cancellationToken = default)
 {
-    var session = this.copilotSession;         // volatile-ish read; null = no active session
-    if (session is null || string.IsNullOrWhiteSpace(text))
+    ArgumentNullException.ThrowIfNull(messages);
+
+    var prompt = ExtractPrompt(messages);
+    var session = await this.EnsureSessionAsync(options, cancellationToken).ConfigureAwait(false);
+
+    var channel = Channel.CreateUnbounded<ChatResponseUpdate>(new UnboundedChannelOptions
     {
-        return;
-    }
+        SingleReader = true,
+        SingleWriter = true,
+    });
 
-    await session.SendAsync(
-        new MessageOptions { Prompt = text, Mode = "immediate" },
-        cancellationToken).ConfigureAwait(false);
-}
-```
+    await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
----
-
-### `AgentFactory.cs`
-
-#### Return-type change
-
-Change both `CreateChatClient` overloads from returning `(IChatClient, string)` to
-`ChatClientResult`. The single-arg overload becomes:
-
-```csharp
-public static ChatClientResult CreateChatClient(AgentDefinition agent)
-    => CreateChatClient(agent, services: null);
-```
-
-The two-arg overload:
-
-```csharp
-public static ChatClientResult CreateChatClient(
-    AgentDefinition agent,
-    AgentServices? services)
-{
-    // ... resolve model, provider as before ...
-
-    return provider switch
+    using var subscription = session.On(sessionEvent =>
     {
-        "echo"           => new ChatClientResult(new EchoChatClient(), "Echo Chat Client", null),
-        "github-models"  => WrapWithMiddleware(CreateGitHubModelsClient(model)),
-        "github-copilot" => CreateGitHubCopilotResult(model, services),
-        "ollama"         => WrapWithMiddleware(CreateOllamaClient(model, services)),
-        // ...
-    };
-}
+        // ... existing switch cases unchanged ...
+    });
 
-private static ChatClientResult WrapWithMiddleware((IChatClient client, string displayName) inner)
-{
-    var mw = new ToolResultSteeringMiddleware(inner.client);
-    return new ChatClientResult(mw, inner.displayName, mw);
-}
-
-private static ChatClientResult CreateGitHubCopilotResult(Model model, AgentServices? services)
-{
-    var (client, displayName) = CreateGitHubCopilotClient(model, services);
-    // CopilotSdkChatClient implements ISteerableChatClient directly.
-    return new ChatClientResult(client, displayName, (ISteerableChatClient)client);
-}
-```
-
-`echo` and `test` providers return `null` for `Steerable` — steering is not meaningful
-for deterministic/in-process providers. The processing loop null-checks before activating
-the poll, so this is a no-op.
-
-#### Call-site update in `AgentChat.InitializeAsync`
-
-The single call site at line 122 changes from:
-
-```csharp
-var clientInfo = ... AgentFactory.CreateChatClient(resolvedAgentDefinition, ...);
-var resolvedClient = clientInfo.Item1;
-this.DisplayName = ... clientInfo.Item2;
-```
-
-to:
-
-```csharp
-var chatClientResult = ... AgentFactory.CreateChatClient(resolvedAgentDefinition, ...);
-var resolvedClient = chatClientResult.ChatClient;
-this.steerable = chatClientResult.Steerable;
-this.DisplayName = ... chatClientResult.DisplayName;
-```
-
----
-
-### `InternalCreateAgentChatRequest.cs`
-
-Add an optional `SteerableOverride` so tests can inject a fake `ISteerableChatClient`
-alongside `ClientOverride`:
-
-```csharp
-/// <summary>
-/// Optional steerable override for test scenarios.
-/// When <see langword="null"/> and <see cref="ClientOverride"/> is set, steering
-/// is disabled for the override path (same as production clients that return
-/// <see langword="null"/> from the factory).
-/// </summary>
-public ISteerableChatClient? SteerableOverride { get; init; }
-```
-
----
-
-### `AgentChat.cs`
-
-#### New field
-
-```csharp
-private ISteerableChatClient? steerable;
-```
-
-#### `InitializeAsync` — pick up steerable from factory result
-
-See the `AgentFactory` section above for the exact diff at line 122. When
-`ClientOverride` is set, use `request.SteerableOverride` (defaults to `null`).
-
-#### `RunProcessLoopAsync` — extend the existing `WhenAny` race
-
-The inner provider-stream loop already races `MoveNextAsync` against the interrupt token
-via `WasCanceledBeforeCompletingAsync`. Steering is a third arm in that same race — no
-separate task, signal, or `CancellationTokenSource` is needed.
-
-Replace the single `WasCanceledBeforeCompletingAsync` call with an inline loop that
-also watches the existing `queueStateSignal` when a steerable client is present.
-`queueStateSignal` is safe to share because the outer "wait for first item" loop only
-uses it when `chatMessagesToSubmit.Count == 0`, which is never true while a run is
-executing.
-
-```csharp
-while (true)
-{
-    pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
-
-    // Race the provider against the interrupt and (when steering is active) against
-    // new queue items.  Loop until the provider step completes or the run is cancelled;
-    // drain and steer any items that arrive mid-step.
-    while (!pendingMoveNext.IsCompleted)
+    // While a turn is running, forward any non-held queue items as steering input.
+    // SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
+    void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
     {
-        runCancellation.Token.ThrowIfCancellationRequested();
-
-        // Without a steerable client the behaviour is identical to the previous
-        // WasCanceledBeforeCompletingAsync: race against an infinite delay that the
-        // cancellation token will trigger.
-        var raceTarget = this.steerable is not null
-            ? queueStateSignal.WaitAsync(runCancellation.Token)
-            : Task.Delay(Timeout.Infinite, runCancellation.Token);
-
-        if (await Task.WhenAny(pendingMoveNext, raceTarget).ConfigureAwait(false)
-            == pendingMoveNext)
+        if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
         {
-            break; // provider step finished first
+            return;
         }
 
-        if (runCancellation.Token.IsCancellationRequested)
+        while (this.queueManager!.TryDequeueNextImmediateOrQueued(out var item))
         {
-            break; // interrupt won — detected on the next ThrowIfCancellationRequested
-        }
-
-        // Queue changed while the provider was still running — drain and steer.
-        while (this.queueManager.TryDequeueNextImmediateOrQueued(out var steeringItem))
-        {
-            this.AppendUserMessagesToHistory(steeringItem.Messages ?? []);
-
-            foreach (var message in steeringItem.Messages ?? [])
+            foreach (var message in item.Messages ?? [])
             {
                 var text = string.Concat(
                     message.Contents.OfType<TextContent>().Select(c => c.Text));
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    await this.steerable!.SteerAsync(text, runCancellation.Token)
-                        .ConfigureAwait(false);
+                    // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe
+                    // and returns promptly. Errors are non-fatal for steering.
+                    _ = session.SendAsync(
+                        new MessageOptions { Prompt = text, Mode = "immediate" },
+                        CancellationToken.None);
                 }
             }
         }
     }
 
-    if (runCancellation.Token.IsCancellationRequested)
+    if (this.queueManager is not null)
     {
-        throw new OperationCanceledException(runCancellation.Token);
+        this.queueManager.QueueStateChanged += OnQueueChanged;
     }
 
-    var hasNext = await pendingMoveNext; // already completed
-    pendingMoveNext = null;
-    if (!hasNext)
+    try
     {
-        break;
-    }
+        await session.SendAsync(
+            new MessageOptions { Prompt = prompt },
+            cancellationToken).ConfigureAwait(false);
 
-    this.AccumulateUsage(providerEnumerator.Current);
-    partialResponses.Notify(providerEnumerator.Current);
+        await foreach (var update in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            yield return update;
+        }
+    }
+    finally
+    {
+        if (this.queueManager is not null)
+        {
+            this.queueManager.QueueStateChanged -= OnQueueChanged;
+        }
+        this.turnLock.Release();
+    }
 }
 ```
 
-This replaces the previous pattern:
+**Reentrancy:** `TryDequeueFirst` fires `QueueStateChanged` with `ChangeKind.ItemRemoved`
+after each dequeue. The handler checks `ChangeKind == ItemAdded` before acting, so
+removals are ignored and do not re-enter the drain loop.
+
+**Concurrency:** if multiple `ItemAdded` events arrive simultaneously, multiple handler
+invocations may race to drain. This is safe: `TryDequeueNextImmediateOrQueued` is
+CAS-based, so each item is dequeued exactly once. Concurrent `session.SendAsync` calls
+with `Mode = "immediate"` are permitted by the SDK.
+
+---
+
+### `AgentFactory.cs`
+
+#### `CreateChatClient` — add queue manager parameter
+
 ```csharp
-// OLD — replaced
-pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
-if (await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
-    throw new OperationCanceledException(runCancellation.Token);
-var hasNext = await pendingMoveNext;
+public static ChatClientResult CreateChatClient(AgentDefinition agent)
+    => CreateChatClient(agent, services: null, queueManager: null);
+
+public static ChatClientResult CreateChatClient(
+    AgentDefinition agent,
+    AgentServices? services,
+    AgentInputQueueManager? queueManager = null)
+{
+    // ... resolve model, provider as before ...
+
+    return provider switch
+    {
+        "echo"           => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
+        "github-models"  => WrapWithMiddleware(CreateGitHubModelsClient(model), queueManager),
+        "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager),
+        "ollama"         => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
+        // ...
+    };
+}
+
+// Wraps the inner client with ToolResultSteeringMiddleware when a queue manager is
+// provided. When queueManager is null (e.g. test providers or no steering desired),
+// returns the inner client unwrapped.
+private static ChatClientResult WrapWithMiddleware(
+    (IChatClient client, string displayName) inner,
+    AgentInputQueueManager? queueManager)
+{
+    if (queueManager is null)
+    {
+        return new ChatClientResult(inner.client, inner.displayName);
+    }
+
+    return new ChatClientResult(
+        new ToolResultSteeringMiddleware(inner.client, queueManager),
+        inner.displayName);
+}
+
+private static ChatClientResult CreateGitHubCopilotResult(
+    Model model,
+    AgentServices? services,
+    AgentInputQueueManager? queueManager)
+{
+    var (client, displayName) = CreateGitHubCopilotClient(model, services);
+    // Re-create with the queue manager wired in.
+    // (Or: CreateGitHubCopilotClient returns the CopilotSdkChatClient directly
+    // and the queue manager is passed as a constructor argument.)
+    if (queueManager is not null && client is CopilotSdkChatClient copilotClient)
+    {
+        copilotClient.SetQueueManager(queueManager); // or pass at construction
+    }
+    return new ChatClientResult(client, displayName);
+}
 ```
 
-No changes are needed to the outer loop, the `finally` block, or `CleanUpRunAsync`.
-`WasCanceledBeforeCompletingAsync` can be deleted if it is no longer used elsewhere.
+`echo` and `test` providers do not receive a queue manager — steering is not meaningful
+for deterministic/in-process clients. `WrapWithMiddleware` with `null` is a no-op.
 
-**Note on held queues:** `TryDequeueNextImmediateOrQueued` already excludes held queues —
-no extra check is needed.
+**Alternative (preferred):** refactor `CreateGitHubCopilotClient` to accept the queue
+manager directly and pass it to the `CopilotSdkChatClient` constructor, avoiding the
+need for a `SetQueueManager` setter.
+
+#### Call-site update in `AgentChat.InitializeAsync`
+
+The single call site changes to pass the queue manager:
+
+```csharp
+// Before
+var clientInfo = AgentFactory.CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
+var resolvedClient = clientInfo.Item1;
+this.DisplayName = ... clientInfo.Item2;
+
+// After
+var chatClientResult = AgentFactory.CreateChatClient(
+    resolvedAgentDefinition,
+    this.request.AgentServices,
+    queueManager: this.queueManager);
+var resolvedClient = chatClientResult.ChatClient;
+this.DisplayName = ... chatClientResult.DisplayName;
+```
+
+No other changes to `AgentChat`. The processing loop is unmodified.
+
+---
+
+### `AgentChat.cs`
+
+No changes to `RunProcessLoopAsync` or any other method. The only change is the
+`InitializeAsync` call site shown above.
+
+---
+
+## No changes needed
+
+- `ISteerableChatClient` — not introduced
+- `InternalCreateAgentChatRequest` — no `SteerableOverride` needed
+- `AgentChat.RunProcessLoopAsync` — unchanged; steering is entirely provider-internal
 
 ---
 
@@ -391,156 +359,103 @@ no extra check is needed.
 
 Location: `Phantom.Workspaces.Llm.Core.Tests`
 
+Uses a `CapturingChatClient` test double that records the messages it receives, and a
+real `AgentInputQueueManager` to enqueue items.
+
 ```
-SteerAsync_DoesNothing_WhenNoPendingItems
-    → GetStreamingResponseAsync with FunctionResultContent last message
-    → inner receives original message list unchanged
+NoItemsInQueue_MessageListPassedUnchanged
+    → Queue is empty
+    → GetStreamingResponseAsync with FunctionResultContent last
+    → inner receives original message list
 
-SteerAsync_InjectsUserMessages_AfterFunctionResults
-    → Call SteerAsync("focus on auth")
-    → GetStreamingResponseAsync with a message ending in FunctionResultContent
-    → inner receives original messages + ChatMessage(ChatRole.User, "focus on auth") appended
+ItemsInQueue_AppendedAfterFunctionResults
+    → Enqueue a user message via queueManager
+    → GetStreamingResponseAsync with FunctionResultContent last
+    → inner receives original messages + the queued ChatMessage appended
 
-SteerAsync_InjectsMultipleItems_InOrder
-    → SteerAsync("first"), SteerAsync("second")
+MultipleItemsInQueue_AllAppendedInFifoOrder
+    → Enqueue "first" and "second" via queueManager
+    → GetStreamingResponseAsync with FunctionResultContent last
+    → inner receives both messages in enqueue order
+
+ItemsInQueue_NotInjected_WhenLastMessageIsNotToolResult
+    → Enqueue a user message
+    → GetStreamingResponseAsync ending with a plain User message (no FunctionResultContent)
+    → inner receives original list unchanged; item remains in queue
+
+HeldQueue_ItemsNotInjected
+    → Create a queue with Immediacy = Held, enqueue an item on it
     → GetStreamingResponseAsync with FunctionResultContent
-    → inner receives two User messages in FIFO order
+    → inner receives original list unchanged (TryDequeueNextImmediateOrQueued skips Held)
 
-SteerAsync_DoesNotInject_WhenLastMessageIsNotToolResult
-    → SteerAsync("focus on auth")
-    → GetStreamingResponseAsync with a plain user/assistant message last
-    → inner receives original list unchanged; "focus on auth" stays in pending
-
-SteerAsync_PendingCarriesOverToNextToolResult
-    → SteerAsync("deferred")
-    → GetStreamingResponseAsync with no-tool-result message (not consumed)
-    → GetStreamingResponseAsync with FunctionResultContent
-    → inner receives "deferred" as User message on the second call
-
-GetResponseAsync_AlsoInjectsPending
-    → SteerAsync("text")
-    → GetResponseAsync with FunctionResultContent
-    → inner.GetResponseAsync receives injected User message
-
-GetService_ReturnsSelf_ForISteerableChatClient
-    → middleware.GetService<ISteerableChatClient>() returns the middleware itself
-
-GetService_DelegatesToInner_ForOtherTypes
-    → inner exposes a mock service; middleware.GetService<SomeType>() returns inner's value
+ItemsNotInjected_WhenQueueManagerEmpty_GetResponseAsync
+    → Same as first test but via GetResponseAsync
 ```
-
-Use a `CapturingChatClient` test double that records the messages it receives, so
-assertions can inspect what the inner client saw.
 
 ---
 
 ### `AgentFactoryTests.cs` additions
 
 ```
-CreateChatClient_GitHubModels_ReturnsChatClientResultWithMiddleware
-    → provider = "github-models", real connection not required (can throw; test only the shape)
-    → Actually: use a fake model definition that routes to echo, which returns null steerable
-    → For this test, verify the wrapping logic via a unit-testable helper or by using
-       a test definition with a real-enough model spec
+CreateChatClient_GitHubModels_WithQueueManager_WrapsWithMiddleware
+    → Call CreateChatClient with a github-models definition and a real AgentInputQueueManager
+    → result.ChatClient is ToolResultSteeringMiddleware
+    → (Verify via GetService<ToolResultSteeringMiddleware> or type check)
 
-CreateChatClient_Echo_ReturnsChatClientResultWithNullSteerable
-    → provider = "echo"
-    → result.Steerable is null
-    → result.ChatClient is EchoChatClient
+CreateChatClient_GitHubModels_WithoutQueueManager_NoMiddleware
+    → Call CreateChatClient with null queueManager
+    → result.ChatClient is NOT ToolResultSteeringMiddleware
 
-CreateChatClient_GitHubCopilot_ReturnsChatClientResultWithCopilotSteerable
-    → provider = "github-copilot" with a dummy token
-    → result.ChatClient is CopilotSdkChatClient
-    → result.Steerable is the same CopilotSdkChatClient instance (cast to ISteerableChatClient)
-    → (Existing test already covers the provider dispatch; this extends it)
+CreateChatClient_Echo_NoMiddlewareRegardlessOfQueueManager
+    → echo provider always returns unwrapped EchoChatClient
 ```
 
 ---
 
 ### `AgentChatSteeringTests.cs` (new)
 
-Location: `Phantom.Workspaces.Llm.Core.Tests`  
-Uses `DeterministicTestChatClient`, `InMemoryAgentPersistenceStore`, and a `MockSteerableChatClient` test double.
+Location: `Phantom.Workspaces.Llm.Core.Tests`
 
-```csharp
-// Test double — record calls to SteerAsync
-internal sealed class MockSteerableChatClient : ISteerableChatClient
-{
-    public List<string> Steered { get; } = [];
-    public SemaphoreSlim SteeringReceived { get; } = new(0);
+Uses `DeterministicTestChatClient` with a pause point and a real `AgentInputQueueManager`.
 
-    public Task SteerAsync(string text, CancellationToken ct = default)
-    {
-        this.Steered.Add(text);
-        this.SteeringReceived.Release();
-        return Task.CompletedTask;
-    }
-}
-```
-
-#### Tests
+Since the `ToolResultSteeringMiddleware` uses the real `AgentInputQueueManager`, these
+tests verify end-to-end steering without any mocks for the steering path itself.
 
 ```
-NullSteerable_NoSteeringPollStarted_ItemsRemainQueued
+SteeringMiddleware_InjectsQueuedMessage_AtToolResultBoundary
     Arrange:
-        Chat with ClientOverride = slow DeterministicTestChatClient, SteerableOverride = null.
-        Run is in progress (not yet complete).
+        - A DeterministicTestChatClient that emits one ToolCallContent update followed
+          by a FunctionResultContent update, then completes.
+        - Wrap it with ToolResultSteeringMiddleware + AgentInputQueueManager.
+        - Enqueue a user message on the queue before the run starts.
     Act:
-        EnqueueUserMessage("steer me") on the default queue while run is active.
+        Consume all updates from GetStreamingResponseAsync.
     Assert:
-        MockSteerable never called (null, so poll not started).
-        Message appears as the next normal turn input when run ends.
+        The CapturingChatClient (inner) received the queued message appended after
+        the FunctionResultContent message on the second GetStreamingResponseAsync call.
 
-NonNullSteerable_ItemDequeuedAndSteered_DuringActiveRun
-    Arrange:
-        - Chat with SteerableOverride = new MockSteerableChatClient().
-        - DeterministicTestChatClient that pauses mid-stream (via a ManualResetEventSlim
-          held by the test; stream continues only after the test signals it).
-    Act:
-        1. EnqueueUserMessage("initial prompt") — starts the run.
-        2. Wait until the run is active (poll IsBusy or subscribe to a running-item event).
-        3. EnqueueUserMessage("steer me") on the default queue.
-        4. Release the stream to complete.
-    Assert:
-        mock.Steered contains "steer me".
-        "steer me" is in chat History as a User message (AppendUserMessagesToHistory was called).
+HeldQueueItem_NotInjected_AtToolResultBoundary
+    Same as above but the queue uses Immediacy = Held.
+    Assert: inner never receives the held item; it remains in the queue.
 
-HeldQueue_ItemNotSteered
-    Arrange:
-        - SteerableOverride = new MockSteerableChatClient().
-        - Slow DeterministicTestChatClient.
-        - A custom AgentInputQueue with Immediacy = Held.
-    Act:
-        EnqueueUserContents on the held queue while run is active.
-    Assert:
-        mock.Steered is empty (held queue excluded from TryDequeueNextImmediateOrQueued).
-
-SteeringPoll_StopsWhenRunEnds_NextItemBecomesNormalTurn
-    Arrange:
-        - SteerableOverride = mock.
-        - Fast DeterministicTestChatClient (completes immediately).
-    Act:
-        EnqueueUserMessage("first") — run completes quickly.
-        EnqueueUserMessage("second") — becomes a new turn input.
-    Assert:
-        mock.Steered does NOT contain "second" (run ended before it was enqueued).
-        "second" appears as a second turn in History.
+NoFunctionResults_ItemsNotConsumed
+    DeterministicTestChatClient that returns only text (no tool calls).
+    Enqueue an item.
+    Assert: item remains in the queue after the run completes.
 ```
 
 ---
 
 ## Implementation order
 
-1. `ISteerableChatClient.cs` — new interface (no deps)
-2. `ChatClientResult.cs` — new record (depends on `ISteerableChatClient`)
-3. `ToolResultSteeringMiddleware.cs` — new class
-4. `ToolResultSteeringMiddlewareTests.cs` — unit tests pass independently
-5. `CopilotSdkChatClient.cs` — add `ISteerableChatClient` + `SteerAsync`
-6. `AgentFactory.cs` — change return type; update all call sites (one: `AgentChat.InitializeAsync`)
-7. `AgentFactoryTests.cs` additions — cover new steerable shape
-8. `InternalCreateAgentChatRequest.cs` — add `SteerableOverride`
-9. `AgentChat.cs` — add `steerable` field; update `InitializeAsync`; replace
-   `WasCanceledBeforeCompletingAsync` call with inline steering-aware race loop
-10. `AgentChatSteeringTests.cs` — integration tests; all green before merge
+1. `ChatClientResult.cs` — new record (no deps)
+2. `ToolResultSteeringMiddleware.cs` — new class
+3. `ToolResultSteeringMiddlewareTests.cs` — all green independently
+4. `CopilotSdkChatClient.cs` — add `queueManager` constructor param + `OnQueueChanged` handler
+5. `AgentFactory.cs` — change return type to `ChatClientResult`; add `queueManager` param;
+   route it to Copilot constructor and `WrapWithMiddleware`
+6. `AgentFactoryTests.cs` additions — verify wrapping behaviour
+7. `AgentChat.cs` — update the single `InitializeAsync` call site to pass `this.queueManager`
+8. `AgentChatSteeringTests.cs` — end-to-end tests; all green before merge
 
-Steps 1–4 can be done and merged independently. Steps 5–10 are a single coherent change.
+Steps 1–3 can be done and merged independently. Steps 4–8 are a single coherent change.
