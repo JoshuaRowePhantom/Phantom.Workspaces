@@ -103,7 +103,7 @@ public sealed class SelectableTextBlockChatOutputModelsTests
         var model = new ChatMessageSelectableInlineModel(item, () => false);
 
         var toolSpan = FindToolSpan(model.Span);
-        var dataSpan = (Span)toolSpan.Inlines[1];
+        var dataSpan = (Span)toolSpan.Inlines[2];
         Assert.Empty(dataSpan.Inlines);
     }
 
@@ -122,7 +122,7 @@ public sealed class SelectableTextBlockChatOutputModelsTests
         var model = new ChatMessageSelectableInlineModel(item, () => false);
 
         var toolSpanBefore = FindToolSpan(model.Span);
-        var dataSpanBefore = (Span)toolSpanBefore.Inlines[1];
+        var dataSpanBefore = (Span)toolSpanBefore.Inlines[2];
         Assert.Empty(dataSpanBefore.Inlines);
 
         // Simulate the user expanding the tool result.
@@ -134,7 +134,7 @@ public sealed class SelectableTextBlockChatOutputModelsTests
         model.Update(item);
 
         var toolSpanAfter = FindToolSpan(model.Span);
-        var dataSpanAfter = (Span)toolSpanAfter.Inlines[1];
+        var dataSpanAfter = (Span)toolSpanAfter.Inlines[2];
         Assert.NotEmpty(dataSpanAfter.Inlines);
         Assert.Contains("\"ok\": true", GetSpanText(dataSpanAfter));
     }
@@ -155,7 +155,7 @@ public sealed class SelectableTextBlockChatOutputModelsTests
 
         // Rendered as a collapsible tool-style span, collapsed by default with no body inlines.
         var diagnosticSpan = FindToolSpan(model.Span);
-        var dataSpan = (Span)diagnosticSpan.Inlines[1];
+        var dataSpan = (Span)diagnosticSpan.Inlines[2];
         Assert.Empty(dataSpan.Inlines);
 
         var toggle = (ToggleButton)((InlineUIContainer)diagnosticSpan.Inlines[0]).Child!;
