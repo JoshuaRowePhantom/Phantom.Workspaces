@@ -210,6 +210,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();
+            writer.WriteStringValue("entity");
             writer.WriteStringValue("git");
             writer.WriteEndArray();
 

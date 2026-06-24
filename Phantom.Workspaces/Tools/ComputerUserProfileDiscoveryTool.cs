@@ -26,7 +26,7 @@ public sealed class ComputerUserProfileDiscoveryTool(
 
         var entityData = new JsonObject
         {
-            ["entity-types"] = new JsonArray("user-computer-profile"),
+            ["entity-types"] = new JsonArray("entity", "user-computer-profile"),
             ["names"] = new JsonArray(new JsonArray(computerUserProfileName.Components.Select(component => (JsonNode)component).ToArray())),
             ["display-name"] = new JsonObject
             {

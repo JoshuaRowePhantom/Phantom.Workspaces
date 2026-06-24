@@ -502,7 +502,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             $$"""
             {
               "entity-id": "00000000-0000-0000-0000-000000000000",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": "{{displayName}}"
             }
             """);

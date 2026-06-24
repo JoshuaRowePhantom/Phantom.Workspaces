@@ -56,7 +56,7 @@ public static class InterestToggle
             $$"""
             {
               "entity-id": "{{relationshipId}}",
-              "entity-types": ["{{interestTypeName}}", "relationship"],
+              "entity-types": ["entity", "{{interestTypeName}}", "relationship"],
               "names": [["relationships", "{{interestTypeName}}-{{entity.EntityId.Value}}"]],
               "participants": { "target": "{{entity.EntityId.Value}}", "user": "{{userId.Value}}" },
               "note": "Toggled from the entity badge."

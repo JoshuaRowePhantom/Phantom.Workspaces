@@ -71,7 +71,7 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
 
             var entityData = new JsonObject
             {
-                ["entity-types"] = new JsonArray("git-worktree", "filesystem-path"),
+                ["entity-types"] = new JsonArray("entity", "git-worktree", "filesystem-path"),
                 ["names"] = names,
                 ["display-name"] = new JsonObject
                 {

@@ -17,7 +17,7 @@ public sealed class UserDiscoveryTool(
 
         var entityData = new JsonObject
         {
-            ["entity-types"] = new JsonArray("user"),
+            ["entity-types"] = new JsonArray("entity", "user"),
             ["names"] = new JsonArray(new JsonArray("users", "username", userName)),
             ["display-name"] = new JsonObject
             {

@@ -189,6 +189,7 @@ public sealed class ToolExecutionResultWriter
 
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();
+            writer.WriteStringValue("entity");
             writer.WriteStringValue(ToolExecutionResultEntityType);
             writer.WriteEndArray();
 

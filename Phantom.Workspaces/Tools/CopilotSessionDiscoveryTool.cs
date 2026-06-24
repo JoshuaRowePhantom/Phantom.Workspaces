@@ -233,6 +233,7 @@ public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
 
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();
+            writer.WriteStringValue("entity");
             writer.WriteStringValue("mcp-server");
             writer.WriteEndArray();
 
@@ -344,6 +345,7 @@ public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
 
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();
+            writer.WriteStringValue("entity");
             writer.WriteStringValue("agent-definition");
             writer.WriteEndArray();
 

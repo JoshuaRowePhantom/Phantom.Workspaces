@@ -180,7 +180,7 @@ public sealed class AgentSessionShortcutContext
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["agent-session"],
+              "entity-types": ["entity", "agent-session"],
               "names": [{{namesJson}}],
               "display-name": { "default": "{{agentDisplayName}} session" },
               "agent-definition-entity-id": "{{agentDefinitionEntityId}}",
