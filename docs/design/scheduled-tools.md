@@ -23,8 +23,10 @@ Scheduled tools reuse the existing entity / relationship model (see the entity-t
    bind a tool to its execution context:
    - `tool` — the tool entity to run.
    - `schedule` — one or more `schedule` entities controlling when it runs.
-   - `target` — one or more entities to run against; the **host** that executes the relationship
-     is typically a `user-computer-profile`.
+   - `target` — exactly one host entity id (typically a `user-computer-profile`), not an array of
+     hosts.
+   - `last-started` — optional RFC 3339 UTC date-time set by the host immediately before a run is
+     launched; this is the due-check indicator for whether to start a new run.
 4. **`tool-execution-result` entity** — a record of a single tool run, with a start time, end
    time, the tool name, and arbitrary content. A `tool-execution-result` may have child
    `tool-execution-result` entities to log sub-tasks and progress.
@@ -46,8 +48,8 @@ Child results (sub-tasks / progress) are nested beneath their parent result enti
 > schedule is due; `IWorkspaceTool` / `ScheduledToolRegistry` dispatch by `tool.type`;
 > `ToolExecutionResultWriter` records runs as
 > `tool-execution-result` entities; and `ScheduledToolHost.RunDueToolsAsync` discovers
-> tool-relationships targeting the host, evaluates schedules against the last recorded execution, and
-> runs due tools (no double-start). The built-in tools are implemented — `VectorIndexerTool`,
+> tool-relationships targeting the host, evaluates schedules against `tool-relationship.last-started`,
+> and runs due tools (no double-start). The built-in tools are implemented — `VectorIndexerTool`,
 > `EntityClassifierTool`, `GitWorkspaceScanTool`, and `CopilotSessionDiscoveryTool`. The host exposes
 > in-flight running state (`GetRunningExecutions` + `RunningExecutionsChanged`); the GUI view-model
 > cores are implemented — `ScheduledToolsRunningViewModel` (running display) and
@@ -59,16 +61,18 @@ When a host is running, it executes the scheduled tools bound to it. For a `user
 host, the host process is the **`Phantom.Workspaces` executable**.
 
 1. On startup (and periodically), the host queries for `tool-relationship` entities whose
-   `target` includes the host.
-2. For each relationship, it evaluates the bound `schedule` entities against the last execution
-   time to decide whether a run is due.
-3. Due tools are executed; each run creates a `tool-execution-result` under the host and updates
+   `target` equals the host entity id.
+2. For each relationship, it evaluates the bound `schedule` entities against
+   `tool-relationship.last-started` to decide whether a new run is due.
+3. When a run is due, the host first updates `tool-relationship.last-started = now` (with normal
+   concurrency checks), then starts the run.
+4. Due tools are executed; each run creates a `tool-execution-result` under the host and updates
    it (or appends child results) as the run progresses.
-4. Tool execution honors the workspace **trust model**: a scheduled tool runs under the trust
+5. Tool execution honors the workspace **trust model**: a scheduled tool runs under the trust
    profile resolved for its tool/agent definition, and on the host's client instance (see
    `docs/design/trust-models.md`). Tools that drive an agent use `ITrustedExecutor` to construct
    the agent on the correct (local or remote) client instance.
-5. Tools that are currently running when their schedule evaluates shall not be started again;
+6. Tools that are currently running when their schedule evaluates shall not be started again;
    the current tool run is allowed to complete first, and the next run will start at the
    next evaluation time.
 
@@ -167,8 +171,14 @@ resumes where the previous run stopped.
 1. App / host startup (`Phantom.Workspaces`)
    - Composes `ScheduledToolHost` for the current `user-computer-profile` after the repository is
      initialized.
+   - Creates and starts a scheduler loop service (for example `ScheduledToolRunner`) that invokes
+     `RunDueToolsAsync(currentProfileEntityId, hostNameComponents)` immediately on startup and then
+     periodically.
+   - Stops the scheduler loop when the main window/view model is disposed so no background runs
+     continue after shutdown.
 2. `IDataAccessLayer`
-   - Query for due `tool-relationship`s; read targets/entity-types; write `tool-execution-result`s.
+   - Query due `tool-relationship`s; read tool/schedule/target entities; update
+     `tool-relationship.last-started`; write `tool-execution-result`s.
 3. Trust model (`docs/design/trust-models.md`)
    - Tools (especially agent-driven ones) execute via `ITrustedExecutor` under the resolved trust
      profile and client instance.
@@ -177,12 +187,32 @@ resumes where the previous run stopped.
 5. GUI shell
    - Adds the tool result browser as a workspace tab / window.
 
+## Startup / run-loop integration points
+
+The host runtime must be explicitly started by the `Phantom.Workspaces` process.
+
+1. `MainWindowViewModel.InitializeAsync`
+   - After `EntityBroker` and profile/session entities are available, construct
+    `ScheduledToolRegistry` from the built-in `IWorkspaceTool` implementations.
+   - Construct `ScheduledToolHost` using the workspace `IDataAccessLayer` and that registry.
+   - Start a periodic runner that calls `RunDueToolsAsync(...)`.
+2. Scheduler loop implementation
+   - Use a single loop instance per opened workspace host.
+   - Trigger one immediate run on startup, then repeat at a fixed poll interval.
+   - Serialize invocations so the loop never overlaps its own `RunDueToolsAsync` calls.
+3. Shutdown/disposal
+   - Cancel and dispose the loop from `MainWindowViewModel.DisposeAsync` (or equivalent window
+    teardown path).
+   - Ensure cancellation is cooperative so in-flight tools can complete or stop according to their
+    cancellation token handling.
+
 ## Test tasks
 
 1. `ScheduleEvaluator` tests — frequency / days-of-week / start-at "is due" decisions across edge
    cases (timezones, missed runs, first run).
-2. `ScheduledToolHost` tests — discovers only relationships targeting the host; runs only due
-   tools; records start/end results.
+2. `ScheduledToolHost` tests — discovers only relationships whose single `target` is the host;
+   uses `last-started` to decide due runs; updates `last-started` when a run starts; does not
+   start a second run while one is already running; records start/end results.
 3. `ToolExecutionResultWriter` tests — result entities are created at the expected name path and
    child progress entries nest correctly.
 4. `EntityClassifierTool` tests — per-entity prompt assembly order; queue token advances per batch;
@@ -192,5 +222,4 @@ resumes where the previous run stopped.
 ## Non-goals
 
 1. A general cron expression language (recurrence is modeled by the `schedule` entity).
-2. Cross-host coordination/leasing of a single relationship (each host runs the relationships that
-   target it).
+2. Multi-host targets in one `tool-relationship` (a relationship is single-host via one `target`).
