@@ -44,7 +44,7 @@ jobs:
 
       - name: Upload Windows test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-full-windows-logs
           path: scripts/test-results.log
@@ -70,7 +70,7 @@ jobs:
 
       - name: Upload Linux test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-full-linux-logs
           path: scripts/test-results.log
