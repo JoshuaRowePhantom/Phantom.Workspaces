@@ -11,6 +11,7 @@ internal sealed class InMemoryFileSystem : IFileSystem
 {
     private readonly HashSet<string> directories = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> files = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, byte[]> binaryFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> links = new(StringComparer.OrdinalIgnoreCase);
 
     public bool DirectoryExists(string path)
@@ -52,6 +53,7 @@ internal sealed class InMemoryFileSystem : IFileSystem
                      .ToArray())
         {
             this.files.Remove(file);
+            this.binaryFiles.Remove(file);
         }
 
         foreach (var link in this.links.Keys
@@ -92,7 +94,15 @@ internal sealed class InMemoryFileSystem : IFileSystem
                      .Where(pair => pair.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase))
                      .ToArray())
         {
-            this.WriteAllText(destination + file[source.Length..], contents);
+            var destinationFile = destination + file[source.Length..];
+            if (this.binaryFiles.TryGetValue(file, out var bytes))
+            {
+                this.WriteAllBytes(destinationFile, bytes);
+            }
+            else
+            {
+                this.WriteAllText(destinationFile, contents);
+            }
         }
     }
 
@@ -111,6 +121,31 @@ internal sealed class InMemoryFileSystem : IFileSystem
     public string ReadAllText(string path)
     {
         return this.files[Normalize(path)];
+    }
+
+    public void WriteAllBytes(string path, byte[] bytes)
+    {
+        var normalized = Normalize(path);
+        var parent = Path.GetDirectoryName(normalized);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            this.CreateDirectory(parent);
+        }
+
+        this.binaryFiles[normalized] = (byte[])bytes.Clone();
+        this.files[normalized] = string.Empty;
+    }
+
+    public byte[] ReadAllBytes(string path)
+    {
+        return (byte[])this.binaryFiles[Normalize(path)].Clone();
+    }
+
+    public void DeleteFile(string path)
+    {
+        var normalized = Normalize(path);
+        this.files.Remove(normalized);
+        this.binaryFiles.Remove(normalized);
     }
 
     public void CreateOrReplaceDirectoryLink(string linkPath, string targetPath)

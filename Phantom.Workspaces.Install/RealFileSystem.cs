@@ -67,6 +67,30 @@ public sealed class RealFileSystem : IFileSystem
     public string ReadAllText(string path) => File.ReadAllText(path);
 
     /// <inheritdoc />
+    public void WriteAllBytes(string path, byte[] bytes)
+    {
+        var parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+
+        File.WriteAllBytes(path, bytes);
+    }
+
+    /// <inheritdoc />
+    public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
+
+    /// <inheritdoc />
+    public void DeleteFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <inheritdoc />
     public void CreateOrReplaceDirectoryLink(string linkPath, string targetPath)
     {
         if (Directory.Exists(linkPath) || File.Exists(linkPath))

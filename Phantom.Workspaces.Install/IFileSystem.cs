@@ -32,6 +32,15 @@ public interface IFileSystem
     /// <summary>Reads all text from <paramref name="path"/>.</summary>
     string ReadAllText(string path);
 
+    /// <summary>Writes <paramref name="bytes"/> to <paramref name="path"/>, overwriting.</summary>
+    void WriteAllBytes(string path, byte[] bytes);
+
+    /// <summary>Reads all bytes from <paramref name="path"/>.</summary>
+    byte[] ReadAllBytes(string path);
+
+    /// <summary>Deletes the file at <paramref name="path"/> if it exists.</summary>
+    void DeleteFile(string path);
+
     /// <summary>
     /// Creates (or atomically replaces) a directory link at <paramref name="linkPath"/> pointing
     /// at <paramref name="targetPath"/>. Real implementations prefer an NTFS junction (no
