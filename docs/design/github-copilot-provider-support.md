@@ -353,6 +353,187 @@ held state is cleared.
 2. Example definition loading test for `github-copilot-chat.json`. ✅
 3. Schema validation accepts the provider value. ✅
 
+## Usage reporting
+
+### Problem
+
+`CopilotSdkChatClient` currently returns `ChatResponse` and `ChatResponseUpdate` objects
+with no `Usage` populated. The Microsoft.Extensions.AI `UsageDetails` type carries
+`InputTokenCount`, `OutputTokenCount`, `TotalTokenCount`, and an open-ended
+`AdditionalCounts` dictionary for supplementary counts (reasoning tokens, cache hits, etc.).
+Without usage, the agent framework's token-accounting and cost-display logic never fires
+for Copilot-backed sessions.
+
+### SDK surface
+
+The SDK exposes per-call usage via a session event and aggregate session usage via an RPC
+pull API.
+
+#### Per-call: `AssistantUsageEvent`
+
+`AssistantUsageEvent` fires inside the `session.On(...)` subscription — the same mechanism
+already used for `ToolExecutionStartEvent` / `ToolExecutionCompleteEvent`. Each event
+corresponds to one model API call made by the Copilot CLI during its agentic loop. Because
+the CLI drives multiple model calls per logical turn, several `AssistantUsageEvent`s may
+fire within a single `GetResponseAsync` / `GetStreamingResponseAsync` invocation.
+
+Key members of `AssistantUsageData` (accessed via `event.Data`):
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `InputTokens` | `int?` | Prompt tokens for this model call |
+| `OutputTokens` | `int?` | Completion tokens for this model call |
+| `ReasoningTokens` | `int?` | Internal reasoning tokens (extended thinking models) |
+| `CacheReadTokens` | `int?` | Prompt tokens served from the provider's prompt cache |
+| `CacheWriteTokens` | `int?` | Prompt tokens written to the provider's prompt cache |
+| `Model` | `string` | Model identifier used for this call |
+| `CopilotUsage` | `AssistantUsageCopilotUsage` | Per-token-type cost breakdown (`TokenDetails[]`) |
+| `QuotaSnapshots` | `IDictionary<string, AssistantUsageQuotaSnapshot>` | Per-model quota state |
+| `Cost` | `double?` | Monetary cost reported by CLI |
+| `Duration` | `double?` | Duration of this model call (ms) |
+
+`AssistantUsageCopilotUsage.TokenDetails` is an array of `AssistantUsageCopilotUsageTokenDetail`
+(`TokenType` string, `TokenCount` double, `BatchSize`, `CostPerBatch`). This is a billing
+detail breakdown, not needed for the standard MEA usage mapping, but available in
+`AdditionalCounts` if desired.
+
+#### Aggregate session: `session.Rpc.Usage.GetMetricsAsync`
+
+`CopilotSession.Rpc` exposes a `SessionRpc` object. `SessionRpc.Usage` is a `UsageApi`
+(marked `[Experimental]` / `GHCP001` in the SDK). `UsageApi.GetMetricsAsync(CancellationToken)`
+returns `UsageGetMetricsResult` with aggregate metrics for the entire session:
+
+| Property | Type | Notes |
+| --- | --- | --- |
+| `LastCallInputTokens` | `long` | Input tokens for the most recent model call |
+| `LastCallOutputTokens` | `long` | Output tokens for the most recent model call |
+| `TotalUserRequests` | `long` | Total number of user turns sent in this session |
+| `ModelMetrics` | `IDictionary<string, UsageMetricsModelMetric>` | Per-model usage breakdown |
+| `TokenDetails` | `IDictionary<string, UsageMetricsTokenDetail>` | Per-token-type aggregate count |
+| `TotalApiDurationMs` | `TimeSpan` | Cumulative model API call duration |
+| `TotalNanoAiu` | `double?` | Cumulative Copilot billing units |
+| `TotalPremiumRequestCost` | `double` | Cumulative premium request cost |
+| `CodeChanges` | `UsageMetricsCodeChanges` | Files modified, lines added/removed |
+
+`UsageMetricsModelMetric.Usage` carries `InputTokens`, `OutputTokens`, `CacheReadTokens`,
+`CacheWriteTokens`, `ReasoningTokens?` (all `long`) for the aggregate model-level rollup.
+
+Because `GetMetricsAsync` returns **session totals**, per-turn deltas require snapshotting
+before and after each turn, which is cumbersome. The event-based approach is simpler and
+more precise.
+
+#### Context-window: `SessionUsageInfoEvent`
+
+`SessionUsageInfoEvent` fires with context-window occupancy data (not model API token
+counts). `SessionUsageInfoData` carries:
+- `CurrentTokens` — total tokens currently in the context window
+- `TokenLimit` — context-window capacity
+- `ConversationTokens?`, `SystemTokens?`, `ToolDefinitionsTokens?` — breakdown by section
+
+This is useful for watermark / overflow warnings but does not map to MEA `UsageDetails`.
+
+### Recommended approach
+
+Subscribe to `AssistantUsageEvent` inside the existing `session.On(...)` lambda and
+accumulate totals across all events in the turn. Map to `UsageDetails` at the end.
+
+#### `AssistantUsageData` → `UsageDetails` mapping
+
+| `UsageDetails` property | Source |
+| --- | --- |
+| `InputTokenCount` | Sum of `AssistantUsageData.InputTokens` across all events in the turn |
+| `OutputTokenCount` | Sum of `AssistantUsageData.OutputTokens` |
+| `TotalTokenCount` | `InputTokenCount + OutputTokenCount` (no direct total field) |
+| `AdditionalCounts["reasoning_tokens"]` | Sum of `AssistantUsageData.ReasoningTokens` (omit key when null/zero) |
+| `AdditionalCounts["cache_read_tokens"]` | Sum of `AssistantUsageData.CacheReadTokens` |
+| `AdditionalCounts["cache_write_tokens"]` | Sum of `AssistantUsageData.CacheWriteTokens` |
+
+#### `GetResponseAsync` changes
+
+Add an `AssistantUsageData?` accumulator alongside the existing `toolCalls`/`toolResults`
+lists. Handle `AssistantUsageEvent` in the `session.On(...)` callback:
+
+```csharp
+case AssistantUsageEvent usageEvent:
+    lock (toolEventLock)
+    {
+        accumulatedInputTokens += usageEvent.Data.InputTokens ?? 0;
+        accumulatedOutputTokens += usageEvent.Data.OutputTokens ?? 0;
+        accumulatedReasoningTokens += usageEvent.Data.ReasoningTokens ?? 0;
+        accumulatedCacheReadTokens += usageEvent.Data.CacheReadTokens ?? 0;
+        accumulatedCacheWriteTokens += usageEvent.Data.CacheWriteTokens ?? 0;
+    }
+    break;
+```
+
+Set `ChatResponse.Usage` in `BuildResponse` from the accumulated totals.
+
+#### `GetStreamingResponseAsync` changes
+
+Same accumulation in the `session.On(...)` callback. After `SessionIdleEvent` completes the
+channel, emit a final `ChatResponseUpdate` with `Usage` set before writing `TryComplete()`:
+
+```csharp
+case SessionIdleEvent:
+    channel.Writer.TryWrite(new ChatResponseUpdate
+    {
+        Role = ChatRole.Assistant,
+        Usage = BuildUsageDetails(accumulatedInputTokens, accumulatedOutputTokens, ...),
+    });
+    channel.Writer.TryComplete();
+    break;
+```
+
+Alternatively, set `ChatResponse.Usage` on the consolidated `ChatResponse` that
+`AgentChat` assembles from the stream updates — whichever matches how the framework
+expects it.
+
+#### Helper
+
+Extract a `BuildUsageDetails` helper (static, unit-testable) that converts the accumulated
+longs into a `UsageDetails`, skipping zero/null additional counts:
+
+```csharp
+private static UsageDetails? BuildUsageDetails(
+    long inputTokens, long outputTokens,
+    long reasoningTokens, long cacheReadTokens, long cacheWriteTokens)
+{
+    if (inputTokens == 0 && outputTokens == 0)
+    {
+        return null; // no usage reported by CLI (e.g., BYOK test server)
+    }
+
+    var usage = new UsageDetails
+    {
+        InputTokenCount = inputTokens,
+        OutputTokenCount = outputTokens,
+        TotalTokenCount = inputTokens + outputTokens,
+    };
+
+    if (reasoningTokens > 0)
+        usage.AdditionalCounts ??= new AdditionalPropertiesDictionary<long>();
+        usage.AdditionalCounts["reasoning_tokens"] = reasoningTokens;
+    if (cacheReadTokens > 0) { ... }
+    if (cacheWriteTokens > 0) { ... }
+
+    return usage;
+}
+```
+
+### Caveats
+
+- **Multi-call accumulation**: One logical `CopilotSdkChatClient` turn maps to multiple
+  model calls (the CLI's agentic loop). Accumulated `InputTokenCount` therefore includes
+  tokens from every intermediate tool-calling step, not just the first user prompt. This
+  is consistent with how the `github-models` provider counts tokens (tool-result messages
+  are re-sent each turn), but callers should be aware total input tokens will be higher
+  than the raw user-message size.
+- **`session.Rpc.Usage` is experimental**: The `GHCP001` diagnostic must be suppressed to
+  use `UsageApi` directly. The event-based approach avoids this.
+- **Zero-usage responses**: The Copilot CLI may not fire `AssistantUsageEvent` for every
+  session (e.g., during BYOK end-to-end tests against `EchoChatClient`). Return `null`
+  usage in that case rather than a zero-filled `UsageDetails`.
+
 ## Non-goals
 
 1. Replacing the `github-models` path.
