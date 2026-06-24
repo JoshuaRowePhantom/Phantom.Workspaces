@@ -105,6 +105,15 @@ public sealed class ManagementModeRunner
         try
         {
             this.startupTaskService.Disable();
+
+            // Remove the `current` directory link first. A recursive delete of the app root would
+            // otherwise follow the junction into the active version directory, corrupting the
+            // delete. Deleting the link alone removes the reparse point, not the target.
+            if (this.fileSystem.DirectoryExists(this.layout.CurrentLinkPath))
+            {
+                this.fileSystem.DeleteDirectory(this.layout.CurrentLinkPath, recursive: false);
+            }
+
             if (this.fileSystem.DirectoryExists(this.layout.AppRoot))
             {
                 this.fileSystem.DeleteDirectory(this.layout.AppRoot, recursive: true);

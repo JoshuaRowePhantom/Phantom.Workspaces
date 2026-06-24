@@ -18,7 +18,25 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishReadyToRun>true</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- The GUI references other (non-self-contained) executable projects; the self-contained
+         single-file bundle pulls in their assemblies, so bypass the SDK's matching check. -->
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+    <!-- Referenced executable projects emit their own apphost/deps.json under both the RID and
+         non-RID paths; the GUI is the only entry point we ship, so tolerate the duplicates. -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
+  <!-- When the GUI is built non-RID (e.g. by `dotnet build`/`dotnet test`) and then published for
+       a RID, each referenced executable project leaves both a non-RID and a RID `apphost.exe` that
+       map to the same bundle entry (e.g. Phantom.Workspaces.Containers.exe), crashing the
+       single-file bundler. Drop the non-RID copies, keeping the RID-specific one. -->
+  <Target Name="RemoveDuplicateReferencedAppHosts"
+          AfterTargets="_ComputeFilesToBundle"
+          Condition="'$(RuntimeIdentifier)' != ''">
+    <ItemGroup>
+      <_FilesToBundle Remove="@(_FilesToBundle)"
+          Condition="'%(_FilesToBundle.Filename)%(_FilesToBundle.Extension)' == 'apphost.exe' and !$([System.String]::Copy('%(_FilesToBundle.Identity)').Contains('\$(RuntimeIdentifier)\'))" />
+    </ItemGroup>
+  </Target>
   <ItemGroup>
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />
