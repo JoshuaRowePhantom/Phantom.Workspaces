@@ -18,6 +18,10 @@ public partial class AgentChatEditorControl : UserControl
     {
         this.InitializeComponent();
         this.DataContextChanged += this.OnDataContextChanged;
+
+        // The navigation pane starts collapsed so the chat output uses the full width by
+        // default; the user expands it on demand via the collapse toggle.
+        this.SetTreeCollapsed(true);
     }
 
     private void OpenLogWindow()

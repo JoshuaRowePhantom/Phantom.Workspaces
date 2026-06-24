@@ -185,6 +185,18 @@ public sealed class MainWindowAxamlTests
             "ContentTemplate=\"{TemplateBinding HeaderTemplate}\"",
             sharedStylesContent,
             StringComparison.Ordinal);
+
+        // Issue #25: the entity-card-tree TreeViewItem template must bind the child
+        // ItemsPresenter visibility to IsExpanded; otherwise collapsing a tool node has no
+        // effect and the children stay visible.
+        Assert.Contains(
+            "<ItemsPresenter Margin=\"20,0,0,0\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsVisible=\"{Binding IsExpanded}\" />",
+            sharedStylesContent,
+            StringComparison.Ordinal);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -217,6 +229,26 @@ public sealed class MainWindowAxamlTests
             "AgentChatStatusLineStyles.axaml",
             appContent,
             StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_NavigationPane_StartsCollapsed()
+    {
+        // Issue #24: the editor navigation pane should start collapsed when an agent chat view
+        // is opened, so the chat output uses the full width by default.
+        var control = new AgentChatEditorControl();
+
+        var navigationTree = GetField<TreeView>(control, "NavigationTree");
+        var splitterHost = GetField<GridSplitter>(control, "SplitterHost");
+        var collapseToggle = GetField<ToggleButton>(control, "TreeCollapseToggle");
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+
+        Assert.False(navigationTree.IsVisible);
+        Assert.False(splitterHost.IsVisible);
+        Assert.Equal("▶", collapseToggle.Content);
+        Assert.True(collapseToggle.IsChecked);
+        Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
+        Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

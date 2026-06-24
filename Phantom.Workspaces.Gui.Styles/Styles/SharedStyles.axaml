@@ -192,7 +192,8 @@
                                 HorizontalContentAlignment="Center"
                                 Command="{Binding ToggleExpandCommand}" />
                     </Border>
-                    <ItemsPresenter Margin="20,0,0,0" />
+                    <ItemsPresenter Margin="20,0,0,0"
+                                    IsVisible="{Binding IsExpanded}" />
                 </StackPanel>
             </ControlTemplate>
         </Setter>
