@@ -78,6 +78,39 @@ public sealed class StringFieldEditorViewModel : EntityFieldEditorViewModel
     }
 }
 
+public sealed class BooleanToggleFieldEditorViewModel : EntityFieldEditorViewModel
+{
+    private bool value;
+
+    public BooleanToggleFieldEditorViewModel(
+        string fieldName,
+        bool value)
+        : base(fieldName, "boolean")
+    {
+        this.value = value;
+    }
+
+    public bool Value
+    {
+        get => this.value;
+        set
+        {
+            if (this.SetProperty(ref this.value, value))
+            {
+                this.RaisePropertyChanged(nameof(this.DisplayValue));
+            }
+        }
+    }
+
+    /// <summary>Read-mode presentation of the boolean as lower-case JSON-style text.</summary>
+    public string DisplayValue => this.value ? "true" : "false";
+
+    public override EntityFieldEditorViewModel Clone()
+    {
+        return new BooleanToggleFieldEditorViewModel(this.FieldName, this.Value);
+    }
+}
+
 public sealed class LocalStringFieldEditorViewModel : EntityFieldEditorViewModel
 {
     private readonly ObservableCollection<LocalizedTextValueViewModel> localizedValues = [];

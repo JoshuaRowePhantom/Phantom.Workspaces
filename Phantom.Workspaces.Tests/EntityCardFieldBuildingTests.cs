@@ -219,4 +219,69 @@ public sealed class EntityCardFieldBuildingTests
         Assert.IsType<EntityReferenceFieldEditorViewModel>(
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_BuildsBooleanToggleEditorForPausedField()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "d1e2f3a4-5b6c-4d7e-8f9a-0b1c2d3e4f5c",
+              "entity-types": ["entity", "relationship", "tool-relationship"],
+              "names": [["tool-relationships", "paused-example"]],
+              "participants": {
+                "tool": "11111111-1111-1111-1111-111111111111",
+                "schedule": ["22222222-2222-2222-2222-222222222222"],
+                "target": ["33333333-3333-3333-3333-333333333333"]
+              },
+              "paused": true,
+              "last-started": "2026-06-17T09:30:00Z"
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "tool-relationship");
+
+        var pausedEditor = Assert.IsType<BooleanToggleFieldEditorViewModel>(
+            fieldEditors.Single(editor => editor.FieldName == "paused"));
+        Assert.True(pausedEditor.Value);
+
+        // The relationship view also surfaces last-started for inspection.
+        Assert.Contains(fieldEditors, editor => editor.FieldName == "last-started");
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_BuildsBooleanToggleEditor_DefaultsFalse_WhenPausedAbsent()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "d1e2f3a4-5b6c-4d7e-8f9a-0b1c2d3e4f5d",
+              "entity-types": ["entity", "relationship", "tool-relationship"],
+              "names": [["tool-relationships", "unpaused-example"]],
+              "participants": {
+                "tool": "11111111-1111-1111-1111-111111111111",
+                "schedule": ["22222222-2222-2222-2222-222222222222"],
+                "target": ["33333333-3333-3333-3333-333333333333"]
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "tool-relationship");
+
+        var pausedEditor = Assert.IsType<BooleanToggleFieldEditorViewModel>(
+            fieldEditors.Single(editor => editor.FieldName == "paused"));
+        Assert.False(pausedEditor.Value);
+    }
 }

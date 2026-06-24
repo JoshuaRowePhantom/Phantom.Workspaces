@@ -188,6 +188,24 @@
         </Grid>
     </DataTemplate>
 
+    <DataTemplate DataType="vm:BooleanToggleFieldEditorViewModel">
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*"
+              RowDefinitions="Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding DisplayValue}"
+                       Classes="workspace-field-read-value"
+                       IsVisible="{Binding IsReadMode}" />
+            <ToggleSwitch Grid.Column="1"
+                          IsChecked="{Binding Value, Mode=TwoWay}"
+                          OnContent="true"
+                          OffContent="false"
+                          IsVisible="{Binding IsEditMode}"
+                          Classes="workspace-field-value" />
+        </Grid>
+    </DataTemplate>
+
     <DataTemplate DataType="vm:LocalStringFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="200,*,Auto"
