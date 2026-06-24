@@ -95,7 +95,20 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             includeRelationships: true,
             cancellationToken).ConfigureAwait(false);
 
-        this.ApplyManagedReferenceRelationshipChanges(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
+        var requestSchemasByName = this.GetSchemasFromRequest(
+            new UpdateRequest
+            {
+                UpdateMetadata = request.UpdateMetadata,
+                Changes = changesByEntityId.Values.ToArray(),
+            });
+
+        order = await this.ApplyManagedReferenceRelationshipChangesAsync(
+            changesByEntityId,
+            currentSnapshotsById,
+            orderedChangesByEntityId,
+            requestSchemasByName,
+            order,
+            cancellationToken).ConfigureAwait(false);
         this.ApplyRelationshipDeleteCascade(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
         var folderDeleteFailures = await this.ValidateFolderDeletesAsync(changesByEntityId, currentSnapshotsById, cancellationToken).ConfigureAwait(false);
         if (folderDeleteFailures.Count > 0)
@@ -109,12 +122,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         order = await this.ApplyFolderPrefixEntityChangesAsync(changesByEntityId, orderedChangesByEntityId, order, cancellationToken).ConfigureAwait(false);
         await this.ApplyDuplicateRelationshipCoalescingAsync(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, cancellationToken).ConfigureAwait(false);
-        var requestSchemasByName = this.GetSchemasFromRequest(
-            new UpdateRequest
-            {
-                UpdateMetadata = request.UpdateMetadata,
-                Changes = changesByEntityId.Values.ToArray(),
-            });
 
         var validationFailures = await this.ValidateReferencesAsync(
             changesByEntityId,
@@ -243,11 +250,13 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return fetchedSnapshot;
     }
 
-    private void ApplyManagedReferenceRelationshipChanges(
+    private async Task<int> ApplyManagedReferenceRelationshipChangesAsync(
         IDictionary<EntityId, EntityChange> changesByEntityId,
         IReadOnlyDictionary<EntityId, EntitySnapshot> currentSnapshotsById,
         IDictionary<EntityId, OrderedChange> orderedChangesByEntityId,
-        ref int nextOrder)
+        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        int nextOrder,
+        CancellationToken cancellationToken)
     {
         foreach (var entityId in changesByEntityId.Keys.ToArray())
         {
@@ -262,17 +271,23 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             var previousData = currentSnapshotsById.TryGetValue(entityId, out var currentSnapshot)
                 ? currentSnapshot.Data
                 : null;
-            var previousReferenceCounts = this.GetManagedReferenceCounts(previousData);
-            var newReferenceCounts = this.GetManagedReferenceCounts(change.Data.Value);
-            var allTargets = previousReferenceCounts.Keys
-                .Concat(newReferenceCounts.Keys)
+            var previousReferenceTargets = await this.GetManagedReferenceTargetsAsync(
+                previousData,
+                requestSchemaEntitiesByName,
+                cancellationToken).ConfigureAwait(false);
+            var newReferenceTargets = await this.GetManagedReferenceTargetsAsync(
+                change.Data.Value,
+                requestSchemaEntitiesByName,
+                cancellationToken).ConfigureAwait(false);
+            var allTargets = previousReferenceTargets
+                .Concat(newReferenceTargets)
                 .Distinct()
                 .ToArray();
 
             foreach (var targetEntityId in allTargets)
             {
-                var hadReference = previousReferenceCounts.TryGetValue(targetEntityId, out var previousCount) && previousCount > 0;
-                var hasReference = newReferenceCounts.TryGetValue(targetEntityId, out var newCount) && newCount > 0;
+                var hadReference = previousReferenceTargets.Contains(targetEntityId);
+                var hasReference = newReferenceTargets.Contains(targetEntityId);
                 var relationshipEntityId = this.GetManagedReferenceRelationshipEntityId(entityId, targetEntityId);
 
                 if (hasReference)
@@ -333,6 +348,8 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     ref nextOrder);
             }
         }
+
+        return nextOrder;
     }
 
     private void ApplyRelationshipDeleteCascade(
@@ -860,7 +877,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     {
         var references = new List<ReferenceConstraint>();
         references.AddRange(this.ExtractRelationshipParticipantReferences(entityData));
-        references.AddRange(this.ExtractHeuristicEntityIdReferences(entityData));
         references.AddRange(await this.ExtractSchemaTypedReferencesAsync(entityData, requestSchemaEntitiesByName, cancellationToken).ConfigureAwait(false));
         return references
             .GroupBy(
@@ -883,74 +899,6 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return this.GetRelationshipParticipantEntityIds(entityData)
             .Select(static entityId => new ReferenceConstraint { TargetEntityId = entityId, TargetEntityName = null })
             .ToArray();
-    }
-
-    private IReadOnlyCollection<ReferenceConstraint> ExtractHeuristicEntityIdReferences(
-        JsonElement entityData)
-    {
-        var references = new List<ReferenceConstraint>();
-        this.CollectHeuristicEntityIdReferences(entityData, propertyName: null, references);
-
-        var selfEntityId = this.ResolveEntityId(entityData);
-        return references
-            .Where(reference => selfEntityId is null || reference.TargetEntityId != selfEntityId.Value)
-            .ToArray();
-    }
-
-    private void CollectHeuristicEntityIdReferences(
-        JsonElement value,
-        string? propertyName,
-        ICollection<ReferenceConstraint> references)
-    {
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in value.EnumerateObject())
-            {
-                this.CollectHeuristicEntityIdReferences(property.Value, property.Name, references);
-            }
-
-            return;
-        }
-
-        if (value.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in value.EnumerateArray())
-            {
-                this.CollectHeuristicEntityIdReferences(item, propertyName, references);
-            }
-
-            return;
-        }
-
-        if (propertyName is null)
-        {
-            return;
-        }
-
-        if (string.Equals(propertyName, "entity-id", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        if (value.ValueKind != JsonValueKind.String)
-        {
-            return;
-        }
-
-        var isEntityIdField = propertyName.EndsWith("entity-id", StringComparison.OrdinalIgnoreCase)
-            || propertyName.EndsWith("entity-ids", StringComparison.OrdinalIgnoreCase);
-        if (!isEntityIdField
-            || !Guid.TryParse(value.GetString(), out var targetEntityGuid))
-        {
-            return;
-        }
-
-        references.Add(
-            new ReferenceConstraint
-            {
-                TargetEntityId = new EntityId(targetEntityGuid),
-                TargetEntityName = null,
-            });
     }
 
     private async Task<IReadOnlyCollection<ReferenceConstraint>> ExtractSchemaTypedReferencesAsync(
@@ -1454,102 +1402,26 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         return entitiesByName;
     }
 
-    private IReadOnlyDictionary<EntityId, int> GetManagedReferenceCounts(
-        JsonElement? entityData)
+    private async Task<IReadOnlyCollection<EntityId>> GetManagedReferenceTargetsAsync(
+        JsonElement? entityData,
+        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        CancellationToken cancellationToken)
     {
-        if (entityData is not { ValueKind: JsonValueKind.Object })
+        if (entityData is not { ValueKind: JsonValueKind.Object } data)
         {
-            return new Dictionary<EntityId, int>();
+            return Array.Empty<EntityId>();
         }
 
-        var counts = new Dictionary<EntityId, int>();
-        this.CollectManagedReferenceCounts(entityData.Value, propertyName: null, counts);
-        return counts;
-    }
-
-    private void CollectManagedReferenceCounts(
-        JsonElement value,
-        string? propertyName,
-        IDictionary<EntityId, int> counts)
-    {
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            if (string.Equals(propertyName, "participants", StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (var property in value.EnumerateObject())
-                {
-                    this.CollectParticipantReferenceCounts(property.Value, counts);
-                }
-
-                return;
-            }
-
-            foreach (var property in value.EnumerateObject())
-            {
-                this.CollectManagedReferenceCounts(property.Value, property.Name, counts);
-            }
-
-            return;
-        }
-
-        if (value.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in value.EnumerateArray())
-            {
-                this.CollectManagedReferenceCounts(item, propertyName, counts);
-            }
-
-            return;
-        }
-
-        if (propertyName is null
-            || propertyName.Equals("entity-id", StringComparison.OrdinalIgnoreCase)
-            || !propertyName.EndsWith("entity-id", StringComparison.OrdinalIgnoreCase)
-            && !propertyName.EndsWith("entity-ids", StringComparison.OrdinalIgnoreCase)
-            || value.ValueKind != JsonValueKind.String
-            || !Guid.TryParse(value.GetString(), out var targetEntityGuid))
-        {
-            return;
-        }
-
-        var targetEntityId = new EntityId(targetEntityGuid);
-        counts.TryGetValue(targetEntityId, out var existingCount);
-        counts[targetEntityId] = existingCount + 1;
-    }
-
-    private void CollectParticipantReferenceCounts(
-        JsonElement value,
-        IDictionary<EntityId, int> counts)
-    {
-        if (value.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in value.EnumerateObject())
-            {
-                this.CollectParticipantReferenceCounts(property.Value, counts);
-            }
-
-            return;
-        }
-
-        if (value.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in value.EnumerateArray())
-            {
-                this.CollectParticipantReferenceCounts(item, counts);
-            }
-
-            return;
-        }
-
-        if (value.ValueKind != JsonValueKind.String
-            || !Guid.TryParse(value.GetString(), out var participantGuid))
-        {
-            return;
-        }
-
-        var participantEntityId = new EntityId(participantGuid);
-        counts.TryGetValue(participantEntityId, out var existingParticipantCount);
-        counts[participantEntityId] = existingParticipantCount + 1;
+        var references = await this.ExtractSchemaTypedReferencesAsync(
+            data,
+            requestSchemaEntitiesByName,
+            cancellationToken).ConfigureAwait(false);
+        var selfEntityId = this.ResolveEntityId(data);
+        return references
+            .Where(reference => reference.TargetEntityId is not null)
+            .Select(reference => reference.TargetEntityId!.Value)
+            .Where(targetEntityId => selfEntityId is null || targetEntityId != selfEntityId.Value)
+            .ToHashSet();
     }
 
     private EntityId GetManagedReferenceRelationshipEntityId(

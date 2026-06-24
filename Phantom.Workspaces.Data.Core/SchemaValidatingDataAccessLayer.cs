@@ -18,7 +18,6 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private static readonly string[] EntitySchemaNameComponents = { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" };
     private static readonly string EntitySchemaName = JsonSerializer.Serialize(EntitySchemaNameComponents);
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
-    private const string CustomEntityTypeKeyword = "x-entity-types";
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -134,6 +133,13 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             return errors;
         }
 
+        var onlyAbstractTypesError = this.GetOnlyAbstractEntityTypesError(resolvedSchemas, change.EntityId);
+        if (onlyAbstractTypesError is not null)
+        {
+            errors.Add(onlyAbstractTypesError);
+            return errors;
+        }
+
         var shouldCloseUnevaluatedProperties = resolvedSchemas.Any(
             schema => !this.IsBaseEntitySchema(schema));
 
@@ -145,6 +151,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 new BuildOptions
                 {
                     SchemaRegistry = schemaRegistry,
+                    Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
                 });
         }
         catch (Exception exception)
@@ -350,7 +357,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             {
                 using var payloadStream = new MemoryStream();
                 using var payloadWriter = new Utf8JsonWriter(payloadStream);
-                this.WriteElementWithoutCustomKeywords(schemaPayload, payloadWriter);
+                schemaPayload.WriteTo(payloadWriter);
                 payloadWriter.Flush();
                 return System.Text.Encoding.UTF8.GetString(payloadStream.ToArray());
             }
@@ -368,53 +375,12 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             }
 
             writer.WritePropertyName(property.Name);
-            this.WriteElementWithoutCustomKeywords(property.Value, writer);
+            property.Value.WriteTo(writer);
         }
 
         writer.WriteEndObject();
         writer.Flush();
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());
-    }
-
-    protected void WriteElementWithoutCustomKeywords(
-        JsonElement element,
-        Utf8JsonWriter writer)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-                writer.WriteStartObject();
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (string.Equals(property.Name, CustomEntityTypeKeyword, StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    if (string.Equals(property.Name, "x-default-mime-type", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    writer.WritePropertyName(property.Name);
-                    this.WriteElementWithoutCustomKeywords(property.Value, writer);
-                }
-
-                writer.WriteEndObject();
-                return;
-            case JsonValueKind.Array:
-                writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray())
-                {
-                    this.WriteElementWithoutCustomKeywords(item, writer);
-                }
-
-                writer.WriteEndArray();
-                return;
-            default:
-                element.WriteTo(writer);
-                return;
-        }
     }
 
     protected string? GetSchemaReference(
@@ -680,6 +646,47 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             return false;
         }
+    }
+
+    private UpdateError? GetOnlyAbstractEntityTypesError(
+        IReadOnlyList<ApplicableSchema> resolvedSchemas,
+        EntityId? entityId)
+    {
+        var entityTypeSchemas = resolvedSchemas
+            .Where(schema => this.IsEntityTypeSchemaReference(schema.SchemaReference))
+            .ToArray();
+        if (entityTypeSchemas.Length == 0)
+        {
+            return null;
+        }
+
+        if (entityTypeSchemas.Any(static schema => !IsAbstractEntityType(schema.SchemaEntity)))
+        {
+            return null;
+        }
+
+        var typeNames = entityTypeSchemas
+            .Select(static schema => GetEntityTypeNameFromSchemaReference(schema.SchemaReference));
+        return new UpdateError
+        {
+            Message = $"Entity declares only abstract entity types [{string.Join(", ", typeNames)}]. At least one concrete (non-abstract) entity type is required.",
+            RelatedEntityId = entityId,
+        };
+    }
+
+    private static bool IsAbstractEntityType(
+        JsonElement? schemaEntity)
+    {
+        return schemaEntity is { ValueKind: JsonValueKind.Object } entity
+            && entity.TryGetProperty("abstract", out var abstractValue)
+            && abstractValue.ValueKind == JsonValueKind.True;
+    }
+
+    private static string GetEntityTypeNameFromSchemaReference(
+        string schemaReference)
+    {
+        using var document = JsonDocument.Parse(schemaReference);
+        return document.RootElement[1].GetString() ?? string.Empty;
     }
 
     private bool TryGetSchemaPayloadId(

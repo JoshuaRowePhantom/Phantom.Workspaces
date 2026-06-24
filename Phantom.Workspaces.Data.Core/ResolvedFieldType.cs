@@ -30,5 +30,11 @@ public sealed class ResolvedFieldType
     /// <c>x-relative-entity-display-order</c> keyword. Defaults to 0 when absent.
     /// </summary>
     public double RelativeEntityDisplayOrder { get; init; }
+
+    /// <summary>
+    /// Optional status annotation read from the schema's <c>x-field-status</c> keyword. Present only
+    /// for fields whose value represents a status; used to render colored status badges on the card.
+    /// </summary>
+    public FieldStatus? FieldStatus { get; init; }
 }
 

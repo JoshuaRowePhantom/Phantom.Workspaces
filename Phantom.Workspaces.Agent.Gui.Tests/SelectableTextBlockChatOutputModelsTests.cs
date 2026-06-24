@@ -169,6 +169,56 @@ public sealed class SelectableTextBlockChatOutputModelsTests
         Assert.DoesNotContain("Opened toolset", bodyText, StringComparison.Ordinal);
     }
 
+    // Reproduces the O(n^2) streaming render for the selectable path: as the trailing text grows,
+    // the unchanged leading tool content must not be recreated; its inline (and tool model) is reused.
+    [AvaloniaFact]
+    public void Message_Update_WhenLeadingContentUnchanged_ReusesToolInline()
+    {
+        static AgentChatHistoryItem Make(string text) => new()
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new FunctionCallContent("call-1", "search", new Dictionary<string, object?> { ["query"] = "cats" }),
+                new TextContent(text),
+            ],
+        };
+
+        var model = new ChatMessageSelectableInlineModel(Make("partial"), () => false);
+        var toolSpanBefore = FindToolSpan(model.Span);
+
+        model.Update(Make("partial and then some more"));
+
+        var toolSpanAfter = FindToolSpan(model.Span);
+        Assert.Same(toolSpanBefore, toolSpanAfter);
+    }
+
+    [AvaloniaFact]
+    public void Message_Update_WhenNothingChanges_ReusesAllInlines()
+    {
+        static AgentChatHistoryItem Make() => new()
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new FunctionCallContent("call-1", "search", new Dictionary<string, object?> { ["query"] = "cats" }),
+                new TextContent("stable"),
+            ],
+        };
+
+        var model = new ChatMessageSelectableInlineModel(Make(), () => false);
+        var before = model.Span.Inlines.ToArray();
+
+        model.Update(Make());
+
+        var after = model.Span.Inlines.ToArray();
+        Assert.Equal(before.Length, after.Length);
+        for (var index = 0; index < before.Length; index++)
+        {
+            Assert.Same(before[index], after[index]);
+        }
+    }
+
     private static Span FindToolSpan(Span messageSpan)
         => messageSpan.Inlines
             .OfType<Span>()

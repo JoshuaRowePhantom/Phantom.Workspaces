@@ -12,6 +12,8 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
     {
         public required AIContent Content { get; init; }
 
+        public required string Key { get; init; }
+
         public List<Block> Blocks { get; } = [];
 
         public bool IsVisible { get; set; }
@@ -23,6 +25,8 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
     private readonly Section labelSection = new();
     private readonly Section contentSection = new();
     private readonly List<ContentBinding> contentBindings = [];
+    private bool hasRendered;
+    private bool lastReasoningVisible;
 
     public ChatMessageDocumentModel(AgentChatHistoryItem item, Func<bool> isReasoningVisible)
     {
@@ -54,6 +58,52 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
 
     private void Render()
     {
+        var includeReasoning = this.isReasoningVisible();
+        var contents = this.Source.Contents;
+
+        // When reasoning visibility toggles, every binding's visibility may change, so nothing can be
+        // reused from the previous render.
+        var reasoningChanged = !this.hasRendered || includeReasoning != this.lastReasoningVisible;
+
+        var newBindings = new List<ContentBinding>(contents.Count);
+        var anyChange = reasoningChanged || contents.Count != this.contentBindings.Count;
+        for (var index = 0; index < contents.Count; index++)
+        {
+            var content = contents[index];
+            var key = ComputeContentKey(content);
+
+            // Reuse the already-rendered blocks when the content at this position is unchanged, so a
+            // streaming update (which rebuilds identical leading content) does not re-parse JSON or
+            // recreate flow-document blocks. This keeps re-rendering proportional to what changed.
+            if (!reasoningChanged
+                && index < this.contentBindings.Count
+                && this.contentBindings[index].Key == key)
+            {
+                newBindings.Add(this.contentBindings[index]);
+                continue;
+            }
+
+            var binding = new ContentBinding
+            {
+                Content = content,
+                Key = key,
+            };
+            this.RenderContentBinding(binding, includeReasoning);
+            newBindings.Add(binding);
+            anyChange = true;
+        }
+
+        this.hasRendered = true;
+        this.lastReasoningVisible = includeReasoning;
+
+        if (!anyChange)
+        {
+            return;
+        }
+
+        this.contentBindings.Clear();
+        this.contentBindings.AddRange(newBindings);
+
         using (this.labelSection.TextDocument?.BeginChange())
         {
             DocumentBlockUtilities.ClearBlocks(this.labelSection);
@@ -62,24 +112,38 @@ internal sealed class ChatMessageDocumentModel : AgentChatDocumentBlockModel
                 this.Source.Role.Value));
 
             DocumentBlockUtilities.ClearBlocks(this.contentSection);
-            this.contentBindings.Clear();
-            foreach (var content in this.Source.Contents)
+            foreach (var contentBinding in this.contentBindings)
             {
-                var contentBinding = new ContentBinding
+                if (!contentBinding.IsVisible)
                 {
-                    Content = content,
-                };
-                this.contentBindings.Add(contentBinding);
-                this.RenderContentBinding(contentBinding, this.isReasoningVisible());
-                if (contentBinding.IsVisible)
+                    continue;
+                }
+
+                foreach (var block in contentBinding.Blocks)
                 {
-                    foreach (var block in contentBinding.Blocks)
-                    {
-                        this.contentSection.Blocks.Add(block);
-                    }
+                    this.contentSection.Blocks.Add(block);
                 }
             }
         }
+    }
+
+    // A cheap, value-based identity for a content block. It excludes large payloads (function-call
+    // arguments, tool results, binary data) so comparing it every streaming update stays inexpensive;
+    // such payloads are immutable once their content first appears, so the position+identity is enough
+    // to know whether a previously rendered block can be reused.
+    private static string ComputeContentKey(AIContent content)
+    {
+        return content switch
+        {
+            TextReasoningContent reasoning => "reasoning:" + reasoning.Text,
+            TextContent text => "text:" + text.Text,
+            ErrorContent error => "error:" + error.Message,
+            FunctionCallContent call => $"call:{call.CallId}\u0001{call.Name}\u0001{call.Arguments?.Count ?? -1}",
+            FunctionResultContent result => "result:" + result.CallId,
+            DataContent data => $"data:{data.MediaType}\u0001{data.Data.Length}",
+            UriContent uri => "uri:" + uri.Uri,
+            _ => $"other:{content.GetType().FullName}\u0001{content}",
+        };
     }
 
     private void RenderContentBinding(ContentBinding contentBinding, bool includeReasoningContent)

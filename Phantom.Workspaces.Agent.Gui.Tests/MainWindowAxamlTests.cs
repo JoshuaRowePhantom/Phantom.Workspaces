@@ -188,6 +188,38 @@ public sealed class MainWindowAxamlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_ConversationDetailIncludesStatusLine()
+    {
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+        var appContent = ReadAgentGuiFile("App.axaml");
+
+        Assert.Contains(
+            "Classes=\"agent-chat-status-line\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsVisible=\"{Binding StatusLine.IsThinking}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"{Binding StatusLine.ModelDisplay}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"{Binding StatusLine.ProviderDisplay}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"{Binding StatusLine.TokensDisplay}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AgentChatStatusLineStyles.axaml",
+            appContent,
+            StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_CanCollapseAndUncollapseNavigationPane()
     {
         var control = new AgentChatEditorControl();

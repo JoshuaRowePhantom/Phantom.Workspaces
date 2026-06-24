@@ -148,6 +148,53 @@ public sealed class SharedStylesTests
             "InnerLeftContent setter must wrap control content in <Template>.");
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void StatusThemeResources_AreSolidColorBrushes()
+    {
+        var sharedStyles = LoadSharedStyles();
+
+        var expectedKeys = new List<string>
+        {
+            "Theme.Status.Good",
+            "Theme.Status.Bad",
+            "Theme.Status.Foreground",
+        };
+        for (var index = 0; index < 6; index++)
+        {
+            expectedKeys.Add($"Theme.Status.Palette.{index}");
+        }
+
+        foreach (var key in expectedKeys)
+        {
+            Assert.True(sharedStyles.Resources.TryGetValue(key, out var value), $"Expected resource key '{key}' to exist.");
+            _ = Assert.IsAssignableFrom<ISolidColorBrush>(value);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatStatusLineResources_Resolve()
+    {
+        var statusLineStyles = LoadAgentChatStatusLineStyles();
+        var brushKeys = new[]
+        {
+            "AgentChat.StatusLine.ThinkingBrain.Foreground",
+            "AgentChat.StatusLine.Label.Foreground",
+            "AgentChat.StatusLine.Value.Foreground",
+            "AgentChat.StatusLine.Separator.Foreground",
+        };
+
+        foreach (var key in brushKeys)
+        {
+            Assert.True(statusLineStyles.Resources.TryGetValue(key, out var value), $"Expected resource key '{key}' to exist.");
+            _ = Assert.IsAssignableFrom<ISolidColorBrush>(value);
+        }
+
+        Assert.True(statusLineStyles.Resources.TryGetValue("AgentChat.StatusLine.FontSize", out var fontSize));
+        _ = Assert.IsType<double>(fontSize);
+        Assert.True(statusLineStyles.Resources.TryGetValue("AgentChat.StatusLine.Padding", out var padding));
+        _ = Assert.IsType<Thickness>(padding);
+    }
+
     private static DirectoryInfo FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -167,6 +214,14 @@ public sealed class SharedStylesTests
     private static Avalonia.Styling.Styles LoadSharedStyles()
     {
         var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml");
+        var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
+        var loaded = AvaloniaXamlLoader.Load(source, baseUri);
+        return Assert.IsType<Avalonia.Styling.Styles>(loaded);
+    }
+
+    private static Avalonia.Styling.Styles LoadAgentChatStatusLineStyles()
+    {
+        var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml");
         var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
         var loaded = AvaloniaXamlLoader.Load(source, baseUri);
         return Assert.IsType<Avalonia.Styling.Styles>(loaded);

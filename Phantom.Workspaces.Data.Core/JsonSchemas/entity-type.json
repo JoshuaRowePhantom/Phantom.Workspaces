@@ -45,6 +45,10 @@
       "type": "number",
       "description": "Optional float that orders this entity type's contributed fields relative to other entity types when an entity is rendered or edited. Lower values are rendered first. When absent, the type sorts after all types that specify a value, then by type name."
     },
+    "abstract": {
+      "type": "boolean",
+      "description": "When true, this entity type cannot stand on its own: an entity may not declare only abstract entity types. Every entity must declare at least one concrete (non-abstract) entity type."
+    },
     "schema": {
       "$comment": "Meta-rule: every entity-type schema must enforce that its own type name appears in the entity's entity-types. The inline schema must require entity-types and constrain entity-types via contains.const.",
       "type": "object",

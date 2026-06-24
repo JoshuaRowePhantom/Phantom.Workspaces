@@ -106,6 +106,76 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_IsRejected_WhenEntityDeclaresOnlyAbstractEntityTypes()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("b2c7e2a1-3f44-4c9e-9a1d-7e2f6b5c4d3a");
+        var otherEntityId = new EntityId("a1b2c3d4-e5f6-4071-8293-a4b5c6d7e8f9");
+
+        var result = await RequireUpdateFailsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity with only abstract types"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": ["entity", "relationship"],
+                              "names": [["relationship", "abstract-only"]],
+                              "participants": {
+                                "entities": ["{{entityId}}", "{{otherEntityId}}"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("only abstract entity types", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_Succeeds_WhenEntityDeclaresConcreteTypeAlongsideAbstractTypes()
+    {
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityId = new EntityId("d4e9f1c2-5a6b-4c7d-8e9f-0a1b2c3d4e5f");
+        var otherEntityId = new EntityId("f6a7b8c9-0d1e-4f23-8456-7a8b9c0d1e2f");
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add relationship with concrete subtype"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": ["entity", "relationship", "related"],
+                              "names": [["relationship", "concrete-related"]],
+                              "participants": {
+                                "entities": ["{{entityId}}", "{{otherEntityId}}"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        Assert.Equal(UpdateState.Added, result.EntityResults.Single().UpdateState);
+    }
+
+    [Fact]
     public async Task Update_ValidatesLocalizedMimeAttachmentContent_ForNote()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -170,6 +240,29 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                 Environment.NewLine,
                 result.EntityResults.SelectMany(entityResult => entityResult.Errors.Select(error => error.Message))));
         Assert.All(result.EntityResults, entityResult => Assert.Equal(ConcurrencyMatchState.Matched, entityResult.ConcurrencyMatchState));
+        Assert.DoesNotContain(result.EntityResults, entityResult => entityResult.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
+    public async Task Update_Succeeds_WhenSchemaDeclaresCustomAnnotationKeyword()
+    {
+        // Custom "x-" annotation keywords (such as x-field-status, x-entity-types and
+        // x-default-mime-type) must be legal JSON Schema. The schema dialect permits unknown
+        // keywords so these annotations are preserved for the field-type resolver instead of being
+        // stripped or rejected when the schema is built.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add schema with custom annotation keyword and entity"),
+                new EntityChange[]
+                {
+                    CreateValidatedEntityChange(ValidatedEntityId, "one", TestSchemaName),
+                    CreateSchemaEntityChangeWithCustomAnnotation(TestSchemaEntityId, TestSchemaName),
+                }));
+
+        Assert.Equal(2, result.EntityResults.Count);
         Assert.DoesNotContain(result.EntityResults, entityResult => entityResult.UpdateState == UpdateState.Failed);
     }
 
@@ -299,7 +392,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             {
                               "$schema": "{{schemaName}}",
                               "entity-id": "{{entityId}}",
-                              "entity-types": ["entity"],
+                              "entity-types": ["entity", "task"],
                               "names": [["validated-entity"]],
                               "title": "valid"
                             }
@@ -378,7 +471,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
                             $$"""
                             {
                               "entity-id": "{{entityId}}",
-                              "entity-types": ["entity"],
+                              "entity-types": ["entity", "task"],
                               "names": [["entity-with-extra-property"]],
                               "unexpected-property": "should-fail"
                             }
@@ -930,7 +1023,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             {
               "$schema": "{{schemaName}}",
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": ["entity", "task"],
               "names": [["validated-entity"]],
               "title": {{JsonSerializer.Serialize(title)}}
             }
@@ -940,6 +1033,38 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             entityId,
             null,
             entityDocument.RootElement.Clone(),
+            EntityChangeMode.Replace);
+    }
+
+    private static EntityChange CreateSchemaEntityChangeWithCustomAnnotation(
+        EntityId entityId,
+        string schemaName)
+    {
+        using var schemaDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "entity-type", "json-schema"],
+              "names": [["json-schemas", "{{schemaName}}"]],
+              "schema": {
+                "$id": "{{schemaName}}",
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "x-custom-annotation": { "good-status-values": ["one"] }
+                  },
+                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                },
+                "required": ["title", "entity-types"]
+              }
+            }
+            """);
+
+        return CreateEntityChange(
+            entityId,
+            null,
+            schemaDocument.RootElement.Clone(),
             EntityChangeMode.Replace);
     }
 

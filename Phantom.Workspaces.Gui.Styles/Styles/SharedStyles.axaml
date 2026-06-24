@@ -51,6 +51,18 @@
         <x:Double x:Key="Theme.Class.accent.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.accent.FontSize">13</x:Double>
         <FontWeight x:Key="Theme.Class.accent.FontWeight">Normal</FontWeight>
+
+        <!-- Status badge palette. Good is green, Bad is red; the six palette colors are distinct,
+             vibrant hues with no red or green, chosen so the single status foreground reads on all. -->
+        <SolidColorBrush x:Key="Theme.Status.Good">#2E7D32</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Bad">#C62828</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Foreground">#F5F5F5</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.0">#1565C0</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.1">#4527A0</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.2">#6A1B9A</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.3">#00838F</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.4">#FF8F00</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.5">#455A64</SolidColorBrush>
     </Styles.Resources>
     <Style Selector="TextBox.copyable-text">
         <Setter Property="IsReadOnly" Value="True" />
@@ -267,6 +279,19 @@
         <Setter Property="CornerRadius" Value="10" />
         <Setter Property="Padding" Value="8,2" />
         <Setter Property="Margin" Value="0,2,6,0" />
+    </Style>
+    <Style Selector="Border.status-badge">
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="Margin" Value="0,0,4,4" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.status-badge > TextBlock.status-badge-text">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Foreground}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
     <Style Selector="GridSplitter.main-splitter">
         <Setter Property="Width" Value="6" />
@@ -588,11 +613,13 @@
     </Style>
     <Style Selector="Control.workspace-markdown-viewer">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-viewer /template/ ScrollViewer">
+        <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
     <Style Selector="Control.workspace-markdown-editor">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="MinHeight" Value="120" />
     </Style>
     <Style Selector="Control.workspace-json-schema-viewer">
         <Setter Property="MinHeight" Value="180" />

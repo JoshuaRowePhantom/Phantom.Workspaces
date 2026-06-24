@@ -61,7 +61,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.AttachSelectableOutputModel();
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
-        agentChat.ToolsChanged += this.OnToolsChanged;
+        this.agentChat.ToolsChanged += this.OnToolsChanged;
+        this.agentChat.UsageChanged += this.OnUsageChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
@@ -88,6 +89,10 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public string ModelProvider => this.ResolveAgentModel()?.Provider ?? string.Empty;
 
     public string ModelId => this.ResolveAgentModel()?.Id ?? string.Empty;
+
+    public long? TotalInputTokenCount => this.agentChat.TotalInputTokenCount;
+
+    public long? TotalOutputTokenCount => this.agentChat.TotalOutputTokenCount;
 
     public string ModelApiType => this.ResolveAgentModel()?.ApiType ?? string.Empty;
 
@@ -280,8 +285,10 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
 
         this.InputQueue.Dispose();
+        this.conversationDetail.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
+        this.agentChat.UsageChanged -= this.OnUsageChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
             runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
@@ -327,4 +334,21 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     private void OnRunningItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         => this.RaisePropertyChanged(nameof(this.IsChatRunning));
+
+    private void OnUsageChanged(object? sender, EventArgs eventArgs)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            this.RaiseUsagePropertiesChanged();
+            return;
+        }
+
+        Dispatcher.UIThread.Post(this.RaiseUsagePropertiesChanged);
+    }
+
+    private void RaiseUsagePropertiesChanged()
+    {
+        this.RaisePropertyChanged(nameof(this.TotalInputTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalOutputTokenCount));
+    }
 }

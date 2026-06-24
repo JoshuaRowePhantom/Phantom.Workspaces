@@ -22,6 +22,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
     {
         this.Entity = entity;
         this.Badges = new BadgesViewModel(entity.Badges);
+        this.StatusBadges = new StatusBadgesViewModel(entity.StatusBadges);
         this.IndentLevel = indentLevel;
         this.IsParentContext = isParentContext;
         this.entityCardNode = new EntityListNodeViewModel(
@@ -34,6 +35,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
         this.entityCardNode.Card.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
         this.entityCardNode.Card.SetBadges(this.Badges);
+        this.entityCardNode.Card.SetStatusBadges(this.StatusBadges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.RefreshCollections();
     }
@@ -51,6 +53,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
     public bool IsParentContext { get; }
 
     public BadgesViewModel Badges { get; }
+
+    public StatusBadgesViewModel StatusBadges { get; }
 
     public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 

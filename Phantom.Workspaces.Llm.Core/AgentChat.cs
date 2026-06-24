@@ -66,6 +66,11 @@ public sealed class AgentChat : IAsyncDisposable
     private CancellationTokenSource? activeRunCancellation;
     private int disposeStarted;
 
+    // Captured at construction (on the creating thread, e.g. the UI thread) so the processing loop
+    // runs on the foreground synchronization context. Capturing later (once the loop starts) is
+    // unreliable because framework awaits on the initialization path drop the context.
+    private readonly TaskScheduler foregroundScheduler;
+
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
        this.request = request;
@@ -74,6 +79,9 @@ public sealed class AgentChat : IAsyncDisposable
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
        this.ownedResources = request.OwnedResources?.ToList() ?? [];
        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
+       this.foregroundScheduler = SynchronizationContext.Current is not null
+           ? TaskScheduler.FromCurrentSynchronizationContext()
+           : TaskScheduler.Default;
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
@@ -196,6 +204,8 @@ public sealed class AgentChat : IAsyncDisposable
 
     public event EventHandler? ToolsChanged;
 
+    public event EventHandler? UsageChanged;
+
     /// <summary>Completed conversation turns, in order.</summary>
     public AgentChatHistoryCollection History => this.history;
 
@@ -226,6 +236,10 @@ public sealed class AgentChat : IAsyncDisposable
     public string AgentSessionId => this.agentSessionId;
 
     public AgentDefinition? AgentDefinition => this.agentDefinition;
+
+    public long? TotalInputTokenCount { get; private set; }
+
+    public long? TotalOutputTokenCount { get; private set; }
 
     public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
 
@@ -481,37 +495,139 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
-    private async Task UpdateCurrentPartialResponse(
-        AgentChatRunningItem currentRunningItem,
-        AgentResponseUpdate agentResponseUpdate,
-        List<AgentResponseUpdate> agentResponseUpdates)
+    // Drains a conflator while suppressing coalesce faults so a secondary failure during teardown
+    // cannot mask the cancellation or provider error already being handled.
+    private static async Task DrainQuietlyAsync(PartialResponseConflator conflator)
     {
-        agentResponseUpdates.Add(agentResponseUpdate);
-
-        var chatResponseUpdates = agentResponseUpdates.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
-        var chatResponse = await chatResponseUpdates.ToChatResponseAsync();
-
-        bool lastIsToolResult = Enumerable.OfType<ToolResultContent>(agentResponseUpdate.Contents).Any();
-
-        IEnumerable<AgentChatHistoryItem> finalItem = Array.Empty<AgentChatHistoryItem>();
-        if (lastIsToolResult)
+        try
         {
-            finalItem = new AgentChatHistoryItem[]
-            {
-                new AgentChatHistoryItem
-                {
-                    Role = ChatRole.Assistant,
-                }
-            };
+            await conflator.DrainAsync();
+        }
+        catch
+        {
+        }
+    }
+
+    // Conflates streaming partial-response updates. Every update is appended to the accumulating
+    // list so the accumulator is always complete, but at most one coalesce runs at a time. When a
+    // coalesce finishes, the next one reads the latest accumulated state, so intermediate frames are
+    // skipped while the final frame is always processed. Coalescing the accumulated updates into chat
+    // messages is inherently O(n) per update (O(n^2) over a run), so the list is built on a background
+    // task; the running-item population then runs as a separate task on the captured foreground
+    // scheduler (the UI thread in production), so the UI-bound collections are only mutated there.
+    private sealed class PartialResponseConflator
+    {
+        private readonly AgentChat owner;
+        private readonly AgentChatRunningItem runningItem;
+        private readonly TaskScheduler foregroundScheduler;
+        private readonly List<AgentResponseUpdate> updates = new();
+        private readonly object gate = new();
+        private long version;
+        private long processedVersion;
+        private bool workerRunning;
+        private Task worker = Task.CompletedTask;
+
+        public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem)
+        {
+            this.owner = owner;
+            this.runningItem = runningItem;
+            this.foregroundScheduler = owner.foregroundScheduler;
         }
 
-        var chatHistoryItems = chatResponse.Messages.Reverse().Select((message, index) => new AgentChatHistoryItem
+        public void Notify(AgentResponseUpdate update)
         {
-            Role = message.Role,
-            Contents = message.Contents.ToArray(),
-        }).Reverse().Concat(finalItem).ToArray();
+            bool startWorker = false;
+            lock (this.gate)
+            {
+                this.updates.Add(update);
+                this.version++;
+                if (!this.workerRunning)
+                {
+                    this.workerRunning = true;
+                    startWorker = true;
+                }
+            }
 
-        this.UpdateRunningItem(currentRunningItem, chatHistoryItems);
+            if (startWorker)
+            {
+                this.worker = this.RunWorkerAsync();
+            }
+        }
+
+        // Awaited after the producer loop ends. Because the worker always coalesces the latest
+        // accumulated version before exiting, awaiting it guarantees the final frame is applied.
+        public Task DrainAsync()
+        {
+            lock (this.gate)
+            {
+                return this.worker;
+            }
+        }
+
+        private async Task RunWorkerAsync()
+        {
+            while (true)
+            {
+                AgentResponseUpdate[] snapshot;
+                long targetVersion;
+                lock (this.gate)
+                {
+                    if (this.processedVersion == this.version)
+                    {
+                        this.workerRunning = false;
+                        return;
+                    }
+
+                    targetVersion = this.version;
+                    snapshot = this.updates.ToArray();
+                }
+
+                // Build the chat history items on a background task (does not touch the foreground).
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot));
+
+                // Populate the running item on the foreground scheduler so the UI-bound collection is
+                // only ever mutated there, even though the producer loop may run off the foreground.
+                await Task.Factory.StartNew(
+                    () => this.owner.UpdateRunningItem(this.runningItem, chatHistoryItems),
+                    CancellationToken.None,
+                    TaskCreationOptions.DenyChildAttach,
+                    this.foregroundScheduler);
+
+                lock (this.gate)
+                {
+                    this.processedVersion = targetVersion;
+                }
+            }
+        }
+
+        private static async Task<AgentChatHistoryItem[]> CoalesceAsync(AgentResponseUpdate[] snapshot)
+        {
+            var chatResponseUpdates = snapshot.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
+            var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
+
+            var lastIsToolResult = snapshot.Length > 0
+                && Enumerable.OfType<ToolResultContent>(snapshot[^1].Contents).Any();
+            IEnumerable<AgentChatHistoryItem> finalItem = lastIsToolResult
+                ? new[]
+                {
+                    new AgentChatHistoryItem
+                    {
+                        Role = ChatRole.Assistant,
+                    },
+                }
+                : Array.Empty<AgentChatHistoryItem>();
+
+            return chatResponse.Messages
+                .Reverse()
+                .Select(message => new AgentChatHistoryItem
+                {
+                    Role = message.Role,
+                    Contents = message.Contents.ToArray(),
+                })
+                .Reverse()
+                .Concat(finalItem)
+                .ToArray();
+        }
     }
 
     private async Task RunProcessLoopAsync(
@@ -569,9 +685,13 @@ public sealed class AgentChat : IAsyncDisposable
 
                 IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator = null;
                 Task<bool>? pendingMoveNext = null;
+                PartialResponseConflator? partialResponses = null;
                 try
                 {
-                    List<AgentResponseUpdate> agentResponseUpdates = new List<AgentResponseUpdate>();
+                    partialResponses = new PartialResponseConflator(
+                        this,
+                        currentPartialTextResponseItem
+                            ?? throw new InvalidOperationException("Running item was unexpectedly null while starting a run."));
 
                     providerEnumerator = this.StartRun(
                             chatMessagesToSubmit.ToArray(),
@@ -597,11 +717,12 @@ public sealed class AgentChat : IAsyncDisposable
                             break;
                         }
 
-                        await this.UpdateCurrentPartialResponse(
-                            currentPartialTextResponseItem,
-                            providerEnumerator.Current,
-                            agentResponseUpdates);
+                        this.AccumulateUsage(providerEnumerator.Current);
+                        partialResponses.Notify(providerEnumerator.Current);
                     }
+
+                    // Flush the final accumulated frame (intermediate frames may have been skipped).
+                    await partialResponses.DrainAsync();
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -609,6 +730,13 @@ public sealed class AgentChat : IAsyncDisposable
                     // diagnostic message after whatever partial content had already streamed in.
                     var runningItem = currentPartialTextResponseItem
                         ?? throw new InvalidOperationException("Running item was unexpectedly null while handling an interruption.");
+
+                    // Drain first so no in-flight coalesce applies a frame after the diagnostic below.
+                    if (partialResponses is not null)
+                    {
+                        await DrainQuietlyAsync(partialResponses);
+                    }
+
                     var interruptedItems = runningItem.Items
                         .Concat([
                             new AgentChatHistoryItem
@@ -713,6 +841,48 @@ public sealed class AgentChat : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private void AccumulateUsage(AgentResponseUpdate update)
+    {
+        var inputTokenCountToAdd = 0L;
+        var outputTokenCountToAdd = 0L;
+        var hasInputTokenCount = false;
+        var hasOutputTokenCount = false;
+
+        foreach (var usageContent in update.Contents.OfType<UsageContent>())
+        {
+            if (usageContent.Details.InputTokenCount is long inputTokenCount)
+            {
+                inputTokenCountToAdd += inputTokenCount;
+                hasInputTokenCount = true;
+            }
+
+            if (usageContent.Details.OutputTokenCount is long outputTokenCount)
+            {
+                outputTokenCountToAdd += outputTokenCount;
+                hasOutputTokenCount = true;
+            }
+        }
+
+        var previousInputTokenCount = this.TotalInputTokenCount;
+        var previousOutputTokenCount = this.TotalOutputTokenCount;
+
+        if (hasInputTokenCount)
+        {
+            this.TotalInputTokenCount = (this.TotalInputTokenCount ?? 0L) + inputTokenCountToAdd;
+        }
+
+        if (hasOutputTokenCount)
+        {
+            this.TotalOutputTokenCount = (this.TotalOutputTokenCount ?? 0L) + outputTokenCountToAdd;
+        }
+
+        if (this.TotalInputTokenCount != previousInputTokenCount
+            || this.TotalOutputTokenCount != previousOutputTokenCount)
+        {
+            this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 

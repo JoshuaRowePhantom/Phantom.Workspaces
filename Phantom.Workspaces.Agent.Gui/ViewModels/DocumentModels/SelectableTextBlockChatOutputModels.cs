@@ -352,11 +352,22 @@ internal sealed class RunningChatItemSelectableInlineModel : AgentChatSelectable
     public void Dispose() => this.transformer.Dispose();
 }
 
-internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInlineModel
+internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInlineModel, IDisposable
 {
+    private sealed class ContentInlineBinding
+    {
+        public required string Key { get; init; }
+
+        public required IReadOnlyList<Inline> Inlines { get; init; }
+
+        public ToolContentSelectableInlineModel? ToolModel { get; init; }
+    }
+
     private readonly Func<bool> isReasoningVisible;
     private readonly Dictionary<string, bool> toolExpansionState = new(StringComparer.Ordinal);
-    private readonly List<ToolContentSelectableInlineModel> toolModels = [];
+    private readonly List<ContentInlineBinding> contentBindings = [];
+    private bool hasRendered;
+    private bool lastReasoningVisible;
     private AgentChatHistoryItem source;
 
     public ChatMessageSelectableInlineModel(
@@ -384,92 +395,187 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
 
     private void Render()
     {
-        this.ClearToolModels();
-        this.Span.Inlines.Clear();
-        this.Span.Classes.Clear();
-        this.Span.Classes.Add("agent-chat-selectable-message");
-        this.Span.Classes.Add(string.Equals(this.source.Role.Value, "user", StringComparison.OrdinalIgnoreCase)
-            ? "agent-chat-selectable-user-message"
-            : "agent-chat-selectable-assistant-message");
+        var includeReasoning = this.isReasoningVisible();
+
+        // When reasoning visibility toggles, every content's visibility may change, so nothing from
+        // the previous render can be reused.
+        var reasoningChanged = !this.hasRendered || includeReasoning != this.lastReasoningVisible;
+
         var roleLabel = this.source.Role.Value;
         var isDiagnostic = string.Equals(
             roleLabel,
             AgentChatHistoryItem.DiagnosticChatRole.Value,
             StringComparison.OrdinalIgnoreCase);
 
-        this.AppendLine($"[{roleLabel}]", "agent-chat-selectable-role-label");
-
-        for (var index = 0; index < this.source.Contents.Count; index++)
+        var contents = this.source.Contents;
+        var newBindings = new List<ContentInlineBinding>(contents.Count);
+        var anyChange = reasoningChanged || contents.Count != this.contentBindings.Count;
+        for (var index = 0; index < contents.Count; index++)
         {
-            var contentItem = this.source.Contents[index];
-            if (!this.isReasoningVisible() && contentItem is TextReasoningContent)
+            var content = contents[index];
+            var key = ComputeContentKey(content, isDiagnostic);
+
+            // Reuse the already-built inlines (and tool model, preserving its expansion state) when the
+            // content at this position is unchanged, so a streaming update that rebuilds identical
+            // leading content does not recreate inlines or toggle buttons.
+            if (!reasoningChanged
+                && index < this.contentBindings.Count
+                && this.contentBindings[index].Key == key)
             {
+                newBindings.Add(this.contentBindings[index]);
                 continue;
             }
 
-            switch (contentItem)
+            newBindings.Add(this.BuildContentBinding(index, content, key, includeReasoning, isDiagnostic));
+            anyChange = true;
+        }
+
+        this.hasRendered = true;
+        this.lastReasoningVisible = includeReasoning;
+
+        if (!anyChange)
+        {
+            return;
+        }
+
+        var reusedBindings = new HashSet<ContentInlineBinding>(newBindings);
+        foreach (var previousBinding in this.contentBindings)
+        {
+            if (previousBinding.ToolModel is not null && !reusedBindings.Contains(previousBinding))
             {
-                case TextReasoningContent reasoningContent:
-                    this.AppendLine(reasoningContent.Text, "agent-chat-selectable-reasoning");
-                    break;
-                case TextContent textContent when isDiagnostic && !string.IsNullOrWhiteSpace(textContent.Text):
-                    this.AppendDiagnosticContent(index, textContent.Text);
-                    break;
-                case TextContent textContent:
-                    this.AppendLine(textContent.Text);
-                    break;
-                case FunctionCallContent functionCallContent:
-                    this.AppendToolContent(
-                        $"call:{functionCallContent.CallId}",
-                        $"tool call: {functionCallContent.Name}",
-                        () => DocumentBlockUtilities.PrettyJson(functionCallContent.Arguments));
-                    break;
-                case FunctionResultContent functionResultContent:
-                    this.AppendToolContent(
-                        $"result:{functionResultContent.CallId}",
-                        $"tool result: {functionResultContent.CallId}",
-                        () => DocumentBlockUtilities.PrettyJson(functionResultContent.Result));
-                    break;
-                case DataContent dataContent:
-                    if (DocumentBlockUtilities.IsImageMediaType(dataContent.MediaType))
-                    {
-                        var imageLabel = string.IsNullOrWhiteSpace(dataContent.MediaType) ? "image" : dataContent.MediaType;
-                        this.AppendLine(imageLabel, "agent-chat-selectable-meta");
-                    }
-                    else
-                    {
-                        var mediaLabel = string.IsNullOrWhiteSpace(dataContent.MediaType) ? "[data]" : $"[{dataContent.MediaType}]";
-                        this.AppendLine(mediaLabel, "agent-chat-selectable-monospace");
-                    }
-                    break;
-                case ErrorContent errorContent:
-                    this.AppendLine(errorContent.Message, "agent-chat-selectable-error");
-                    break;
-                case UriContent uriContent:
-                    this.AppendLine(uriContent.Uri.ToString(), "agent-chat-selectable-uri");
-                    break;
-                default:
-                    this.AppendLine(contentItem.ToString() ?? string.Empty);
-                    break;
+                previousBinding.ToolModel.Dispose();
+            }
+        }
+
+        this.contentBindings.Clear();
+        this.contentBindings.AddRange(newBindings);
+
+        this.Span.Inlines.Clear();
+        this.Span.Classes.Clear();
+        this.Span.Classes.Add("agent-chat-selectable-message");
+        this.Span.Classes.Add(string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
+            ? "agent-chat-selectable-user-message"
+            : "agent-chat-selectable-assistant-message");
+
+        var roleLabelLine = CreateLineInline($"[{roleLabel}]", "agent-chat-selectable-role-label");
+        if (roleLabelLine is not null)
+        {
+            this.Span.Inlines.Add(roleLabelLine);
+        }
+
+        foreach (var binding in this.contentBindings)
+        {
+            foreach (var inline in binding.Inlines)
+            {
+                this.Span.Inlines.Add(inline);
             }
         }
 
         this.Span.Inlines.Add(new LineBreak());
     }
 
-    private void AppendToolContent(string stateKey, string headerLabel, Func<string> dataTextFactory)
+    private ContentInlineBinding BuildContentBinding(
+        int index,
+        AIContent content,
+        string key,
+        bool includeReasoning,
+        bool isDiagnostic)
+    {
+        var inlines = new List<Inline>();
+        ToolContentSelectableInlineModel? toolModel = null;
+
+        switch (content)
+        {
+            case TextReasoningContent reasoningContent:
+                if (includeReasoning)
+                {
+                    AddLineInline(inlines, reasoningContent.Text, "agent-chat-selectable-reasoning");
+                }
+
+                break;
+            case TextContent textContent when isDiagnostic && !string.IsNullOrWhiteSpace(textContent.Text):
+                toolModel = this.CreateDiagnosticModel(index, textContent.Text);
+                inlines.Add(toolModel.Inline);
+                break;
+            case TextContent textContent:
+                AddLineInline(inlines, textContent.Text, null);
+                break;
+            case FunctionCallContent functionCallContent:
+                toolModel = this.CreateToolModel(
+                    $"call:{functionCallContent.CallId}",
+                    $"tool call: {functionCallContent.Name}",
+                    () => DocumentBlockUtilities.PrettyJson(functionCallContent.Arguments));
+                inlines.Add(toolModel.Inline);
+                break;
+            case FunctionResultContent functionResultContent:
+                toolModel = this.CreateToolModel(
+                    $"result:{functionResultContent.CallId}",
+                    $"tool result: {functionResultContent.CallId}",
+                    () => DocumentBlockUtilities.PrettyJson(functionResultContent.Result));
+                inlines.Add(toolModel.Inline);
+                break;
+            case DataContent dataContent:
+                if (DocumentBlockUtilities.IsImageMediaType(dataContent.MediaType))
+                {
+                    var imageLabel = string.IsNullOrWhiteSpace(dataContent.MediaType) ? "image" : dataContent.MediaType;
+                    AddLineInline(inlines, imageLabel, "agent-chat-selectable-meta");
+                }
+                else
+                {
+                    var mediaLabel = string.IsNullOrWhiteSpace(dataContent.MediaType) ? "[data]" : $"[{dataContent.MediaType}]";
+                    AddLineInline(inlines, mediaLabel, "agent-chat-selectable-monospace");
+                }
+
+                break;
+            case ErrorContent errorContent:
+                AddLineInline(inlines, errorContent.Message, "agent-chat-selectable-error");
+                break;
+            case UriContent uriContent:
+                AddLineInline(inlines, uriContent.Uri.ToString(), "agent-chat-selectable-uri");
+                break;
+            default:
+                AddLineInline(inlines, content.ToString() ?? string.Empty, null);
+                break;
+        }
+
+        return new ContentInlineBinding
+        {
+            Key = key,
+            Inlines = inlines,
+            ToolModel = toolModel,
+        };
+    }
+
+    // A cheap, value-based identity for a content block, excluding large payloads (tool arguments,
+    // tool results, binary data) that are immutable once first rendered, so comparing it every
+    // streaming update stays inexpensive.
+    private static string ComputeContentKey(AIContent content, bool isDiagnostic)
+    {
+        return content switch
+        {
+            TextReasoningContent reasoning => "reasoning:" + reasoning.Text,
+            TextContent text when isDiagnostic => "diagnostic:" + text.Text,
+            TextContent text => "text:" + text.Text,
+            FunctionCallContent call => $"call:{call.CallId}\u0001{call.Name}\u0001{call.Arguments?.Count ?? -1}",
+            FunctionResultContent result => "result:" + result.CallId,
+            DataContent data => $"data:{data.MediaType}\u0001{data.Data.Length}",
+            ErrorContent error => "error:" + error.Message,
+            UriContent uri => "uri:" + uri.Uri,
+            _ => $"other:{content.GetType().FullName}\u0001{content}",
+        };
+    }
+
+    private ToolContentSelectableInlineModel CreateToolModel(string stateKey, string headerLabel, Func<string> dataTextFactory)
     {
         var initiallyExpanded = this.toolExpansionState.TryGetValue(stateKey, out var expanded) && expanded;
-        var toolModel = new ToolContentSelectableInlineModel(
+        return new ToolContentSelectableInlineModel(
             headerLabel,
             dataTextFactory,
             initiallyExpanded,
             isExpanded => this.toolExpansionState[stateKey] = isExpanded);
-        this.toolModels.Add(toolModel);
-        this.Span.Inlines.Add(toolModel.Inline);
     }
 
-    private void AppendDiagnosticContent(int index, string text)
+    private ToolContentSelectableInlineModel CreateDiagnosticModel(int index, string text)
     {
         // Render diagnostic text as a collapsible region (collapsed by default) like tool content:
         // the first line is the always-visible header and the remainder is revealed when expanded.
@@ -490,31 +596,28 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
 
         var stateKey = $"diagnostic:{index}";
         var initiallyExpanded = this.toolExpansionState.TryGetValue(stateKey, out var expanded) && expanded;
-        var diagnosticModel = new ToolContentSelectableInlineModel(
+        return new ToolContentSelectableInlineModel(
             header,
             () => body,
             initiallyExpanded,
             isExpanded => this.toolExpansionState[stateKey] = isExpanded,
             dataClassName: null);
-        this.toolModels.Add(diagnosticModel);
-        this.Span.Inlines.Add(diagnosticModel.Inline);
     }
 
-    private void ClearToolModels()
+    private static void AddLineInline(List<Inline> target, string text, string? className)
     {
-        for (var index = 0; index < this.toolModels.Count; index++)
+        var lineSpan = CreateLineInline(text, className);
+        if (lineSpan is not null)
         {
-            this.toolModels[index].Dispose();
+            target.Add(lineSpan);
         }
-
-        this.toolModels.Clear();
     }
 
-    private void AppendLine(string text, string? className = null)
+    private static Span? CreateLineInline(string text, string? className)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            return;
+            return null;
         }
 
         var lineSpan = new Span();
@@ -528,7 +631,17 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
 
         lineSpan.Inlines.Add(run);
         lineSpan.Inlines.Add(new LineBreak());
-        this.Span.Inlines.Add(lineSpan);
+        return lineSpan;
+    }
+
+    public void Dispose()
+    {
+        foreach (var binding in this.contentBindings)
+        {
+            binding.ToolModel?.Dispose();
+        }
+
+        this.contentBindings.Clear();
     }
 }
 

@@ -7,6 +7,8 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
 {
     protected static readonly EntityId SampleEntityId = new EntityId();
 
+    protected virtual string DefaultEntityTypesJson => "[\"entity\", \"task\"]";
+
     protected abstract IDataAccessLayer CreateDataAccessLayer();
 
     protected static async Task<UpdateResult> RequireUpdateSucceedsAsync(
@@ -471,7 +473,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             $$"""
             {
               "entity-id": "{{additionalParticipantId}}",
-              "entity-types": ["entity"],
+              "entity-types": {{this.DefaultEntityTypesJson}},
               "names": [["two"]]
             }
             """);
@@ -585,7 +587,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             $$"""
             {
               "entity-id": "{{SampleEntityId}}",
-              "entity-types": ["entity"],
+              "entity-types": {{this.DefaultEntityTypesJson}},
               "names": {{serializedEntityName}}
             }
             """);
@@ -852,7 +854,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity"],
+              "entity-types": {{this.DefaultEntityTypesJson}},
               "names": {{serializedEntityName}}
             }
             """);

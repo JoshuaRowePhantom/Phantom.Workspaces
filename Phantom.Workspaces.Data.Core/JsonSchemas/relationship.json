@@ -33,32 +33,5 @@
   "required": [
     "entity-types",
     "participants"
-  ],
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "entity-types": {
-            "contains": {
-              "const": "entity"
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "entity-types": {
-            "minItems": 3
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "entity-types": {
-            "minItems": 2
-          }
-        }
-      }
-    }
   ]
 }

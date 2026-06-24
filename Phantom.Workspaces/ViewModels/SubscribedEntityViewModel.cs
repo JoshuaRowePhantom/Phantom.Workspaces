@@ -40,6 +40,8 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     }
 
     public BadgesModel Badges { get; } = new();
+
+    public StatusBadgesModel StatusBadges { get; } = new();
     
     public async Task ToggleInterestAsync(string interestTypeName)
     {

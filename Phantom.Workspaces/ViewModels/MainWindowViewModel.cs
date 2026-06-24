@@ -873,6 +873,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot));
         }
 
+        // Project the entity's annotated status fields into colored status badges. Discovery is
+        // asynchronous (each field's status annotation is resolved through the schema), so the badges
+        // arrive after the card is created and populate the entity's observable status-badge model.
+        _ = this.PopulateStatusBadgesAsync(entity);
+
         return new ViewEntityViewModel(
             entity,
             this,
@@ -880,6 +885,29 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             indentLevel,
             isParentContext,
             this.fieldEditorFactory);
+    }
+
+    /// <summary>
+    /// Asynchronously builds the entity's status badges (one per annotated status field across its
+    /// entity types) and applies them to the entity's status-badge model. Resolving the schema for
+    /// each field is asynchronous, so this runs after the card is created; the badges flow to the card
+    /// through the entity's observable status-badge model.
+    /// </summary>
+    private async Task PopulateStatusBadgesAsync(
+        SubscribedEntityViewModel entity)
+    {
+        if (this.fieldEditorFactory is not { } fieldEditorFactory
+            || entity.Snapshot.Data is not JsonElement entityData
+            || entityData.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var statusBadges = await fieldEditorFactory
+            .BuildStatusBadgesAsync(entityData)
+            .ConfigureAwait(true);
+
+        entity.StatusBadges.SetBadges(statusBadges);
     }
 
     /// <summary>

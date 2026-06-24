@@ -1,0 +1,37 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.ThinkingBrain.Foreground">#E86090</SolidColorBrush>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.Label.Foreground">#B3B3B3</SolidColorBrush>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.Value.Foreground">#5EA0FF</SolidColorBrush>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.Separator.Foreground">#4A4A4A</SolidColorBrush>
+        <x:Double x:Key="AgentChat.StatusLine.FontSize">12</x:Double>
+        <Thickness x:Key="AgentChat.StatusLine.Padding">12,8,12,8</Thickness>
+    </Styles.Resources>
+
+    <Style Selector="Border.agent-chat-status-line">
+        <Setter Property="Padding" Value="{DynamicResource AgentChat.StatusLine.Padding}" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-brain">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-value">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Value.Foreground}" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-label">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Label.Foreground}" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-separator">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Separator.Foreground}" />
+        <Setter Property="Margin" Value="8,0,8,0" />
+    </Style>
+</Styles>
