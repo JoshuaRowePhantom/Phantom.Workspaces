@@ -291,86 +291,97 @@ private ISteerableChatClient? steerable;
 See the `AgentFactory` section above for the exact diff at line 122. When
 `ClientOverride` is set, use `request.SteerableOverride` (defaults to `null`).
 
-#### `RunProcessLoopAsync` — add steering poll arm
+#### `RunProcessLoopAsync` — extend the existing `WhenAny` race
 
-Inside the per-run `try` block, just before the provider enumerator is created:
+The inner provider-stream loop already races `MoveNextAsync` against the interrupt token
+via `WasCanceledBeforeCompletingAsync`. Steering is a third arm in that same race — no
+separate task, signal, or `CancellationTokenSource` is needed.
 
-```csharp
-// Steering poll — only active while a run is in progress and a steerable is available.
-using var steeringCts = CancellationTokenSource.CreateLinkedTokenSource(runCancellation.Token);
-using var steeringSignal = new SemaphoreSlim(0, int.MaxValue);
-
-void OnSteeringQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-    => steeringSignal.Release();
-
-Task? steeringPollTask = null;
-if (this.steerable is not null)
-{
-    this.queueManager.QueueStateChanged += OnSteeringQueueChanged;
-    steeringPollTask = this.RunSteeringPollAsync(this.steerable, steeringSignal, steeringCts.Token);
-}
-```
-
-In the run's `finally` block, before `CleanUpRunAsync`:
+Replace the single `WasCanceledBeforeCompletingAsync` call with an inline loop that
+also watches the existing `queueStateSignal` when a steerable client is present.
+`queueStateSignal` is safe to share because the outer "wait for first item" loop only
+uses it when `chatMessagesToSubmit.Count == 0`, which is never true while a run is
+executing.
 
 ```csharp
-finally
+while (true)
 {
-    if (steeringPollTask is not null)
+    pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
+
+    // Race the provider against the interrupt and (when steering is active) against
+    // new queue items.  Loop until the provider step completes or the run is cancelled;
+    // drain and steer any items that arrive mid-step.
+    while (!pendingMoveNext.IsCompleted)
     {
-        this.queueManager.QueueStateChanged -= OnSteeringQueueChanged;
-        await steeringCts.CancelAsync();
-        try { await steeringPollTask; } catch (OperationCanceledException) { }
-    }
+        runCancellation.Token.ThrowIfCancellationRequested();
 
-    // ... existing CleanUpRunAsync, CompleteRunningItem ...
-}
-```
+        // Without a steerable client the behaviour is identical to the previous
+        // WasCanceledBeforeCompletingAsync: race against an infinite delay that the
+        // cancellation token will trigger.
+        var raceTarget = this.steerable is not null
+            ? queueStateSignal.WaitAsync(runCancellation.Token)
+            : Task.Delay(Timeout.Infinite, runCancellation.Token);
 
-#### New method `RunSteeringPollAsync`
-
-```csharp
-private async Task RunSteeringPollAsync(
-    ISteerableChatClient steerable,
-    SemaphoreSlim signal,
-    CancellationToken cancellationToken)
-{
-    while (!cancellationToken.IsCancellationRequested)
-    {
-        // Wait for a queue change. Releases accumulate if multiple items arrive fast;
-        // the inner while loop below drains all of them, so extra signals are no-ops.
-        await signal.WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        while (this.queueManager.TryDequeueNextImmediateOrQueued(out var item))
+        if (await Task.WhenAny(pendingMoveNext, raceTarget).ConfigureAwait(false)
+            == pendingMoveNext)
         {
-            // Append to chat history so the UI shows the steered text.
-            this.AppendUserMessagesToHistory(item.Messages ?? []);
+            break; // provider step finished first
+        }
 
-            foreach (var message in item.Messages ?? [])
+        if (runCancellation.Token.IsCancellationRequested)
+        {
+            break; // interrupt won — detected on the next ThrowIfCancellationRequested
+        }
+
+        // Queue changed while the provider was still running — drain and steer.
+        while (this.queueManager.TryDequeueNextImmediateOrQueued(out var steeringItem))
+        {
+            this.AppendUserMessagesToHistory(steeringItem.Messages ?? []);
+
+            foreach (var message in steeringItem.Messages ?? [])
             {
                 var text = string.Concat(
-                    message.Contents
-                        .OfType<TextContent>()
-                        .Select(t => t.Text));
+                    message.Contents.OfType<TextContent>().Select(c => c.Text));
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    await steerable.SteerAsync(text, cancellationToken)
+                    await this.steerable!.SteerAsync(text, runCancellation.Token)
                         .ConfigureAwait(false);
                 }
             }
         }
     }
+
+    if (runCancellation.Token.IsCancellationRequested)
+    {
+        throw new OperationCanceledException(runCancellation.Token);
+    }
+
+    var hasNext = await pendingMoveNext; // already completed
+    pendingMoveNext = null;
+    if (!hasNext)
+    {
+        break;
+    }
+
+    this.AccumulateUsage(providerEnumerator.Current);
+    partialResponses.Notify(providerEnumerator.Current);
 }
 ```
 
-**Note on held queues:** `TryDequeueNextImmediateOrQueued` already excludes held queues
-(it only dequeues from `Immediate` and `Queue` immediacy levels). No extra check is
-required here.
+This replaces the previous pattern:
+```csharp
+// OLD — replaced
+pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
+if (await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
+    throw new OperationCanceledException(runCancellation.Token);
+var hasNext = await pendingMoveNext;
+```
 
-**Note on signal contention:** The steering poll uses its own `steeringSignal`
-(a separate `SemaphoreSlim`), not the outer `queueStateSignal` that the main loop uses
-while waiting for the first item of the next turn. The two signals are fed by the same
-`QueueStateChanged` event through separate handler registrations. There is no contention.
+No changes are needed to the outer loop, the `finally` block, or `CleanUpRunAsync`.
+`WasCanceledBeforeCompletingAsync` can be deleted if it is no longer used elsewhere.
+
+**Note on held queues:** `TryDequeueNextImmediateOrQueued` already excludes held queues —
+no extra check is needed.
 
 ---
 
@@ -528,7 +539,8 @@ SteeringPoll_StopsWhenRunEnds_NextItemBecomesNormalTurn
 6. `AgentFactory.cs` — change return type; update all call sites (one: `AgentChat.InitializeAsync`)
 7. `AgentFactoryTests.cs` additions — cover new steerable shape
 8. `InternalCreateAgentChatRequest.cs` — add `SteerableOverride`
-9. `AgentChat.cs` — add `steerable` field, update `InitializeAsync`, add polling in `RunProcessLoopAsync`
+9. `AgentChat.cs` — add `steerable` field; update `InitializeAsync`; replace
+   `WasCanceledBeforeCompletingAsync` call with inline steering-aware race loop
 10. `AgentChatSteeringTests.cs` — integration tests; all green before merge
 
 Steps 1–4 can be done and merged independently. Steps 5–10 are a single coherent change.
