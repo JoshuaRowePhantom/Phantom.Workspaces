@@ -83,7 +83,7 @@ public sealed class EntityClickShortcutHandlerTests
             $$"""
             {
               "entity-id": "99999999-9999-9999-9999-999999999999",
-              "entity-types": ["{{entityType}}"],
+              "entity-types": ["entity", "{{entityType}}"],
               "names": [["tests", "{{entityType}}"]],
               "display-name": { "default": "Test {{entityType}}" }
             }

@@ -553,7 +553,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{relationshipEntityId}}",
-              "entity-types": ["relationship", "related"],
+              "entity-types": ["entity", "relationship", "related"],
               "names": [["relationship", "{{relationshipEntityId}}"]],
               "participants": {
                 "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
@@ -616,7 +616,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             generatedReferenceRelationship.Data is JsonElement generatedReferenceData
             && generatedReferenceData.TryGetProperty("entity-types", out var entityTypes)
             && entityTypes.ValueKind == JsonValueKind.Array
-            && entityTypes.EnumerateArray().Select(static item => item.GetString()).SequenceEqual(["relationship", "reference"])
+            && entityTypes.EnumerateArray().Select(static item => item.GetString()).SequenceEqual(["entity", "relationship", "reference"])
             && generatedReferenceData.TryGetProperty("participants", out var participants)
             && participants.ValueKind == JsonValueKind.Object
             && participants.TryGetProperty("source", out var sourceId)
@@ -671,7 +671,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["{{entityType}}"],
+              "entity-types": ["entity", "{{entityType}}"],
               "names": [["{{name}}"]]
             }
             """);
@@ -688,7 +688,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{relationshipEntityId}}",
-              "entity-types": ["relationship", "related"],
+              "entity-types": ["entity", "relationship", "related"],
               "names": [["relationship", "{{relationshipEntityId}}"]],
               "participants": {
                 "entities": ["{{sourceEntityId}}", "{{destinationEntityId}}"]
@@ -706,7 +706,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{schemaEntityId}}",
-              "entity-types": ["entity-type"],
+              "entity-types": ["entity", "entity-type", "json-schema"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
                 "$id": "{{schemaName}}",
@@ -717,7 +717,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                   },
                   "entity-types": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": { "type": "string" },
+                    "contains": { "const": "entity" }
                   },
                   "names": {
                     "type": "array",
@@ -729,7 +730,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                     "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-id",
                     "x-entity-types": ["folder"]
                   }
-                }
+                },
+                "required": ["entity-types"]
               }
             }
             """);
@@ -763,7 +765,7 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["entity-type"],
+              "entity-types": ["entity", "entity-type", "json-schema"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
                 "$id": "{{schemaName}}",
@@ -776,7 +778,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                     "type": "array",
                     "items": {
                       "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-type-id"
-                    }
+                    },
+                    "contains": { "const": "entity" }
                   },
                   "names": {
                     "type": "array",
@@ -788,7 +791,8 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
                     "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/core.json#/$defs/entity-reference",
                     "x-entity-types": ["entity"]
                   }
-                }
+                },
+                "required": ["entity-types"]
               }
             }
             """);

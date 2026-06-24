@@ -56,7 +56,7 @@ public sealed class EntityClassifierToolTests
             $$"""
             {
               "entity-id": "{{guid}}",
-              "entity-types": ["{{entityType}}"],
+              "entity-types": ["entity", "{{entityType}}"],
               "names": [["notes","{{nameLeaf}}"]],
               "content": { "text": {{JsonSerializer.Serialize(text)}} }
             }
@@ -78,7 +78,7 @@ public sealed class EntityClassifierToolTests
             $$"""
             {
               "entity-id": "{{entityId.Value}}",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["notes","x"]],
               "content": { "text": {{JsonSerializer.Serialize(newText)}} }
             }
@@ -93,7 +93,7 @@ public sealed class EntityClassifierToolTests
     private static WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer, string prompt = "Classify this entity.") =>
         WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            $$"""{ "entity-types": ["tool"], "tool-type": "entity-classifier", "classifier-prompt": {{JsonSerializer.Serialize(prompt)}} }""");
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "entity-classifier", "classifier-prompt": {{JsonSerializer.Serialize(prompt)}} }""");
 
     [Fact]
     public async Task Run_InvokesRunnerOncePerEntity_AndDrainsQueue()
@@ -125,7 +125,7 @@ public sealed class EntityClassifierToolTests
                 {
                     EntityId = new EntityId(Guid.NewGuid()),
                     ConcurrencyTag = null,
-                    Data = JsonDocument.Parse("""{ "entity-types": ["entity-type"], "names": [["entity-types","note"]] }""").RootElement.Clone(),
+                    Data = JsonDocument.Parse("""{ "entity-types": ["entity", "entity-type"], "names": [["entity-types","note"]] }""").RootElement.Clone(),
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
             ],
@@ -170,7 +170,7 @@ public sealed class EntityClassifierToolTests
                     Data = JsonDocument.Parse(
                         """
                         {
-                          "entity-types": ["interest-type","relationship-type","entity-type","note"],
+                          "entity-types": ["entity", "interest-type","relationship-type","entity-type","note"],
                           "names": [["entity-types","not-interesting"]],
                           "applied": { "indicator": "x", "description": "Not interesting", "actionText": "Mark not interesting" },
                           "notApplied": { "indicator": "", "description": "Interesting", "actionText": "Clear" }

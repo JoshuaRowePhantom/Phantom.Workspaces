@@ -71,7 +71,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{entityId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["sample"],
+                          "entity-types": ["entity", "sample"],
                           "names": [["samples", "one"]],
                           "display-name": "Sample Entity"
                         }
@@ -121,7 +121,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{entityId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["sample"],
+                          "entity-types": ["entity", "sample"],
                           "names": [["samples", "one"]],
                           "display-name": "Sample Entity",
                           "content": {
@@ -174,7 +174,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{entityId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["sample"],
+                          "entity-types": ["entity", "sample"],
                           "names": [["samples", "delete-me"]],
                           "value": "before"
                         }
@@ -236,7 +236,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{relationshipId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["assigned-to", "relationship"],
+                          "entity-types": ["entity", "assigned-to", "relationship"],
                           "participants": { "target": "{{Guid.NewGuid():D}}", "user": "{{Guid.NewGuid():D}}" }
                         }
                       }
@@ -277,7 +277,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
                         "entity-id": "{{relationshipId:D}}",
                         "entity-change-mode": "replace",
                         "data": {
-                          "entity-types": ["assigned-to", "relationship"],
+                          "entity-types": ["entity", "assigned-to", "relationship"],
                           "participants": { "target": "{{Guid.NewGuid():D}}", "user": "{{Guid.NewGuid():D}}" },
                           "note": "Task is assigned to the user per the project board."
                         }
@@ -377,7 +377,7 @@ public sealed class WorkspaceEntityToolsetFactoryTests
             $$"""
             {
               "entity-id": "{{Guid.NewGuid():D}}",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [{{JsonSerializer.Serialize(entityName)}}],
               "content": {
                 "default": {

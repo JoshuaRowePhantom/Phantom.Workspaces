@@ -13,7 +13,7 @@ public sealed class EntityPresentationTests
             """
             {
               "entity-id": "12121212-1212-1212-1212-121212121212",
-              "entity-types": ["view", "agent-definition"],
+              "entity-types": ["entity", "view", "agent-definition"],
               "names": [["tests", "entity"]],
               "display-name": { "default": "Entity" }
             }
@@ -30,7 +30,7 @@ public sealed class EntityPresentationTests
             """
             {
               "entity-id": "34343434-3434-3434-3434-343434343434",
-              "entity-types": ["view", "workspace"],
+              "entity-types": ["entity", "view", "workspace"],
               "names": [["tests", "workspace"]],
               "display-name": { "default": "Workspace Entity" }
             }
@@ -49,7 +49,7 @@ public sealed class EntityPresentationTests
             """
             {
               "entity-id": "56565656-5656-5656-5656-565656565656",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["documentation", "agent-manifests"]],
               "title": { "default": "Agent Manifests" },
               "content": {
@@ -75,7 +75,7 @@ public sealed class EntityPresentationTests
             """
             {
               "entity-id": "67676767-6767-6767-6767-676767676767",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["documentation", "empty"]],
               "title": { "default": "Empty" }
             }

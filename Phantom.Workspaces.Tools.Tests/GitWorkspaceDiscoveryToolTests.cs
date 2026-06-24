@@ -109,7 +109,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["computer"],
+              "entity-types": ["entity", "computer"],
               "names": [["computers", "hostname", "test-computer"]]
             }
             """,
@@ -120,7 +120,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             """
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
-              "entity-types": ["user"],
+              "entity-types": ["entity", "user"],
               "names": [["users", "username", "test-user"]]
             }
             """,
@@ -131,7 +131,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             $$"""
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
-              "entity-types": ["user-computer-profile"],
+              "entity-types": ["entity", "user-computer-profile"],
               "names": [["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]],
               "computer-reference": ["computers", "hostname", "test-computer"],
               "user-reference": ["users", "username", "test-user"],
@@ -145,7 +145,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             $$"""
             {
               "entity-id": "44444444-4444-4444-4444-444444444444",
-              "entity-types": ["user-computer-profile"],
+              "entity-types": ["entity", "user-computer-profile"],
               "names": [["computer-user-profiles", "users", "username", "other-user", "computers", "hostname", "other-computer"]],
               "computer-reference": ["computers", "hostname", "other-computer"],
               "user-reference": ["users", "username", "other-user"],
@@ -159,7 +159,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             $$"""
             {
               "entity-id": "55555555-5555-5555-5555-555555555555",
-              "entity-types": ["filesystem-folder", "filesystem-path"],
+              "entity-types": ["entity", "filesystem-folder", "filesystem-path"],
               "names": [
                 ["filesystem-folders", "current-profile-root"],
                 ["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]
@@ -174,7 +174,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             $$"""
             {
               "entity-id": "66666666-6666-6666-6666-666666666666",
-              "entity-types": ["filesystem-folder", "filesystem-path"],
+              "entity-types": ["entity", "filesystem-folder", "filesystem-path"],
               "names": [
                 ["filesystem-folders", "other-profile-root"],
                 ["computer-user-profiles", "users", "username", "other-user", "computers", "hostname", "other-computer"]

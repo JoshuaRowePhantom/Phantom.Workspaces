@@ -414,7 +414,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
             $$"""
             {
               "entity-id": "{{relationshipEntityId}}",
-              "entity-types": ["relationship", "related"],
+              "entity-types": ["entity", "relationship", "related"],
               "names": [["a-to-b"]],
               "participants": {
                 "entities": ["{{participantA}}", "{{participantB}}"]

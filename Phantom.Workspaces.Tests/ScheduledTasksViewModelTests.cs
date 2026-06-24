@@ -20,18 +20,18 @@ public sealed class ScheduledTasksViewModelTests
         var relationshipId = new EntityId("a638fe05-9dd5-49f8-a0b8-c767de434b6f");
 
         await SeedAsync(broker, $$"""
-            { "entity-id": "{{toolId}}", "entity-types": ["folder"], "names": [["tools","git-workspace-scan"]], "display-name": { "default": "Git Workspace Scan" } }
+            { "entity-id": "{{toolId}}", "entity-types": ["entity", "folder"], "names": [["tools","git-workspace-scan"]], "display-name": { "default": "Git Workspace Scan" } }
             """);
         await SeedAsync(broker, $$"""
-            { "entity-id": "{{scheduleId}}", "entity-types": ["folder"], "names": [["schedule","every-five-minutes"]], "display-name": { "default": "Every five minutes" } }
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "folder"], "names": [["schedule","every-five-minutes"]], "display-name": { "default": "Every five minutes" } }
             """);
         await SeedAsync(broker, $$"""
-            { "entity-id": "{{targetId}}", "entity-types": ["folder"], "names": [["profiles","jrowe-daemon"]], "display-name": { "default": "jrowe @ DAEMON" } }
+            { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","jrowe-daemon"]], "display-name": { "default": "jrowe @ DAEMON" } }
             """);
         await SeedAsync(broker, $$"""
             {
               "entity-id": "{{relationshipId}}",
-              "entity-types": ["tool-relationship", "relationship"],
+              "entity-types": ["entity", "tool-relationship", "relationship"],
               "names": [["relationship","{{relationshipId}}"]],
               "note": "Scheduling Git Workspace Scan every five minutes.",
               "participants": {

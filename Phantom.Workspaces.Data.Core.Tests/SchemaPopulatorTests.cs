@@ -189,7 +189,7 @@ public sealed class SchemaPopulatorTests
             $$"""
             {
               "entity-id": "{{relationshipId.Value}}",
-              "entity-types": ["relationship", "tool-relationship"],
+              "entity-types": ["entity", "relationship", "tool-relationship"],
               "names": [["tool-relationships", "git-workspace-scan-on-default-profile"]],
               "participants": {
                 "tool": "{{toolId.Value}}",
@@ -287,7 +287,7 @@ public sealed class SchemaPopulatorTests
             && entityTypes.EnumerateArray().Any(type =>
                 type.ValueKind == JsonValueKind.String
                 && string.Equals(type.GetString(), "entity-type", StringComparison.Ordinal))
-            && !entityTypes.EnumerateArray().Any(type =>
+            && entityTypes.EnumerateArray().Any(type =>
                 type.ValueKind == JsonValueKind.String
                 && string.Equals(type.GetString(), "json-schema", StringComparison.Ordinal))
             && entityTypeSchema.TryGetProperty("schema", out var schema)

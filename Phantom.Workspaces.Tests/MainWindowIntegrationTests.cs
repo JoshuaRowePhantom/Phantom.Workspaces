@@ -129,7 +129,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": { "default": "Workspace Without Regions" }
             }
             """);
@@ -137,7 +137,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": { "default": "Workspace Without Regions" }
             }
             """);
@@ -185,7 +185,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "f95a86dc-f71f-43f8-abf5-31c6444f7a4e",
-              "entity-types": ["agent-definition"],
+              "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "local-echo"]],
               "display-name": { "default": "Local Echo" },
               "definition": {
@@ -245,7 +245,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "a1b2c3d4-0000-4000-8000-000000000001",
-              "entity-types": ["agent-manifest"],
+              "entity-types": ["entity", "agent-manifest"],
               "names": [["tests", "agent-manifests", "local-echo"]],
               "display-name": { "default": "Local Echo Manifest" },
               "manifest": {
@@ -289,7 +289,7 @@ public sealed class MainWindowIntegrationTests
             """
             {
               "entity-id": "b6731cc0-fb8a-4f8e-9f89-3f33a5db1b8a",
-              "entity-types": ["agent-definition"],
+              "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "workspace-entity-tool"]],
               "display-name": { "default": "Workspace Entity Tool Agent" },
               "definition": {

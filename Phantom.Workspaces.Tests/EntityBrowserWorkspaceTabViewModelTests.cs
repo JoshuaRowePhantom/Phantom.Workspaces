@@ -22,7 +22,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "11111111-1111-1111-1111-111111111111",
-                  "entity-types": ["folder"],
+                  "entity-types": ["entity", "folder"],
                   "names": [["entity-types"]],
                   "display-name": { "default": "Entity Types" }
                 }
@@ -35,7 +35,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "22222222-2222-2222-2222-222222222222",
-                  "entity-types": ["entity-type"],
+                  "entity-types": ["entity", "entity-type"],
                   "names": [["entity-types", "workspace"]],
                   "display-name": { "default": "Workspace" }
                 }
@@ -112,7 +112,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "44444444-4444-4444-4444-444444444444",
-                  "entity-types": ["folder"],
+                  "entity-types": ["entity", "folder"],
                   "names": [["tools"]],
                   "display-name": { "default": "Tools" }
                 }
@@ -125,7 +125,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "55555555-5555-5555-5555-555555555555",
-                  "entity-types": ["tool"],
+                  "entity-types": ["entity", "tool"],
                   "names": [["tools", "git-workspace-scan"]],
                   "display-name": { "default": "Git Workspace Scan" }
                 }
@@ -189,7 +189,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "33333333-3333-3333-3333-333333333333",
-                  "entity-types": ["note"],
+                  "entity-types": ["entity", "note"],
                   "names": [["documentation", "markdown-note"]],
                   "display-name": { "default": "Markdown Note" },
                   "content": {
@@ -259,7 +259,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "33333333-3333-3333-3333-333333333333",
-                  "entity-types": ["note"],
+                  "entity-types": ["entity", "note"],
                   "names": [["notes", "localized-mime"]],
                   "display-name": { "default": "Localized Mime" },
                   "content": {
@@ -329,7 +329,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 """
                 {
                   "entity-id": "44444444-4444-4444-4444-444444444444",
-                  "entity-types": ["entity-type", "json-schema"],
+                  "entity-types": ["entity", "entity-type", "json-schema"],
                   "names": [["entity-types", "note"]],
                   "display-name": { "default": "Note Type" },
                   "schema": {

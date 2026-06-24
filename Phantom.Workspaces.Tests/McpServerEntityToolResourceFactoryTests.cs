@@ -99,7 +99,7 @@ public sealed class McpServerEntityToolResourceFactoryTests
             $$"""
             {
               "entity-id": "{{Guid.NewGuid():D}}",
-              "entity-types": ["mcp-server"],
+              "entity-types": ["entity", "mcp-server"],
               "names": [{{JsonSerializer.Serialize(entityName)}}],
               "mcp-server": {
                 "serverName": {{JsonSerializer.Serialize(serverName)}},

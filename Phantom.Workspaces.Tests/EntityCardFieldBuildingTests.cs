@@ -20,7 +20,7 @@ public sealed class EntityCardFieldBuildingTests
             """
             {
               "entity-id": "c0d1e2f3-7a8b-4c9d-9e0f-6a7b8c9d0e1f",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["views", "sessions", "notes", "agent-manifests"]],
               "display-name": { "default": "Agent Manifests" },
               "content": {

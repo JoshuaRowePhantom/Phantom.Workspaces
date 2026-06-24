@@ -133,15 +133,16 @@ public sealed class SchemaAccessorTests
             $$"""
             {
               "entity-id": "{{schemaEntityId}}",
-              "entity-types": ["entity-type"],
+              "entity-types": ["entity", "entity-type", "json-schema"],
               "names": [["json-schemas", "{{schemaName}}"]],
               "schema": {
                 "$id": "{{schemaName}}",
                 "type": "object",
                 "properties": {
-                  "title": { "type": "{{titleType}}" }
+                  "title": { "type": "{{titleType}}" },
+                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
                 },
-                "required": ["title"]
+                "required": ["title", "entity-types"]
               }
             }
             """);

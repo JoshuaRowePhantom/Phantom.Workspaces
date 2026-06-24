@@ -45,12 +45,12 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
     private WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
         WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            $$"""{ "entity-types": ["tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}}, "mcp-config-path": {{JsonSerializer.Serialize(Path.Combine(this.sessionStateRoot, "nonexistent-mcp-config.json"))}} }""");
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}}, "mcp-config-path": {{JsonSerializer.Serialize(Path.Combine(this.sessionStateRoot, "nonexistent-mcp-config.json"))}} }""");
 
     private WorkspaceToolExecutionContext ContextWithMcpConfig(IDataAccessLayer dataAccessLayer, string mcpConfigPath) =>
         WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            $$"""{ "entity-types": ["tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}}, "mcp-config-path": {{JsonSerializer.Serialize(mcpConfigPath)}} }""");
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "copilot-session-discovery", "session-state-root": {{JsonSerializer.Serialize(this.sessionStateRoot)}}, "mcp-config-path": {{JsonSerializer.Serialize(mcpConfigPath)}} }""");
 
     private string WriteMcpConfig(string json)
     {
@@ -105,7 +105,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         {
             var entity = await GetEntityAsync(dataAccessLayer, sessionId);
             Assert.NotNull(entity);
-            Assert.Equal("agent-definition", entity!.Value.GetProperty("entity-types")[0].GetString());
+            Assert.Contains("agent-definition", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
             var name = entity.Value.GetProperty("names")[0].EnumerateArray().Select(c => c.GetString()).ToArray();
             Assert.Equal("copilot", name[0]);
             Assert.Equal("sessions", name[1]);
@@ -159,7 +159,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
 
         var entity = await GetEntityAsync(repository.DataAccessLayer, sessionId);
         Assert.NotNull(entity);
-        Assert.Equal("agent-definition", entity!.Value.GetProperty("entity-types")[0].GetString());
+        Assert.Contains("agent-definition", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
 
         var entity = await GetEntityByNameAsync(dataAccessLayer, MachineMcpServerName);
         Assert.NotNull(entity);
-        Assert.Equal("mcp-server", entity!.Value.GetProperty("entity-types")[0].GetString());
+        Assert.Contains("mcp-server", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
         var mcpServer = entity.Value.GetProperty("mcp-server");
         Assert.Equal("github", mcpServer.GetProperty("serverName").GetString());
         Assert.Equal("https://api.githubcopilot.com/mcp/", mcpServer.GetProperty("connection").GetProperty("endpoint").GetString());

@@ -38,7 +38,7 @@ public sealed class MongoDbNativeDataRoundTripTests
             $$"""
             {
               "entity-id": "{{guid}}",
-              "entity-types": ["entity-type","note"],
+              "entity-types": ["entity", "entity-type","note"],
               "names": [["entity-types","sample"]],
               "schema": {
                 "$id": "https://example/sample.json",
@@ -122,12 +122,12 @@ public sealed class MongoDbNativeDataRoundTripTests
         var assignedTask = Guid.NewGuid();
         var otherTask = Guid.NewGuid();
 
-        await SeedRawAsync(dataAccessLayer, user, """{ "entity-types": ["user"] }""");
-        await SeedRawAsync(dataAccessLayer, otherUser, """{ "entity-types": ["user"] }""");
-        await SeedRawAsync(dataAccessLayer, assignedTask, """{ "entity-types": ["task"], "display-name": { "default": "Mine" } }""");
-        await SeedRawAsync(dataAccessLayer, otherTask, """{ "entity-types": ["task"], "display-name": { "default": "Theirs" } }""");
-        await SeedRawAsync(dataAccessLayer, Guid.NewGuid(), $$"""{ "entity-types": ["assigned-to","relationship"], "participants": { "target": "{{assignedTask}}", "user": "{{user}}" } }""");
-        await SeedRawAsync(dataAccessLayer, Guid.NewGuid(), $$"""{ "entity-types": ["assigned-to","relationship"], "participants": { "target": "{{otherTask}}", "user": "{{otherUser}}" } }""");
+        await SeedRawAsync(dataAccessLayer, user, """{ "entity-types": ["entity", "user"] }""");
+        await SeedRawAsync(dataAccessLayer, otherUser, """{ "entity-types": ["entity", "user"] }""");
+        await SeedRawAsync(dataAccessLayer, assignedTask, """{ "entity-types": ["entity", "task"], "display-name": { "default": "Mine" } }""");
+        await SeedRawAsync(dataAccessLayer, otherTask, """{ "entity-types": ["entity", "task"], "display-name": { "default": "Theirs" } }""");
+        await SeedRawAsync(dataAccessLayer, Guid.NewGuid(), $$"""{ "entity-types": ["entity", "assigned-to","relationship"], "participants": { "target": "{{assignedTask}}", "user": "{{user}}" } }""");
+        await SeedRawAsync(dataAccessLayer, Guid.NewGuid(), $$"""{ "entity-types": ["entity", "assigned-to","relationship"], "participants": { "target": "{{otherTask}}", "user": "{{otherUser}}" } }""");
 
         var result = await dataAccessLayer.QueryAsync(new QueryRequest
         {
@@ -201,7 +201,7 @@ public sealed class MongoDbNativeDataRoundTripTests
             $$"""
             {
               "entity-id": "{{id}}",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["notes","{{id}}"]],
               "priority": {{JsonSerializer.Serialize(priority)}}
             }

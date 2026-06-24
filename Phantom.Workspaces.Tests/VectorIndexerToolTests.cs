@@ -19,7 +19,7 @@ public sealed class VectorIndexerToolTests
             $$"""
             {
               "entity-id": "{{guid}}",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["notes","{{nameLeaf}}"]],
               "content": { "text": {{JsonSerializer.Serialize(text)}} }
             }
@@ -45,7 +45,7 @@ public sealed class VectorIndexerToolTests
     private static WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
         WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            """{ "entity-types": ["tool"], "tool-type": "vector-indexer" }""");
+            """{ "entity-types": ["entity", "tool"], "tool-type": "vector-indexer" }""");
 
     [Fact]
     public async Task Run_DrainsTheVectorIndexQueue()

@@ -19,12 +19,12 @@ public sealed class NotInterestingQueryTests
         var userId = new EntityId("d1d1d1d1-0000-0000-0000-000000000001");
         var visibleId = new EntityId("d2d2d2d2-0000-0000-0000-000000000002");
         var hiddenId = new EntityId("d3d3d3d3-0000-0000-0000-000000000003");
-        await SeedAsync(dataAccessLayer, userId, """{ "entity-types": ["user"], "names": [["users","u","u"]] }""");
-        await SeedAsync(dataAccessLayer, visibleId, """{ "entity-types": ["task"], "names": [["tasks","visible"]] }""");
-        await SeedAsync(dataAccessLayer, hiddenId, """{ "entity-types": ["task"], "names": [["tasks","hidden"]] }""");
-        await SeedAsync(dataAccessLayer, new EntityId(Guid.NewGuid()), $$"""{ "entity-types": ["actionable","relationship"], "participants": { "target": "{{visibleId.Value}}", "user": "{{userId.Value}}" } }""");
-        await SeedAsync(dataAccessLayer, new EntityId(Guid.NewGuid()), $$"""{ "entity-types": ["actionable","relationship"], "participants": { "target": "{{hiddenId.Value}}", "user": "{{userId.Value}}" } }""");
-        await SeedAsync(dataAccessLayer, new EntityId(Guid.NewGuid()), $$"""{ "entity-types": ["not-interesting","relationship"], "participants": { "target": "{{hiddenId.Value}}" } }""");
+        await SeedAsync(dataAccessLayer, userId, """{ "entity-types": ["entity", "user"], "names": [["users","u","u"]] }""");
+        await SeedAsync(dataAccessLayer, visibleId, """{ "entity-types": ["entity", "task"], "names": [["tasks","visible"]] }""");
+        await SeedAsync(dataAccessLayer, hiddenId, """{ "entity-types": ["entity", "task"], "names": [["tasks","hidden"]] }""");
+        await SeedAsync(dataAccessLayer, new EntityId(Guid.NewGuid()), $$"""{ "entity-types": ["entity", "actionable","relationship"], "participants": { "target": "{{visibleId.Value}}", "user": "{{userId.Value}}" } }""");
+        await SeedAsync(dataAccessLayer, new EntityId(Guid.NewGuid()), $$"""{ "entity-types": ["entity", "actionable","relationship"], "participants": { "target": "{{hiddenId.Value}}", "user": "{{userId.Value}}" } }""");
+        await SeedAsync(dataAccessLayer, new EntityId(Guid.NewGuid()), $$"""{ "entity-types": ["entity", "not-interesting","relationship"], "participants": { "target": "{{hiddenId.Value}}" } }""");
 
         var inboxQuery = new QueryRequest
         {

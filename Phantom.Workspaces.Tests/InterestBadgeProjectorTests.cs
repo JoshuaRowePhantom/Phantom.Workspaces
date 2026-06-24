@@ -23,7 +23,7 @@ public sealed class InterestBadgeProjectorTests
         EntityId = entityId,
         ConcurrencyTag = new ConcurrencyTag("1"),
         ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-        Data = JsonDocument.Parse($$"""{ "entity-id": "{{entityId.Value}}", "entity-types": ["task"] }""").RootElement.Clone(),
+        Data = JsonDocument.Parse($$"""{ "entity-id": "{{entityId.Value}}", "entity-types": ["entity", "task"] }""").RootElement.Clone(),
         Relationships = relationships,
     };
 
@@ -35,7 +35,7 @@ public sealed class InterestBadgeProjectorTests
             EntityId = new EntityId(Guid.NewGuid()),
             ConcurrencyTag = new ConcurrencyTag("1"),
             ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-            Data = JsonDocument.Parse($$"""{ "entity-types": ["{{interestType}}","relationship"], "participants": { "target": "{{target.Value}}" }{{noteJson}} }""").RootElement.Clone(),
+            Data = JsonDocument.Parse($$"""{ "entity-types": ["entity", "{{interestType}}","relationship"], "participants": { "target": "{{target.Value}}" }{{noteJson}} }""").RootElement.Clone(),
             Relationships = [],
         };
     }

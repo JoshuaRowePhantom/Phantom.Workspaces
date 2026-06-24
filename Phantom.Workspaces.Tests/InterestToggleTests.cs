@@ -17,7 +17,7 @@ public sealed class InterestToggleTests
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
 
         var taskId = new EntityId(Guid.NewGuid());
-        await SeedAsync(dataAccessLayer, taskId, """{ "entity-types": ["task"], "names": [["tasks","t"]] }""");
+        await SeedAsync(dataAccessLayer, taskId, """{ "entity-types": ["entity", "task"], "names": [["tasks","t"]] }""");
 
         // Toggle on: no interest yet, so one is created.
         await InterestToggle.ToggleAsync(broker, await GetWithInterestsAsync(broker, taskId, ct), "actionable", ct);

@@ -138,7 +138,7 @@ public sealed class ScheduleEvaluatorTests
     [Fact]
     public void FromEntity_MissingRepeat_Throws()
     {
-        using var document = JsonDocument.Parse("""{ "entity-types": ["schedule"] }""");
+        using var document = JsonDocument.Parse("""{ "entity-types": ["entity", "schedule"] }""");
         Assert.Throws<ArgumentException>(() => ScheduleDefinition.FromEntity(document.RootElement));
     }
 

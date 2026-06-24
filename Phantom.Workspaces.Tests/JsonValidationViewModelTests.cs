@@ -52,7 +52,7 @@ public sealed class JsonValidationViewModelTests
             """
             {
               "entity-id": "33333333-3333-3333-3333-333333333333",
-              "entity-types": ["agent-manifest"],
+              "entity-types": ["entity", "agent-manifest"],
               "names": [["tests", "invalid"]]
             }
             """);
@@ -71,7 +71,7 @@ public sealed class JsonValidationViewModelTests
             """
             {
               "entity-id": "44444444-4444-4444-4444-444444444444",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["tests", "valid"]],
               "display-name": { "default": "Valid" },
               "content": { "default": { "mime-type": "text/markdown", "content": { "text": "hi" } } }

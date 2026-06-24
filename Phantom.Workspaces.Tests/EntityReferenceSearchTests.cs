@@ -19,7 +19,7 @@ public sealed class EntityReferenceSearchTests
             $$"""
             {
               "entity-id": "{{profileId}}",
-              "entity-types": ["folder"],
+              "entity-types": ["entity", "folder"],
               "names": [["profiles", "jrowe-daemon"]],
               "display-name": { "default": "jrowe @ DAEMON" }
             }
@@ -57,7 +57,7 @@ public sealed class EntityReferenceSearchTests
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["schedule"],
+              "entity-types": ["entity", "schedule"],
               "names": [["schedule", "every-day-at-09"]],
               "display-name": { "default": "Every day at 09:00" }
             }

@@ -134,7 +134,7 @@ public sealed class DiscoveryToolsTests
             $$"""
             {
               "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-              "entity-types": ["computer"],
+              "entity-types": ["entity", "computer"],
               "names": [["computers", "hostname", "{{provider.ComputerName}}"]]
             }
             """,
@@ -145,7 +145,7 @@ public sealed class DiscoveryToolsTests
             $$"""
             {
               "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-              "entity-types": ["user"],
+              "entity-types": ["entity", "user"],
               "names": [["users", "username", "{{provider.UserName}}"]]
             }
             """,
@@ -156,7 +156,7 @@ public sealed class DiscoveryToolsTests
             $$"""
             {
               "entity-id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
-              "entity-types": ["user-computer-profile"],
+              "entity-types": ["entity", "user-computer-profile"],
               "names": [["computer-user-profiles", "users", "username", "{{provider.UserName}}", "computers", "hostname", "{{provider.ComputerName}}"]],
               "computer-reference": ["computers", "hostname", "{{provider.ComputerName}}"],
               "user-reference": ["users", "username", "{{provider.UserName}}"],

@@ -22,7 +22,7 @@ public sealed class EntitySchemaComposerTests
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["note"],
+              "entity-types": ["entity", "note"],
               "names": [["tests", "valid-note"]],
               "display-name": { "default": "Valid" },
               "content": { "default": { "mime-type": "text/markdown", "content": { "text": "hello" } } }
@@ -43,7 +43,7 @@ public sealed class EntitySchemaComposerTests
             """
             {
               "entity-id": "22222222-2222-2222-2222-222222222222",
-              "entity-types": ["agent-manifest"],
+              "entity-types": ["entity", "agent-manifest"],
               "names": [["tests", "invalid-manifest"]],
               "display-name": { "default": "Invalid" }
             }

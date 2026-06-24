@@ -492,7 +492,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             $$"""
             {
               "entity-id": "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69",
-              "entity-types": ["relationship", "related"],
+              "entity-types": ["entity", "relationship", "related"],
               "names": [["relationship", "8fcb8f49-a3aa-4498-9f3d-4a8e6992dd69"]],
               "participants": {
                 "entities": ["{{SampleEntityId}}", "{{additionalParticipantId}}"]
@@ -885,7 +885,7 @@ public abstract class DataAccessLayerNonQueryWithoutHistoryTests
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["view"],
+              "entity-types": ["entity", "view"],
               "names": {{serializedEntityName}},
               "title": { "default": "Typed view child" },
               "sub-views": []

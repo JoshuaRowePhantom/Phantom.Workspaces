@@ -102,7 +102,7 @@ public sealed class WorkspacePaneViewModelTests
             """
             {
               "entity-id": "11111111-1111-1111-1111-111111111111",
-              "entity-types": ["workspace"],
+              "entity-types": ["entity", "workspace"],
               "display-name": { "default": "Workspace" }
             }
             """);

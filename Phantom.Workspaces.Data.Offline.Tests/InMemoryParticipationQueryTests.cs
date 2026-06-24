@@ -21,16 +21,16 @@ public sealed class InMemoryParticipationQueryTests
     public async Task Participation_SelectsTargetsOfTypedRelationship_FilteredByMustHaveParticipant()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var user = await AddAsync(dataAccessLayer, """{ "entity-types": ["user"], "names": [["users","u"]] }""");
-        var assignedTask = await AddAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","assigned"]] }""");
-        var unassignedTask = await AddAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","unassigned"]] }""");
+        var user = await AddAsync(dataAccessLayer, """{ "entity-types": ["entity", "user"], "names": [["users","u"]] }""");
+        var assignedTask = await AddAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","assigned"]] }""");
+        var unassignedTask = await AddAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","unassigned"]] }""");
 
         // An assigned-to interest linking the assigned task (target) to the user.
         await AddAsync(
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["assigned-to","relationship"],
+              "entity-types": ["entity", "assigned-to","relationship"],
               "names": [["relationships","r1"]],
               "participants": { "target": "{{assignedTask.Value}}", "user": "{{user.Value}}" }
             }
@@ -41,7 +41,7 @@ public sealed class InMemoryParticipationQueryTests
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["related","relationship"],
+              "entity-types": ["entity", "related","relationship"],
               "names": [["relationships","r2"]],
               "participants": { "entities": ["{{unassignedTask.Value}}", "{{user.Value}}"] }
             }
@@ -68,13 +68,13 @@ public sealed class InMemoryParticipationQueryTests
     public async Task Participation_WithoutMustHave_ReturnsRequestedRoleParticipants()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var user = await AddAsync(dataAccessLayer, """{ "entity-types": ["user"], "names": [["users","u"]] }""");
-        var task = await AddAsync(dataAccessLayer, """{ "entity-types": ["task"], "names": [["tasks","t"]] }""");
+        var user = await AddAsync(dataAccessLayer, """{ "entity-types": ["entity", "user"], "names": [["users","u"]] }""");
+        var task = await AddAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","t"]] }""");
         await AddAsync(
             dataAccessLayer,
             $$"""
             {
-              "entity-types": ["assigned-to","relationship"],
+              "entity-types": ["entity", "assigned-to","relationship"],
               "names": [["relationships","r"]],
               "participants": { "target": "{{task.Value}}", "user": "{{user.Value}}" }
             }

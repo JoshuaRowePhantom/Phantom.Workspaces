@@ -44,7 +44,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     private WorkspaceToolExecutionContext Context(IDataAccessLayer dataAccessLayer) =>
         WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            $$"""{ "entity-types": ["tool"], "tool-type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(this.scanRoot)}} }""");
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(this.scanRoot)}} }""");
 
     private static async Task<JsonElement[]> GitEntitiesAsync(IDataAccessLayer dataAccessLayer)
     {
@@ -126,7 +126,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: () => [this.scanRoot]);
         var context = WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            """{ "entity-types": ["tool"], "tool-type": "git-workspace-scan" }""");
+            """{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan" }""");
 
         await tool.ExecuteAsync(context);
 
@@ -148,7 +148,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         // Configure scan-roots (and overlapping scan-root) — the same repo must not be reported twice.
         var context = WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
-            $$"""{ "entity-types": ["tool"], "tool-type": "git-workspace-scan", "scan-roots": [{{JsonSerializer.Serialize(rootA)}}, {{JsonSerializer.Serialize(rootB)}}], "scan-root": {{JsonSerializer.Serialize(rootA)}} }""");
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-roots": [{{JsonSerializer.Serialize(rootA)}}, {{JsonSerializer.Serialize(rootB)}}], "scan-root": {{JsonSerializer.Serialize(rootA)}} }""");
         // The fake drive provider would return nothing, proving the configured roots take precedence.
         var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: Array.Empty<string>);
 

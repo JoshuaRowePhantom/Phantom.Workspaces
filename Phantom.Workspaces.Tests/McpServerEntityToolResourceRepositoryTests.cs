@@ -59,7 +59,7 @@ public sealed class McpServerEntityToolResourceRepositoryTests
             $$"""
             {
               "entity-id": "{{entityId}}",
-              "entity-types": ["mcp-server"],
+              "entity-types": ["entity", "mcp-server"],
               "names": [{{JsonSerializer.Serialize(name)}}],
               "mcp-server": {
                 "serverName": {{JsonSerializer.Serialize(serverName)}},
