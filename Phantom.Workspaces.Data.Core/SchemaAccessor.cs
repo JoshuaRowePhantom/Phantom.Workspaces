@@ -123,6 +123,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
                     new BuildOptions
                     {
                         SchemaRegistry = schemaRegistry,
+                        Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
                     },
                     schemaUri);
             }
@@ -139,6 +140,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
                     new BuildOptions
                     {
                         SchemaRegistry = schemaRegistry,
+                        Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
                     },
                     new Uri(pair.Key, UriKind.Absolute));
             }
@@ -358,7 +360,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
             {
                 using var payloadStream = new MemoryStream();
                 using var payloadWriter = new Utf8JsonWriter(payloadStream);
-                WriteElementWithoutCustomKeywords(schemaPayload, payloadWriter);
+                schemaPayload.WriteTo(payloadWriter);
                 payloadWriter.Flush();
                 return System.Text.Encoding.UTF8.GetString(payloadStream.ToArray());
             }
@@ -379,48 +381,11 @@ public sealed class SchemaAccessor : ISchemaAccessor
             }
 
             writer.WritePropertyName(property.Name);
-            WriteElementWithoutCustomKeywords(property.Value, writer);
+            property.Value.WriteTo(writer);
         }
 
         writer.WriteEndObject();
         writer.Flush();
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());
-    }
-
-    private static void WriteElementWithoutCustomKeywords(
-        JsonElement element,
-        Utf8JsonWriter writer)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-                writer.WriteStartObject();
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (string.Equals(property.Name, "x-entity-types", StringComparison.Ordinal)
-                        || string.Equals(property.Name, "x-default-mime-type", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    writer.WritePropertyName(property.Name);
-                    WriteElementWithoutCustomKeywords(property.Value, writer);
-                }
-
-                writer.WriteEndObject();
-                return;
-            case JsonValueKind.Array:
-                writer.WriteStartArray();
-                foreach (var item in element.EnumerateArray())
-                {
-                    WriteElementWithoutCustomKeywords(item, writer);
-                }
-
-                writer.WriteEndArray();
-                return;
-            default:
-                element.WriteTo(writer);
-                return;
-        }
     }
 }

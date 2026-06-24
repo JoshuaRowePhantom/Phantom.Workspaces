@@ -244,6 +244,29 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
     }
 
     [Fact]
+    public async Task Update_Succeeds_WhenSchemaDeclaresCustomAnnotationKeyword()
+    {
+        // Custom "x-" annotation keywords (such as x-field-status, x-entity-types and
+        // x-default-mime-type) must be legal JSON Schema. The schema dialect permits unknown
+        // keywords so these annotations are preserved for the field-type resolver instead of being
+        // stripped or rejected when the schema is built.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add schema with custom annotation keyword and entity"),
+                new EntityChange[]
+                {
+                    CreateValidatedEntityChange(ValidatedEntityId, "one", TestSchemaName),
+                    CreateSchemaEntityChangeWithCustomAnnotation(TestSchemaEntityId, TestSchemaName),
+                }));
+
+        Assert.Equal(2, result.EntityResults.Count);
+        Assert.DoesNotContain(result.EntityResults, entityResult => entityResult.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
     public async Task Update_Succeeds_WhenRequestSchemaOverridesPrepopulatedSchema()
     {
         var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
@@ -1010,6 +1033,38 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             entityId,
             null,
             entityDocument.RootElement.Clone(),
+            EntityChangeMode.Replace);
+    }
+
+    private static EntityChange CreateSchemaEntityChangeWithCustomAnnotation(
+        EntityId entityId,
+        string schemaName)
+    {
+        using var schemaDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "entity-type", "json-schema"],
+              "names": [["json-schemas", "{{schemaName}}"]],
+              "schema": {
+                "$id": "{{schemaName}}",
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "x-custom-annotation": { "good-status-values": ["one"] }
+                  },
+                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                },
+                "required": ["title", "entity-types"]
+              }
+            }
+            """);
+
+        return CreateEntityChange(
+            entityId,
+            null,
+            schemaDocument.RootElement.Clone(),
             EntityChangeMode.Replace);
     }
 
