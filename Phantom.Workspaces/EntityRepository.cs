@@ -60,50 +60,6 @@ public sealed class EntityRepository
         return repository;
     }
 
-    public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        // This is the repository's "load the whole store" primitive: it returns the
-        // latest snapshot of every entity so the GUI can present all entities and
-        // callers can look any of them up by name. There is no bounded key set to
-        // get or query for, so exporting the full store is the correct mechanism.
-        var exportResult = await this.DataAccessLayer.ExportAsync(new ExportRequest(), cancellationToken);
-        return exportResult.ChangeBatches
-            .SelectMany(static batch => batch.Entities)
-            .GroupBy(static snapshot => snapshot.EntityId)
-            .ToDictionary(
-                static group => group.Key,
-                static group => (EntitySnapshot)group
-                    .OrderByDescending(static snapshot => snapshot.ModifiedTime.DateTime)
-                    .ThenByDescending(static snapshot => snapshot.ModifiedTime.ChangeId, StringComparer.Ordinal)
-                    .First());
-    }
-
-    public EntitySnapshot? TryGetEntityByName(
-        IReadOnlyDictionary<EntityId, EntitySnapshot> snapshots,
-        EntityName entityName)
-    {
-        foreach (var snapshot in snapshots.Values)
-        {
-            if (snapshot.Data is not JsonElement data)
-            {
-                continue;
-            }
-
-            if (!TryGetEntityNames(data, out var names))
-            {
-                continue;
-            }
-
-            if (names.Any(name => name == entityName))
-            {
-                return snapshot;
-            }
-        }
-
-        return null;
-    }
-
     private static async Task<IDataAccessLayer> CreateUnderlyingDataAccessLayerAsync(
         RepositorySource repositorySource)
     {
@@ -199,30 +155,5 @@ public sealed class EntityRepository
 
         throw new InvalidOperationException(
             $"Failed to populate repository schemas: {string.Join(" | ", errors.Select(static error => error.Message))}");
-    }
-
-    private static bool TryGetEntityNames(
-        JsonElement entityData,
-        out IReadOnlyCollection<EntityName> names)
-    {
-        var resolved = new List<EntityName>();
-        if (!entityData.TryGetProperty("names", out var namesElement)
-            || namesElement.ValueKind != JsonValueKind.Array)
-        {
-            names = resolved;
-            return false;
-        }
-
-        foreach (var nameElement in namesElement.EnumerateArray())
-        {
-            var parsedEntityName = nameElement.TryReadEntityName();
-            if (parsedEntityName is not null)
-            {
-                resolved.Add(parsedEntityName.Value);
-            }
-        }
-
-        names = resolved;
-        return resolved.Count > 0;
     }
 }

@@ -111,13 +111,6 @@ public sealed class EntityBroker
         return subscribedQuery;
     }
 
-    public async Task<IReadOnlyDictionary<EntityId, EntitySnapshot>> ExportEntitySnapshotsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        return await this.entityRepository.ExportEntitySnapshotsAsync(cancellationToken);
-    }
-
-
     public bool TryGetReferencedEntity(
         JsonElement element,
         string propertyName,
