@@ -86,6 +86,23 @@ public sealed class ToolsetFactory : IToolsetFactory
             underlyingToolsetFactory);
     }
 
+    public static IToolsetFactory CreateCurrentSessionToolsetFactory(
+        IDataAccessLayer dataAccessLayer,
+        CurrentSessionContext currentSessionContext,
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        return CreateNamedToolsetFactory(
+            "current-session",
+            (tool, agentServices) =>
+            {
+                _ = tool;
+                _ = agentServices;
+                return Task.FromResult<AIContextProvider?>(
+                    new CurrentSessionContextProvider(dataAccessLayer, currentSessionContext));
+            },
+            underlyingToolsetFactory);
+    }
+
     private static Task<AIContextProvider?> CreateWebSearchToolsetAsync(
         AgentSchema.Tool tool,
         AgentServices agentServices)

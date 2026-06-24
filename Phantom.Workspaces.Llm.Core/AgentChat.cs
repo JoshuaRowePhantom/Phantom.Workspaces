@@ -24,8 +24,9 @@ namespace Phantom.Workspaces.Llm;
 /// Exposes observable collections and events that consumers (e.g. ViewModels, CLI) can
 /// subscribe to and marshal onto their own thread as needed.
 /// Events and collection mutations run on the processing loop scheduler: this is
-/// the current synchronization context if one is present when processing starts,
-/// otherwise the default task scheduler.
+/// the current synchronization context if one is present when the chat is created,
+/// otherwise a dedicated exclusive scheduler that serializes foreground work so the
+/// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
 public sealed class AgentChat : IAsyncDisposable
 {
@@ -66,9 +67,18 @@ public sealed class AgentChat : IAsyncDisposable
     private CancellationTokenSource? activeRunCancellation;
     private int disposeStarted;
 
+    // Serializes foreground work when the chat is created without a synchronization context (for
+    // example in tests or non-GUI hosts). In production the captured UI synchronization context
+    // already runs foreground work one-at-a-time; this provides the same single-threaded guarantee
+    // off the UI thread so the running-item collections are never mutated concurrently.
+    private readonly ConcurrentExclusiveSchedulerPair foregroundSchedulerPair = new();
+
     // Captured at construction (on the creating thread, e.g. the UI thread) so the processing loop
     // runs on the foreground synchronization context. Capturing later (once the loop starts) is
-    // unreliable because framework awaits on the initialization path drop the context.
+    // unreliable because framework awaits on the initialization path drop the context. When no
+    // synchronization context is present, the exclusive scheduler above serializes foreground work
+    // so the process loop and the partial-response conflator never mutate the running-item
+    // collections from two threads at once.
     private readonly TaskScheduler foregroundScheduler;
 
     internal AgentChat(InternalCreateAgentChatRequest request)
@@ -81,7 +91,7 @@ public sealed class AgentChat : IAsyncDisposable
        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
        this.foregroundScheduler = SynchronizationContext.Current is not null
            ? TaskScheduler.FromCurrentSynchronizationContext()
-           : TaskScheduler.Default;
+           : this.foregroundSchedulerPair.ExclusiveScheduler;
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
@@ -1000,14 +1010,16 @@ public sealed class AgentChat : IAsyncDisposable
             }
 
             this.processingStarted = true;
-            var scheduler = SynchronizationContext.Current is not null
-                ? TaskScheduler.FromCurrentSynchronizationContext()
-                : TaskScheduler.Default;
+            // Run the process loop on the same foreground scheduler used for running-item mutations.
+            // In production this is the captured UI synchronization context; off the UI thread it is
+            // the exclusive scheduler, which serializes the loop's running-item lifecycle operations
+            // (create/update/complete) with the conflator's running-item population so the
+            // collections are never mutated concurrently.
             this.processTask = Task.Factory.StartNew(
                 () => this.RunProcessLoopAsync(this.cts.Token),
                 this.cts.Token,
                 TaskCreationOptions.DenyChildAttach,
-                scheduler).Unwrap();
+                this.foregroundScheduler).Unwrap();
         }
     }
 
