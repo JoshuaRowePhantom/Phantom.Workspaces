@@ -68,12 +68,13 @@ public sealed class AgentChat : IAsyncDisposable
     private int disposeStarted;
 
     // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
-    // are buffered here and flushed to History after CompleteRunningItem so they appear in the
-    // correct chronological order (after the streaming assistant turn, not interleaved with it).
-    // Guarded by pendingSteeringLock because the Copilot path fires from the UI thread while the
-    // processing loop runs the drain/complete sequence on its own task.
-    private List<AgentChatHistoryItem>? pendingSteeringItems;
-    private readonly object pendingSteeringLock = new();
+    // are injected into the active PartialResponseConflator so they appear at the tool-result
+    // boundary where they were sent to the agent, not before or after the full turn.
+    // When no run is active, steering adds directly to History.
+    // Guarded by steeringLock because the Copilot path fires SteeringMessageForwarded from
+    // the UI thread while the processing loop runs on its own task.
+    private PartialResponseConflator? activeConflator;
+    private readonly object steeringLock = new();
 
     // Serializes foreground work when the chat is created without a synchronization context (for
     // example in tests or non-GUI hosts). In production the captured UI synchronization context
@@ -499,19 +500,28 @@ public sealed class AgentChat : IAsyncDisposable
             return;
         }
 
-        lock (this.pendingSteeringLock)
+        PartialResponseConflator? conflator;
+        lock (this.steeringLock)
         {
-            if (this.pendingSteeringItems is not null)
-            {
-                this.pendingSteeringItems.AddRange(items);
-                return;
-            }
+            conflator = this.activeConflator;
         }
 
-        // No active run — add directly to history.
-        foreach (var item in items)
+        if (conflator is not null)
         {
-            this.AddHistoryItem(item);
+            // Active run: inject into the conflator at the current update-count boundary so the
+            // steering message appears at the tool-result boundary where it was sent to the agent.
+            foreach (var item in items)
+            {
+                conflator.InjectInterstitialAfterCurrentUpdates(item);
+            }
+        }
+        else
+        {
+            // No active run — add directly to history.
+            foreach (var item in items)
+            {
+                this.AddHistoryItem(item);
+            }
         }
     }
 
@@ -618,6 +628,7 @@ public sealed class AgentChat : IAsyncDisposable
         private readonly AgentChatRunningItem runningItem;
         private readonly TaskScheduler foregroundScheduler;
         private readonly List<AgentResponseUpdate> updates = new();
+        private readonly List<(int AfterUpdateCount, AgentChatHistoryItem Item)> interstitials = new();
         private readonly object gate = new();
         private long version;
         private long processedVersion;
@@ -652,6 +663,32 @@ public sealed class AgentChat : IAsyncDisposable
             }
         }
 
+        /// <summary>
+        /// Records a steering message to appear at the current update-count boundary in the
+        /// running item. Steering injected at update N will appear after the items coalesced
+        /// from updates 0..N-1 and before those from N onwards — i.e. at the tool-result boundary
+        /// where it was sent to the agent.
+        /// </summary>
+        internal void InjectInterstitialAfterCurrentUpdates(AgentChatHistoryItem item)
+        {
+            bool startWorker = false;
+            lock (this.gate)
+            {
+                this.interstitials.Add((this.updates.Count, item));
+                this.version++;
+                if (!this.workerRunning)
+                {
+                    this.workerRunning = true;
+                    startWorker = true;
+                }
+            }
+
+            if (startWorker)
+            {
+                this.worker = this.RunWorkerAsync();
+            }
+        }
+
         // Awaited after the producer loop ends. Because the worker always coalesces the latest
         // accumulated version before exiting, awaiting it guarantees the final frame is applied.
         public Task DrainAsync()
@@ -667,6 +704,7 @@ public sealed class AgentChat : IAsyncDisposable
             while (true)
             {
                 AgentResponseUpdate[] snapshot;
+                (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitialSnapshot;
                 long targetVersion;
                 lock (this.gate)
                 {
@@ -678,6 +716,7 @@ public sealed class AgentChat : IAsyncDisposable
 
                     targetVersion = this.version;
                     snapshot = this.updates.ToArray();
+                    interstitialSnapshot = [..this.interstitials];
                 }
 
                 // Capture the current cached items before the background task so that the
@@ -685,7 +724,7 @@ public sealed class AgentChat : IAsyncDisposable
                 var previousItems = this.cachedItems;
 
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot));
 
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
@@ -707,39 +746,81 @@ public sealed class AgentChat : IAsyncDisposable
 
         private static async Task<AgentChatHistoryItem[]> CoalesceAsync(
             AgentResponseUpdate[] snapshot,
-            AgentChatHistoryItem[] previous)
+            AgentChatHistoryItem[] previous,
+            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials)
         {
-            var chatResponseUpdates = snapshot.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
-            var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
+            AgentChatHistoryItem[] newItems;
 
-            var lastIsToolResult = snapshot.Length > 0
-                && Enumerable.OfType<ToolResultContent>(snapshot[^1].Contents).Any();
-            IEnumerable<AgentChatHistoryItem> finalItem = lastIsToolResult
-                ? new[]
+            if (interstitials.Length == 0)
+            {
+                // Fast path: no interstitials, single pass.
+                newItems = await CoalesceSegmentAsync(snapshot);
+            }
+            else
+            {
+                // Interstitials mark "inject this item after the first N streaming updates."
+                // Split the snapshot at each boundary, coalesce each segment independently,
+                // then interleave the injected items so they appear at the right position.
+                var result = new List<AgentChatHistoryItem>();
+                int segStart = 0;
+
+                foreach (var (afterCount, item) in interstitials.OrderBy(static x => x.AfterUpdateCount))
                 {
-                    new AgentChatHistoryItem
+                    int segEnd = Math.Min(afterCount, snapshot.Length);
+                    if (segEnd > segStart)
                     {
-                        Role = ChatRole.Assistant,
-                    },
-                }
-                : Array.Empty<AgentChatHistoryItem>();
+                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd]));
+                    }
 
-            var newItems = chatResponse.Messages
-                .Reverse()
-                .Select(message => new AgentChatHistoryItem
+                    result.Add(item);
+                    segStart = segEnd;
+                }
+
+                // Tail: remaining updates after the last interstitial.
+                if (segStart < snapshot.Length)
                 {
-                    Role = message.Role,
-                    Contents = message.Contents.ToArray(),
-                })
-                .Reverse()
-                .Concat(finalItem)
-                .ToArray();
+                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..]));
+                }
+
+                newItems = result.ToArray();
+            }
+
+            // Add a blank assistant placeholder if the full snapshot ends with a tool result,
+            // indicating the agent is still waiting to respond to the tool output.
+            var lastIsToolResult = snapshot.Length > 0
+                && snapshot[^1].Contents.OfType<ToolResultContent>().Any();
+            if (lastIsToolResult)
+            {
+                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant }];
+            }
 
             // Re-use the cached reference for each item whose content is structurally unchanged.
             // This lets AgentRunningItems.SyncItems' ReferenceEquals guard suppress unnecessary
             // Replace notifications (and their downstream HTML re-render work) for stable items.
             ReuseUnchangedItemReferences(previous, newItems);
             return newItems;
+        }
+
+        // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
+        // returns an empty array; no assistant placeholder is added here (that is handled by the
+        // caller on the full snapshot).
+        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates)
+        {
+            if (updates.Length == 0)
+            {
+                return [];
+            }
+
+            var chatResponseUpdates = updates.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
+            var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
+
+            return chatResponse.Messages
+                .Select(message => new AgentChatHistoryItem
+                {
+                    Role = message.Role,
+                    Contents = message.Contents.ToArray(),
+                })
+                .ToArray();
         }
 
         /// <summary>
@@ -844,11 +925,6 @@ public sealed class AgentChat : IAsyncDisposable
 
                 this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
-                lock (this.pendingSteeringLock)
-                {
-                    this.pendingSteeringItems = [];
-                }
-
                 AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
                     new AgentChatHistoryItem
                     {
@@ -873,6 +949,11 @@ public sealed class AgentChat : IAsyncDisposable
                         this,
                         currentPartialTextResponseItem
                             ?? throw new InvalidOperationException("Running item was unexpectedly null while starting a run."));
+
+                    lock (this.steeringLock)
+                    {
+                        this.activeConflator = partialResponses;
+                    }
 
                     providerEnumerator = this.StartRun(
                             chatMessagesToSubmit.ToArray(),
@@ -960,19 +1041,13 @@ public sealed class AgentChat : IAsyncDisposable
                     // on a canceled read cannot block the agent. The in-flight read is observed before
                     // disposing to honor the async-enumerator contract.
                     _ = CleanUpRunAsync(providerEnumerator, pendingMoveNext, runCancellation);
+
+                    lock (this.steeringLock)
+                    {
+                        this.activeConflator = null;
+                    }
+
                     this.CompleteRunningItem(currentPartialTextResponseItem);
-
-                    List<AgentChatHistoryItem> bufferedSteeringItems;
-                    lock (this.pendingSteeringLock)
-                    {
-                        bufferedSteeringItems = this.pendingSteeringItems ?? [];
-                        this.pendingSteeringItems = null;
-                    }
-
-                    foreach (var item in bufferedSteeringItems)
-                    {
-                        this.AddHistoryItem(item);
-                    }
                 }
             }
         }

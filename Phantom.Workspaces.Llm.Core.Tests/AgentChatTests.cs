@@ -1135,16 +1135,19 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task SteeringMessage_InjectedWhileRunActive_AppearsAfterAssistantTurnInHistory()
+    public async Task SteeringMessage_InjectedWhileRunActive_AppearsAtInjectionPointInRunningItem()
     {
         // Arrange: a chat client that exposes a ToolResultSteeringMiddleware via GetService while
         // delegating actual streaming to a DeterministicTestChatClient. This lets the test fire
-        // MessagesInjected (via a real tool-result middleware call) while a run is still streaming,
-        // verifying that the steering message ends up after the assistant turn in History (#42).
+        // MessagesInjected (via a real tool-result middleware call) mid-stream, verifying that the
+        // steering message ends up at the update-count boundary where it was injected (#42).
         var innerClient = new DeterministicTestChatClient();
         var stream = innerClient.EnqueueStreamingResponse();
-        var blockedUpdate = stream.EnqueueUpdate(
-            new ChatResponseUpdate(ChatRole.Assistant, "response") { FinishReason = ChatFinishReason.Stop },
+
+        // "first " arrives immediately; "second" is held until after steering injection.
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "first "));
+        var blockedSecond = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "second") { FinishReason = ChatFinishReason.Stop },
             isReady: false);
         var blockedComplete = stream.Complete(isReady: false);
 
@@ -1152,9 +1155,15 @@ public sealed class AgentChatTests
         await using var compositeClient = new SteeringPassthroughChatClient(innerClient, queueManager);
         await using var chat = CreateChat(compositeClient);
 
-        // Act: start a run that pauses mid-stream, inject a steering message, then release.
+        // Act: start the run, wait for "first " to land in the running item, then inject steering
+        // at that boundary before releasing the rest of the stream.
         chat.EnqueueUserMessage("user turn");
-        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "run to become active");
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count > 0
+                  && chat.RunningItems[0].Items.Count > 0
+                  && GetText(chat.RunningItems[0].Items[0].Contents).Contains("first"),
+            "first streaming update to appear in running item");
 
         queueManager.Enqueue(
             queueManager.ImmediateQueue,
@@ -1162,17 +1171,21 @@ public sealed class AgentChatTests
         await compositeClient.SteeringMiddleware.GetResponseAsync(
             [new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-1", "done")])]);
 
-        blockedUpdate.MarkReady();
+        blockedSecond.MarkReady();
         blockedComplete.MarkReady();
 
-        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 3, "history to contain user + assistant + steering");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 4, "history to contain user + first + steer + second");
 
-        // Assert: user turn first, then assistant turn, then steering message.
-        Assert.Equal(3, chat.History.Count);
+        // Assert: user turn, then assistant "first ", then steering user message, then assistant "second".
+        // The steering appears at the update boundary where it was injected, not before or after the full turn.
+        Assert.Equal(4, chat.History.Count);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
         Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        Assert.Equal("first ", GetText(chat.History[1].Contents));
         Assert.Equal(ChatRole.User, chat.History[2].Role);
         Assert.Equal("steer me", GetText(chat.History[2].Contents));
+        Assert.Equal(ChatRole.Assistant, chat.History[3].Role);
+        Assert.Equal("second", GetText(chat.History[3].Contents));
     }
 
     private static string GetText(IReadOnlyList<AIContent> contents)

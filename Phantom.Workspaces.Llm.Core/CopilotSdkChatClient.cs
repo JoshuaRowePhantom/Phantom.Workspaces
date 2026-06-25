@@ -348,8 +348,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
             });
 
-            // While a turn is running, forward any non-held queue items as immediate steering input.
-            // SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
+            // While a turn is running, forward any Immediate-immediacy queue items as steering
+            // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
             void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
             {
                 if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
@@ -357,7 +357,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     return;
                 }
 
-                while (this.queueManager!.TryDequeueNextImmediateOrQueued(out var item))
+                while (this.queueManager!.TryDequeueNextImmediate(out var item))
                 {
                     foreach (var message in item.Messages ?? [])
                     {
