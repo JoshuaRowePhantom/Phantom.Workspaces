@@ -295,6 +295,50 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
+    public void RunningItem_StreamingUpdate_EmitsNoHtmlOps_WhenItemsAreReferenceEqual()
+    {
+        var item = TextMessage(ChatRole.Assistant, "hello");
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(item);
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        sink.Clear();
+
+        // Replace the item in the running item's inner collection with the same reference.
+        // ChatMessageHtmlModel.Update must short-circuit on ReferenceEquals.
+        runningItem.Items[0] = item;
+
+        Assert.Empty(sink.ContentOperations);
+    }
+
+    [Fact]
+    public void RunningItem_StreamingUpdate_EmitsHtmlOps_WhenItemContentChanges()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "partial"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        sink.Clear();
+
+        // Replace the item with new content — HTML ops must be emitted.
+        runningItem.Items[0] = TextMessage(ChatRole.Assistant, "partial complete");
+
+        Assert.NotEmpty(sink.ContentOperations);
+    }
+
+    [Fact]
     public void TextContent_DisablesRawHtmlInMarkdown_SoItCannotInjectMarkup()
     {
         var html = ChatOutputHtmlRenderer.RenderContent(
