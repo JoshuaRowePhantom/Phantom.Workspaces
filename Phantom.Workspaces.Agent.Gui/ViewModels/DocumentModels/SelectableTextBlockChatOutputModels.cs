@@ -366,6 +366,10 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
     private readonly Func<bool> isReasoningVisible;
     private readonly Dictionary<string, bool> toolExpansionState = new(StringComparer.Ordinal);
     private readonly List<ContentInlineBinding> contentBindings = [];
+    private readonly LineBreak trailingLineBreak = new();
+    private Span? cachedRoleLabelInline;
+    private string? cachedRoleLabel;
+    private string? classesAppliedForRole;
     private bool hasRendered;
     private bool lastReasoningVisible;
     private AgentChatHistoryItem source;
@@ -450,28 +454,87 @@ internal sealed class ChatMessageSelectableInlineModel : AgentChatSelectableInli
         this.contentBindings.Clear();
         this.contentBindings.AddRange(newBindings);
 
-        this.Span.Inlines.Clear();
+        this.EnsureClasses(roleLabel);
+
+        // Build the desired ordered inline sequence, reusing stable role-label and trailing
+        // line-break instances. Reconciling against the current inlines (rather than clearing and
+        // re-adding everything) leaves unchanged content inlines - in particular the
+        // InlineUIContainer tool toggle buttons - attached, avoiding the repeated detach/attach
+        // layout churn that froze the UI during streaming updates (issue #30).
+        var desired = new List<Inline>(this.contentBindings.Count + 2);
+        var roleLabelLine = this.GetRoleLabelInline(roleLabel);
+        if (roleLabelLine is not null)
+        {
+            desired.Add(roleLabelLine);
+        }
+
+        foreach (var binding in this.contentBindings)
+        {
+            desired.AddRange(binding.Inlines);
+        }
+
+        desired.Add(this.trailingLineBreak);
+
+        ReconcileInlines(this.Span.Inlines, desired);
+    }
+
+    // Reconcile the live inline collection toward the desired sequence using reference identity:
+    // unchanged inline instances stay in place (never detached), stale ones are removed, and new
+    // ones are inserted. Reused inlines preserve their relative order in both lists, so a single
+    // forward pass is sufficient.
+    private static void ReconcileInlines(InlineCollection current, IReadOnlyList<Inline> desired)
+    {
+        var desiredSet = new HashSet<Inline>(desired, ReferenceEqualityComparer.Instance);
+        var cursor = 0;
+        foreach (var wanted in desired)
+        {
+            while (cursor < current.Count
+                && !ReferenceEquals(current[cursor], wanted)
+                && !desiredSet.Contains(current[cursor]))
+            {
+                current.RemoveAt(cursor);
+            }
+
+            if (cursor < current.Count && ReferenceEquals(current[cursor], wanted))
+            {
+                cursor++;
+                continue;
+            }
+
+            current.Insert(cursor, wanted);
+            cursor++;
+        }
+
+        while (current.Count > cursor)
+        {
+            current.RemoveAt(current.Count - 1);
+        }
+    }
+
+    private Span? GetRoleLabelInline(string roleLabel)
+    {
+        if (!string.Equals(this.cachedRoleLabel, roleLabel, StringComparison.Ordinal))
+        {
+            this.cachedRoleLabelInline = CreateLineInline($"[{roleLabel}]", "agent-chat-selectable-role-label");
+            this.cachedRoleLabel = roleLabel;
+        }
+
+        return this.cachedRoleLabelInline;
+    }
+
+    private void EnsureClasses(string roleLabel)
+    {
+        if (string.Equals(this.classesAppliedForRole, roleLabel, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         this.Span.Classes.Clear();
         this.Span.Classes.Add("agent-chat-selectable-message");
         this.Span.Classes.Add(string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
             ? "agent-chat-selectable-user-message"
             : "agent-chat-selectable-assistant-message");
-
-        var roleLabelLine = CreateLineInline($"[{roleLabel}]", "agent-chat-selectable-role-label");
-        if (roleLabelLine is not null)
-        {
-            this.Span.Inlines.Add(roleLabelLine);
-        }
-
-        foreach (var binding in this.contentBindings)
-        {
-            foreach (var inline in binding.Inlines)
-            {
-                this.Span.Inlines.Add(inline);
-            }
-        }
-
-        this.Span.Inlines.Add(new LineBreak());
+        this.classesAppliedForRole = roleLabel;
     }
 
     private ContentInlineBinding BuildContentBinding(

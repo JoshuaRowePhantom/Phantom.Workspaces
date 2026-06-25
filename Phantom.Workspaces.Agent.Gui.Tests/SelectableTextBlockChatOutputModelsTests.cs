@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Linq;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
@@ -217,6 +219,62 @@ public sealed class SelectableTextBlockChatOutputModelsTests
         {
             Assert.Same(before[index], after[index]);
         }
+    }
+
+    // Reproduces issue #30: a streaming update that only changes trailing text must not detach the
+    // unchanged leading tool inline (and other stable inlines). Wholesale Span.Inlines.Clear() would
+    // raise a Reset that detaches every inline - including the InlineUIContainer toggle - producing
+    // the repeated AccessText.OnDetachedFromVisualTree layout churn that froze the UI.
+    [AvaloniaFact]
+    public void Message_Update_WhenLeadingContentUnchanged_DoesNotDetachStableInlines()
+    {
+        static AgentChatHistoryItem Make(string text) => new()
+        {
+            Role = ChatRole.Assistant,
+            Contents =
+            [
+                new FunctionCallContent("call-1", "search", new Dictionary<string, object?> { ["query"] = "cats" }),
+                new TextContent(text),
+            ],
+        };
+
+        var model = new ChatMessageSelectableInlineModel(Make("partial"), () => false);
+        var toolSpanBefore = FindToolSpan(model.Span);
+        var roleLabelBefore = model.Span.Inlines[0];
+        var trailingBefore = model.Span.Inlines[^1];
+
+        var removed = new List<object>();
+        var resetCount = 0;
+        void OnChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                resetCount++;
+            }
+
+            if (e.OldItems is not null)
+            {
+                removed.AddRange(e.OldItems.Cast<object>());
+            }
+        }
+
+        model.Span.Inlines.CollectionChanged += OnChanged;
+        try
+        {
+            model.Update(Make("partial and then some more"));
+        }
+        finally
+        {
+            model.Span.Inlines.CollectionChanged -= OnChanged;
+        }
+
+        Assert.Equal(0, resetCount);
+        Assert.DoesNotContain(toolSpanBefore, removed);
+        Assert.DoesNotContain(roleLabelBefore, removed);
+        Assert.DoesNotContain(trailingBefore, removed);
+
+        // The tool span instance is still the same and still present after the update.
+        Assert.Same(toolSpanBefore, FindToolSpan(model.Span));
     }
 
     private static Span FindToolSpan(Span messageSpan)
