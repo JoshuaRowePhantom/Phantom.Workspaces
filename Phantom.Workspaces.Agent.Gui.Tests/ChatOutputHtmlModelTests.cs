@@ -246,6 +246,24 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
+    public void TextContent_RendersMarkdownPipeTable_AsHtmlTable()
+    {
+        var markdown = "| A | B |\n|---|---|\n| 1 | 2 |";
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent(markdown),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("<table>", html);
+        Assert.Contains("<th>", html);
+        Assert.Contains("<td>", html);
+        Assert.DoesNotContain("|---|", html);
+    }
+
+    [Fact]
     public void TextContent_DisablesRawHtmlInMarkdown_SoItCannotInjectMarkup()
     {
         var html = ChatOutputHtmlRenderer.RenderContent(

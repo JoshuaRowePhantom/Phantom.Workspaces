@@ -23,8 +23,10 @@ internal static class ChatOutputHtmlRenderer
     // Assistant/user text is authored in Markdown. Raw HTML pass-through is disabled so any literal
     // angle brackets in the model output are escaped (the rendered HTML is injected into the chat
     // WebView, where un-escaped markup would be an injection risk).
+    // UsePipeTables enables GitHub-Flavored Markdown pipe tables (| col | col |).
     private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
         .DisableHtml()
+        .UsePipeTables()
         .Build();
 
     public static string MessageId(int sequence) => $"msg-{sequence}";
