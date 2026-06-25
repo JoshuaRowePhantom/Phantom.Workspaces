@@ -46,6 +46,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly List<SubscribedQuery> selectedViewSubViewQuerySubscriptions = [];
     private readonly ShortcutManager shortcutManager = new();
     private EntityClickShortcutHandler? entityClickShortcutHandler;
+    private OpenAgentSessionShortcutHandler? openAgentSessionShortcutHandler;
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -86,11 +87,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
-        this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
-        this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
-        this.shortcutManager.AddShortcutHandler(openAgentSessionShortcutHandler);
-        this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler));
+        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
+        this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
@@ -1584,7 +1585,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                             continue;
                         }
 
-                        if (this.TryReadWorkspaceTabContent(tab, out var workspaceTab))
+                        var workspaceTab = await this.TryReadWorkspaceTabContentAsync(tab);
+                        if (workspaceTab is not null)
                         {
                             tabs.Add(workspaceTab);
                         }
@@ -1621,15 +1623,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return workspacePane;
     }
 
-    private bool TryReadWorkspaceTabContent(
-        JsonElement tab,
-        out WorkspaceTabViewModel workspaceTab)
+    private async Task<WorkspaceTabViewModel?> TryReadWorkspaceTabContentAsync(
+        JsonElement tab)
     {
-        workspaceTab = null!;
         if (!tab.TryGetProperty("content", out var content)
             || content.ValueKind != JsonValueKind.Object)
         {
-            return false;
+            return null;
         }
 
         // Try entity reference through the broker
@@ -1645,42 +1645,57 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     // Use the first URL (or "default" URL if available)
                     var entityUrl = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
 
-                    workspaceTab = new WebViewModel(entityUrl, this)
+                    return new WebViewModel(entityUrl, this)
                     {
                         Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
                         Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
                         DockRegion = ReadString(tab, "dock") ?? "full",
                     };
-                    return true;
                 }
             }
 
+            // For agent-session entities, restore through the dedicated handler so the agent is
+            // correctly initialised (same path as a manual open via OpenAgentSessionShortcutHandler).
+            if (targetEntity.IsEntityType("agent-session") && this.openAgentSessionShortcutHandler is not null)
+            {
+                var agentSessionTab = await this.openAgentSessionShortcutHandler
+                    .TryCreateAgentSessionTabForRestoreAsync(
+                        this,
+                        targetEntity,
+                        tabId: ReadString(tab, "tab-id"),
+                        title: ReadString(tab, "title"),
+                        dockRegion: ReadString(tab, "dock"));
+                if (agentSessionTab is not null)
+                {
+                    return agentSessionTab;
+                }
+                // Fall through to generic entity view if creation fails (missing data etc.).
+            }
+
             // Default entity view
-            workspaceTab = new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+            return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
             {
                 Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
                 Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
                 Entity = targetEntity,
                 DockRegion = ReadString(tab, "dock") ?? "full",
             };
-            return true;
         }
 
         if (content.TryGetProperty("url", out var url)
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            workspaceTab = new BrowserWorkspaceTabViewModel
+            return new BrowserWorkspaceTabViewModel
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,
                 Url = url.GetString()!,
                 DockRegion = ReadString(tab, "dock") ?? "full",
             };
-            return true;
         }
 
-        return false;
+        return null;
     }
 
     private async Task OpenStartupWorkspaceAsync()

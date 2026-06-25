@@ -361,6 +361,220 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(selectedTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateWorkspacePaneAsync_WithAgentSessionTab_CreatesAgentSessionWorkspaceTabViewModel()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Create an agent-definition entity.
+        var agentDefinitionId = new EntityId("c0ffee01-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "c0ffee01-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "tab-restore-echo"]],
+              "display-name": { "default": "Tab Restore Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "tab-restore-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // Open the agent via the shortcut handler — this creates the agent-session entity in the store.
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var agentDefinitionEntity = Assert.Single(await entityBroker.GetEntitiesAsync([agentDefinitionId]));
+        var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+        var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
+        Assert.True(handled);
+
+        // Retrieve the newly-created agent-session entity from the active tab.
+        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        var agentSessionEntity = selectedTab.Entity!;
+        var agentSessionEntityId = agentSessionEntity.EntityId.ToString();
+
+        // Build a workspace JSON with a tab referencing the agent-session entity by its entity ID.
+        // Construct the workspace entity directly (no schema validation) to avoid workspace-schema
+        // constraints on region/tab structure when we only care about the content routing logic.
+        var workspaceEntityId = new EntityId("c0ffee03-0000-4000-8000-000000000003");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "c0ffee03-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Restore Test Workspace" },
+              "regions": [
+                {
+                  "tabs": [
+                    {
+                      "tab-id": "restored-tab-1",
+                      "title": "My Restored Session",
+                      "dock": "full",
+                      "content": {
+                        "target-entity-name": "{{agentSessionEntityId}}"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        using var workspaceDoc = JsonDocument.Parse(workspaceJson);
+        var workspaceEntity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = workspaceEntityId,
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = workspaceDoc.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+
+        var createWorkspacePaneMethod = typeof(MainWindowViewModel).GetMethod(
+            "CreateWorkspacePaneAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(createWorkspacePaneMethod);
+
+        var task = (Task<WorkspacePaneViewModel>?)createWorkspacePaneMethod!.Invoke(
+            viewModel,
+            [workspaceEntity, workspaceDoc.RootElement.Clone()]);
+        Assert.NotNull(task);
+
+        var workspacePane = await task!;
+        Assert.NotNull(workspacePane);
+
+        // The tab must be an AgentSessionWorkspaceTabViewModel, not a plain entity view.
+        var tabs = workspacePane.SelectedRegion?.Tabs;
+        Assert.NotNull(tabs);
+        var restoredTab = Assert.Single(tabs!);
+        var agentSessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(restoredTab);
+        Assert.Equal("restored-tab-1", agentSessionTab.Id);
+        Assert.Equal("My Restored Session", agentSessionTab.Title);
+        Assert.True(agentSessionTab.Entity?.IsEntityType("agent-session"));
+        Assert.NotNull(agentSessionTab.Agent);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateWorkspacePaneAsync_WithAgentSessionTabButMissingDefinition_FallsBackToEntityWorkspaceTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Create an agent-definition entity so we can create a valid agent-session entity.
+        var agentDefinitionId = new EntityId("dead0001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "dead0001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "fallback-echo"]],
+              "display-name": { "default": "Fallback Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "fallback-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // Create the agent-session via the shortcut handler.
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var agentDefinitionEntity = Assert.Single(await entityBroker.GetEntitiesAsync([agentDefinitionId]));
+        var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+        Assert.True(await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity));
+
+        var createdSessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        var agentSessionEntityId = createdSessionTab.Entity!.EntityId.ToString();
+
+        // Now delete the agent-definition entity so the restore path will fail to find it.
+        // ConcurrencyTag is required by MergeProcessingDataAccessLayer for existing entities.
+        var latestDefinitionEntity = Assert.Single(await entityBroker.GetEntitiesAsync([agentDefinitionId]));
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Delete agent definition." } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = agentDefinitionId,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                    ConcurrencyTag = latestDefinitionEntity.ConcurrencyTag,
+                    Data = null,
+                },
+            ],
+        });
+
+        var workspaceEntityId = new EntityId("dead0002-0000-4000-8000-000000000002");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "dead0002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Missing Def Workspace" },
+              "regions": [
+                {
+                  "tabs": [
+                    {
+                      "tab-id": "orphaned-tab",
+                      "title": "Orphaned Session",
+                      "content": {
+                        "target-entity-name": "{{agentSessionEntityId}}"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        using var workspaceDoc = JsonDocument.Parse(workspaceJson);
+        var workspaceEntity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = workspaceEntityId,
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = workspaceDoc.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+
+        var createWorkspacePaneMethod = typeof(MainWindowViewModel).GetMethod(
+            "CreateWorkspacePaneAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(createWorkspacePaneMethod);
+
+        var task = (Task<WorkspacePaneViewModel>?)createWorkspacePaneMethod!.Invoke(
+            viewModel,
+            [workspaceEntity, workspaceDoc.RootElement.Clone()]);
+        Assert.NotNull(task);
+
+        var workspacePane = await task!;
+        Assert.NotNull(workspacePane);
+
+        // When the agent-definition is gone, TryCreateAgentSessionTabForRestoreAsync returns null
+        // and we fall back to EntityWorkspaceTabViewModel.
+        var tabs = workspacePane.SelectedRegion?.Tabs;
+        Assert.NotNull(tabs);
+        var fallbackTab = Assert.Single(tabs!);
+        Assert.IsType<EntityWorkspaceTabViewModel>(fallbackTab);
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();

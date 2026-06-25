@@ -34,7 +34,31 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        if (entityViewModel.Data is not JsonElement agentSessionEntityData
+        var workspaceTab = await this.TryCreateAgentSessionTabForRestoreAsync(
+            mainWindowViewModel, entityViewModel);
+        if (workspaceTab is null)
+        {
+            return false;
+        }
+
+        await mainWindowViewModel.OpenTabAsync(workspaceTab);
+        return true;
+    }
+
+    /// <summary>
+    /// Creates an <see cref="AgentSessionWorkspaceTabViewModel"/> for the given
+    /// <paramref name="agentSessionEntity"/> without opening it as a tab.
+    /// Returns <see langword="null"/> if the entity data is missing required fields or the
+    /// referenced agent-definition entity cannot be found.
+    /// </summary>
+    public async Task<AgentSessionWorkspaceTabViewModel?> TryCreateAgentSessionTabForRestoreAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        string? tabId = null,
+        string? title = null,
+        string? dockRegion = null)
+    {
+        if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
             || agentSessionIdElement.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(agentSessionIdElement.GetString())
@@ -43,7 +67,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             || string.IsNullOrWhiteSpace(agentDefinitionEntityIdElement.GetString())
             || !Guid.TryParse(agentDefinitionEntityIdElement.GetString(), out var agentDefinitionEntityIdValue))
         {
-            return false;
+            return null;
         }
 
         var agentSessionId = agentSessionIdElement.GetString();
@@ -52,7 +76,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             .FirstOrDefault();
         if (agentDefinitionEntity?.Data is not JsonElement agentSourceEntityData)
         {
-            return false;
+            return null;
         }
 
         var loggerFactory = new ObservableLoggerFactory();
@@ -80,14 +104,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         }
         else
         {
-            return false;
+            return null;
         }
 
         var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
-
-        var workspaceTab = CreateAgentSessionTab(entityViewModel, loggerFactory, agentChat);
-        await mainWindowViewModel.OpenTabAsync(workspaceTab);
-        return true;
+        return CreateAgentSessionTab(
+            agentSessionEntity, loggerFactory, agentChat,
+            tabId: tabId ?? agentSessionEntity.EntityId.ToString(),
+            title: title ?? agentSessionEntity.DisplayName,
+            dockRegion: dockRegion ?? "full");
     }
 
     public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
@@ -96,21 +121,29 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         AgentChat agentChat)
     {
         var loggerFactory = new ObservableLoggerFactory();
-        return CreateAgentSessionTab(agentSessionEntity, loggerFactory, agentChat);
+        return CreateAgentSessionTab(
+            agentSessionEntity, loggerFactory, agentChat,
+            tabId: agentSessionEntity.EntityId.ToString(),
+            title: agentSessionEntity.DisplayName,
+            dockRegion: "full");
     }
 
     private static AgentSessionWorkspaceTabViewModel CreateAgentSessionTab(
         SubscribedEntityViewModel agentSessionEntity,
         ObservableLoggerFactory loggerFactory,
-        AgentChat agentChat)
+        AgentChat agentChat,
+        string tabId,
+        string title,
+        string dockRegion)
     {
         return new AgentSessionWorkspaceTabViewModel
         {
-            Id = agentSessionEntity.EntityId.ToString(),
-            Title = agentSessionEntity.DisplayName,
+            Id = tabId,
+            Title = title,
+            DockRegion = dockRegion,
             Entity = agentSessionEntity,
             LoggerFactory = loggerFactory,
-            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, agentSessionEntity.DisplayName, loggerFactory),
+            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, title, loggerFactory),
         };
     }
 }
