@@ -40,7 +40,7 @@
                         <TextBlock Classes="agent-chat-status-line-brain"
                                    FontFamily="Segoe UI Emoji"
                                    Text="🧠"
-                                   IsVisible="{Binding StatusLine.IsThinking}"/>
+                                   Classes.thinking="{Binding StatusLine.IsThinking}"/>
                         <TextBlock Classes="agent-chat-status-line-value"
                                    Text="{Binding StatusLine.ModelDisplay}"
                                    IsVisible="{Binding StatusLine.HasModel}"/>

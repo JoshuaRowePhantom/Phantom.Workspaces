@@ -212,7 +212,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "IsVisible=\"{Binding StatusLine.IsThinking}\"",
+            "Classes.thinking=\"{Binding StatusLine.IsThinking}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
