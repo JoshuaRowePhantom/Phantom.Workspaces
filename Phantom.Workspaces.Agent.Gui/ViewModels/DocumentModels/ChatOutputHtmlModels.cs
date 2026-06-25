@@ -60,6 +60,11 @@ internal sealed class ChatMessageHtmlModel
 
     public void Update(AgentChatHistoryItem newSource)
     {
+        if (ReferenceEquals(newSource, this.source))
+        {
+            return;
+        }
+
         this.source = newSource;
         this.Render(emit: true);
     }

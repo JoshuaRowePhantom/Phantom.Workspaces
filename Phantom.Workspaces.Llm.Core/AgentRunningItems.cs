@@ -24,7 +24,12 @@ public sealed class AgentRunningItems
     {
         ArgumentNullException.ThrowIfNull(runningItem);
         ArgumentNullException.ThrowIfNull(items);
-        SyncItems(runningItem.Items, items);
+        var changed = SyncItems(runningItem.Items, items);
+        if (!changed)
+        {
+            return;
+        }
+
         var index = this.items.IndexOf(runningItem);
         if (index >= 0)
         {
@@ -38,23 +43,32 @@ public sealed class AgentRunningItems
         this.items.Remove(item);
     }
 
-    private static void SyncItems(ObservableCollection<AgentChatHistoryItem> target, IReadOnlyList<AgentChatHistoryItem> source)
+    private static bool SyncItems(ObservableCollection<AgentChatHistoryItem> target, IReadOnlyList<AgentChatHistoryItem> source)
     {
+        var changed = false;
         for (var index = 0; index < source.Count; index++)
         {
             if (index < target.Count)
             {
-                target[index] = source[index];
+                if (!ReferenceEquals(target[index], source[index]))
+                {
+                    target[index] = source[index];
+                    changed = true;
+                }
             }
             else
             {
                 target.Add(source[index]);
+                changed = true;
             }
         }
 
         while (target.Count > source.Count)
         {
             target.RemoveAt(target.Count - 1);
+            changed = true;
         }
+
+        return changed;
     }
 }

@@ -558,6 +558,10 @@ public sealed class AgentChat : IAsyncDisposable
     // messages is inherently O(n) per update (O(n^2) over a run), so the list is built on a background
     // task; the running-item population then runs as a separate task on the captured foreground
     // scheduler (the UI thread in production), so the UI-bound collections are only mutated there.
+    // To minimise downstream collection churn, CoalesceAsync re-uses the cached AgentChatHistoryItem
+    // reference from the previous frame whenever an item's content is structurally unchanged.  This
+    // lets SyncItems' reference-equality guard suppress Replace notifications (and the HTML re-render
+    // work they would trigger) for every item that did not actually change in this streaming tick.
     private sealed class PartialResponseConflator
     {
         private readonly AgentChat owner;
@@ -569,6 +573,7 @@ public sealed class AgentChat : IAsyncDisposable
         private long processedVersion;
         private bool workerRunning;
         private Task worker = Task.CompletedTask;
+        private AgentChatHistoryItem[] cachedItems = [];
 
         public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem)
         {
@@ -625,8 +630,15 @@ public sealed class AgentChat : IAsyncDisposable
                     snapshot = this.updates.ToArray();
                 }
 
+                // Capture the current cached items before the background task so that the
+                // background work does not race with a foreground assignment to cachedItems.
+                var previousItems = this.cachedItems;
+
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems));
+
+                // Store the newly-coalesced result so the next cycle can reuse stable references.
+                this.cachedItems = chatHistoryItems;
 
                 // Populate the running item on the foreground scheduler so the UI-bound collection is
                 // only ever mutated there, even though the producer loop may run off the foreground.
@@ -643,7 +655,9 @@ public sealed class AgentChat : IAsyncDisposable
             }
         }
 
-        private static async Task<AgentChatHistoryItem[]> CoalesceAsync(AgentResponseUpdate[] snapshot)
+        private static async Task<AgentChatHistoryItem[]> CoalesceAsync(
+            AgentResponseUpdate[] snapshot,
+            AgentChatHistoryItem[] previous)
         {
             var chatResponseUpdates = snapshot.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
             var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
@@ -660,7 +674,7 @@ public sealed class AgentChat : IAsyncDisposable
                 }
                 : Array.Empty<AgentChatHistoryItem>();
 
-            return chatResponse.Messages
+            var newItems = chatResponse.Messages
                 .Reverse()
                 .Select(message => new AgentChatHistoryItem
                 {
@@ -670,6 +684,75 @@ public sealed class AgentChat : IAsyncDisposable
                 .Reverse()
                 .Concat(finalItem)
                 .ToArray();
+
+            // Re-use the cached reference for each item whose content is structurally unchanged.
+            // This lets AgentRunningItems.SyncItems' ReferenceEquals guard suppress unnecessary
+            // Replace notifications (and their downstream HTML re-render work) for stable items.
+            ReuseUnchangedItemReferences(previous, newItems);
+            return newItems;
+        }
+
+        /// <summary>
+        /// For each position where the new item is structurally identical to the cached previous
+        /// item, replaces the new instance with the cached one so callers can use reference
+        /// equality to detect unchanged items cheaply.
+        /// </summary>
+        private static void ReuseUnchangedItemReferences(
+            AgentChatHistoryItem[] previous,
+            AgentChatHistoryItem[] current)
+        {
+            var reuseCount = Math.Min(previous.Length, current.Length);
+            for (var i = 0; i < reuseCount; i++)
+            {
+                if (AreStructurallyEqual(previous[i], current[i]))
+                {
+                    current[i] = previous[i];
+                }
+            }
+        }
+
+        internal static bool AreStructurallyEqual(AgentChatHistoryItem a, AgentChatHistoryItem b)
+        {
+            if (!string.Equals(a.Role.Value, b.Role.Value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var ac = a.Contents;
+            var bc = b.Contents;
+            if (ac.Count != bc.Count)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < ac.Count; i++)
+            {
+                if (!AreContentsEqual(ac[i], bc[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AreContentsEqual(AIContent a, AIContent b)
+        {
+            if (a.GetType() != b.GetType())
+            {
+                return false;
+            }
+
+            return (a, b) switch
+            {
+                (TextContent ta, TextContent tb) => ta.Text == tb.Text,
+                (TextReasoningContent ra, TextReasoningContent rb) => ra.Text == rb.Text,
+                (FunctionCallContent ca, FunctionCallContent cb) =>
+                    ca.CallId == cb.CallId && ca.Name == cb.Name,
+                (FunctionResultContent ra, FunctionResultContent rb) => ra.CallId == rb.CallId,
+                (ErrorContent ea, ErrorContent eb) => ea.Message == eb.Message,
+                _ => false,
+            };
         }
     }
 

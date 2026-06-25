@@ -246,6 +246,37 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
+    public void Update_EmitsNoOperations_WhenSourceIsReferenceEqual()
+    {
+        var item = TextMessage(ChatRole.Assistant, "hello");
+        var history = new ObservableCollection<AgentChatHistoryItem> { item };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        // Trigger a Replace event with the same reference — ChatMessageHtmlModel.Update must short-circuit.
+        history[0] = item;
+
+        Assert.Empty(sink.ContentOperations);
+    }
+
+    [Fact]
+    public void Update_EmitsOperations_WhenSourceDiffers()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "original"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history[0] = TextMessage(ChatRole.Assistant, "updated");
+
+        Assert.NotEmpty(sink.ContentOperations);
+    }
+
+    [Fact]
     public void TextContent_RendersMarkdownPipeTable_AsHtmlTable()
     {
         var markdown = "| A | B |\n|---|---|\n| 1 | 2 |";
