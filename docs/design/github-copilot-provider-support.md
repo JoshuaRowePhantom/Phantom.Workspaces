@@ -357,8 +357,29 @@ held state is cleared.
 
 1. Replacing the `github-models` path.
 2. Adding fallback behavior between provider types.
-3. Replaying full prior history into the Copilot session on restore (the live session
-   retains context across turns within a single chat lifetime).
+
+## Session restore (issue #3)
+
+Within a single chat lifetime the live Copilot session retains context across turns, but a
+restored chat (for example after restarting the app) used to create a brand-new
+`CopilotSession` via `CreateSessionAsync`, so the model lost all awareness of earlier turns.
+
+To preserve history across restarts, the Copilot SDK session id is persisted and the session
+is resumed:
+
+- `CopilotSdkChatClient` exposes `SetResumeSessionId(string?)` (a one-shot resume id consumed on
+  the first session creation) and a `SessionEstablished` event carrying the live
+  `CopilotSession.SessionId`. `EnsureSessionAsync` calls `ResumeSessionAsync` (with
+  `BuildResumeSessionConfig`, mirroring `BuildSessionConfig`) when a resume id is set, falling
+  back to `CreateSessionAsync` if the on-disk session can no longer be resumed. Later session
+  recreations (e.g. a tool-set change) always create fresh.
+- `PersistedAgent.CopilotSdkSessionId` carries the id through the persistence store
+  (`InMemoryAgentPersistenceStore` and `MongoDbAgentPersistenceStore` both round-trip it, never
+  clearing a known id on a subsequent null). `AgentPersistenceChatHistoryProvider` includes it in
+  every store call.
+- On restore, `AgentChat` reads `PersistedAgent.CopilotSdkSessionId`, seeds the provider, and
+  calls `SetResumeSessionId`; it subscribes to `SessionEstablished` to keep the persisted id
+  current.
 
 ## BYOK testing
 

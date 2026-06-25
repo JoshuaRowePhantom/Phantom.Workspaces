@@ -67,6 +67,47 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public void BuildResumeSessionConfig_ForwardsFunctionToolsInstructionsAndModel()
+    {
+        var tool = AIFunctionFactory.Create(
+            (string id) => id,
+            "lookup_issue",
+            "Fetch issue details from our tracker");
+        var options = new ChatOptions
+        {
+            Instructions = "system prompt",
+            Tools = [tool],
+        };
+
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options);
+
+        Assert.Equal("gpt-test", config.Model);
+        Assert.Equal("system prompt", config.SystemMessage!.Content);
+        Assert.NotNull(config.Tools);
+        Assert.Contains(config.Tools!, candidate => candidate.Name == "lookup_issue");
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_IgnoresNonFunctionToolsAndMissingOptions()
+    {
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options: null);
+
+        Assert.Equal("gpt-test", config.Model);
+        Assert.True(config.Tools is null || config.Tools.Count == 0);
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_MapsReasoningEffort()
+    {
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            new ChatOptions { Reasoning = new ReasoningOptions { Effort = ReasoningEffort.High } });
+
+        Assert.Equal("high", config.ReasoningEffort);
+    }
+
+    [Fact]
     public void ComputeSessionSignature_IsStableForEquivalentOptions_IgnoringToolOrder()
     {
         var toolA = AIFunctionFactory.Create((string id) => id, "alpha", "a");

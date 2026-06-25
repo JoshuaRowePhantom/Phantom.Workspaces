@@ -19,7 +19,9 @@ namespace Phantom.Workspaces.Llm;
 /// session on first use and, for each request, forwards only the latest user
 /// message to that session. Prior turns are remembered by the Copilot session
 /// itself, while the agent framework continues to record history for
-/// presentation and persistence.
+/// presentation and persistence. When a stored SDK session id is supplied via
+/// <see cref="SetResumeSessionId"/>, the first session is resumed rather than
+/// created, so history survives a process restart (issue #3).
 /// </remarks>
 public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient
 {
@@ -36,6 +38,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private CopilotClient? copilotClient;
     private CopilotSession? copilotSession;
     private string? currentSessionSignature;
+    private string? pendingResumeSessionId;
     private int disposeStarted;
 
     /// <summary>
@@ -43,6 +46,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// <c>AgentChat</c> can record it in its visible chat history.
     /// </summary>
     internal event Action<ChatMessage>? SteeringMessageForwarded;
+
+    /// <summary>
+    /// Raised after a Copilot SDK session is created or resumed, carrying its
+    /// <see cref="CopilotSession.SessionId"/> so the owning <c>AgentChat</c> can persist it for
+    /// later resumption (issue #3).
+    /// </summary>
+    internal event Action<string>? SessionEstablished;
 
     /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
@@ -155,6 +165,60 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         return sessionConfig;
+    }
+
+    /// <summary>
+    /// Builds the Copilot SDK <see cref="ResumeSessionConfig"/> for resuming a previously created
+    /// session. Mirrors <see cref="BuildSessionConfig"/> so a resumed session is configured with the
+    /// same model, BYOK provider, reasoning effort, system instructions, and function tools (issue #3).
+    /// </summary>
+    public static ResumeSessionConfig BuildResumeSessionConfig(
+        string modelId,
+        CopilotByokOptions? byokOptions,
+        ChatOptions? options)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        var resumeConfig = new ResumeSessionConfig
+        {
+            Model = modelId,
+            Streaming = true,
+            OnPermissionRequest = PermissionHandler.ApproveAll,
+        };
+
+        if (byokOptions is not null)
+        {
+            resumeConfig.Provider = CreateProviderConfig(byokOptions, modelId);
+        }
+
+        var reasoningEffort = MapReasoningEffort(options?.Reasoning?.Effort);
+        if (reasoningEffort is not null)
+        {
+            resumeConfig.ReasoningEffort = reasoningEffort;
+        }
+
+        if (!string.IsNullOrWhiteSpace(options?.Instructions))
+        {
+            resumeConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
+        }
+
+        var tools = options?.Tools?.OfType<AIFunction>().ToList();
+        if (tools is { Count: > 0 })
+        {
+            resumeConfig.Tools = tools;
+        }
+
+        return resumeConfig;
+    }
+
+    /// <summary>
+    /// Sets the Copilot SDK session id to resume on the next (first) session creation, so the CLI
+    /// session and its conversation history survive a restart (issue #3). The id is consumed once:
+    /// later session recreations (for example after a tool-set change) always create a fresh session.
+    /// </summary>
+    internal void SetResumeSessionId(string? sessionId)
+    {
+        this.pendingResumeSessionId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId;
     }
 
     /// <inheritdoc />
@@ -479,17 +543,48 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 this.currentSessionSignature = null;
             }
 
-            var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
-            var session = await this.copilotClient.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
+            var session = await this.CreateOrResumeSessionAsync(options, cancellationToken).ConfigureAwait(false);
 
             this.copilotSession = session;
             this.currentSessionSignature = signature;
+            this.SessionEstablished?.Invoke(session.SessionId);
             return session;
         }
         finally
         {
             this.sessionInitializationLock.Release();
         }
+    }
+
+    // Resumes the persisted Copilot session on the first creation when a resume id was provided, so
+    // prior conversation history remains visible to the model (issue #3); otherwise creates a fresh
+    // session. The resume id is one-shot. If resuming fails (for example the on-disk session has been
+    // removed), fall back to creating a new session so the chat stays usable.
+    private async Task<CopilotSession> CreateOrResumeSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
+    {
+        var resumeSessionId = this.pendingResumeSessionId;
+        this.pendingResumeSessionId = null;
+
+        if (!string.IsNullOrWhiteSpace(resumeSessionId))
+        {
+            try
+            {
+                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options);
+                return await this.copilotClient!
+                    .ResumeSessionAsync(resumeSessionId, resumeConfig, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogWarning(
+                    exception,
+                    "Failed to resume Copilot session {SessionId}; creating a new session.",
+                    resumeSessionId);
+            }
+        }
+
+        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
+        return await this.copilotClient!.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

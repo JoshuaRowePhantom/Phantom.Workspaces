@@ -34,10 +34,23 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
 
         if (request.Agent.AgentSessionJson is not null)
         {
+            // Preserve a previously stored SDK session id when this store call does not carry one,
+            // mirroring how the in-memory store coalesces (issue #3).
+            var copilotSdkSessionId = request.Agent.CopilotSdkSessionId;
+            if (copilotSdkSessionId is null)
+            {
+                var existingSessionDocument = await this.sessionsCollection
+                    .Find(Builders<MongoDbPersistedSessionDocument>.Filter.Eq(static x => x.AgentSessionId, request.Agent.AgentSessionId))
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                copilotSdkSessionId = existingSessionDocument?.CopilotSdkSessionId;
+            }
+
             var persistedSessionDocument = new MongoDbPersistedSessionDocument
             {
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentSessionJson = request.Agent.AgentSessionJson,
+                CopilotSdkSessionId = copilotSdkSessionId,
                 UpdatedUtc = DateTime.UtcNow,
             };
 
@@ -113,6 +126,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             AgentSessionId = sessionDocument.AgentSessionId,
             AgentSessionJson = sessionDocument.AgentSessionJson,
             AgentDefinitionJson = definitionDocument?.AgentDefinitionJson,
+            CopilotSdkSessionId = sessionDocument.CopilotSdkSessionId,
         };
     }
 
@@ -153,6 +167,8 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public string AgentSessionId { get; init; } = string.Empty;
 
         public BsonDocument? AgentSessionJson { get; init; }
+
+        public string? CopilotSdkSessionId { get; init; }
 
         public DateTime UpdatedUtc { get; init; }
     }

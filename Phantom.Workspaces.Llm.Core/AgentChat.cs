@@ -207,6 +207,22 @@ public sealed class AgentChat : IAsyncDisposable
            this.persistenceProvider.SetAgentSessionId(frameworkSession, this.request.AgentSessionId);
        }
 
+       // Resume the GitHub Copilot CLI session (and its model-visible history) after a restart by
+       // replaying the stored SDK session id, and keep the persisted id current as new sessions are
+       // established (issue #3).
+       if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
+       {
+           var restoredCopilotSdkSessionId = restoredAgent?.CopilotSdkSessionId;
+           if (!string.IsNullOrWhiteSpace(restoredCopilotSdkSessionId))
+           {
+               copilotSdkClient.SetResumeSessionId(restoredCopilotSdkSessionId);
+               this.persistenceProvider.SetCopilotSdkSessionId(restoredCopilotSdkSessionId);
+           }
+
+           copilotSdkClient.SessionEstablished += establishedSessionId =>
+               this.persistenceProvider.SetCopilotSdkSessionId(establishedSessionId);
+       }
+
        var resolvedAgentSessionId = this.persistenceProvider.ExtractAgentSessionId(frameworkSession);
        var persistedMessages = await this.request.ConfiguredStore.ReadMessagesAsync(
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },

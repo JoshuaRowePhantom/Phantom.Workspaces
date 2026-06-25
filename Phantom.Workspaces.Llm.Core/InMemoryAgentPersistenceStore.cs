@@ -26,6 +26,7 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
             {
                 AgentSessionJson = request.Agent.AgentSessionJson ?? session.Agent?.AgentSessionJson,
                 AgentDefinitionJson = request.Agent.AgentDefinitionJson ?? session.Agent?.AgentDefinitionJson,
+                CopilotSdkSessionId = request.Agent.CopilotSdkSessionId ?? session.Agent?.CopilotSdkSessionId,
             };
             if (newMessages.Length > 0)
             {
