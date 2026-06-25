@@ -1,7 +1,9 @@
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using Phantom.Workspaces.Agent.Gui.Controls;
@@ -312,7 +314,7 @@ public sealed class MainWindowAxamlTests
             outputControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Cancel\" Command=\"{Binding InterruptCommand}\"",
+            "Gesture=\"Ctrl+Cancel\" Command=\"{Binding InterruptCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -324,7 +326,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Ctrl+Shift+Pause\" Command=\"{Binding InputQueue.UnholdAllQueuesCommand}\"",
+            "Gesture=\"Ctrl+Shift+Cancel\" Command=\"{Binding InputQueue.UnholdAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -347,6 +349,45 @@ public sealed class MainWindowAxamlTests
             "Text=\"Connection type\"",
             editorControlContent,
             StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EditorControl_InterruptGesture_MatchesCtrlBreak_NotPlainCancel()
+    {
+        // Issue #21: Windows delivers the Pause/Break key as Key.Cancel (VK_CANCEL) whenever Ctrl is
+        // held, so Ctrl+Break arrives as Key.Cancel + Control. The interrupt binding must use the
+        // "Ctrl+Cancel" gesture; the pre-fix "Cancel" gesture (no modifiers) never matched the real
+        // event, which is why Ctrl+Break did nothing in Copilot sessions.
+        var control = new AgentChatEditorControl();
+
+        var interruptGesture = control.KeyBindings
+            .Select(binding => binding.Gesture)
+            .Single(gesture => gesture is { Key: Key.Cancel, KeyModifiers: KeyModifiers.Control });
+
+        var ctrlBreak = new KeyEventArgs { Key = Key.Cancel, KeyModifiers = KeyModifiers.Control };
+        Assert.True(interruptGesture.Matches(ctrlBreak));
+
+        // The pre-fix gesture would not have matched the real Ctrl+Break event.
+        Assert.False(new KeyGesture(Key.Cancel).Matches(ctrlBreak));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EditorControl_UnholdGesture_MatchesCtrlShiftBreak()
+    {
+        // Issue #21: Ctrl+Shift+Break likewise arrives as Key.Cancel + Control + Shift, so the unhold
+        // binding must use "Ctrl+Shift+Cancel" rather than "Ctrl+Shift+Pause".
+        var control = new AgentChatEditorControl();
+
+        var unholdGesture = control.KeyBindings
+            .Select(binding => binding.Gesture)
+            .Single(gesture => gesture is { Key: Key.Cancel, KeyModifiers: KeyModifiers.Control | KeyModifiers.Shift });
+
+        var ctrlShiftBreak = new KeyEventArgs
+        {
+            Key = Key.Cancel,
+            KeyModifiers = KeyModifiers.Control | KeyModifiers.Shift,
+        };
+        Assert.True(unholdGesture.Matches(ctrlShiftBreak));
     }
 
     private static string ReadMainWindowAxaml()

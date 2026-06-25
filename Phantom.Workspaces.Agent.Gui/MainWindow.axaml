@@ -9,10 +9,12 @@
         MinWidth="600" MinHeight="400"
         Classes="agent-window">
     <Window.KeyBindings>
-        <KeyBinding Gesture="Cancel"         Command="{Binding Agent.InterruptCommand}"/>
+        <!-- Windows reports the Pause/Break key as VK_CANCEL (Key.Cancel) whenever Ctrl is held, so
+             Ctrl+Break is Ctrl+Cancel and Ctrl+Shift+Break is Ctrl+Shift+Cancel. -->
+        <KeyBinding Gesture="Ctrl+Cancel"    Command="{Binding Agent.InterruptCommand}"/>
         <KeyBinding Gesture="Pause"          Command="{Binding Agent.InputQueue.ToggleHoldAllQueuesCommand}"/>
         <KeyBinding Gesture="Shift+Pause"    Command="{Binding Agent.InputQueue.HoldAllQueuesCommand}"/>
-        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding Agent.InputQueue.UnholdAllQueuesCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding Agent.InputQueue.UnholdAllQueuesCommand}"/>
     </Window.KeyBindings>
 
     <DockPanel>

@@ -288,109 +288,205 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ArgumentNullException.ThrowIfNull(messages);
 
         var prompt = ExtractPrompt(messages);
-        var session = await this.EnsureSessionAsync(options, cancellationToken).ConfigureAwait(false);
 
-        var channel = Channel.CreateUnbounded<ChatResponseUpdate>(new UnboundedChannelOptions
+        await foreach (var update in this.RunStreamingTurnAsync(BeginTurnAsync, cancellationToken).ConfigureAwait(false))
         {
-            SingleReader = true,
-            SingleWriter = true,
-        });
+            yield return update;
+        }
+
+        // Establishing the turn (resolving the session, creating the channel, and subscribing to
+        // session events) happens inside the turn lock because RunStreamingTurnAsync invokes this
+        // delegate while the lock is held. That ordering guarantees the previous turn has fully torn
+        // down first, so its events cannot bleed into this turn's channel and its session cannot be
+        // invalidated out from under us.
+        async Task<StreamingTurnContext> BeginTurnAsync(CancellationToken turnCancellationToken)
+        {
+            var session = await this.EnsureSessionAsync(options, turnCancellationToken).ConfigureAwait(false);
+
+            var channel = Channel.CreateUnbounded<ChatResponseUpdate>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true,
+            });
+
+            var eventSubscription = session.On(sessionEvent =>
+            {
+                switch (sessionEvent)
+                {
+                    case AssistantMessageDeltaEvent delta when !string.IsNullOrEmpty(delta.Data.DeltaContent):
+                        channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, delta.Data.DeltaContent));
+                        break;
+                    case AssistantReasoningDeltaEvent reasoningDelta when !string.IsNullOrEmpty(reasoningDelta.Data.DeltaContent):
+                        channel.Writer.TryWrite(new ChatResponseUpdate
+                        {
+                            Role = ChatRole.Assistant,
+                            Contents = [new TextReasoningContent(reasoningDelta.Data.DeltaContent)],
+                        });
+                        break;
+                    case ToolExecutionStartEvent toolStart:
+                        channel.Writer.TryWrite(new ChatResponseUpdate
+                        {
+                            Role = ChatRole.Assistant,
+                            Contents = [CopilotToolEventMapper.MapToolStart(toolStart)],
+                        });
+                        break;
+                    case ToolExecutionCompleteEvent toolComplete:
+                        channel.Writer.TryWrite(new ChatResponseUpdate
+                        {
+                            Role = ChatRole.Tool,
+                            Contents = [CopilotToolEventMapper.MapToolComplete(toolComplete)],
+                        });
+                        break;
+                    case SessionErrorEvent error:
+                        channel.Writer.TryComplete(new InvalidOperationException(
+                            $"GitHub Copilot session error: {error.Data.Message}"));
+                        break;
+                    case SessionIdleEvent:
+                        channel.Writer.TryComplete();
+                        break;
+                }
+            });
+
+            // While a turn is running, forward any non-held queue items as immediate steering input.
+            // SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
+            void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            {
+                if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
+                {
+                    return;
+                }
+
+                while (this.queueManager!.TryDequeueNextImmediateOrQueued(out var item))
+                {
+                    foreach (var message in item.Messages ?? [])
+                    {
+                        var text = string.Concat(
+                            message.Contents.OfType<TextContent>().Select(content => content.Text));
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            // Record the forwarded steering message in history before sending it.
+                            this.SteeringMessageForwarded?.Invoke(message);
+
+                            // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
+                            // returns promptly. Errors are non-fatal for steering.
+                            _ = session.SendAsync(
+                                new MessageOptions { Prompt = text, Mode = "immediate" },
+                                CancellationToken.None);
+                        }
+                    }
+                }
+            }
+
+            if (this.queueManager is not null)
+            {
+                this.queueManager.QueueStateChanged += OnQueueChanged;
+            }
+
+            var subscription = new DelegateDisposable(() =>
+            {
+                eventSubscription.Dispose();
+                if (this.queueManager is not null)
+                {
+                    this.queueManager.QueueStateChanged -= OnQueueChanged;
+                }
+            });
+
+            return new StreamingTurnContext(
+                channel.Reader,
+                subscription,
+                sendCancellationToken => session.SendAsync(
+                    new MessageOptions { Prompt = prompt },
+                    sendCancellationToken),
+                () => this.AbortAndInvalidateSessionAsync(session));
+        }
+    }
+
+    /// <summary>
+    /// Runs a single streaming turn under the per-client turn lock. The turn is established (session
+    /// resolved, event subscription created) only after the lock is held, and on cancellation the
+    /// context's <see cref="StreamingTurnContext.OnCancelledAsync"/> runs before the lock is released
+    /// so the in-flight Copilot turn is actually aborted rather than merely abandoned. Acquiring the
+    /// lock and creating the subscription inside the guarded scope also ensures a failure while
+    /// subscribing can never leak the lock, which would otherwise deadlock every subsequent turn.
+    /// </summary>
+    internal async IAsyncEnumerable<ChatResponseUpdate> RunStreamingTurnAsync(
+        Func<CancellationToken, Task<StreamingTurnContext>> beginTurnAsync,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(beginTurnAsync);
 
         await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        using var subscription = session.On(sessionEvent =>
+        try
         {
-            switch (sessionEvent)
+            var turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
+            using (turn.Subscription)
             {
-                case AssistantMessageDeltaEvent delta when !string.IsNullOrEmpty(delta.Data.DeltaContent):
-                    channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, delta.Data.DeltaContent));
-                    break;
-                case AssistantReasoningDeltaEvent reasoningDelta when !string.IsNullOrEmpty(reasoningDelta.Data.DeltaContent):
-                    channel.Writer.TryWrite(new ChatResponseUpdate
-                    {
-                        Role = ChatRole.Assistant,
-                        Contents = [new TextReasoningContent(reasoningDelta.Data.DeltaContent)],
-                    });
-                    break;
-                case ToolExecutionStartEvent toolStart:
-                    channel.Writer.TryWrite(new ChatResponseUpdate
-                    {
-                        Role = ChatRole.Assistant,
-                        Contents = [CopilotToolEventMapper.MapToolStart(toolStart)],
-                    });
-                    break;
-                case ToolExecutionCompleteEvent toolComplete:
-                    channel.Writer.TryWrite(new ChatResponseUpdate
-                    {
-                        Role = ChatRole.Tool,
-                        Contents = [CopilotToolEventMapper.MapToolComplete(toolComplete)],
-                    });
-                    break;
-                case SessionErrorEvent error:
-                    channel.Writer.TryComplete(new InvalidOperationException(
-                        $"GitHub Copilot session error: {error.Data.Message}"));
-                    break;
-                case SessionIdleEvent:
-                    channel.Writer.TryComplete();
-                    break;
-            }
-        });
-
-        // While a turn is running, forward any non-held queue items as immediate steering input.
-        // SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
-        void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-        {
-            if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
-            {
-                return;
-            }
-
-            while (this.queueManager!.TryDequeueNextImmediateOrQueued(out var item))
-            {
-                foreach (var message in item.Messages ?? [])
+                try
                 {
-                    var text = string.Concat(
-                        message.Contents.OfType<TextContent>().Select(content => content.Text));
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        // Record the forwarded steering message in history before sending it.
-                        this.SteeringMessageForwarded?.Invoke(message);
+                    await turn.SendAsync(cancellationToken).ConfigureAwait(false);
 
-                        // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
-                        // returns promptly. Errors are non-fatal for steering.
-                        _ = session.SendAsync(
-                            new MessageOptions { Prompt = text, Mode = "immediate" },
-                            CancellationToken.None);
+                    await foreach (var update in turn.Reader
+                        .ReadAllAsync(cancellationToken)
+                        .ConfigureAwait(false))
+                    {
+                        yield return update;
+                    }
+                }
+                finally
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        await turn.OnCancelledAsync().ConfigureAwait(false);
                     }
                 }
             }
         }
-
-        if (this.queueManager is not null)
-        {
-            this.queueManager.QueueStateChanged += OnQueueChanged;
-        }
-
-        try
-        {
-            await session.SendAsync(
-                new MessageOptions { Prompt = prompt },
-                cancellationToken).ConfigureAwait(false);
-
-            await foreach (var update in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
-            {
-                yield return update;
-            }
-        }
         finally
         {
-            if (this.queueManager is not null)
-            {
-                this.queueManager.QueueStateChanged -= OnQueueChanged;
-            }
-
             this.turnLock.Release();
         }
+    }
+
+    // Actually stops the in-flight Copilot CLI turn. Cancelling the read loop alone leaves the CLI
+    // generating and lets a stale SessionIdleEvent from the abandoned turn complete the next turn's
+    // channel (a silent empty response), so the session is also invalidated and recreated next turn.
+    private async Task AbortAndInvalidateSessionAsync(CopilotSession session)
+    {
+        try
+        {
+            await session.AbortAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // The turn is being torn down; a failed abort must not mask the user's cancellation.
+            this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
+                .LogDebug(exception, "Aborting the interrupted Copilot turn failed; invalidating the session.");
+        }
+
+        this.InvalidateCopilotSession(session);
+    }
+
+    // Drops the cached session (disposing it in the background) so the next turn creates a fresh one.
+    private void InvalidateCopilotSession(CopilotSession session)
+    {
+        if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session)
+        {
+            return;
+        }
+
+        this.currentSessionSignature = null;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
+                    .LogDebug(exception, "Disposing the invalidated Copilot session failed.");
+            }
+        });
     }
 
     /// <inheritdoc />
@@ -638,4 +734,29 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     /// <summary>Gets the human-readable display name for this client.</summary>
     public string DisplayName => this.displayName;
+
+    /// <summary>An <see cref="IDisposable"/> that runs an action once on disposal.</summary>
+    private sealed class DelegateDisposable(Action onDispose) : IDisposable
+    {
+        private Action? onDispose = onDispose;
+
+        public void Dispose() => Interlocked.Exchange(ref this.onDispose, null)?.Invoke();
+    }
 }
+
+/// <summary>
+/// The resources and operations for a single Copilot streaming turn, established under the turn lock
+/// by <see cref="CopilotSdkChatClient.RunStreamingTurnAsync"/>.
+/// </summary>
+/// <param name="Reader">The channel the session's events are written to and the turn reads from.</param>
+/// <param name="Subscription">The session-event (and steering-queue) subscription, disposed at turn end.</param>
+/// <param name="SendAsync">Sends the turn's prompt to the session.</param>
+/// <param name="OnCancelledAsync">
+/// Invoked when the turn is cancelled, before the lock is released, to abort the in-flight CLI turn and
+/// invalidate the session.
+/// </param>
+internal sealed record StreamingTurnContext(
+    System.Threading.Channels.ChannelReader<ChatResponseUpdate> Reader,
+    IDisposable Subscription,
+    Func<CancellationToken, Task> SendAsync,
+    Func<Task> OnCancelledAsync);

@@ -11,11 +11,15 @@
         <KeyBinding Gesture="Ctrl+L"
                    Command="{Binding RequestOpenLogWindowCommand}" />
         <!-- Interrupt / queue hold work from anywhere in the agent chat (input box or output),
-             so they are bound on this control which contains both. -->
-        <KeyBinding Gesture="Cancel" Command="{Binding InterruptCommand}" />
+             so they are bound on this control which contains both.
+             Windows turns the Pause/Break key into VK_CANCEL (Key.Cancel) whenever Ctrl is held, so
+             Ctrl+Break and Ctrl+Shift+Break are matched as Ctrl+Cancel / Ctrl+Shift+Cancel — binding
+             them as "Cancel" or "Ctrl+Shift+Pause" never fires because the real key is Cancel and the
+             Ctrl modifier is present. -->
+        <KeyBinding Gesture="Ctrl+Cancel" Command="{Binding InterruptCommand}" />
         <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
         <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
     </UserControl.KeyBindings>
 
     <UserControl.Resources>
