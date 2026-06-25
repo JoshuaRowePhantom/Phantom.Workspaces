@@ -67,6 +67,14 @@ public sealed class AgentChat : IAsyncDisposable
     private CancellationTokenSource? activeRunCancellation;
     private int disposeStarted;
 
+    // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
+    // are buffered here and flushed to History after CompleteRunningItem so they appear in the
+    // correct chronological order (after the streaming assistant turn, not interleaved with it).
+    // Guarded by pendingSteeringLock because the Copilot path fires from the UI thread while the
+    // processing loop runs the drain/complete sequence on its own task.
+    private List<AgentChatHistoryItem>? pendingSteeringItems;
+    private readonly object pendingSteeringLock = new();
+
     // Serializes foreground work when the chat is created without a synchronization context (for
     // example in tests or non-GUI hosts). In production the captured UI synchronization context
     // already runs foreground work one-at-a-time; this provides the same single-threaded guarantee
@@ -151,12 +159,12 @@ public sealed class AgentChat : IAsyncDisposable
        // recorded in the visible chat history (issue #17).
        if (resolvedClient.GetService(typeof(ToolResultSteeringMiddleware)) is ToolResultSteeringMiddleware steeringMiddleware)
        {
-           steeringMiddleware.MessagesInjected += injected => this.AppendUserMessagesToHistory(injected);
+           steeringMiddleware.MessagesInjected += injected => this.AppendSteeringMessagesToHistory(injected);
        }
 
        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
        {
-           copilotChatClient.SteeringMessageForwarded += message => this.AppendUserMessagesToHistory([message]);
+           copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
        }
 
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)
@@ -462,6 +470,48 @@ public sealed class AgentChat : IAsyncDisposable
             };
 
             this.History.Add(nextItem);
+        }
+    }
+
+    // Steering messages injected mid-run must not be added to History immediately: the streaming
+    // assistant response is still in RunningItems, so adding the steering message now would place
+    // it before the assistant turn in the History list. Buffer the items and flush them to History
+    // in RunProcessLoopAsync after CompleteRunningItem moves the assistant turn to History.
+    private void AppendSteeringMessagesToHistory(IReadOnlyList<ChatMessage> requestMessages)
+    {
+        var items = new List<AgentChatHistoryItem>();
+        foreach (var message in requestMessages)
+        {
+            if (message.Role != ChatRole.User)
+            {
+                continue;
+            }
+
+            items.Add(new AgentChatHistoryItem
+            {
+                Role = ChatRole.User,
+                Contents = message.Contents.ToArray(),
+            });
+        }
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        lock (this.pendingSteeringLock)
+        {
+            if (this.pendingSteeringItems is not null)
+            {
+                this.pendingSteeringItems.AddRange(items);
+                return;
+            }
+        }
+
+        // No active run — add directly to history.
+        foreach (var item in items)
+        {
+            this.AddHistoryItem(item);
         }
     }
 
@@ -794,6 +844,11 @@ public sealed class AgentChat : IAsyncDisposable
 
                 this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
+                lock (this.pendingSteeringLock)
+                {
+                    this.pendingSteeringItems = [];
+                }
+
                 AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
                     new AgentChatHistoryItem
                     {
@@ -906,6 +961,18 @@ public sealed class AgentChat : IAsyncDisposable
                     // disposing to honor the async-enumerator contract.
                     _ = CleanUpRunAsync(providerEnumerator, pendingMoveNext, runCancellation);
                     this.CompleteRunningItem(currentPartialTextResponseItem);
+
+                    List<AgentChatHistoryItem> bufferedSteeringItems;
+                    lock (this.pendingSteeringLock)
+                    {
+                        bufferedSteeringItems = this.pendingSteeringItems ?? [];
+                        this.pendingSteeringItems = null;
+                    }
+
+                    foreach (var item in bufferedSteeringItems)
+                    {
+                        this.AddHistoryItem(item);
+                    }
                 }
             }
         }
