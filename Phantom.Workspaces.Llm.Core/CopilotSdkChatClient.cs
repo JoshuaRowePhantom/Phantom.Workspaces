@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
@@ -229,7 +230,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         ArgumentNullException.ThrowIfNull(messages);
 
-        var prompt = ExtractPrompt(messages);
+        var messageOptions = BuildMessageOptions(messages);
         var session = await this.EnsureSessionAsync(options, cancellationToken).ConfigureAwait(false);
 
         await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -261,7 +262,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             });
 
             var finalEvent = await session.SendAndWaitAsync(
-                new MessageOptions { Prompt = prompt },
+                messageOptions,
                 timeout: null,
                 cancellationToken).ConfigureAwait(false);
 
@@ -287,7 +288,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         ArgumentNullException.ThrowIfNull(messages);
 
-        var prompt = ExtractPrompt(messages);
+        var messageOptions = BuildMessageOptions(messages);
 
         await foreach (var update in this.RunStreamingTurnAsync(BeginTurnAsync, cancellationToken).ConfigureAwait(false))
         {
@@ -395,7 +396,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 channel.Reader,
                 subscription,
                 sendCancellationToken => session.SendAsync(
-                    new MessageOptions { Prompt = prompt },
+                    messageOptions,
                     sendCancellationToken),
                 () => this.AbortAndInvalidateSessionAsync(session));
         }
@@ -544,24 +545,47 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.turnLock.Dispose();
     }
 
-    private static string ExtractPrompt(IEnumerable<ChatMessage> messages)
+    /// <summary>
+    /// Builds a <see cref="MessageOptions"/> from the message history by locating the last user
+    /// message and extracting its text prompt and any inline image/data attachments.
+    /// </summary>
+    internal static MessageOptions BuildMessageOptions(IEnumerable<ChatMessage> messages)
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
 
         for (var index = materialized.Count - 1; index >= 0; index--)
         {
-            if (materialized[index].Role == ChatRole.User)
+            var message = materialized[index];
+            if (message.Role != ChatRole.User)
             {
-                var text = materialized[index].Text;
-                if (!string.IsNullOrEmpty(text))
+                continue;
+            }
+
+            var text = message.Text;
+            var dataItems = message.Contents.OfType<DataContent>().ToList();
+
+            if (!string.IsNullOrEmpty(text) || dataItems.Count > 0)
+            {
+                var options = new MessageOptions { Prompt = text ?? string.Empty };
+
+                if (dataItems.Count > 0)
                 {
-                    return text;
+                    options.Attachments = dataItems
+                        .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+                        {
+                            Data = Convert.ToBase64String(d.Data.ToArray()),
+                            MimeType = d.MediaType ?? string.Empty,
+                            DisplayName = d.MediaType ?? "attachment",
+                        })
+                        .ToList();
                 }
+
+                return options;
             }
         }
 
         var lastWithText = materialized.LastOrDefault(message => !string.IsNullOrEmpty(message.Text));
-        return lastWithText?.Text ?? string.Empty;
+        return new MessageOptions { Prompt = lastWithText?.Text ?? string.Empty };
     }
 
     private static ChatResponse BuildResponse(

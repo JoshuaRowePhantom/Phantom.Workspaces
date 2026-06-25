@@ -284,4 +284,104 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.Equal(fromNull, fromEmpty);
     }
+
+    [Fact]
+    public void BuildMessageOptions_WithTextOnly_SetsPromptAndNoAttachments()
+    {
+        var messages = new[] { new ChatMessage(ChatRole.User, "hello") };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("hello", result.Prompt);
+        Assert.Null(result.Attachments);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithImageAttachment_PopulatesAttachmentsAsBlobAndPreservesText()
+    {
+        var pngBytes = new byte[] { 1, 2, 3 };
+        var contents = new AIContent[]
+        {
+            new TextContent("describe this"),
+            new DataContent(pngBytes, "image/png"),
+        };
+        var messages = new[] { new ChatMessage(ChatRole.User, contents) };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("describe this", result.Prompt);
+        Assert.NotNull(result.Attachments);
+        Assert.Single(result.Attachments);
+        var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments[0]);
+        Assert.Equal("image/png", blob.MimeType);
+        Assert.Equal(Convert.ToBase64String(pngBytes), blob.Data);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithMultipleImageAttachments_PopulatesAllBlobs()
+    {
+        var contents = new AIContent[]
+        {
+            new TextContent("look"),
+            new DataContent(new byte[] { 1 }, "image/png"),
+            new DataContent(new byte[] { 2 }, "image/jpeg"),
+        };
+        var messages = new[] { new ChatMessage(ChatRole.User, contents) };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal(2, result.Attachments?.Count);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithImageButNoText_SetsEmptyPromptAndPopulatesAttachments()
+    {
+        var contents = new AIContent[] { new DataContent(new byte[] { 1 }, "image/png") };
+        var messages = new[] { new ChatMessage(ChatRole.User, contents) };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal(string.Empty, result.Prompt);
+        Assert.NotNull(result.Attachments);
+        Assert.Single(result.Attachments);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_PicksLastUserMessage_IgnoresEarlierTurns()
+    {
+        var pngBytes = new byte[] { 9 };
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "first"),
+            new ChatMessage(ChatRole.Assistant, "ok"),
+            new ChatMessage(ChatRole.User, new AIContent[]
+            {
+                new TextContent("second"),
+                new DataContent(pngBytes, "image/png"),
+            }),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("second", result.Prompt);
+        Assert.Single(result.Attachments!);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_IgnoresNonImageDataContent_StillPopulatesBlob()
+    {
+        var pdfBytes = new byte[] { 5, 6 };
+        var contents = new AIContent[]
+        {
+            new TextContent("here"),
+            new DataContent(pdfBytes, "application/pdf"),
+        };
+        var messages = new[] { new ChatMessage(ChatRole.User, contents) };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Single(result.Attachments!);
+        var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments![0]);
+        Assert.Equal("application/pdf", blob.MimeType);
+    }
 }
