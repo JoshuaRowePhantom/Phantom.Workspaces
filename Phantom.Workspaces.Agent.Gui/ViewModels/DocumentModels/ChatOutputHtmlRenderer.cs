@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using Markdig;
 using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -9,7 +10,8 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 /// <summary>
 /// Pure HTML generation for chat output. Produces the DOM shape consumed by the browser-hosted
 /// renderer (<c>div.chat-message</c> &gt; <c>div.chat-header</c> + <c>div.chat-contents</c> &gt;
-/// <c>div.chat-content</c>), with all dynamic text HTML-escaped. Stateless and fully testable.
+/// <c>div.chat-content</c>). Assistant/user text is rendered from Markdown to HTML (with raw HTML
+/// disabled); all other dynamic text is HTML-escaped. Stateless and fully testable.
 /// </summary>
 internal static class ChatOutputHtmlRenderer
 {
@@ -17,6 +19,13 @@ internal static class ChatOutputHtmlRenderer
     public const string RunningContainerId = "chat-running";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
+
+    // Assistant/user text is authored in Markdown. Raw HTML pass-through is disabled so any literal
+    // angle brackets in the model output are escaped (the rendered HTML is injected into the chat
+    // WebView, where un-escaped markup would be an injection risk).
+    private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
+        .DisableHtml()
+        .Build();
 
     public static string MessageId(int sequence) => $"msg-{sequence}";
 
@@ -85,7 +94,7 @@ internal static class ChatOutputHtmlRenderer
             case TextContent text when isDiagnostic && !string.IsNullOrWhiteSpace(text.Text):
                 return RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text));
             case TextContent text:
-                return string.IsNullOrWhiteSpace(text.Text) ? null : TextBlock(contentId, "chat-text", text.Text);
+                return string.IsNullOrWhiteSpace(text.Text) ? null : MarkdownBlock(contentId, "chat-text", text.Text);
             case FunctionCallContent call:
                 return RenderCollapsible(contentId, "chat-tool", $"tool call: {call.Name}", PrettyJson(call.Arguments));
             case FunctionResultContent result:
@@ -161,6 +170,17 @@ internal static class ChatOutputHtmlRenderer
 
     private static string TextBlock(string contentId, string cssClass, string text)
         => $"<div class=\"chat-content {cssClass}\" id=\"{contentId}\">{HtmlEscape(text)}</div>";
+
+    /// <summary>
+    /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
+    /// block-level HTML (headings, paragraphs, lists, fenced code, blockquotes, inline emphasis/code)
+    /// with raw HTML disabled so model output cannot inject markup into the WebView.
+    /// </summary>
+    private static string MarkdownBlock(string contentId, string cssClass, string text)
+        => $"<div class=\"chat-content {cssClass}\" id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
+
+    private static string MarkdownToHtml(string text)
+        => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
 
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {

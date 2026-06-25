@@ -209,4 +209,53 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("<script>", operation.Content);
         Assert.Contains("&lt;script&gt;", operation.Content);
     }
+
+    [Fact]
+    public void TextContent_RendersMarkdownEmphasisAndInlineCode_AsHtmlElements()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("This is **bold**, *italic*, and `code`."),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("class=\"chat-content chat-text\"", html);
+        Assert.Contains("<strong>bold</strong>", html);
+        Assert.Contains("<em>italic</em>", html);
+        Assert.Contains("<code>code</code>", html);
+    }
+
+    [Fact]
+    public void TextContent_RendersMarkdownHeadingsListsAndFencedCode_AsHtmlElements()
+    {
+        var markdown = "# Title\n\n- one\n- two\n\n```\nlet x = 1;\n```";
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent(markdown),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("<h1>Title</h1>", html);
+        Assert.Contains("<ul>", html);
+        Assert.Contains("<li>one</li>", html);
+        Assert.Contains("<pre><code>", html);
+        Assert.Contains("let x = 1;", html);
+    }
+
+    [Fact]
+    public void TextContent_DisablesRawHtmlInMarkdown_SoItCannotInjectMarkup()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("before <img src=x onerror=alert(1)> after"),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("<img", html);
+        Assert.Contains("&lt;img", html);
+    }
 }

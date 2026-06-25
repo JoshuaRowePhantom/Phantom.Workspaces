@@ -62,6 +62,60 @@
       font-style: italic;
     }
 
+    .chat-text {
+      white-space: normal;
+    }
+
+    .chat-text > :first-child {
+      margin-top: 0;
+    }
+
+    .chat-text > :last-child {
+      margin-bottom: 0;
+    }
+
+    .chat-text p {
+      margin: 0.4em 0;
+      white-space: pre-wrap;
+    }
+
+    .chat-text h1,
+    .chat-text h2,
+    .chat-text h3,
+    .chat-text h4,
+    .chat-text h5,
+    .chat-text h6 {
+      margin: 0.5em 0 0.3em;
+    }
+
+    .chat-text ul,
+    .chat-text ol {
+      margin: 0.4em 0;
+      padding-left: 1.5em;
+    }
+
+    .chat-text blockquote {
+      margin: 0.4em 0;
+      padding-left: 10px;
+      border-left: 3px solid var(--chat-meta);
+    }
+
+    .chat-text code {
+      font-family: var(--chat-font-family);
+    }
+
+    .chat-text pre {
+      margin: 0.4em 0;
+      padding: 6px 8px;
+      background: var(--chat-tool-body-background);
+      white-space: pre;
+      overflow-x: auto;
+    }
+
+    .chat-text pre code {
+      white-space: inherit;
+    }
+
     .chat-meta,
     .chat-monospace {
       color: var(--chat-meta);
