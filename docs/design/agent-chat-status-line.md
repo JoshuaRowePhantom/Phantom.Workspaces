@@ -30,8 +30,8 @@ Segments from left to right:
 
 The current codebase renders an indeterminate `ProgressBar` in two locations:
 
-1. `AgentChatOutputControl.axaml` — a `.agent-chat-running-progress` bar below the selectable output text (visible when `IsChatRunning`). This is styled with `MinHeight="2"` and is essentially an invisible blue strip.
-2. `RunningChatDocumentModels.cs` — a FlowDocument `BlockUIContainer` progress bar rendered inside the document's running section.
+1. `AgentChatOutputControl.axaml` — a `.agent-chat-running-progress` bar below the chat output (visible when `IsChatRunning`). This is styled with `MinHeight="2"` and is essentially an invisible blue strip.
+2. The chat-output document/running section progress bar (historically `RunningChatDocumentModels.cs`, since superseded by the browser-hosted renderer).
 
 **Both are removed.** The brain ProgressBar serves as the single, visible progress indicator.
 
@@ -322,7 +322,7 @@ The `StatusLine` text is a single formatted string built by the view model, usin
             <TextBlock Classes="status-line-metric" Text="{Binding StatusLine.TokensDisplay}" IsVisible="{Binding StatusLine.HasTokens}" />
         </StackPanel>
     </Border>
-    <controls:AgentChatOutputControl DataContext="{Binding Agent}" OutputMode="SelectableTextBox"/>
+    <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
 </DockPanel>
 ```
 
@@ -403,5 +403,5 @@ Add the pink brain color to the centralized theme resources if not in the dedica
 1. **Single-line compact status.** The status line is always one row. No expand/collapse toggles; if more detail is needed, users open Chat Details.
 2. **Brain as emoji, not icon resource.** We use the `🧠` Unicode character rather than an image asset to keep it lightweight and avoid resource management concerns. Font-family fallback ensures cross-platform rendering.
 3. **No new colors in SharedStyles for status segments.** The pink brain goes in `SharedStyles.axaml` as a theme resource; segment text uses existing accent/muted brushes.
-4. **Status line is view-model-driven, not inline-HTML.** Each segment is its own `TextBlock` with `IsVisible` binding — this is more reliable than trying to format rich text across Avalonia's limited `Inline` support and avoids issues like the FlowDocument rendering bugs already noted in the codebase.
+4. **Status line is view-model-driven, not inline-HTML.** Each segment is its own `TextBlock` with `IsVisible` binding — this is more reliable than threading rich status text through the browser-hosted chat output, and keeps the status line as native Avalonia chrome around the WebView surface.
 5. **Credits/tokens are optional.** If a provider does not expose usage data, those segments simply do not render. No null-pointer or format errors.

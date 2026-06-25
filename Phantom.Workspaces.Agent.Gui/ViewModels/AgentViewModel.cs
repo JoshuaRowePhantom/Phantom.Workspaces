@@ -3,7 +3,6 @@ using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Windows.Input;
 using Avalonia.Threading;
-using Avalonia.Controls.Documents;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
@@ -19,14 +18,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly AgentChatToolsDetailViewModel toolsDetail;
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
-    private Section outputHistoryRootSection = new();
-    private Section outputRunningRootSection = new();
-    private readonly Span outputSelectableRootSpan = new();
-    private readonly Span outputSelectableHistoryRootSpan = new();
-    private readonly Span outputSelectableRunningRootSpan = new();
-    private ChatHistoryDocumentModel? historyDocumentModel;
-    private RunningChatItemsDocumentModel? runningDocumentModel;
-    private SelectableTextBlockChatOutputModel? selectableTextBlockOutputModel;
     private bool isReasoningVisible;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
@@ -54,11 +45,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             this.agentChat.DefaultInputQueue,
             this.agentChat.InputQueueManager);
         this.EditorItems = [];
-        this.OutputDocument = AgentChatFlowDocumentBuilder.CreateDocument();
-        this.outputSelectableRootSpan.Inlines.Add(this.outputSelectableHistoryRootSpan);
-        this.outputSelectableRootSpan.Inlines.Add(this.outputSelectableRunningRootSpan);
-        this.AttachOutputDocumentModels();
-        this.AttachSelectableOutputModel();
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged += this.OnToolsChanged;
@@ -124,13 +110,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public bool IsChatRunning => this.RunningItems.Count > 0;
 
-    public FlowDocument OutputDocument { get; private set; }
-
-    public Span OutputSelectableRootSpan => this.outputSelectableRootSpan;
-
-    /// <summary>Raised when the selectable output content changes (for example, to follow the bottom).</summary>
-    public event EventHandler? SelectableOutputContentChanged;
-
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
     {
         get => this.selectedEditorItem;
@@ -166,18 +145,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         => this.OpenLogWindowRequested?.Invoke(this, EventArgs.Empty);
 
     public void SetReasoningVisibility(bool visible)
-    {
-        if (!this.SetProperty(ref this.isReasoningVisible, visible))
-        {
-            return;
-        }
-
-        // Refresh the in-place document models so reasoning blocks appear/disappear, plus the
-        // selectable-text output which is the displayed surface.
-        this.historyDocumentModel?.Refresh();
-        this.runningDocumentModel?.Refresh();
-        this.selectableTextBlockOutputModel?.Refresh();
-    }
+        => this.SetProperty(ref this.isReasoningVisible, visible);
 
     private void OnAgentSessionIdChanged(object? sender, string sessionId)
     {
@@ -276,14 +244,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        this.historyDocumentModel?.Dispose();
-        this.runningDocumentModel?.Dispose();
-        if (this.selectableTextBlockOutputModel is not null)
-        {
-            this.selectableTextBlockOutputModel.ContentChanged -= this.OnSelectableOutputContentChanged;
-            this.selectableTextBlockOutputModel.Dispose();
-        }
-
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
@@ -295,31 +255,6 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         }
         await this.agentChat.DisposeAsync();
     }
-
-    private void AttachOutputDocumentModels()
-    {
-        this.OutputDocument.Blocks.Add(this.outputHistoryRootSection);
-        this.OutputDocument.Blocks.Add(this.outputRunningRootSection);
-        // The FlowDocument is not the displayed output (the editor uses the SelectableTextBox mode),
-        // but these document models keep the document's Sections updated in place from the live history
-        // and running-item collections, so the FlowDocument output mode renders incrementally.
-        this.historyDocumentModel = new ChatHistoryDocumentModel(this.outputHistoryRootSection, this.History, () => this.IsReasoningVisible);
-        this.runningDocumentModel = new RunningChatItemsDocumentModel(this.outputRunningRootSection, this.RunningItems, () => this.IsReasoningVisible);
-    }
-
-    private void AttachSelectableOutputModel()
-    {
-        this.selectableTextBlockOutputModel = new SelectableTextBlockChatOutputModel(
-            this.History,
-            this.RunningItems,
-            this.outputSelectableHistoryRootSpan,
-            this.outputSelectableRunningRootSpan,
-            () => this.IsReasoningVisible);
-        this.selectableTextBlockOutputModel.ContentChanged += this.OnSelectableOutputContentChanged;
-    }
-
-    private void OnSelectableOutputContentChanged(object? sender, EventArgs e)
-        => this.SelectableOutputContentChanged?.Invoke(this, EventArgs.Empty);
 
     private Model? ResolveAgentModel()
     {

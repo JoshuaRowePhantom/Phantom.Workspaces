@@ -304,11 +304,11 @@ public sealed class MainWindowAxamlTests
             outputControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "<FlowDocumentScrollViewer",
+            "x:Name=\"BrowserHost\"",
             outputControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "<SelectableTextBlock x:Name=\"SelectableOutputText\"",
+            "x:Name=\"AutoScrollToggle\"",
             outputControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -328,7 +328,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "OutputMode=\"SelectableTextBox\"",
+            "<controls:AgentChatOutputControl DataContext=\"{Binding Agent}\"/>",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(

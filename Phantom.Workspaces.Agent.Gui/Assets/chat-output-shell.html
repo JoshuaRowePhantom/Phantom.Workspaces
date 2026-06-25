@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat output</title>
+  <style>
+    :root {
+      --chat-background: #1e1e1e;
+      --chat-foreground: #d4d4d4;
+      --chat-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+      --chat-font-size: 13px;
+      --chat-role: #9cdcfe;
+      --chat-user: #4ec9b0;
+      --chat-reasoning: #808080;
+      --chat-meta: #808080;
+      --chat-error: #f48771;
+      --chat-uri: #569cd6;
+      --chat-tool-summary: #c586c0;
+      --chat-tool-body-background: #252526;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: var(--chat-background);
+      color: var(--chat-foreground);
+      font-family: var(--chat-font-family);
+      font-size: var(--chat-font-size);
+    }
+
+    body {
+      padding: 8px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      white-space: normal;
+    }
+
+    .chat-message {
+      margin-bottom: 10px;
+    }
+
+    .chat-header {
+      color: var(--chat-role);
+      font-weight: bold;
+      margin-bottom: 2px;
+    }
+
+    .chat-user-message .chat-header {
+      color: var(--chat-user);
+    }
+
+    .chat-content {
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 1px 0;
+    }
+
+    .chat-reasoning {
+      color: var(--chat-reasoning);
+      font-style: italic;
+    }
+
+    .chat-meta,
+    .chat-monospace {
+      color: var(--chat-meta);
+    }
+
+    .chat-error {
+      color: var(--chat-error);
+    }
+
+    .chat-uri {
+      color: var(--chat-uri);
+    }
+
+    details.chat-content > summary {
+      cursor: pointer;
+      color: var(--chat-tool-summary);
+      white-space: pre-wrap;
+    }
+
+    details.chat-content > .chat-collapsible-body {
+      margin: 4px 0 4px 12px;
+      padding: 6px 8px;
+      background: var(--chat-tool-body-background);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="chat-history"></div>
+  <div id="chat-running"></div>
+  <script>
+    (function () {
+      "use strict";
+
+      function postToHost(message) {
+        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+          window.chrome.webview.postMessage(JSON.stringify(message));
+        }
+      }
+
+      function isNearBottom() {
+        var slack = 24;
+        return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - slack);
+      }
+
+      function scrollToBottom() {
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+
+      function applyCommand(command) {
+        switch (command.type) {
+          case "update": {
+            var target = document.getElementById(command.path);
+            if (!target) {
+              return;
+            }
+            switch (command.location) {
+              case "replace":
+                target.outerHTML = command.content;
+                break;
+              case "before":
+                target.insertAdjacentHTML("beforebegin", command.content);
+                break;
+              case "after":
+                target.insertAdjacentHTML("afterend", command.content);
+                break;
+              case "append":
+                target.insertAdjacentHTML("beforeend", command.content);
+                break;
+            }
+            break;
+          }
+          case "remove": {
+            var element = document.getElementById(command.path);
+            if (element) {
+              element.remove();
+            }
+            break;
+          }
+          case "scroll":
+            scrollToBottom();
+            break;
+          case "theme": {
+            if (command.variables) {
+              var root = document.documentElement;
+              Object.keys(command.variables).forEach(function (key) {
+                root.style.setProperty(key, command.variables[key]);
+              });
+            }
+            break;
+          }
+        }
+      }
+
+      window.hostBridge = {
+        receiveMessage: function (payload) {
+          try {
+            applyCommand(JSON.parse(payload));
+          } catch (error) {
+            postToHost({ type: "error", message: String(error) });
+          }
+        }
+      };
+
+      window.addEventListener("scroll", function () {
+        postToHost({ type: "scrollState", atBottom: isNearBottom() });
+      }, { passive: true });
+
+      postToHost({ type: "ready" });
+    })();
+  </script>
+</body>
+</html>

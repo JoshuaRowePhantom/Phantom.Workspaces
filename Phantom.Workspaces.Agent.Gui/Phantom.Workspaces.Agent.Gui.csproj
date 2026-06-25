@@ -24,4 +24,7 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Styles\Phantom.Workspaces.Gui.Styles.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\chat-output-shell.html" />
+  </ItemGroup>
 </Project>

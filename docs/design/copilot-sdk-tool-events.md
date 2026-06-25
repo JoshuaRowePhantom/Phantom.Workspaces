@@ -16,8 +16,8 @@ the CLI, not by `FunctionInvokingChatClient` in our pipeline. Today
 
 As a result tool **use and results never reach the chat history** the GUI renders. Other
 providers surface tools as `FunctionCallContent` / `FunctionResultContent`, which the
-SelectableTextBlock chat output renders as collapsible tool-call / tool-result expanders
-(see `SelectableTextBlockChatOutputModels`). Under the Copilot provider the user only sees
+browser-hosted chat output renders as collapsible tool-call / tool-result expanders
+(see `ChatOutputHtmlRenderer`/`ChatOutputHtmlModel`). Under the Copilot provider the user only sees
 the assistant's final text.
 
 ## SDK events

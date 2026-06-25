@@ -11,6 +11,7 @@ public static class AvaloniaTestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp()
     {
+        global::Phantom.Workspaces.Gui.Styles.Controls.ControllableBrowserFactory.Create = static () => new HeadlessControllableBrowser();
         return AppBuilder.Configure<TestApplication>()
             .UseHeadless(
                 new AvaloniaHeadlessPlatformOptions

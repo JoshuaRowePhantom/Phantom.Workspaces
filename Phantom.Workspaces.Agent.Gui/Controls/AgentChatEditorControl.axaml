@@ -56,8 +56,7 @@
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"/>
-                <controls:AgentChatOutputControl DataContext="{Binding Agent}"
-                                                OutputMode="SelectableTextBox"/>
+                <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:AgentChatDetailsViewModel">
