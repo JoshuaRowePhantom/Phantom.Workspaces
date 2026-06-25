@@ -20,7 +20,7 @@ public sealed class AgentChatQueueManager
             new AgentInputQueue.Parameters
             {
                 Priority = int.MaxValue - 1,
-                Immediacy = AgentInputQueueImmediacy.Queue,
+                Immediacy = AgentInputQueueImmediacy.Immediate,
             });
         this.inputQueueManager.RegisterInputQueue(defaultQueue);
         this.DefaultInputQueue = new AgentChatQueue(defaultQueue, "Default Queue", isDefault: true);

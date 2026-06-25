@@ -65,9 +65,11 @@ internal sealed class ToolResultSteeringMiddleware : IChatClient
 
     public void Dispose() => this.inner.Dispose();
 
-    // If the last message carries FunctionResultContent, drain available non-held queue items and
-    // append them as additional messages before the model call. TryDequeueNextImmediateOrQueued
-    // already excludes Held queues and is CAS-based, so concurrent drains are safe.
+    // If the last message carries FunctionResultContent, drain Immediate queue items and
+    // append them as additional messages before the model call. Only Immediate-immediacy items
+    // are injected at tool boundaries; Queue-immediacy items wait until the end of the current
+    // turn. TryDequeueNextImmediate excludes both Held and Queue-immediacy items and is
+    // CAS-based, so concurrent drains are safe.
     private IList<ChatMessage> InjectQueuedIfToolResult(IEnumerable<ChatMessage> messages)
     {
         var messageList = messages as IList<ChatMessage> ?? messages.ToList();
@@ -79,7 +81,7 @@ internal sealed class ToolResultSteeringMiddleware : IChatClient
 
         List<ChatMessage>? augmented = null;
         List<ChatMessage>? injected = null;
-        while (this.queueManager.TryDequeueNextImmediateOrQueued(out var item))
+        while (this.queueManager.TryDequeueNextImmediate(out var item))
         {
             augmented ??= [.. messageList];
             foreach (var message in item.Messages ?? [])

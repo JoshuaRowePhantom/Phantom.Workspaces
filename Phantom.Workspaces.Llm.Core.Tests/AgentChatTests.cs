@@ -951,11 +951,11 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task Constructor_DefaultQueueStartsQueued_AndImmediateQueueStartsImmediate()
+    public async Task Constructor_DefaultQueueStartsImmediate_AndImmediateQueueStartsImmediate()
     {
         await using var chat = CreateChat();
 
-        Assert.Equal(AgentInputQueueImmediacy.Queue, chat.DefaultInputQueue.Immediacy);
+        Assert.Equal(AgentInputQueueImmediacy.Immediate, chat.DefaultInputQueue.Immediacy);
         Assert.True(chat.ImmediateInputQueue.IsImmediate);
         Assert.Equal(AgentInputQueueImmediacy.Immediate, chat.ImmediateInputQueue.Immediacy);
     }
@@ -1134,6 +1134,47 @@ public sealed class AgentChatTests
             "queued user message to start processing and produce assistant output");
     }
 
+    [Fact]
+    public async Task SteeringMessage_InjectedWhileRunActive_AppearsAfterAssistantTurnInHistory()
+    {
+        // Arrange: a chat client that exposes a ToolResultSteeringMiddleware via GetService while
+        // delegating actual streaming to a DeterministicTestChatClient. This lets the test fire
+        // MessagesInjected (via a real tool-result middleware call) while a run is still streaming,
+        // verifying that the steering message ends up after the assistant turn in History (#42).
+        var innerClient = new DeterministicTestChatClient();
+        var stream = innerClient.EnqueueStreamingResponse();
+        var blockedUpdate = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "response") { FinishReason = ChatFinishReason.Stop },
+            isReady: false);
+        var blockedComplete = stream.Complete(isReady: false);
+
+        var queueManager = new AgentInputQueueManager();
+        await using var compositeClient = new SteeringPassthroughChatClient(innerClient, queueManager);
+        await using var chat = CreateChat(compositeClient);
+
+        // Act: start a run that pauses mid-stream, inject a steering message, then release.
+        chat.EnqueueUserMessage("user turn");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "run to become active");
+
+        queueManager.Enqueue(
+            queueManager.ImmediateQueue,
+            [new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "steer me")] }]);
+        await compositeClient.SteeringMiddleware.GetResponseAsync(
+            [new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-1", "done")])]);
+
+        blockedUpdate.MarkReady();
+        blockedComplete.MarkReady();
+
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 3, "history to contain user + assistant + steering");
+
+        // Assert: user turn first, then assistant turn, then steering message.
+        Assert.Equal(3, chat.History.Count);
+        Assert.Equal(ChatRole.User, chat.History[0].Role);
+        Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        Assert.Equal(ChatRole.User, chat.History[2].Role);
+        Assert.Equal("steer me", GetText(chat.History[2].Contents));
+    }
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 
@@ -1198,6 +1239,66 @@ public sealed class AgentChatTests
             ?? throw new InvalidOperationException("session field not found.");
         sessionField.SetValue(chat, agentChatSession);
         return chat;
+    }
+
+    // Delegates streaming to an inner DeterministicTestChatClient while exposing a separate
+    // ToolResultSteeringMiddleware via GetService so that AgentChat.InitializeAsync subscribes
+    // to MessagesInjected. This lets tests fire steering injection mid-run by calling
+    // SteeringMiddleware.GetResponseAsync with a tool-result message.
+    private sealed class SteeringPassthroughChatClient : IAsyncDisposable, IChatClient
+    {
+        private readonly DeterministicTestChatClient inner;
+        private readonly ToolResultSteeringMiddleware steeringMiddleware;
+
+        public SteeringPassthroughChatClient(DeterministicTestChatClient inner, AgentInputQueueManager queueManager)
+        {
+            this.inner = inner;
+            var stub = new StubInnerForSteering();
+            this.steeringMiddleware = new ToolResultSteeringMiddleware(stub, queueManager);
+        }
+
+        public ToolResultSteeringMiddleware SteeringMiddleware => this.steeringMiddleware;
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetResponseAsync(messages, options, cancellationToken);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetStreamingResponseAsync(messages, options, cancellationToken);
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(ToolResultSteeringMiddleware)
+                ? this.steeringMiddleware
+                : this.inner.GetService(serviceType, serviceKey);
+
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class StubInnerForSteering : IChatClient
+        {
+            public Task<ChatResponse> GetResponseAsync(
+                IEnumerable<ChatMessage> messages,
+                ChatOptions? options = null,
+                CancellationToken cancellationToken = default)
+                => Task.FromResult(new ChatResponse());
+
+            public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+                IEnumerable<ChatMessage> messages,
+                ChatOptions? options = null,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            {
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            public object? GetService(Type serviceType, object? serviceKey = null) => null;
+            public void Dispose() { }
+        }
     }
 
 }

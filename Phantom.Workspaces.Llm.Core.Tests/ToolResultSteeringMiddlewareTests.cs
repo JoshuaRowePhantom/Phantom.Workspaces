@@ -59,6 +59,23 @@ public sealed class ToolResultSteeringMiddlewareTests
     }
 
     [Fact]
+    public async Task QueueImmediacy_ItemsNotInjected_AtToolBoundary()
+    {
+        var (inner, middleware, queueManager) = CreateMiddleware();
+        var queuedQueue = new AgentInputQueue(new AgentInputQueue.Parameters
+        {
+            Immediacy = AgentInputQueueImmediacy.Queue,
+        });
+        Enqueue(queueManager, queuedQueue, "queued");
+        var messages = new List<ChatMessage> { ToolResultMessage() };
+
+        await DrainStreamingAsync(middleware, messages);
+
+        Assert.Single(inner.LastMessages!);
+        Assert.Single(queuedQueue.Items);
+    }
+
+    [Fact]
     public async Task HeldQueue_ItemsNotInjected()
     {
         var (inner, middleware, queueManager) = CreateMiddleware();
