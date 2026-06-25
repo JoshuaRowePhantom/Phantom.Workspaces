@@ -17,6 +17,19 @@
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
         <Setter Property="Margin" Value="0,0,8,0" />
+        <Style.Animations>
+            <Animation IterationCount="INFINITE"
+                       Duration="0:0:1"
+                       PlaybackDirection="Alternate"
+                       Easing="SineEaseInOut">
+                <KeyFrame Cue="0%">
+                    <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="FontSize" Value="16" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-value">

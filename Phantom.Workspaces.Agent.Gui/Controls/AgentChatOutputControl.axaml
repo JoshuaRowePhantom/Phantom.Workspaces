@@ -9,18 +9,13 @@
         <Border x:Name="BrowserHost"
                 Grid.Row="0" />
         <Grid Grid.Row="1"
-              ColumnDefinitions="Auto,*">
+              ColumnDefinitions="Auto">
             <CheckBox x:Name="AutoScrollToggle"
                       Grid.Column="0"
                       Content="Auto-scroll"
                       IsChecked="True"
                       Classes="agent-chat-autoscroll-toggle"
                       IsCheckedChanged="OnAutoScrollToggleChanged" />
-            <ProgressBar x:Name="OutputProgressBar"
-                         Grid.Column="1"
-                         IsIndeterminate="True"
-                         IsVisible="{Binding IsChatRunning}"
-                         Classes="agent-chat-running-progress" />
         </Grid>
     </Grid>
 </UserControl>
