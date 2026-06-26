@@ -107,7 +107,38 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">
-        <agentControls:AgentChatEditorControl DataContext="{Binding Agent}" />
+        <Panel>
+            <!-- Loading state -->
+            <StackPanel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Loading}}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12">
+                <TextBlock Text="Loading agent session…"
+                           Classes="muted"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Ready state: wrap in Panel so IsVisible binds to AgentSessionWorkspaceTabViewModel,
+                 not to the AgentViewModel set as DataContext on the inner control -->
+            <Panel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Ready}}">
+                <agentControls:AgentChatEditorControl DataContext="{Binding Agent}" />
+            </Panel>
+
+            <!-- Failed state -->
+            <StackPanel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Failed}}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12"
+                        MaxWidth="400">
+                <TextBlock Text="Failed to load agent session"
+                           Classes="heading"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding LoadError}"
+                           Classes="muted"
+                           TextWrapping="Wrap"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+        </Panel>
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">

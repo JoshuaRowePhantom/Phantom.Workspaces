@@ -251,6 +251,8 @@ public sealed class MainWindowIntegrationTests
         Assert.True(handled);
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
         var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        await WaitForAgentReadyAsync(selectedTab);
+        Assert.Equal(AgentTabState.Ready, selectedTab.State);
         Assert.NotNull(selectedTab.Agent);
         Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
         var names = ReadEntityNames(selectedTab.Entity!.Data);
@@ -313,6 +315,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(handled);
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
         var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        await WaitForAgentReadyAsync(selectedTab);
         Assert.NotNull(selectedTab.Agent);
         Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
     }
@@ -360,6 +363,8 @@ public sealed class MainWindowIntegrationTests
         Assert.True(handled);
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
         var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        await WaitForAgentReadyAsync(selectedTab);
+        Assert.NotNull(selectedTab.Agent);
         Assert.Contains(selectedTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
@@ -463,6 +468,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("restored-tab-1", agentSessionTab.Id);
         Assert.Equal("My Restored Session", agentSessionTab.Title);
         Assert.True(agentSessionTab.Entity?.IsEntityType("agent-session"));
+        await WaitForAgentReadyAsync(agentSessionTab);
         Assert.NotNull(agentSessionTab.Agent);
     }
 
@@ -569,12 +575,12 @@ public sealed class MainWindowIntegrationTests
         var workspacePane = await task!;
         Assert.NotNull(workspacePane);
 
-        // When the agent-definition is gone, TryCreateAgentSessionTabForRestoreAsync returns null
-        // and we fall back to EntityWorkspaceTabViewModel.
+        // With the new loading-tab design, TryCreateAgentSessionTabForRestoreAsync always returns
+        // a loading tab (which transitions to Failed state asynchronously when data is missing).
         var tabs = workspacePane.SelectedRegion?.Tabs;
         Assert.NotNull(tabs);
-        var fallbackTab = Assert.Single(tabs!);
-        Assert.IsType<EntityWorkspaceTabViewModel>(fallbackTab);
+        var agentTab = Assert.Single(tabs!);
+        Assert.IsType<AgentSessionWorkspaceTabViewModel>(agentTab);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -731,6 +737,37 @@ public sealed class MainWindowIntegrationTests
         }
 
         return null;
+    }
+
+    private static async Task WaitForAgentReadyAsync(AgentSessionWorkspaceTabViewModel tab)
+    {
+        if (tab.State is AgentTabState.Ready or AgentTabState.Failed)
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(AgentSessionWorkspaceTabViewModel.State)
+                && tab.State is AgentTabState.Ready or AgentTabState.Failed)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        tab.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            if (tab.State is not (AgentTabState.Ready or AgentTabState.Failed))
+            {
+                await signal.Task;
+            }
+        }
+        finally
+        {
+            tab.PropertyChanged -= OnPropertyChanged;
+        }
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()

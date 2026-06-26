@@ -3,7 +3,9 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AgentSchema;
+using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -34,15 +36,47 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        var workspaceTab = await this.TryCreateAgentSessionTabForRestoreAsync(
-            mainWindowViewModel, entityViewModel);
-        if (workspaceTab is null)
+        // Open a loading tab immediately so the user sees feedback right away.
+        // OpenTabAsync dedupes by Id, so if the session is already open it just activates it.
+        var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
-            return false;
-        }
+            Id = entityViewModel.EntityId.ToString(),
+            Title = entityViewModel.DisplayName,
+            DockRegion = "full",
+            Entity = entityViewModel,
+        };
+        await mainWindowViewModel.OpenTabAsync(loadingTab);
 
-        await mainWindowViewModel.OpenTabAsync(workspaceTab);
+        // Complete initialization in the background
+        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab));
+
         return true;
+    }
+
+    private async Task InitializeTabInBackgroundAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AgentSessionWorkspaceTabViewModel tab)
+    {
+        try
+        {
+            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (result is var (agent, loggerFactory))
+                {
+                    tab.SetReady(agent, loggerFactory);
+                }
+                else
+                {
+                    tab.SetFailed("Could not load agent session: missing required entity data.");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => tab.SetFailed(ex.Message));
+        }
     }
 
     /// <summary>
@@ -57,6 +91,41 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         string? tabId = null,
         string? title = null,
         string? dockRegion = null)
+    {
+        var loadingTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = tabId ?? agentSessionEntity.EntityId.ToString(),
+            Title = title ?? agentSessionEntity.DisplayName,
+            DockRegion = dockRegion ?? "full",
+            Entity = agentSessionEntity,
+        };
+
+        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab));
+
+        return loadingTab;
+    }
+
+    public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AgentChat agentChat)
+    {
+        var loggerFactory = new ObservableLoggerFactory();
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = agentSessionEntity.EntityId.ToString(),
+            Title = agentSessionEntity.DisplayName,
+            DockRegion = "full",
+            Entity = agentSessionEntity,
+        };
+        tab.SetReady(agent, loggerFactory);
+        return tab;
+    }
+
+    private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory)?> TryBuildAgentAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
@@ -108,36 +177,26 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         }
 
         var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
-        return CreateAgentSessionTab(
-            mainWindowViewModel, agentSessionEntity, loggerFactory, agentChat,
-            tabId: tabId ?? agentSessionEntity.EntityId.ToString(),
-            title: title ?? agentSessionEntity.DisplayName,
-            dockRegion: dockRegion ?? "full");
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+        return (agent, loggerFactory);
     }
 
-    public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
+    public AgentViewModel BuildAgentViewModelPublic(
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel agentSessionEntity,
-        AgentChat agentChat)
-    {
-        var loggerFactory = new ObservableLoggerFactory();
-        return CreateAgentSessionTab(
-            mainWindowViewModel, agentSessionEntity, loggerFactory, agentChat,
-            tabId: agentSessionEntity.EntityId.ToString(),
-            title: agentSessionEntity.DisplayName,
-            dockRegion: "full");
-    }
-
-    private static AgentSessionWorkspaceTabViewModel CreateAgentSessionTab(
-        MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel agentSessionEntity,
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
-        string tabId,
-        string title,
-        string dockRegion)
+        string title)
     {
-        var agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, title, loggerFactory)
+        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title);
+    }
+
+    private static AgentViewModel BuildAgentViewModel(
+        MainWindowViewModel mainWindowViewModel,
+        ObservableLoggerFactory loggerFactory,
+        AgentChat agentChat,
+        string title)
+    {
+        return new AgentViewModel(agentChat, title, loggerFactory)
         {
             OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
                 new WebViewModel(url, mainWindowViewModel)
@@ -145,16 +204,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     Id = $"web-{url}",
                     Title = url,
                 }),
-        };
-
-        return new AgentSessionWorkspaceTabViewModel
-        {
-            Id = tabId,
-            Title = title,
-            DockRegion = dockRegion,
-            Entity = agentSessionEntity,
-            LoggerFactory = loggerFactory,
-            Agent = agent,
         };
     }
 }

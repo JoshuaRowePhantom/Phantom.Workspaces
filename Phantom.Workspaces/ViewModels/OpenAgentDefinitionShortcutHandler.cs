@@ -2,6 +2,8 @@ using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AgentSchema;
+using Avalonia.Threading;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -39,31 +41,54 @@ public sealed class OpenAgentDefinitionShortcutHandler : ShortcutHandler
             return false;
         }
 
-        var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
-        var agentChat = await AgentFactory.CreateAgentChatAsync(
-            new CreateAgentChatRequest
-            {
-                AgentDefinition = agentDefinition,
-                AgentServices = agentServices,
-            });
+        // Pre-generate the agent session ID so the entity can be created before the slow agent init.
+        var agentSessionId = Guid.NewGuid().ToString("n");
 
-        try
+        // Create the agent-session entity first (fast data write) to get its entity ID and reference.
+        var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            mainWindowViewModel, entityViewModel, agentSessionId);
+        if (createdAgentSessionEntity is null)
         {
-            var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-                mainWindowViewModel,
-                entityViewModel,
-                agentChat.AgentSessionId);
-            if (createdAgentSessionEntity is null)
+            return false;
+        }
+
+        // Open a loading tab immediately so the user sees feedback right away.
+        var loadingTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = createdAgentSessionEntity.EntityId.ToString(),
+            Title = createdAgentSessionEntity.DisplayName,
+            DockRegion = "full",
+            Entity = createdAgentSessionEntity,
+        };
+        await mainWindowViewModel.OpenTabAsync(loadingTab);
+
+        // Initialize the agent chat in the background.
+        var definitionJson = definitionElement.GetRawText();
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                return false;
+                var loggerFactory = new ObservableLoggerFactory();
+                var agentServices = await this.agentSessionShortcutContext
+                    .CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
+                var agentDefinition = AgentDefinition.FromJson(definitionJson);
+                var agentChat = await AgentFactory.CreateAgentChatAsync(
+                    new CreateAgentChatRequest
+                    {
+                        AgentDefinition = agentDefinition,
+                        AgentSessionId = agentSessionId,
+                        AgentServices = agentServices,
+                    });
+                var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
+                    mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName);
+                await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetReady(agent, loggerFactory));
             }
+            catch (Exception ex)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetFailed(ex.Message));
+            }
+        });
 
-            return await this.openAgentSessionShortcutHandler.Handle(mainWindowViewModel, shortcut, createdAgentSessionEntity);
-        }
-        finally
-        {
-            await agentChat.DisposeAsync();
-        }
+        return true;
     }
 }
