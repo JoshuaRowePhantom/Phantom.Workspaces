@@ -5,7 +5,6 @@ using System.Reflection;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Interactivity;
 using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -40,8 +39,14 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
     private ChatOutputHtmlModel? outputModel;
     private AgentViewModel? subscribedViewModel;
     private bool isAttached;
-    private bool autoScrollEnabled = true;
-    private bool suppressAutoScrollCommand;
+    private bool suppressScrollOnEnable;
+
+    /// <summary>
+    /// Raised when the page requests opening a URL in an external browser.
+    /// The event argument is the URL string. The control also calls <see cref="Process.Start"/>
+    /// to open the URL; this event is provided for testability.
+    /// </summary>
+    public event EventHandler<string>? UrlNavigationRequested;
 
     public AgentChatOutputControl()
     {
@@ -63,7 +68,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
 
     public void ScrollToBottom()
     {
-        if (!this.autoScrollEnabled)
+        if (this.subscribedViewModel?.AutoScrollEnabled == false)
         {
             return;
         }
@@ -157,6 +162,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
         {
             this.outputModel?.Refresh();
         }
+        else if (e.PropertyName == nameof(AgentViewModel.AutoScrollEnabled)
+            && this.subscribedViewModel?.AutoScrollEnabled == true
+            && !this.suppressScrollOnEnable)
+        {
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+        }
     }
 
     private void OnBrowserReady(object? sender, EventArgs e)
@@ -164,44 +175,57 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
 
     private void OnBrowserMessageReceived(object? sender, string message)
     {
-        ScrollStateMessage? state;
+        JsonElement root;
         try
         {
-            state = JsonSerializer.Deserialize<ScrollStateMessage>(message);
+            root = JsonSerializer.Deserialize<JsonElement>(message);
         }
         catch (JsonException)
         {
             return;
         }
 
-        if (state is null || !string.Equals(state.Type, "scrollState", StringComparison.Ordinal))
+        if (!root.TryGetProperty("type", out var typeProp))
         {
             return;
         }
 
-        this.SetAutoScrollFromPage(state.AtBottom);
+        switch (typeProp.GetString())
+        {
+            case "scrollState":
+            {
+                var atBottom = root.TryGetProperty("atBottom", out var ab) && ab.GetBoolean();
+                this.SetAutoScrollFromPage(atBottom);
+                break;
+            }
+            case "openUrl":
+            {
+                if (root.TryGetProperty("url", out var urlProp))
+                {
+                    var url = urlProp.GetString();
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        this.UrlNavigationRequested?.Invoke(this, url);
+                        this.subscribedViewModel?.OpenUrlHandler?.Invoke(url);
+                    }
+                }
+                break;
+            }
+        }
     }
 
     private void SetAutoScrollFromPage(bool atBottom)
     {
-        if (atBottom == this.autoScrollEnabled)
+        if (this.subscribedViewModel is null)
         {
             return;
         }
 
-        this.autoScrollEnabled = atBottom;
-        this.suppressAutoScrollCommand = true;
-        this.AutoScrollToggle.IsChecked = atBottom;
-        this.suppressAutoScrollCommand = false;
-    }
-
-    private void OnAutoScrollToggleChanged(object? sender, RoutedEventArgs e)
-    {
-        this.autoScrollEnabled = this.AutoScrollToggle.IsChecked == true;
-        if (this.autoScrollEnabled && !this.suppressAutoScrollCommand)
-        {
-            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
-        }
+        // Suppress the "scroll to bottom" side-effect that fires when AutoScrollEnabled
+        // transitions to true — the page is already at the bottom when atBottom is true.
+        this.suppressScrollOnEnable = true;
+        this.subscribedViewModel.AutoScrollEnabled = atBottom;
+        this.suppressScrollOnEnable = false;
     }
 
     private IReadOnlyDictionary<string, string> BuildThemeVariables()
@@ -223,13 +247,4 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
         => color.A == 255
             ? $"#{color.R:x2}{color.G:x2}{color.B:x2}"
             : $"rgba({color.R}, {color.G}, {color.B}, {(color.A / 255.0):0.###})";
-
-    private sealed class ScrollStateMessage
-    {
-        [System.Text.Json.Serialization.JsonPropertyName("type")]
-        public string? Type { get; set; }
-
-        [System.Text.Json.Serialization.JsonPropertyName("atBottom")]
-        public bool AtBottom { get; set; }
-    }
 }

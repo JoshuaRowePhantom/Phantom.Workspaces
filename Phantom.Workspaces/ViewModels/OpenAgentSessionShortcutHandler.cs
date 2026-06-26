@@ -109,7 +109,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 
         var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
         return CreateAgentSessionTab(
-            agentSessionEntity, loggerFactory, agentChat,
+            mainWindowViewModel, agentSessionEntity, loggerFactory, agentChat,
             tabId: tabId ?? agentSessionEntity.EntityId.ToString(),
             title: title ?? agentSessionEntity.DisplayName,
             dockRegion: dockRegion ?? "full");
@@ -122,13 +122,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
     {
         var loggerFactory = new ObservableLoggerFactory();
         return CreateAgentSessionTab(
-            agentSessionEntity, loggerFactory, agentChat,
+            mainWindowViewModel, agentSessionEntity, loggerFactory, agentChat,
             tabId: agentSessionEntity.EntityId.ToString(),
             title: agentSessionEntity.DisplayName,
             dockRegion: "full");
     }
 
     private static AgentSessionWorkspaceTabViewModel CreateAgentSessionTab(
+        MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
@@ -136,6 +137,17 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         string title,
         string dockRegion)
     {
+        var agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, title, loggerFactory)
+        {
+            OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
+                new BrowserWorkspaceTabViewModel
+                {
+                    Id = $"browser-{url}",
+                    Title = url,
+                    Url = url,
+                }),
+        };
+
         return new AgentSessionWorkspaceTabViewModel
         {
             Id = tabId,
@@ -143,8 +155,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             DockRegion = dockRegion,
             Entity = agentSessionEntity,
             LoggerFactory = loggerFactory,
-            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, title, loggerFactory),
+            Agent = agent,
         };
     }
 }
-

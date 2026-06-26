@@ -16,9 +16,11 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
 
 #pragma warning disable CS0067 // Events are part of the bridge contract; the stub never raises them.
     public event EventHandler? Ready;
+#pragma warning restore CS0067
 
     public event EventHandler<string>? JavaScriptMessageReceived;
-#pragma warning restore CS0067
+
+    public void FireMessage(string message) => JavaScriptMessageReceived?.Invoke(this, message);
 
     public void AddStartupScript(string script)
     {

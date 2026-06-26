@@ -241,6 +241,16 @@
         postToHost({ type: "scrollState", atBottom: isNearBottom() });
       }, { passive: true });
 
+      // Intercept all anchor clicks and post to host instead of navigating the WebView.
+      document.addEventListener("click", function (e) {
+        var anchor = e.target.closest("a[href]");
+        if (!anchor) { return; }
+        var href = anchor.getAttribute("href");
+        if (!href || href.startsWith("#")) { return; }
+        e.preventDefault();
+        postToHost({ type: "openUrl", url: anchor.href });
+      }, true);
+
       postToHost({ type: "ready" });
     })();
   </script>

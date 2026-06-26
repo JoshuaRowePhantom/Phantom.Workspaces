@@ -19,6 +19,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
     private bool isReasoningVisible;
+    private bool autoScrollEnabled = true;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
@@ -137,9 +138,30 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         private set => this.SetProperty(ref this.isReasoningVisible, value);
     }
 
+    public bool AutoScrollEnabled
+    {
+        get => this.autoScrollEnabled;
+        set
+        {
+            if (this.SetProperty(ref this.autoScrollEnabled, value))
+            {
+                this.RaisePropertyChanged(nameof(this.AutoScrollDisabled));
+            }
+        }
+    }
+
+    public bool AutoScrollDisabled => !this.autoScrollEnabled;
+
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
 
     public event EventHandler? OpenLogWindowRequested;
+
+    /// <summary>
+    /// Called when the user activates a hyperlink in the chat output. The workspace layer
+    /// sets this to open a browser tab; the standalone Agent.Gui app sets it to
+    /// <see cref="System.Diagnostics.Process.Start"/>. Null means no navigation occurs.
+    /// </summary>
+    public Action<string>? OpenUrlHandler { get; set; }
 
     private void RequestOpenLogWindow()
         => this.OpenLogWindowRequested?.Invoke(this, EventArgs.Empty);

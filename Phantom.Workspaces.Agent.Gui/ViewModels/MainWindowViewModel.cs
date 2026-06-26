@@ -1,3 +1,6 @@
+using System;
+using System.Diagnostics;
+using System.IO;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -63,6 +66,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             displayName = $"{displayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        return new AgentViewModel(chat, displayName, loggerFactory);
+        return new AgentViewModel(chat, displayName, loggerFactory)
+        {
+            OpenUrlHandler = OpenUrlExternal,
+        };
+    }
+
+    private static void OpenUrlExternal(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // Best-effort; no notification surface available.
+        }
     }
 }
