@@ -3,7 +3,7 @@
         x:CompileBindings="False">
     <Styles.Resources>
         <!-- Notifications panel resources -->
-        <SolidColorBrush x:Key="Theme.Notifications.Panel.Background">#E0202020</SolidColorBrush>
+        <StaticResource x:Key="Theme.Notifications.Panel.Background" ResourceKey="SystemControlBackgroundChromeMediumLowBrush" />
         <CornerRadius x:Key="Theme.Notifications.Panel.CornerRadius">6</CornerRadius>
         <BoxShadows x:Key="Theme.Notifications.Panel.BoxShadow">0 4 16 0 #80000000</BoxShadows>
         
