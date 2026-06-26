@@ -25,6 +25,7 @@ For each issue in the list (in ascending number order):
    ```
 
 2. Launch a `general-purpose` sub-agent in **background** mode with:
+   - A clear statement at the top of the prompt: **"Fix issue #NUMBER only. Do not fetch the next-up label list."**
    - The full issue text pasted verbatim into the prompt.
    - The repository path: `c:\dev\phantom.workspaces-llm`.
    - The design doc path: `c:\dev\phantom.workspaces-design\docs\design\`.

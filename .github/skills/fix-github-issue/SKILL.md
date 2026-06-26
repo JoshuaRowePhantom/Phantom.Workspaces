@@ -9,6 +9,8 @@ Fix a GitHub issue completely by delegating implementation to a `general-purpose
 
 ## Step 1 — Read the issue (main agent)
 
+> **Important**: When an issue number is explicitly provided by the caller, use it directly. Do **not** fetch the `next-up` label list or select a different issue. Issue selection is the orchestrator's responsibility; this skill is a pure executor for the assigned issue.
+
 ```powershell
 gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 ```
@@ -129,3 +131,4 @@ gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 6. No `Debug.WriteLine`, timing waits, or defensive fallback logic.
 7. Tests must be written before or alongside implementation — never skipped.
 8. If there are open questions, assign back to the reporter and stop — do not guess.
+9. **Never fetch the `next-up` label list.** Work only on the issue number provided. Issue selection is the orchestrator's job.
