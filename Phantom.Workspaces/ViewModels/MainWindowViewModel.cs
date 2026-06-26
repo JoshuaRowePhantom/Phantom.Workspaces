@@ -1426,6 +1426,36 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         DisposeWorkspaceTab(oldTab);
     }
 
+    public void CloseTab(WorkspaceTabViewModel tab)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null)
+            {
+                continue;
+            }
+
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null)
+            {
+                continue;
+            }
+
+            var document = documentDock.VisibleDockables
+                .OfType<WorkspaceDocument>()
+                .FirstOrDefault(doc => string.Equals(doc.Id, tab.Id, StringComparison.Ordinal));
+
+            if (document is null)
+            {
+                continue;
+            }
+
+            this.dockFactory.CloseDockable(document);
+            DisposeWorkspaceTab(document.TabViewModel);
+            return;
+        }
+    }
+
     private IDocumentDock? FindDocumentDock(IDockable dockable)
     {
         if (dockable is IDocumentDock documentDock)

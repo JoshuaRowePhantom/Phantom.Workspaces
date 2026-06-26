@@ -143,6 +143,11 @@ public class WebViewModel : WorkspaceTabViewModel
         this.NavigationRequested?.Invoke(this, direction);
     }
 
+    public void RaiseCloseTab()
+    {
+        this.tabService?.CloseTab(this);
+    }
+
     public async void RaiseOpenNewWindow(string url)
     {
         System.Diagnostics.Debug.WriteLine($"[WebViewModel] RaiseOpenNewWindow: {url}");

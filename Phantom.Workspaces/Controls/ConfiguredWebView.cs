@@ -96,6 +96,8 @@ public class ConfiguredWebView : NativeWebView
         
         System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NewWindowRequested");
         this.NewWindowRequested += OnNewWindowRequested;
+
+        this.WebMessageReceived += OnWebMessageReceived;
         
         System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Constructor completed");
     }
@@ -150,6 +152,39 @@ public class ConfiguredWebView : NativeWebView
         }
     }
 
+    private void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs e)
+    {
+        if (string.Equals(e.Body, "close-tab", StringComparison.Ordinal))
+        {
+            this.ViewModel?.RaiseCloseTab();
+        }
+    }
+
+    private async Task InjectCloseTabShortcutAsync()
+    {
+        const string script = """
+            (function() {
+                if (window.__phantomCloseTabListenerInstalled) return;
+                window.__phantomCloseTabListenerInstalled = true;
+                document.addEventListener('keydown', function(e) {
+                    if (e.ctrlKey && e.key === 'w') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        invokeCSharpAction('close-tab');
+                    }
+                }, true);
+            })();
+            """;
+        try
+        {
+            await this.InvokeScript(script);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to inject close-tab shortcut: {ex.Message}");
+        }
+    }
+
     private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
     {
         System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NavigationCompleted: Source={this.Source}, CanGoBack={this.CanGoBack}, CanGoForward={this.CanGoForward}");
@@ -166,6 +201,8 @@ public class ConfiguredWebView : NativeWebView
             // Update title by executing JavaScript to get document.title
             _ = UpdateTitleAsync();
         }
+
+        _ = InjectCloseTabShortcutAsync();
     }
 
     private async Task UpdateTitleAsync()
