@@ -912,7 +912,7 @@
     </Style>
     
     <!-- Dock tab tooltips binding -->
-    <Style Selector="TabStripItem">
+    <Style Selector="DocumentTabStripItem">
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
         <!-- Render the dockable's EffectiveTabHeader via the application DataTemplate for TabHeaderViewModel,
              which shows icon items + notification indicator (always in layout, opacity 0 when no unread) + title. -->
