@@ -179,8 +179,8 @@ public sealed class ViewHierarchyAssembler
             ],
         };
 
-        var subscription = await this.entityBroker.SubscribeQueryAsync(query, cancellationToken).ConfigureAwait(false);
-        return subscription.Results.ToList();
+        var results = await this.entityBroker.GetEntitiesAsync(query, cancellationToken).ConfigureAwait(false);
+        return results.ToList();
     }
 
     private async Task<SubscribedEntityViewModel?> GetEntityTypeViewAsync(

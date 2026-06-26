@@ -749,6 +749,66 @@ public sealed class EntityBrokerTests
         Assert.Equal(sessionId2, remaining.EntityId);
     }
 
+    [AvaloniaFact]
+    public async Task RefreshAsync_SkipsCollectedSubscribedGet()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        var request = new GetRequest
+        {
+            Entities =
+            [
+                new GetEntityRequest
+                {
+                    EntityName = new EntityName("gc-test", "get"),
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                },
+            ],
+            Timestamps = [null],
+        };
+
+        var weakRef = await CreateCollectedSubscribedGetAsync(broker, request, ct);
+
+        ForceGarbageCollection();
+        Assert.False(weakRef.TryGetTarget(out _));
+
+        await broker.RefreshAsync(ct);
+
+        Assert.Equal(0, broker.ActiveSubscribedGetCount);
+    }
+
+    [AvaloniaFact]
+    public async Task RefreshAsync_SkipsCollectedSubscribedQuery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        var request = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("gc-test"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(["gc-test-type"]),
+                    },
+                },
+            ],
+        };
+
+        var weakRef = await CreateCollectedSubscribedQueryAsync(broker, request, ct);
+
+        ForceGarbageCollection();
+        Assert.False(weakRef.TryGetTarget(out _));
+
+        await broker.RefreshAsync(ct);
+
+        Assert.Equal(0, broker.ActiveSubscribedQueryCount);
+    }
+
     private static Task<EntityBroker> CreateBrokerAsync(CancellationToken cancellationToken)
     {
         return EntityBroker.CreateInitializedAsync(
@@ -764,6 +824,26 @@ public sealed class EntityBrokerTests
         var entities = await broker.GetEntitiesAsync([entityId], TestContext.Current.CancellationToken);
         var entity = Assert.Single(entities);
         return new WeakReference<SubscribedEntityViewModel>(entity);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference<SubscribedGet>> CreateCollectedSubscribedGetAsync(
+        EntityBroker broker,
+        GetRequest request,
+        CancellationToken cancellationToken)
+    {
+        var sub = await broker.SubscribeGetAsync(request, cancellationToken);
+        return new WeakReference<SubscribedGet>(sub);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference<SubscribedQuery>> CreateCollectedSubscribedQueryAsync(
+        EntityBroker broker,
+        QueryRequest request,
+        CancellationToken cancellationToken)
+    {
+        var sub = await broker.SubscribeQueryAsync(request, cancellationToken);
+        return new WeakReference<SubscribedQuery>(sub);
     }
 
     private static void ForceGarbageCollection()

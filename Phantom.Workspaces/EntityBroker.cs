@@ -15,8 +15,8 @@ public sealed class EntityBroker
     private readonly EntityRepository entityRepository;
     private readonly object gate = new();
     private readonly Dictionary<EntityId, WeakReference<SubscribedEntityViewModel>> subscribedEntitiesById = new();
-    private readonly List<WeakReference<SubscribedGet>> subscribedGets = new();
-    private readonly List<WeakReference<SubscribedQuery>> subscribedQueries = new();
+    private readonly Dictionary<string, WeakReference<SubscribedGet>> subscribedGets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WeakReference<SubscribedQuery>> subscribedQueries = new(StringComparer.Ordinal);
 
     public EntityBroker(
         EntityRepository entityRepository)
@@ -82,10 +82,27 @@ public sealed class EntityBroker
         GetRequest request,
         CancellationToken cancellationToken = default)
     {
+        var key = JsonSerializer.Serialize(request);
+
+        lock (this.gate)
+        {
+            if (this.subscribedGets.TryGetValue(key, out var existingRef)
+                && existingRef.TryGetTarget(out var existing))
+            {
+                return existing;
+            }
+        }
+
         var subscribedGet = new SubscribedGet(this, request);
         lock (this.gate)
         {
-            this.subscribedGets.Add(new WeakReference<SubscribedGet>(subscribedGet));
+            if (this.subscribedGets.TryGetValue(key, out var existingRef)
+                && existingRef.TryGetTarget(out var existing))
+            {
+                return existing;
+            }
+
+            this.subscribedGets[key] = new WeakReference<SubscribedGet>(subscribedGet);
         }
 
         await subscribedGet.RefreshAsync(cancellationToken);
@@ -101,10 +118,27 @@ public sealed class EntityBroker
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
+        var key = JsonSerializer.Serialize(request);
+
+        lock (this.gate)
+        {
+            if (this.subscribedQueries.TryGetValue(key, out var existingRef)
+                && existingRef.TryGetTarget(out var existing))
+            {
+                return existing;
+            }
+        }
+
         var subscribedQuery = new SubscribedQuery(this, request);
         lock (this.gate)
         {
-            this.subscribedQueries.Add(new WeakReference<SubscribedQuery>(subscribedQuery));
+            if (this.subscribedQueries.TryGetValue(key, out var existingRef)
+                && existingRef.TryGetTarget(out var existing))
+            {
+                return existing;
+            }
+
+            this.subscribedQueries[key] = new WeakReference<SubscribedQuery>(subscribedQuery);
         }
 
         await subscribedQuery.RefreshAsync(cancellationToken);
@@ -482,6 +516,31 @@ public sealed class EntityBroker
             });
     }
 
+    internal int ActiveSubscribedGetCount
+    {
+        get
+        {
+            lock (this.gate)
+                return this.subscribedGets.Count(r => r.Value.TryGetTarget(out _));
+        }
+    }
+
+    internal int ActiveSubscribedQueryCount
+    {
+        get
+        {
+            lock (this.gate)
+                return this.subscribedQueries.Count(r => r.Value.TryGetTarget(out _));
+        }
+    }
+
+    public async Task<IReadOnlyCollection<SubscribedEntityViewModel>> GetEntitiesAsync(
+        QueryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return await this.GetSubscribedEntitiesForQueryRequestAsync(request, null, cancellationToken);
+    }
+
     private List<SubscribedEntityViewModel> GetLiveSubscribedEntities()
     {
         lock (this.gate)
@@ -516,18 +575,23 @@ public sealed class EntityBroker
         lock (this.gate)
         {
             liveSubscribedGets = new List<SubscribedGet>();
-            var nextReferences = new List<WeakReference<SubscribedGet>>();
-            foreach (var reference in this.subscribedGets)
+            var deadKeys = new List<string>();
+            foreach (var (key, reference) in this.subscribedGets)
             {
                 if (reference.TryGetTarget(out var subscribedGet))
                 {
                     liveSubscribedGets.Add(subscribedGet);
-                    nextReferences.Add(reference);
+                }
+                else
+                {
+                    deadKeys.Add(key);
                 }
             }
 
-            this.subscribedGets.Clear();
-            this.subscribedGets.AddRange(nextReferences);
+            foreach (var key in deadKeys)
+            {
+                this.subscribedGets.Remove(key);
+            }
         }
 
         foreach (var subscribedGet in liveSubscribedGets)
@@ -544,18 +608,23 @@ public sealed class EntityBroker
         lock (this.gate)
         {
             liveSubscribedQueries = new List<SubscribedQuery>();
-            var nextReferences = new List<WeakReference<SubscribedQuery>>();
-            foreach (var reference in this.subscribedQueries)
+            var deadKeys = new List<string>();
+            foreach (var (key, reference) in this.subscribedQueries)
             {
                 if (reference.TryGetTarget(out var subscribedQuery))
                 {
                     liveSubscribedQueries.Add(subscribedQuery);
-                    nextReferences.Add(reference);
+                }
+                else
+                {
+                    deadKeys.Add(key);
                 }
             }
 
-            this.subscribedQueries.Clear();
-            this.subscribedQueries.AddRange(nextReferences);
+            foreach (var key in deadKeys)
+            {
+                this.subscribedQueries.Remove(key);
+            }
         }
 
         foreach (var subscribedQuery in liveSubscribedQueries)

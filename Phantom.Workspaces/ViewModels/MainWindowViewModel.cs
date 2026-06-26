@@ -1763,7 +1763,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private async Task OpenEntityBrowserTabAsync()
     {
         const string entityBrowserTabId = "entity-browser-tab";
-        
+
+        await this.EnsureWorkspaceLoadedAsync();
+        if (this.selectedWorkspacePane?.ContentLayout is { } layout)
+        {
+            var documentDock = this.FindDocumentDock(layout);
+            var existingDocument = documentDock?.VisibleDockables
+                ?.OfType<WorkspaceDocument>()
+                .FirstOrDefault(d => string.Equals(d.Id, entityBrowserTabId, StringComparison.Ordinal));
+            if (existingDocument is not null)
+            {
+                this.dockFactory.SetActiveDockable(existingDocument);
+                this.dockFactory.SetFocusedDockable(documentDock!, existingDocument);
+                return;
+            }
+        }
+
         var subscribedGet = await this.EntityBroker.SubscribeGetAsync(
             new GetRequest
             {
