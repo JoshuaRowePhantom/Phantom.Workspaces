@@ -1,0 +1,27 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/vscode-tunnel.json",
+  "description": "Schema for VS Code dev tunnel entities discovered on the current machine.",
+  "allOf": [{ "$ref": "entity.json" }],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": { "$ref": "core.json#/$defs/entity-type-id" },
+      "contains": { "const": "vscode-tunnel" }
+    },
+    "tunnel-name": {
+      "type": "string",
+      "description": "The VS Code tunnel machine name (e.g. 'my-desktop'). Used to build the vscode.dev URL."
+    },
+    "tunnel-url": {
+      "type": "string",
+      "format": "uri",
+      "description": "The vscode.dev/tunnel/<tunnel-name> URL for this tunnel."
+    },
+    "active": {
+      "type": "boolean",
+      "description": "Whether the tunnel process was running at last discovery."
+    }
+  },
+  "required": ["entity-types", "tunnel-name", "tunnel-url"]
+}

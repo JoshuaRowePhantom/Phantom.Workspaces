@@ -357,6 +357,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.VectorIndexerTool(),
             new Tools.GitWorkspaceScanTool(),
             new Tools.CopilotSessionDiscoveryTool(),
+            new Tools.VsCodeTunnelDiscoveryTool(),
         ]);
         this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(dataAccessLayer, registry);
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(

@@ -1,0 +1,38 @@
+{
+  "entity-id": "d5e6f7a8-3b4c-5d6e-8f9a-0b1c2d3e4f5a",
+  "entity-display-order": 325,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/vscode-tunnel.json"
+    ],
+    [
+      "entity-types",
+      "vscode-tunnel"
+    ]
+  ],
+  "display-name": {
+    "default": "VS Code Tunnel Entity Type"
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "vscode-tunnel"
+    ]
+  ],
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/vscode-tunnel-entity-type-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/vscode-tunnel.json"
+  }
+}
