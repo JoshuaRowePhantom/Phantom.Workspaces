@@ -40,6 +40,8 @@
         <KeyBinding Gesture="Ctrl+0" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="9" />
         <KeyBinding Gesture="F7" Command="{Binding NavigatePreviousNotificationCommand}" />
         <KeyBinding Gesture="F8" Command="{Binding NavigateNextNotificationCommand}" />
+        <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding NavigateBackCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+OemMinus" Command="{Binding NavigateForwardCommand}" />
     </Window.KeyBindings>
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">

@@ -15,6 +15,7 @@ using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -63,6 +64,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
+    private readonly NavigationHistoryService navigationHistoryService = new();
+    private bool navigatingViaHistory;
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -91,6 +94,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.CycleTabBackwardCommand = new RelayCommand(_ => this.OnCycleTab(-1));
         this.GoToTabAtIndexCommand = new RelayCommand(param => this.OnGoToTabAtIndex(int.Parse((string)param!)));
         this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
+        this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
+        this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
@@ -148,6 +153,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public RelayCommand NavigateNextNotificationCommand { get; }
     public RelayCommand NavigatePreviousNotificationCommand { get; }
+    public RelayCommand NavigateBackCommand { get; }
+    public RelayCommand NavigateForwardCommand { get; }
 
     public NotificationsViewModel? NotificationsViewModel
     {
@@ -1299,6 +1306,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (target is WorkspaceDocument doc)
         {
             this.notificationService.MarkRead(doc.Id);
+            if (!this.navigatingViaHistory)
+            {
+                this.navigationHistoryService.Push(new NavigationEntry(doc.Id, this.selectedWorkspacePane.Id));
+            }
         }
     }
 
@@ -1310,11 +1321,96 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         this.SelectedWorkspacePane = this.WorkspacePanes[index];
+
+        if (!this.navigatingViaHistory)
+        {
+            var activeTabId = this.ActiveTabId;
+            if (activeTabId is not null)
+            {
+                this.navigationHistoryService.Push(new NavigationEntry(activeTabId, this.SelectedWorkspacePane.Id));
+            }
+        }
+    }
+
+    private void OnNavigateBack()
+    {
+        if (!this.navigationHistoryService.GoBack(out var entry) || entry is null)
+        {
+            return;
+        }
+
+        this.navigatingViaHistory = true;
+        try
+        {
+            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+        }
+        finally
+        {
+            this.navigatingViaHistory = false;
+        }
+    }
+
+    private void OnNavigateForward()
+    {
+        if (!this.navigationHistoryService.GoForward(out var entry) || entry is null)
+        {
+            return;
+        }
+
+        this.navigatingViaHistory = true;
+        try
+        {
+            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+        }
+        finally
+        {
+            this.navigatingViaHistory = false;
+        }
+    }
+
+    private void ActivateTabById(string tabId, string? workspacePaneId)
+    {
+        // Prefer the workspace pane recorded in the history entry
+        if (workspacePaneId is not null)
+        {
+            var targetPane = this.WorkspacePanes.FirstOrDefault(
+                p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal));
+            if (targetPane?.ContentLayout is not null)
+            {
+                var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
+                var doc = documentDock?.VisibleDockables
+                    ?.OfType<WorkspaceDocument>()
+                    .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+                if (doc is not null)
+                {
+                    this.SelectedWorkspacePane = targetPane;
+                    this.dockFactory.SetActiveDockable(doc);
+                    this.dockFactory.SetFocusedDockable(documentDock!, doc);
+                    return;
+                }
+            }
+        }
+
+        // Fall back to searching all panes
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            var doc = documentDock?.VisibleDockables
+                ?.OfType<WorkspaceDocument>()
+                .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+            if (doc is not null)
+            {
+                this.SelectedWorkspacePane = pane;
+                this.dockFactory.SetActiveDockable(doc);
+                this.dockFactory.SetFocusedDockable(documentDock!, doc);
+                return;
+            }
+        }
     }
 
     internal async Task RemoveWorkspacePaneAsync(WorkspacePaneViewModel pane)
-    {
-       // Don't allow closing the default placeholder
+    {// Don't allow closing the default placeholder
        if (string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
        {
            return;
@@ -1430,6 +1526,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Create new document
         this.dockFactory.AddWorkspaceTab(documentDock, tab);
         this.SyncSelectedWorkspacePaneFromDock();
+        if (!this.navigatingViaHistory)
+        {
+            this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+        }
     }
 
     public async Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab)
@@ -2645,6 +2745,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 this.dockFactory.SetActiveDockable(doc);
                 this.dockFactory.SetFocusedDockable(documentDock, doc);
+                if (!this.navigatingViaHistory)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(tabId, pane.Id));
+                }
                 return;
             }
         }
