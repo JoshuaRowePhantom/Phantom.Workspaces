@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
+        xmlns:dmc="using:Dock.Model.Controls"
         xmlns:controls="using:Phantom.Workspaces.Controls"
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.MainWindow"
@@ -170,6 +171,17 @@
                     <DataTemplate DataType="vm:WorkspacePaneDocument">
                         <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}">
                             <dock:DockControl.DataTemplates>
+                                <!-- Provide our own DocumentControl so we can set HeaderTemplate directly,
+                                     rendering WorkspaceDocument.EffectiveTabHeader in the tab strip. -->
+                                <DataTemplate DataType="dmc:IDocumentDock">
+                                    <dock:DocumentControl>
+                                        <dock:DocumentControl.HeaderTemplate>
+                                            <DataTemplate x:DataType="vm:WorkspaceDocument">
+                                                <ContentControl Content="{Binding EffectiveTabHeader}" />
+                                            </DataTemplate>
+                                        </dock:DocumentControl.HeaderTemplate>
+                                    </dock:DocumentControl>
+                                </DataTemplate>
                                 <!-- Content-level tab: shows the tab's ViewModel -->
                                 <DataTemplate DataType="vm:WorkspaceDocument">
                                     <ContentControl Content="{Binding TabViewModel}" />

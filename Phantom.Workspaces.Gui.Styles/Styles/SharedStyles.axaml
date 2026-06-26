@@ -915,10 +915,5 @@
     <Style Selector="DocumentTabStripItem">
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
     </Style>
-    <!-- Override PART_HeaderPresenter inside DocumentTabStripItem to render EffectiveTabHeader
-         (a TabHeaderViewModel) instead of the plain Title string that Dock sets by default.
-         The DataContext of the ContentPresenter inherits WorkspaceDocument from the tab item. -->
-    <Style Selector="DocumentTabStripItem ContentPresenter#PART_HeaderPresenter">
-        <Setter Property="Content" Value="{Binding EffectiveTabHeader}" />
-    </Style>
+
 </Styles>
