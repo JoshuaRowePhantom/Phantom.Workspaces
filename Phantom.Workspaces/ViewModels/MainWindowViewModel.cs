@@ -86,6 +86,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.CloseActiveTabCommand = new RelayCommand(_ => this.OnCloseActiveTab());
         this.CycleTabForwardCommand = new RelayCommand(_ => this.OnCycleTab(+1));
         this.CycleTabBackwardCommand = new RelayCommand(_ => this.OnCycleTab(-1));
+        this.GoToTabAtIndexCommand = new RelayCommand(param => this.OnGoToTabAtIndex(int.Parse((string)param!)));
+        this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
@@ -129,6 +131,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand CycleTabForwardCommand { get; }
 
     public RelayCommand CycleTabBackwardCommand { get; }
+
+    public RelayCommand GoToTabAtIndexCommand { get; }
+
+    public RelayCommand GoToWorkspacePaneAtIndexCommand { get; }
 
     public ConnectionStatusViewModel? ConnectionStatus{ get; private set; }
 
@@ -1235,6 +1241,34 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var nextDockable = dockables[nextIndex];
         this.dockFactory.SetActiveDockable(nextDockable);
         this.dockFactory.SetFocusedDockable(documentDock, nextDockable);
+    }
+
+    private void OnGoToTabAtIndex(int index)
+    {
+        if (this.selectedWorkspacePane?.ContentLayout is null)
+        {
+            return;
+        }
+
+        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
+        if (documentDock?.VisibleDockables is not { } tabs || index >= tabs.Count)
+        {
+            return;
+        }
+
+        var target = tabs[index];
+        this.dockFactory.SetActiveDockable(target);
+        this.dockFactory.SetFocusedDockable(documentDock, target);
+    }
+
+    private void OnGoToWorkspacePaneAtIndex(int index)
+    {
+        if (index >= this.WorkspacePanes.Count)
+        {
+            return;
+        }
+
+        this.SelectedWorkspacePane = this.WorkspacePanes[index];
     }
 
     internal async Task RemoveWorkspacePaneAsync(WorkspacePaneViewModel pane)

@@ -781,6 +781,107 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("tab-a-single", documentDock.ActiveDockable?.Id);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToTabAtIndexCommand_WithThreeTabs_ActivatesCorrectTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "goto-tab-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "goto-tab-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabC = new BrowserWorkspaceTabViewModel { Id = "goto-tab-c", Title = "Tab C", Url = "https://c.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        viewModel.GoToTabAtIndexCommand.Execute("0");
+
+        Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToTabAtIndexCommand_WithIndexOutOfRange_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "goto-oob-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "goto-oob-b", Title = "Tab B", Url = "https://b.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var activeBefore = documentDock!.ActiveDockable;
+
+        viewModel.GoToTabAtIndexCommand.Execute("5");
+
+        Assert.Equal(activeBefore, documentDock.ActiveDockable);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WithMultiplePanes_ActivatesCorrectPane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("dddddddd-dddd-4ddd-dddd-dddddddddddd");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "dddddddd-dddd-4ddd-dddd-dddddddddddd",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-nav-a"]],
+              "display-name": { "default": "Pane Nav A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-nav-b"]],
+              "display-name": { "default": "Pane Nav B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Select the second pane first, then navigate back to index 0
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WithIndexOutOfRange_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var selectedBefore = viewModel.SelectedWorkspacePane;
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("99");
+
+        Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
+    }
+
     private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)
     {
         var contentLayout = viewModel.SelectedWorkspacePane?.ContentLayout;
