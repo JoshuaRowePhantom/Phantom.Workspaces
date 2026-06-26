@@ -3,20 +3,19 @@
         x:CompileBindings="False">
     <Styles.Resources>
         <!-- Notifications panel resources -->
-        <StaticResource x:Key="Theme.Notifications.Panel.Background" ResourceKey="SystemControlBackgroundChromeMediumLowBrush" />
+        <StaticResource x:Key="Theme.Notifications.Panel.Background" ResourceKey="Theme.Surface.Popup.Background" />
+        <StaticResource x:Key="Theme.Notifications.Panel.Border" ResourceKey="Theme.Surface.Popup.Border" />
         <CornerRadius x:Key="Theme.Notifications.Panel.CornerRadius">6</CornerRadius>
-        <BoxShadows x:Key="Theme.Notifications.Panel.BoxShadow">0 4 16 0 #80000000</BoxShadows>
+        <BoxShadows x:Key="Theme.Notifications.Panel.BoxShadow">0 4 16 0 #B0000000</BoxShadows>
         
         <!-- Notifications badge (unread count) -->
         <SolidColorBrush x:Key="Theme.Notifications.Badge.Foreground">Gold</SolidColorBrush>
-        
-        <!-- Notification row opacities -->
-        <x:Double x:Key="Theme.Notifications.Row.ReasonOpacity">0.7</x:Double>
-        <x:Double x:Key="Theme.Notifications.Row.TimestampOpacity">0.5</x:Double>
     </Styles.Resources>
 
     <Style Selector="Border.notifications-panel">
         <Setter Property="Background" Value="{DynamicResource Theme.Notifications.Panel.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Notifications.Panel.Border}" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource Theme.Notifications.Panel.CornerRadius}" />
         <Setter Property="BoxShadow" Value="{DynamicResource Theme.Notifications.Panel.BoxShadow}" />
     </Style>
