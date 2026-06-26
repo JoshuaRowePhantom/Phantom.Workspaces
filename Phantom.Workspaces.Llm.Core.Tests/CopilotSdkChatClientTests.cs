@@ -286,6 +286,75 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public void ComputeSessionSignature_ChangesWhenWorkingDirectoryChanges()
+    {
+        var withDir = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = "/repo/a" },
+        });
+        var withOtherDir = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = "/repo/b" },
+        });
+
+        Assert.NotEqual(withDir, withOtherDir);
+    }
+
+    [Fact]
+    public void ComputeSessionSignature_TreatsAbsentAndNullWorkingDirectoryAsEquivalent()
+    {
+        var withNull = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = null },
+        });
+        var withAbsent = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions());
+
+        Assert.Equal(withNull, withAbsent);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_SetsWorkingDirectory_WhenPresentInAdditionalProperties()
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = "/my/repo" },
+        };
+
+        var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options);
+
+        Assert.Equal("/my/repo", config.WorkingDirectory);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_DoesNotSetWorkingDirectory_WhenAbsentFromAdditionalProperties()
+    {
+        var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options: null);
+
+        Assert.Null(config.WorkingDirectory);
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_SetsWorkingDirectory_WhenPresentInAdditionalProperties()
+    {
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = "/my/repo" },
+        };
+
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options);
+
+        Assert.Equal("/my/repo", config.WorkingDirectory);
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_DoesNotSetWorkingDirectory_WhenAbsentFromAdditionalProperties()
+    {
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options: null);
+
+        Assert.Null(config.WorkingDirectory);
+    }
+
+    [Fact]
     public void BuildMessageOptions_WithTextOnly_SetsPromptAndNoAttachments()
     {
         var messages = new[] { new ChatMessage(ChatRole.User, "hello") };

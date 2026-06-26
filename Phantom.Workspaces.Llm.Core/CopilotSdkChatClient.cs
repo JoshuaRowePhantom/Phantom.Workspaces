@@ -124,8 +124,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     /// <summary>
     /// Builds the Copilot SDK <see cref="SessionConfig"/> for a turn, forwarding the agent's
-    /// model, BYOK provider, reasoning effort, system instructions, and—critically—its function
-    /// tools. The Copilot CLI otherwise only exposes its own built-in tools, so without forwarding
+    /// model, BYOK provider, reasoning effort, system instructions, working directory, and—critically—its
+    /// function tools. The Copilot CLI otherwise only exposes its own built-in tools, so without forwarding
     /// <see cref="ChatOptions.Tools"/> the workspace <see cref="AIFunction"/>s (for example
     /// <c>workspaces_entity_get</c>) never reach the model.
     /// </summary>
@@ -159,6 +159,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
         }
 
+        var workingDirectory = GetWorkingDirectory(options);
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            sessionConfig.WorkingDirectory = workingDirectory;
+        }
+
         var tools = options?.Tools?.OfType<AIFunction>().ToList();
         if (tools is { Count: > 0 })
         {
@@ -171,7 +177,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// <summary>
     /// Builds the Copilot SDK <see cref="ResumeSessionConfig"/> for resuming a previously created
     /// session. Mirrors <see cref="BuildSessionConfig"/> so a resumed session is configured with the
-    /// same model, BYOK provider, reasoning effort, system instructions, and function tools (issue #3).
+    /// same model, BYOK provider, reasoning effort, system instructions, working directory, and function
+    /// tools (issue #3).
     /// </summary>
     public static ResumeSessionConfig BuildResumeSessionConfig(
         string modelId,
@@ -201,6 +208,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         if (!string.IsNullOrWhiteSpace(options?.Instructions))
         {
             resumeConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
+        }
+
+        var workingDirectory = GetWorkingDirectory(options);
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            resumeConfig.WorkingDirectory = workingDirectory;
         }
 
         var tools = options?.Tools?.OfType<AIFunction>().ToList();
@@ -645,13 +658,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // takes effect by recreating the session. The CLI client is reused across recreations.
             if (this.copilotClient is null)
             {
-                var client = new CopilotClient(new CopilotClientOptions
+                var clientOptions = new CopilotClientOptions
                 {
                     GitHubToken = this.gitHubToken,
                     Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
                     CliPath = this.cliPath,
-                });
+                };
 
+                var workingDirectory = GetWorkingDirectory(options);
+                if (!string.IsNullOrWhiteSpace(workingDirectory))
+                {
+                    clientOptions.Cwd = workingDirectory;
+                }
+
+                var client = new CopilotClient(clientOptions);
                 await client.StartAsync(cancellationToken).ConfigureAwait(false);
                 this.copilotClient = client;
             }
@@ -709,9 +729,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     /// <summary>
     /// Computes a signature for the session-config inputs that, when changed between turns, require
-    /// recreating the Copilot session (so live tool toggling takes effect). The model and BYOK
-    /// provider are fixed for the lifetime of the client and are therefore not included. Tool order
-    /// is ignored so that only an actual change to the tool set forces a recreation.
+    /// recreating the Copilot session (so live tool toggling and working-directory changes take effect).
+    /// The model and BYOK provider are fixed for the lifetime of the client and are therefore not
+    /// included. Tool order is ignored so that only an actual change to the tool set forces a recreation.
     /// </summary>
     public static string ComputeSessionSignature(ChatOptions? options)
     {
@@ -723,12 +743,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var instructions = options?.Instructions ?? string.Empty;
         var reasoning = MapReasoningEffort(options?.Reasoning?.Effort) ?? string.Empty;
+        var workingDirectory = GetWorkingDirectory(options) ?? string.Empty;
 
         return string.Join(
             '\u0001',
             "tools=" + string.Join(',', toolNames),
             "instructions=" + instructions,
-            "reasoning=" + reasoning);
+            "reasoning=" + reasoning,
+            "working-directory=" + workingDirectory);
     }
 
     private static string? MapReasoningEffort(ReasoningEffort? effort)
@@ -754,6 +776,22 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         return null;
+    }
+
+    // Extracts the working directory from model options forwarded via AdditionalProperties.
+    // The key "working-directory" is set by AgentDefinitionParameterSubstitutor after parameter
+    // substitution, and maps to both CopilotClientOptions.Cwd (process level) and
+    // SessionConfig.WorkingDirectory (session level).
+    private static string? GetWorkingDirectory(ChatOptions? options)
+    {
+        if (options?.AdditionalProperties is null)
+        {
+            return null;
+        }
+
+        return options.AdditionalProperties.TryGetValue("working-directory", out var value)
+            ? value as string
+            : null;
     }
 
     /// <summary>Gets the human-readable display name for this client.</summary>
