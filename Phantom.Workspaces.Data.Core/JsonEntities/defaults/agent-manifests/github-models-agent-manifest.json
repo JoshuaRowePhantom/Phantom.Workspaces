@@ -54,7 +54,7 @@
       {
         "kind": "tool",
         "id": "fixed",
-        "name": "workspace-entity"
+        "name": "workspace-gui"
       }
     ]
   }
