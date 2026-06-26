@@ -1,8 +1,6 @@
-using System.Linq;
-using Avalonia.Controls;
+using System.Runtime.CompilerServices;
 using Avalonia.Headless.XUnit;
-using Avalonia.Themes.Fluent;
-using Avalonia.VisualTree;
+using Avalonia.Input;
 using Phantom.Workspaces.Controls;
 
 namespace Phantom.Workspaces.Tests;
@@ -10,79 +8,36 @@ namespace Phantom.Workspaces.Tests;
 public sealed class EntityCardControlInteractionTests
 {
     [AvaloniaFact(Timeout = 15_000)]
-    public void IsInteractiveSource_TapInsideReferenceLinkButton_IsTreatedAsInteractive()
+    public void OnEntityCardTapped_WhenEventAlreadyHandled_DoesNotOpenCard()
     {
-        // Reproduces issue #22: a workspace reference-link button renders its content as an
-        // inner TextBlock, so a routed tap reports the TextBlock (not the Button) as its source.
-        // The card must still recognize the tap as interactive so it does not open the entity a
-        // second time in addition to the button's own open command.
-        var innerText = new TextBlock { Text = "Linked entity" };
-        var openButton = new Button { Content = innerText };
-        var plainText = new TextBlock { Text = "Card title" };
-        var card = new Border
-        {
-            Child = new StackPanel
-            {
-                Children = { openButton, plainText },
-            },
-        };
+        var card = new SpyEntityCardControl();
+        var e = (TappedEventArgs)RuntimeHelpers.GetUninitializedObject(typeof(TappedEventArgs));
+        e.Handled = true;
 
-        var window = CreateWindow(card);
-        window.Show();
+        card.OnEntityCardTapped(null, e);
 
-        try
-        {
-            var renderedInner = window.GetVisualDescendants()
-                .OfType<TextBlock>()
-                .First(textBlock => textBlock.Text == "Linked entity");
-
-            Assert.True(EntityCardControl.IsInteractiveSource(renderedInner, card));
-            Assert.True(EntityCardControl.IsInteractiveSource(openButton, card));
-        }
-        finally
-        {
-            window.Close();
-        }
+        Assert.Equal(0, card.ActivateCardCallCount);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void IsInteractiveSource_TapOnNonInteractiveContent_IsNotInteractive()
+    public void OnEntityCardTapped_WhenEventNotHandled_OpensCard()
     {
-        // Reproduces issue #26: tapping non-interactive card chrome (a title TextBlock) should
-        // still trigger the card's default open behavior, while tapping inner controls should not.
-        var plainText = new TextBlock { Text = "Card title" };
-        var textBox = new TextBox { Text = "editable" };
-        var card = new Border
-        {
-            Child = new StackPanel
-            {
-                Children = { plainText, textBox },
-            },
-        };
+        var card = new SpyEntityCardControl();
+        var e = (TappedEventArgs)RuntimeHelpers.GetUninitializedObject(typeof(TappedEventArgs));
 
-        var window = CreateWindow(card);
-        window.Show();
+        card.OnEntityCardTapped(null, e);
 
-        try
-        {
-            Assert.False(EntityCardControl.IsInteractiveSource(plainText, card));
-            Assert.True(EntityCardControl.IsInteractiveSource(textBox, card));
-        }
-        finally
-        {
-            window.Close();
-        }
+        Assert.Equal(1, card.ActivateCardCallCount);
+        Assert.True(e.Handled);
     }
 
-    private static Window CreateWindow(Control content)
+    private sealed class SpyEntityCardControl : EntityCardControl
     {
-        var window = new Window
+        public int ActivateCardCallCount { get; private set; }
+
+        internal override void ActivateCard()
         {
-            Width = 400,
-            Height = 400,
-            Content = content,
-        };
-        window.Styles.Add(new FluentTheme());
-        return window;
+            ActivateCardCallCount++;
+        }
     }
 }
