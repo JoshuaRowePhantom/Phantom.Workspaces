@@ -30,11 +30,9 @@ public class ConfiguredWebView : NativeWebView
         try
         {
             Directory.CreateDirectory(userDataFolderPath);
-            System.Diagnostics.Debug.WriteLine($"WebView data folder: {userDataFolderPath}");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to create WebView data folder: {ex.Message}");
         }
 
         // Try to configure the WebView environment globally before any instances are created
@@ -60,14 +58,12 @@ public class ConfiguredWebView : NativeWebView
             {
                 // Call PrepareWebViewStartup if it exists
                 prepareMethod.Invoke(null, null);
-                System.Diagnostics.Debug.WriteLine("Called PrepareWebViewStartup");
             }
 
             environmentConfigured = true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to configure WebView environment: {ex.Message}");
         }
     }
 
@@ -79,8 +75,6 @@ public class ConfiguredWebView : NativeWebView
 
     public ConfiguredWebView()
     {
-        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Constructor called");
-        
         // Subscribe to EnvironmentRequested if the event exists
         this.Initialized += OnInitialized;
         
@@ -88,18 +82,11 @@ public class ConfiguredWebView : NativeWebView
         this.PropertyChanged += OnPropertyChanged;
         
         // Subscribe to WebView navigation events directly
-        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NavigationStarted");
         this.NavigationStarted += OnWebViewNavigationStarted;
-        
-        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NavigationCompleted");
         this.NavigationCompleted += OnWebViewNavigationCompleted;
-        
-        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Subscribing to NewWindowRequested");
         this.NewWindowRequested += OnNewWindowRequested;
 
         this.WebMessageReceived += OnWebMessageReceived;
-        
-        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Constructor completed");
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -132,22 +119,16 @@ public class ConfiguredWebView : NativeWebView
                 this.GoForward();
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"Navigation failed: {ex.Message}");
         }
     }
 
     private void OnWebViewNavigationStarted(object? sender, EventArgs e)
     {
-        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NavigationStarted event fired!");
-        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Current Source: {this.Source}");
-        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] EventArgs type: {e?.GetType().FullName}");
-        
         // Update the ViewModel with the URL as soon as navigation starts
         if (this.ViewModel != null && this.Source != null)
         {
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Updating URL to: {this.Source}");
             this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
         }
     }
@@ -179,24 +160,19 @@ public class ConfiguredWebView : NativeWebView
         {
             await this.InvokeScript(script);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to inject close-tab shortcut: {ex.Message}");
         }
     }
 
     private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
     {
-        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NavigationCompleted: Source={this.Source}, CanGoBack={this.CanGoBack}, CanGoForward={this.CanGoForward}");
-        
         // Update the ViewModel with the current URL after navigation completes
         if (this.ViewModel != null && this.Source != null)
         {
             this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
             this.ViewModel.CanGoBack = this.CanGoBack;
             this.ViewModel.CanGoForward = this.CanGoForward;
-            
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Updated ViewModel: CanGoBack={this.ViewModel.CanGoBack}, CanGoForward={this.ViewModel.CanGoForward}");
             
             // Update title by executing JavaScript to get document.title
             _ = UpdateTitleAsync();
@@ -221,25 +197,16 @@ public class ConfiguredWebView : NativeWebView
                 viewModel.SetPageTitle(title);
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to get document title: {ex.Message}");
         }
-    }
-
-    private void OnDocumentTitleChanged(object? sender, EventArgs e)
-    {
-        // This method is no longer needed - title is updated in OnWebViewNavigationCompleted
     }
 
     private void OnNewWindowRequested(object? sender, object? e)
     {
-        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] NewWindowRequested event fired! EventArgs type: {e?.GetType().FullName}");
-        
         // Handle new window requests (e.g., Ctrl+click, window.open())
         if (this.ViewModel == null || e == null)
         {
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] ViewModel or EventArgs is null, skipping");
             return;
         }
 
@@ -247,27 +214,11 @@ public class ConfiguredWebView : NativeWebView
         {
             var argsType = e.GetType();
             
-            // Log all properties
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Event args properties:");
-            foreach (var prop in argsType.GetProperties())
-            {
-                try
-                {
-                    var value = prop.GetValue(e);
-                    System.Diagnostics.Debug.WriteLine($"  {prop.Name} ({prop.PropertyType.Name}): {value}");
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"  {prop.Name}: Error reading - {ex.Message}");
-                }
-            }
-            
             // Try to get Request property (which is a Uri)
             var requestProperty = argsType.GetProperty("Request");
             if (requestProperty != null)
             {
                 var url = requestProperty.GetValue(e);
-                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Extracted Request: {url}");
                 
                 if (url != null)
                 {
@@ -276,11 +227,6 @@ public class ConfiguredWebView : NativeWebView
                     if (handledProperty != null && handledProperty.CanWrite)
                     {
                         handledProperty.SetValue(e, true);
-                        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Set Handled=true");
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Handled property not found or not writable!");
                     }
 
                     // Convert to string
@@ -288,18 +234,11 @@ public class ConfiguredWebView : NativeWebView
 
                     // Notify the ViewModel to open a new tab
                     this.ViewModel.RaiseOpenNewWindow(urlString);
-                    System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Raised OpenNewWindow event: {urlString}");
                 }
             }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] WARNING: Request property not found on event args!");
-            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Failed to handle NewWindowRequested: {ex.Message}");
-            System.Diagnostics.Debug.WriteLine($"[ConfiguredWebView] Stack trace: {ex.StackTrace}");
         }
     }
 
@@ -330,8 +269,6 @@ public class ConfiguredWebView : NativeWebView
 
     private void OnInitialized(object? sender, EventArgs e)
     {
-        System.Diagnostics.Debug.WriteLine("[ConfiguredWebView] Initialized event fired");
-        
         // Try to set environment properties if they're available
         TrySetUserDataFolder();
     }
@@ -360,13 +297,11 @@ public class ConfiguredWebView : NativeWebView
                 {
                     var handler = Delegate.CreateDelegate(handlerType, this, handlerMethod);
                     eventInfo.AddEventHandler(this, handler);
-                    System.Diagnostics.Debug.WriteLine("Subscribed to EnvironmentRequested");
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to set user data folder: {ex.Message}");
         }
     }
 
@@ -387,12 +322,10 @@ public class ConfiguredWebView : NativeWebView
             if (folderProperty != null && folderProperty.CanWrite)
             {
                 folderProperty.SetValue(args, userDataFolderPath);
-                System.Diagnostics.Debug.WriteLine($"Set UserDataFolder to: {userDataFolderPath}");
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to set UserDataFolder: {ex.Message}");
         }
     }
 }
