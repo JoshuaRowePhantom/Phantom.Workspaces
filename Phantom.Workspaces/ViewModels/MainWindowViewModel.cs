@@ -1898,33 +1898,33 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        // Load each tab asynchronously in parallel; add each to the dock as it resolves
+        // Load all tabs in parallel, preserving declaration order
         var tabAdded = false;
         if (tabDeclarations.Count > 0)
         {
-            var tabTasks = tabDeclarations.Select(async tabDecl =>
-            {
-                var workspaceTab = await this.TryFetchWorkspaceTabAsync(tabDecl);
-                if (workspaceTab is null)
-                {
-                    return;
-                }
+            var tabResults = await Task.WhenAll(
+                tabDeclarations.Select(tabDecl => this.TryFetchWorkspaceTabAsync(tabDecl)));
 
-                await Dispatcher.UIThread.InvokeAsync(() =>
+            // Add to dock in declaration order on the UI thread
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var workspaceClosed = false;
+                foreach (var workspaceTab in tabResults)
                 {
+                    if (workspaceTab is null) continue;
+
                     // Guard: workspace may have been closed while tabs were loading
-                    if (!this.WorkspacePanes.Contains(workspacePane))
+                    if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
                     {
+                        workspaceClosed = true;
                         DisposeWorkspaceTab(workspaceTab);
-                        return;
+                        continue;
                     }
 
                     this.dockFactory.AddWorkspaceTab(contentDock, workspaceTab);
                     tabAdded = true;
-                });
-            }).ToList();
-
-            await Task.WhenAll(tabTasks);
+                }
+            });
         }
 
         if (!tabAdded)

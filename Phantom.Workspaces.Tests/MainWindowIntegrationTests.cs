@@ -1259,5 +1259,152 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("multi-nav-a", documentDock.ActiveDockable?.Id);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithMultipleBrowserTabs_TabsAppearInDeclarationOrder()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("00100001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "00100001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "tab-order-test"]],
+              "display-name": { "default": "Tab Order Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "tab-order-a",
+                      "title": "Tab A",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://a.example.com" }
+                    },
+                    {
+                      "tab-id": "tab-order-b",
+                      "title": "Tab B",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://b.example.com" }
+                    },
+                    {
+                      "tab-id": "tab-order-c",
+                      "title": "Tab C",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://c.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+
+        await WaitForWorkspaceTabAsync(contentDock!, "tab-order-a");
+        await WaitForWorkspaceTabAsync(contentDock!, "tab-order-b");
+        await WaitForWorkspaceTabAsync(contentDock!, "tab-order-c");
+
+        var tabIds = contentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .Where(d => d.Id is "tab-order-a" or "tab-order-b" or "tab-order-c")
+            .Select(d => d.Id)
+            .ToList();
+
+        Assert.Equal(["tab-order-a", "tab-order-b", "tab-order-c"], tabIds);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithUnresolvableMiddleTab_SkipsNullAndPreservesOrder()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("00100002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "00100002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "null-tab-order-test"]],
+              "display-name": { "default": "Null Tab Order Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "null-order-a",
+                      "title": "Tab A",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://a.example.com" }
+                    },
+                    {
+                      "tab-id": "null-order-missing",
+                      "title": "Missing Tab",
+                      "kind": "entity",
+                      "dock": "full",
+                      "content": {
+                        "target-entity-name": ["tests", "null-tab-test", "entity-does-not-exist"]
+                      }
+                    },
+                    {
+                      "tab-id": "null-order-c",
+                      "title": "Tab C",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://c.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+
+        await WaitForWorkspaceTabAsync(contentDock!, "null-order-a");
+        await WaitForWorkspaceTabAsync(contentDock!, "null-order-c");
+
+        var tabIds = contentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .Where(d => d.Id is "null-order-a" or "null-order-c" or "null-order-missing")
+            .Select(d => d.Id)
+            .ToList();
+
+        Assert.Equal(["null-order-a", "null-order-c"], tabIds);
+    }
+
 }
 
