@@ -647,8 +647,8 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "tab-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "tab-b", Title = "Tab B" };
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB); // tabB is now active
 
@@ -670,9 +670,9 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "tab-b", Title = "Tab B", Url = "https://b.example.com" };
-        var tabC = new BrowserWorkspaceTabViewModel { Id = "tab-c", Title = "Tab C", Url = "https://c.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "tab-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "tab-c", Title = "Tab C" };
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB);
         await viewModel.OpenTabAsync(tabC); // tabC is now active
@@ -702,9 +702,9 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "tab-b", Title = "Tab B", Url = "https://b.example.com" };
-        var tabC = new BrowserWorkspaceTabViewModel { Id = "tab-c", Title = "Tab C", Url = "https://c.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "tab-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "tab-c", Title = "Tab C" };
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB);
         await viewModel.OpenTabAsync(tabC); // tabC is now active
@@ -734,7 +734,7 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a-single", Title = "Tab A", Url = "https://a.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a-single", Title = "Tab A" };
         await viewModel.OpenTabAsync(tabA);
 
         var documentDock = GetDocumentDock(viewModel);
@@ -770,9 +770,9 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "goto-tab-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "goto-tab-b", Title = "Tab B", Url = "https://b.example.com" };
-        var tabC = new BrowserWorkspaceTabViewModel { Id = "goto-tab-c", Title = "Tab C", Url = "https://c.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "goto-tab-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "goto-tab-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "goto-tab-c", Title = "Tab C" };
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB);
         await viewModel.OpenTabAsync(tabC);
@@ -791,8 +791,8 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "goto-oob-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "goto-oob-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "goto-oob-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "goto-oob-b", Title = "Tab B" };
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB);
 
@@ -1050,13 +1050,13 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "nav-push-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "nav-push-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "nav-push-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "nav-push-b", Title = "Tab B" };
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB); // push B; B is active
 
         // Re-open tab A (it already exists) — should push a navigation entry
-        var tabAAgain = new BrowserWorkspaceTabViewModel { Id = "nav-push-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabAAgain = new WebViewModel("https://a.example.com") { Id = "nav-push-a", Title = "Tab A" };
         await viewModel.OpenTabAsync(tabAAgain);
 
         var documentDock = GetDocumentDock(viewModel);
@@ -1074,9 +1074,9 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var tabA = new BrowserWorkspaceTabViewModel { Id = "multi-nav-a", Title = "Tab A", Url = "https://a.example.com" };
-        var tabB = new BrowserWorkspaceTabViewModel { Id = "multi-nav-b", Title = "Tab B", Url = "https://b.example.com" };
-        var tabC = new BrowserWorkspaceTabViewModel { Id = "multi-nav-c", Title = "Tab C", Url = "https://c.example.com" };
+        var tabA = new WebViewModel("https://a.example.com") { Id = "multi-nav-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "multi-nav-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "multi-nav-c", Title = "Tab C" };
 
         // Simulate sequential tool-driven tab openings
         await viewModel.OpenTabAsync(tabA);  // push A

@@ -1975,11 +1975,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            return new BrowserWorkspaceTabViewModel
+            return new WebViewModel(url.GetString()!)
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,
-                Url = url.GetString()!,
                 DockRegion = ReadString(tab, "dock") ?? "full",
             };
         }
@@ -2167,11 +2166,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            return new BrowserWorkspaceTabViewModel
+            return new WebViewModel(url.GetString()!)
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,
-                Url = url.GetString()!,
                 DockRegion = ReadString(tab, "dock") ?? "full",
             };
         }

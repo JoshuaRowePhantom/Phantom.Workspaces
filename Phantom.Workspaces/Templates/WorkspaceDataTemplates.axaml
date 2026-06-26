@@ -452,12 +452,6 @@
         <templates:EntityBrowserWorkspaceTabView />
     </DataTemplate>
 
-    <DataTemplate DataType="vm:BrowserWorkspaceTabViewModel">
-        <StackPanel Classes="workspace-template-browser-root">
-            <TextBlock Text="Browser" Classes="heading" />
-            <TextBlock Text="{Binding Url}" />
-        </StackPanel>
-    </DataTemplate>
 
     <DataTemplate DataType="vm:WorkspacePaneViewModel">
         <Grid RowDefinitions="Auto,*">
