@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
+using Dock.Model.Controls;
+using Dock.Model.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
@@ -39,11 +41,171 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
         {
             Tools =
             [
+                new WorkspaceListTool(this.context),
+                new TabListTool(this.context),
                 new WorkspaceCloseTool(this.context),
                 new TabCloseTool(this.context),
                 new EntityInvokeShortcutTool(this.context),
             ],
         });
+    }
+
+    private sealed class WorkspaceListTool : AIFunction
+    {
+        private static readonly JsonElement InputSchema = JsonDocument.Parse(
+            """
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+            """).RootElement.Clone();
+
+        private readonly WorkspaceGuiContext context;
+
+        public WorkspaceListTool(WorkspaceGuiContext context)
+        {
+            this.context = context;
+        }
+
+        public override string Name => "workspace_list";
+
+        public override string Description =>
+            "List all open workspace panes. Returns an array of objects with workspace_entity_id, title, and is_selected for each pane.";
+
+        public override JsonElement JsonSchema => InputSchema;
+
+        protected override ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments,
+            CancellationToken cancellationToken)
+        {
+            var result = Dispatcher.UIThread.Invoke(() =>
+            {
+                var mainVm = this.context.MainWindowViewModel;
+                var selectedId = mainVm.SelectedWorkspacePane?.Id;
+                return mainVm.WorkspacePanes
+                    .Select(pane => new
+                    {
+                        workspace_entity_id = pane.Id,
+                        title = pane.Title,
+                        is_selected = string.Equals(pane.Id, selectedId, StringComparison.Ordinal),
+                    })
+                    .ToArray();
+            });
+            return new ValueTask<object?>(Serialize(result));
+        }
+    }
+
+    private sealed class TabListTool : AIFunction
+    {
+        private static readonly JsonElement InputSchema = JsonDocument.Parse(
+            """
+            {
+              "type": "object",
+              "properties": {
+                "workspace_entity_id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The workspace pane to enumerate tabs for. If omitted, uses the currently selected workspace pane."
+                }
+              },
+              "additionalProperties": false
+            }
+            """).RootElement.Clone();
+
+        private readonly WorkspaceGuiContext context;
+
+        public TabListTool(WorkspaceGuiContext context)
+        {
+            this.context = context;
+        }
+
+        public override string Name => "tab_list";
+
+        public override string Description =>
+            "List open tabs in a workspace pane. If workspace_entity_id is omitted, uses the selected workspace pane. "
+            + "Returns an array of objects with tab_id, title, and is_active for each tab.";
+
+        public override JsonElement JsonSchema => InputSchema;
+
+        protected override ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments,
+            CancellationToken cancellationToken)
+        {
+            string? workspaceEntityId = null;
+            if (arguments.TryGetValue("workspace_entity_id", out var idArg)
+                && idArg is JsonElement idElement
+                && idElement.ValueKind == JsonValueKind.String)
+            {
+                workspaceEntityId = idElement.GetString();
+            }
+
+            var capturedId = workspaceEntityId;
+            var result = Dispatcher.UIThread.Invoke(() =>
+            {
+                var mainVm = this.context.MainWindowViewModel;
+                WorkspacePaneViewModel? pane;
+                if (capturedId is not null)
+                {
+                    pane = mainVm.WorkspacePanes
+                        .FirstOrDefault(p => string.Equals(p.Id, capturedId, StringComparison.Ordinal));
+                    if (pane is null)
+                    {
+                        return Serialize(new { error = $"Workspace pane '{capturedId}' not found." });
+                    }
+                }
+                else
+                {
+                    pane = mainVm.SelectedWorkspacePane;
+                }
+
+                if (pane.ContentLayout is null)
+                {
+                    return Serialize(Array.Empty<object>());
+                }
+
+                var documentDock = FindDocumentDock(pane.ContentLayout);
+                if (documentDock?.VisibleDockables is null)
+                {
+                    return Serialize(Array.Empty<object>());
+                }
+
+                var activeTabId = documentDock.ActiveDockable?.Id;
+                var tabs = documentDock.VisibleDockables
+                    .OfType<WorkspaceDocument>()
+                    .Select(doc => new
+                    {
+                        tab_id = doc.Id,
+                        title = doc.TabViewModel.Title,
+                        is_active = string.Equals(doc.Id, activeTabId, StringComparison.Ordinal),
+                    })
+                    .ToArray();
+                return Serialize(tabs);
+            });
+            return new ValueTask<object?>(result);
+        }
+    }
+
+    private static IDocumentDock? FindDocumentDock(IDockable dockable)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            return documentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                var result = FindDocumentDock(child);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+        }
+
+        return null;
     }
 
     private sealed class WorkspaceCloseTool : AIFunction
