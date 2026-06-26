@@ -167,7 +167,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         => this.OpenLogWindowRequested?.Invoke(this, EventArgs.Empty);
 
     public void SetReasoningVisibility(bool visible)
-        => this.SetProperty(ref this.isReasoningVisible, visible);
+        => this.IsReasoningVisible = visible;
 
     private void OnAgentSessionIdChanged(object? sender, string sessionId)
     {

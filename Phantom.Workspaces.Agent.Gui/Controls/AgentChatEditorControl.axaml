@@ -63,6 +63,13 @@
                                   Content="Auto-scroll"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
                                   IsVisible="{Binding Agent.AutoScrollDisabled}"/>
+                        <TextBlock Classes="agent-chat-status-line-separator" Text="•" />
+                        <Button Classes="agent-chat-status-line-reasoning-toggle"
+                                Command="{Binding Agent.ToggleReasoningVisibilityCommand}"
+                                ToolTip.Tip="Toggle reasoning text visibility (Ctrl+T)">
+                            <TextBlock Text="{Binding StatusLine.ReasoningIndicatorText}"
+                                       Classes.muted="{Binding !Agent.IsReasoningVisible}" />
+                        </Button>
                     </StackPanel>
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
