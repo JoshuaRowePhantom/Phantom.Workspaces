@@ -34,17 +34,31 @@ For each issue in the list (in ascending number order):
 
 4. Read the sub-agent result. If it reports open questions (i.e., it assigned the issue back to the reporter and stopped), note that and skip to the next issue. Do not block the whole queue on one ambiguous issue.
 
+5. **Report progress immediately** after each sub-agent completes, before launching the next:
+
+   After a successful fix:
+   ```
+   ✅ Fixed #<NUMBER>: <title>
+      Commit: <short SHA> — "<first line of commit message>"
+   ```
+
+   After a skipped issue:
+   ```
+   ⏭ Skipped #<NUMBER>: <title>
+      Reason: open questions posted; assigned back to reporter.
+   ```
+
 5. After each sub-agent completes successfully, re-fetch the next-up list to pick up any new issues added since the run started:
    ```powershell
    gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces --label next-up --state open --json number,title,url
    ```
    Work the list from lowest number not yet fixed.
 
-## Step 3 — Report
+## Step 3 — Final summary
 
-When no open next-up issues remain (or all remaining ones are blocked on questions), report a summary to the user:
-- Issues fixed (with commit references)
-- Issues skipped due to open questions (with links)
+When no open next-up issues remain (or all remaining ones are blocked on questions), report a concise recap:
+- Total fixed (count) with links to each commit
+- Total skipped (count) with links to each issue
 
 ## Rules
 
