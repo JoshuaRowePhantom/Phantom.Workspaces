@@ -3,5 +3,6 @@
   "entity-types": ["entity", "entity-type-view"],
   "names": [["entity-type-views", "workspace"]],
   "display-name": { "default": "Workspace View" },
-  "fields": []
+  "fields": [],
+  "traversed-entity-display-disposition": "collapsed"
 }
