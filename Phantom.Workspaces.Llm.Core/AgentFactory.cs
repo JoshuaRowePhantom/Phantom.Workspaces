@@ -358,6 +358,7 @@ public static class AgentFactory
                 ConfiguredStore = configuredStore,
                 ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
+                ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
             });
     }
 

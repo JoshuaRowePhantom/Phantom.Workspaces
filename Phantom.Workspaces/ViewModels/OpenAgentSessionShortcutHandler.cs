@@ -49,7 +49,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
         // Complete initialization in the background
-        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab));
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
 
         return true;
     }
@@ -57,11 +58,12 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
     private async Task InitializeTabInBackgroundAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
-        AgentSessionWorkspaceTabViewModel tab)
+        AgentSessionWorkspaceTabViewModel tab,
+        TaskScheduler foregroundScheduler)
     {
         try
         {
-            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity);
+            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, foregroundScheduler);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (result is var (agent, loggerFactory))
@@ -102,7 +104,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             TabHeader = new IconTabHeaderViewModel { Icon = "🧠", Title = title ?? agentSessionEntity.DisplayName },
         };
 
-        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab));
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
 
         return loadingTab;
     }
@@ -128,7 +131,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 
     private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory)?> TryBuildAgentAsync(
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel agentSessionEntity)
+        SubscribedEntityViewModel agentSessionEntity,
+        TaskScheduler foregroundScheduler)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
@@ -162,6 +166,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 AgentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText()),
                 AgentSessionId = agentSessionId,
                 AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
             };
         }
         else if (agentSourceEntityData.TryGetProperty("manifest", out var manifestElement))
@@ -172,6 +177,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 ToolResourceFactory = agentServices.ToolResourceFactory,
                 AgentSessionId = agentSessionId,
                 AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
             };
         }
         else

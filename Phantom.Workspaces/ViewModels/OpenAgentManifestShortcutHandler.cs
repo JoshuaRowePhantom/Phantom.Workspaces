@@ -65,6 +65,7 @@ public sealed class OpenAgentManifestShortcutHandler : ShortcutHandler
 
         // Initialize the agent chat in the background.
         var manifestJson = manifestElement.GetRawText();
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
         _ = Task.Run(async () =>
         {
             try
@@ -80,6 +81,7 @@ public sealed class OpenAgentManifestShortcutHandler : ShortcutHandler
                         ToolResourceFactory = agentServices.ToolResourceFactory,
                         AgentSessionId = agentSessionId,
                         AgentServices = agentServices,
+                        ForegroundScheduler = foregroundScheduler,
                     });
                 var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
                     mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName);

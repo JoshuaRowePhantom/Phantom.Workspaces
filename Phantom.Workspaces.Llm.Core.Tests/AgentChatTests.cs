@@ -1188,6 +1188,65 @@ public sealed class AgentChatTests
         Assert.Equal("second", GetText(chat.History[3].Contents));
     }
 
+    [Fact]
+    public async Task CreateAsync_OnTaskRunThread_WithExplicitForegroundScheduler_UsesThatSchedulerAndProcessesMessages()
+    {
+        // Regression test for GitHub issue #70: before e51ec14, AgentChat was created on the UI thread
+        // so SynchronizationContext.Current was the Avalonia dispatcher. After e51ec14, creation moved
+        // inside Task.Run where SynchronizationContext.Current is null, causing AgentChat to fall back
+        // to its internal ConcurrentExclusiveSchedulerPair rather than the UI scheduler. The fix
+        // captures the UI scheduler before entering Task.Run and passes it via ForegroundScheduler so
+        // the processing loop always uses the correct scheduler regardless of the construction thread.
+
+        // Arrange: set up a response stream and capture an explicit scheduler to simulate the UI
+        // scheduler that would be captured on the real UI thread before Task.Run.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+
+        // Use a distinct ConcurrentExclusiveSchedulerPair as a stand-in for the UI scheduler.
+        var uiSchedulerPair = new System.Threading.Tasks.ConcurrentExclusiveSchedulerPair();
+        var capturedForegroundScheduler = uiSchedulerPair.ExclusiveScheduler;
+
+        // Act: create the chat inside Task.Run (no SynchronizationContext on that thread), but
+        // supply the pre-captured scheduler so the processing loop uses the right scheduler.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        await using var chat = await Task.Run(async () =>
+            await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                ConfiguredStore = persistenceStore,
+                ClientOverride = client,
+                DisplayNameOverride = "test-chat",
+                ForegroundScheduler = capturedForegroundScheduler,
+            }));
+
+        // Assert: the private foregroundScheduler field is the one we passed in, not the internal
+        // fallback ExclusiveScheduler that would be chosen when SynchronizationContext.Current is null.
+        var foregroundSchedulerField = typeof(AgentChat).GetField(
+            "foregroundScheduler",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(foregroundSchedulerField);
+        var actualScheduler = foregroundSchedulerField!.GetValue(chat);
+        Assert.Same(capturedForegroundScheduler, actualScheduler);
+
+        // Also verify messages are processed end-to-end on that scheduler.
+        chat.EnqueueUserMessage("ping");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2 && chat.History[^1].Role == ChatRole.Assistant,
+            "assistant response to complete");
+
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("pong", GetText(chat.History[1].Contents));
+    }
+
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 

@@ -98,9 +98,10 @@ public sealed class AgentChat : IAsyncDisposable
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
        this.ownedResources = request.OwnedResources?.ToList() ?? [];
        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
-       this.foregroundScheduler = SynchronizationContext.Current is not null
-           ? TaskScheduler.FromCurrentSynchronizationContext()
-           : this.foregroundSchedulerPair.ExclusiveScheduler;
+       this.foregroundScheduler = request.ForegroundScheduler
+           ?? (SynchronizationContext.Current is not null
+               ? TaskScheduler.FromCurrentSynchronizationContext()
+               : this.foregroundSchedulerPair.ExclusiveScheduler);
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
