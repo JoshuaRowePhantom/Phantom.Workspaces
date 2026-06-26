@@ -2161,13 +2161,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 var urls = OpenExternalEntityShortcutHandler.ParseUrls(targetEntity);
                 if (urls.Count > 0)
                 {
-                    // Use the first URL (or "default" URL if available)
-                    var entityUrl = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
+                    var urlKey = urls.ContainsKey("default") ? "default" : urls.Keys.First();
+                    var entityUrl = urls[urlKey];
+                    var isDefault = string.Equals(urlKey, "default", StringComparison.OrdinalIgnoreCase);
+                    var explicitTitle = ReadString(tab, "title");
 
-                    return new WebViewModel(entityUrl, this)
+                    return new WebViewModel(entityUrl, this, titleFixed: explicitTitle is not null || !isDefault)
                     {
                         Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
-                        Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                        Title = explicitTitle ?? (isDefault ? targetEntity.DisplayName : urlKey),
                         DockRegion = ReadString(tab, "dock") ?? "full",
                     };
                 }

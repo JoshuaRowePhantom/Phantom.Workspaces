@@ -18,9 +18,11 @@ public class WebViewModel : WorkspaceTabViewModel
     private string currentUrl = string.Empty;
 
     private readonly IWorkspaceTabService? tabService;
+    private readonly bool titleFixed;
 
-    public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null)
+    public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null, bool titleFixed = false)
     {
+        this.titleFixed = titleFixed;
         this.addressBarUrl = initialUrl;
         this.currentUrl = initialUrl;
         this.sourceUri = Uri.TryCreate(initialUrl, UriKind.Absolute, out var uri) ? uri : null;
@@ -170,7 +172,10 @@ public class WebViewModel : WorkspaceTabViewModel
     public void SetPageTitle(string pageTitle)
     {
         this.fullTitle = pageTitle;
-        this.Title = pageTitle; // Don't truncate here - let WorkspaceDocument handle it
+        if (!this.titleFixed)
+        {
+            this.Title = pageTitle;
+        }
         UpdateTooltip();
     }
     
