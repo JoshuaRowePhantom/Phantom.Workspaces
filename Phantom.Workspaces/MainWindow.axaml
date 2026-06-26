@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
+        xmlns:controls="using:Phantom.Workspaces.Controls"
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -101,19 +102,25 @@
                         Click="OnOpenScheduledTasksClicked" />
 
                 <Panel Grid.Column="4">
-                    <Button Classes="settings-gear"
+                    <Button x:Name="NotificationBellButton"
+                            Classes="settings-gear"
                             Content="🔔"
                             ToolTip.Tip="Notifications"
                             Command="{Binding NotificationsViewModel.ToggleOpenCommand}" />
                     <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
                                IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
-                               Foreground="Gold"
+                               Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
                                FontSize="9"
                                FontWeight="Bold"
                                IsHitTestVisible="False"
                                HorizontalAlignment="Right"
                                VerticalAlignment="Top"
                                Margin="0,-2,-2,0" />
+                    <Popup IsOpen="{Binding NotificationsViewModel.IsOpen, Mode=TwoWay}"
+                           PlacementTarget="{Binding #NotificationBellButton}"
+                           IsLightDismissEnabled="True">
+                        <controls:NotificationsControl DataContext="{Binding NotificationsViewModel}" />
+                    </Popup>
                 </Panel>
 
                 <Button Grid.Column="5"
@@ -172,54 +179,6 @@
                     </DataTemplate>
                 </dock:DockControl.DataTemplates>
             </dock:DockControl>
-
-            <Border Grid.Column="2"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    IsVisible="{Binding NotificationsViewModel.IsOpen, FallbackValue=False}"
-                    ZIndex="100"
-                    Width="360"
-                    MaxHeight="480"
-                    Background="#E0202020"
-                    CornerRadius="6"
-                    BoxShadow="0 4 16 0 #80000000">
-                <Grid RowDefinitions="Auto,*">
-                    <Border Grid.Row="0" Padding="12,8">
-                        <TextBlock Text="Notifications" FontWeight="SemiBold" />
-                    </Border>
-                    <ScrollViewer Grid.Row="1" MaxHeight="420">
-                        <ItemsControl ItemsSource="{Binding NotificationsViewModel.Rows}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:NotificationRowViewModel">
-                                    <Border Padding="8,4" Margin="0,1">
-                                        <Grid ColumnDefinitions="*,Auto">
-                                            <Button Grid.Column="0"
-                                                    Command="{Binding NavigateCommand}"
-                                                    HorizontalAlignment="Stretch"
-                                                    HorizontalContentAlignment="Left"
-                                                    Padding="4">
-                                                <StackPanel Spacing="2">
-                                                    <StackPanel Orientation="Horizontal" Spacing="4">
-                                                        <TextBlock Text="{Binding TabTitle}" />
-                                                        <TextBlock Text=" · " />
-                                                        <TextBlock Text="{Binding Reason}" Opacity="0.7" />
-                                                    </StackPanel>
-                                                    <TextBlock Text="{Binding RelativeTime}" Opacity="0.5" FontSize="11" />
-                                                </StackPanel>
-                                            </Button>
-                                            <Button Grid.Column="1"
-                                                    Command="{Binding SnoozeCommand}"
-                                                    Content="💤"
-                                                    VerticalAlignment="Top"
-                                                    Padding="6,4" />
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </Grid>
-            </Border>
         </Grid>
     </Grid>
 </Window>
