@@ -1,6 +1,7 @@
 <DataTemplates xmlns="https://github.com/avaloniaui"
                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                xmlns:vm="using:Phantom.Workspaces.ViewModels"
+               xmlns:converters="using:Phantom.Workspaces.Converters"
                xmlns:templates="using:Phantom.Workspaces.Templates"
                xmlns:agentControls="using:Phantom.Workspaces.Agent.Gui.Controls"
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
@@ -510,5 +511,30 @@
                 </ContentControl>
             </Grid>
         </Grid>
+    </DataTemplate>
+    <!-- Tab header templates -->
+    <DataTemplate DataType="vm:TabHeaderViewModel">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+            <ItemsControl ItemsSource="{Binding Items}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="2" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.DataTemplates>
+                    <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
+                        <TextBlock Text="{Binding Icon}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
+                        <!-- Always occupies space; opacity hides it when there is no unread notification -->
+                        <TextBlock Text="❗"
+                                   Foreground="Red"
+                                   FontWeight="Bold"
+                                   Opacity="{Binding HasUnread, Converter={x:Static converters:BoolToOpacityConverter.Instance}}" />
+                    </DataTemplate>
+                </ItemsControl.DataTemplates>
+            </ItemsControl>
+            <TextBlock Text="{Binding Title}" />
+        </StackPanel>
     </DataTemplate>
 </DataTemplates>

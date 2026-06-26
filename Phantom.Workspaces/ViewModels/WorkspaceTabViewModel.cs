@@ -27,9 +27,9 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Optional rich header model. When non-null, the tab strip renders this instead of the plain
-    /// <see cref="Title"/> string. Set to an <see cref="IconTabHeaderViewModel"/> to add a glyph.
-    /// When null the tab falls back to plain-text rendering.
+    /// Optional rich header model. When non-null, its <see cref="TabHeaderViewModel.Items"/> are
+    /// merged into the <see cref="WorkspaceDocument.EffectiveTabHeader"/> shown in the tab strip.
+    /// Use <see cref="TabHeaderViewModel.WithIcon"/> to set an icon glyph.
     /// </summary>
     public TabHeaderViewModel? TabHeader
     {

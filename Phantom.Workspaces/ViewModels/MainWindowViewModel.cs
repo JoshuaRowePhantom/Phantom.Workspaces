@@ -126,6 +126,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigateNextNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(+1));
         this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
+        this.dockFactory.ActiveDockableChanged += this.OnActiveDockableChanged;
     }
 
     public RepositorySource RepositorySource { get; }
@@ -2752,6 +2753,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
+    {
+        if (e.Dockable is WorkspaceDocument doc)
+        {
+            this.notificationService.MarkRead(doc.Id);
+        }
+    }
+
     private void OnNavigateNotification(int direction)
     {
         var notifications = this.notificationService.Notifications;
@@ -2812,6 +2821,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public async ValueTask DisposeAsync()
     {
         this.notificationService.NotificationsChanged -= this.OnNotificationsChanged;
+        this.dockFactory.ActiveDockableChanged -= this.OnActiveDockableChanged;
         this.notificationsViewModel?.Dispose();
 
         if (this.scheduledToolRunner is not null)

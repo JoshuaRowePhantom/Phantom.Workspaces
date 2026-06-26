@@ -45,7 +45,7 @@ public sealed class OpenAgentManifestShortcutHandler : ShortcutHandler
             Title = entityViewModel.DisplayName,
             DockRegion = "full",
             Entity = entityViewModel,
-            TabHeader = new IconTabHeaderViewModel { Icon = "🚀", Title = entityViewModel.DisplayName },
+            TabHeader = TabHeaderViewModel.WithIcon("🚀", entityViewModel.DisplayName),
         };
 
         _ = mainWindowViewModel.OpenTabAsync(launchpadTab);

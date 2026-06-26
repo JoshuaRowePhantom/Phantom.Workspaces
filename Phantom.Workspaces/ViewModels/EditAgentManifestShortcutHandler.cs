@@ -25,7 +25,7 @@ public sealed class EditAgentManifestShortcutHandler : ShortcutHandler
             Title = $"Edit: {entityViewModel.DisplayName}",
             DockRegion = "full",
             Entity = entityViewModel,
-            TabHeader = new IconTabHeaderViewModel { Icon = "✏️", Title = $"Edit: {entityViewModel.DisplayName}" },
+            TabHeader = TabHeaderViewModel.WithIcon("✏️", $"Edit: {entityViewModel.DisplayName}"),
         };
         _ = mainWindowViewModel.OpenTabAsync(editorVm);
         return Task.FromResult(true);

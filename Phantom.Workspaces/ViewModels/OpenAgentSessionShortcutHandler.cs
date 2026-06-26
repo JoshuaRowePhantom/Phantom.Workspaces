@@ -45,7 +45,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             Title = entityViewModel.DisplayName,
             DockRegion = "full",
             Entity = entityViewModel,
-            TabHeader = new IconTabHeaderViewModel { Icon = "🧠", Title = entityViewModel.DisplayName },
+            TabHeader = TabHeaderViewModel.WithIcon("🧠", entityViewModel.DisplayName),
             NotificationService = mainWindowViewModel.NotificationService,
         };
         await mainWindowViewModel.OpenTabAsync(loadingTab);
@@ -103,7 +103,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             Title = title ?? agentSessionEntity.DisplayName,
             DockRegion = dockRegion ?? "full",
             Entity = agentSessionEntity,
-            TabHeader = new IconTabHeaderViewModel { Icon = "🧠", Title = title ?? agentSessionEntity.DisplayName },
+            TabHeader = TabHeaderViewModel.WithIcon("🧠", title ?? agentSessionEntity.DisplayName),
             NotificationService = mainWindowViewModel.NotificationService,
         };
 
@@ -126,7 +126,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             Title = agentSessionEntity.DisplayName,
             DockRegion = "full",
             Entity = agentSessionEntity,
-            TabHeader = new IconTabHeaderViewModel { Icon = "🧠", Title = agentSessionEntity.DisplayName },
+            TabHeader = TabHeaderViewModel.WithIcon("🧠", agentSessionEntity.DisplayName),
             NotificationService = mainWindowViewModel.NotificationService,
         };
         tab.SetReady(agent, loggerFactory);
