@@ -140,11 +140,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         var agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, title, loggerFactory)
         {
             OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
-                new BrowserWorkspaceTabViewModel
+                new WebViewModel(url, mainWindowViewModel)
                 {
-                    Id = $"browser-{url}",
+                    Id = $"web-{url}",
                     Title = url,
-                    Url = url,
                 }),
         };
 
