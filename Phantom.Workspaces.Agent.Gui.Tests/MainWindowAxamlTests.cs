@@ -318,7 +318,11 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "IsVisible=\"{Binding Agent.AutoScrollDisabled}\"",
+            "IsHitTestVisible=\"{Binding Agent.AutoScrollDisabled}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Opacity=\"{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
