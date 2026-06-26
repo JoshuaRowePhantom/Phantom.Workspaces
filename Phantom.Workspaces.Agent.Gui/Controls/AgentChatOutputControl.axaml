@@ -5,17 +5,5 @@
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel"
              Classes="agent-chat-output-root">
-    <Grid RowDefinitions="*,Auto">
-        <Border x:Name="BrowserHost"
-                Grid.Row="0" />
-        <Grid Grid.Row="1"
-              ColumnDefinitions="Auto">
-            <CheckBox x:Name="AutoScrollToggle"
-                      Grid.Column="0"
-                      Content="Auto-scroll"
-                      IsChecked="True"
-                      Classes="agent-chat-autoscroll-toggle"
-                      IsCheckedChanged="OnAutoScrollToggleChanged" />
-        </Grid>
-    </Grid>
+    <Border x:Name="BrowserHost" />
 </UserControl>

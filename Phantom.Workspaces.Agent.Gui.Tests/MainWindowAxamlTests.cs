@@ -309,9 +309,17 @@ public sealed class MainWindowAxamlTests
             "x:Name=\"BrowserHost\"",
             outputControlContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "x:Name=\"AutoScrollToggle\"",
             outputControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsChecked=\"{Binding Agent.AutoScrollEnabled, Mode=TwoWay}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsVisible=\"{Binding Agent.AutoScrollDisabled}\"",
+            editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "Gesture=\"Ctrl+Cancel\" Command=\"{Binding InterruptCommand}\"",

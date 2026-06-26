@@ -56,6 +56,13 @@
                         <TextBlock Classes="agent-chat-status-line-label"
                                    Text="{Binding StatusLine.TokensDisplay}"
                                    IsVisible="{Binding StatusLine.HasTokens}"/>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   IsVisible="{Binding Agent.AutoScrollDisabled}"/>
+                        <CheckBox Classes="agent-chat-autoscroll-toggle"
+                                  Content="Auto-scroll"
+                                  IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
+                                  IsVisible="{Binding Agent.AutoScrollDisabled}"/>
                     </StackPanel>
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
