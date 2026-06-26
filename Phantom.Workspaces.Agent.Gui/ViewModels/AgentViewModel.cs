@@ -228,9 +228,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     }
 
     private IReadOnlyList<AgentEditorNavigationItemViewModel> BuildToolNavigationItems(IEnumerable<AgentChatToolViewModel> tools)
-        => tools.Select(this.BuildToolNavigationItem).ToArray();
+        => tools.Select(t => BuildToolNavigationItem(t, isTopLevel: true)).ToArray();
 
-    private AgentEditorNavigationItemViewModel BuildToolNavigationItem(AgentChatToolViewModel tool)
+    private AgentEditorNavigationItemViewModel BuildToolNavigationItem(AgentChatToolViewModel tool, bool isTopLevel = false)
         => new(
             tool.Id,
             tool.Name,
@@ -238,7 +238,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
             tool.Summary,
             tool,
             this.toolsDetail,
-            tool.Children.Select(this.BuildToolNavigationItem).ToArray());
+            tool.Children.Select(c => BuildToolNavigationItem(c, isTopLevel: false)).ToArray(),
+            isExpanded: !isTopLevel);
 
     private static AgentEditorNavigationItemViewModel? FindNavigationItem(AgentEditorNavigationItemViewModel root, string? id)
     {
