@@ -83,6 +83,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ActivateShortcutCommand = new RelayCommand(async _ => await this.OnActivateShortcutAsync(_), this.CanActivateShortcut);
         this.SetDebuggingCommand = new RelayCommand(async parameter => await this.SetDebuggingAsync(ReadDebuggingParameter(parameter)));
         this.CloseWorkspaceCommand = new RelayCommand(this.OnCloseWorkspace, this.CanCloseWorkspace);
+        this.CloseActiveTabCommand = new RelayCommand(_ => this.OnCloseActiveTab());
+        this.CycleTabForwardCommand = new RelayCommand(_ => this.OnCycleTab(+1));
+        this.CycleTabBackwardCommand = new RelayCommand(_ => this.OnCycleTab(-1));
         this.ApplyThemeResources(this.currentProfile.Theme);
         this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
@@ -121,7 +124,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public RelayCommand CloseWorkspaceCommand { get; }
 
-    public ConnectionStatusViewModel? ConnectionStatus { get; private set; }
+    public RelayCommand CloseActiveTabCommand { get; }
+
+    public RelayCommand CycleTabForwardCommand { get; }
+
+    public RelayCommand CycleTabBackwardCommand { get; }
+
+    public ConnectionStatusViewModel? ConnectionStatus{ get; private set; }
 
     public IRootDock? Layout
     {
@@ -1187,6 +1196,47 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
        }
 
        await this.RemoveWorkspacePaneAsync(pane);
+    }
+
+    private void OnCloseActiveTab()
+    {
+        if (this.selectedWorkspacePane?.ContentLayout is null)
+        {
+            return;
+        }
+
+        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
+        if (documentDock?.ActiveDockable is not WorkspaceDocument activeDoc)
+        {
+            return;
+        }
+
+        this.dockFactory.CloseDockable(activeDoc);
+        DisposeWorkspaceTab(activeDoc.TabViewModel);
+    }
+
+    private void OnCycleTab(int delta)
+    {
+        if (this.selectedWorkspacePane?.ContentLayout is null)
+        {
+            return;
+        }
+
+        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
+        var dockables = documentDock?.VisibleDockables;
+        if (documentDock is null || dockables is null || dockables.Count < 2)
+        {
+            return;
+        }
+
+        var currentIndex = documentDock.ActiveDockable is { } active
+            ? dockables.IndexOf(active)
+            : 0;
+
+        var nextIndex = ((currentIndex + delta) % dockables.Count + dockables.Count) % dockables.Count;
+        var nextDockable = dockables[nextIndex];
+        this.dockFactory.SetActiveDockable(nextDockable);
+        this.dockFactory.SetFocusedDockable(documentDock, nextDockable);
     }
 
     internal async Task RemoveWorkspacePaneAsync(WorkspacePaneViewModel pane)

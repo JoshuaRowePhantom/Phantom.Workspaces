@@ -14,6 +14,11 @@
         MinHeight="700"
         FontFamily="{DynamicResource Theme.FontFamily}"
         Title="Phantom.Workspaces">
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+W"         Command="{Binding CloseActiveTabCommand}" />
+        <KeyBinding Gesture="Ctrl+Tab"       Command="{Binding CycleTabForwardCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Tab" Command="{Binding CycleTabBackwardCommand}" />
+    </Window.KeyBindings>
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
             <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">

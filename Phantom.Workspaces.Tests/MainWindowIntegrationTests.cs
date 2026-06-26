@@ -3,6 +3,8 @@ using Avalonia.Headless.XUnit;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using Dock.Model.Controls;
+using Dock.Model.Core;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -575,6 +577,162 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<EntityWorkspaceTabViewModel>(fallbackTab);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WithTwoTabs_ClosesActiveTabAndLeavesOther()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "tab-b", Title = "Tab B", Url = "https://b.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB); // tabB is now active
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("tab-b", documentDock!.ActiveDockable?.Id);
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+
+        var remaining = documentDock.VisibleDockables?.OfType<WorkspaceDocument>().ToList();
+        Assert.NotNull(remaining);
+        Assert.DoesNotContain(remaining!, doc => doc.Id == "tab-b");
+        Assert.Contains(remaining!, doc => doc.Id == "tab-a");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CycleTabForwardCommand_WithThreeTabs_WrapsAroundForward()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "tab-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabC = new BrowserWorkspaceTabViewModel { Id = "tab-c", Title = "Tab C", Url = "https://c.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC); // tabC is now active
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var dockables = documentDock!.VisibleDockables!;
+        var count = dockables.Count;
+
+        // Record starting index and cycle forward through all tabs, wrapping around.
+        var startIndex = dockables.IndexOf(documentDock.ActiveDockable!);
+        for (var step = 1; step <= count; step++)
+        {
+            viewModel.CycleTabForwardCommand.Execute(null);
+            var expectedIndex = (startIndex + step) % count;
+            var actualIndex = dockables.IndexOf(documentDock.ActiveDockable!);
+            Assert.Equal(expectedIndex, actualIndex);
+        }
+
+        // After a full cycle we should be back at the start.
+        Assert.Equal(startIndex, dockables.IndexOf(documentDock.ActiveDockable!));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CycleTabBackwardCommand_WithThreeTabs_WrapsAroundBackward()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "tab-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabC = new BrowserWorkspaceTabViewModel { Id = "tab-c", Title = "Tab C", Url = "https://c.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC); // tabC is now active
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var dockables = documentDock!.VisibleDockables!;
+        var count = dockables.Count;
+
+        // Record starting index and cycle backward through all tabs, wrapping around.
+        var startIndex = dockables.IndexOf(documentDock.ActiveDockable!);
+        for (var step = 1; step <= count; step++)
+        {
+            viewModel.CycleTabBackwardCommand.Execute(null);
+            var expectedIndex = ((startIndex - step) % count + count) % count;
+            var actualIndex = dockables.IndexOf(documentDock.ActiveDockable!);
+            Assert.Equal(expectedIndex, actualIndex);
+        }
+
+        // After a full cycle we should be back at the start.
+        Assert.Equal(startIndex, dockables.IndexOf(documentDock.ActiveDockable!));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CycleTabForwardCommand_WithSingleTab_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "tab-a-single", Title = "Tab A", Url = "https://a.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Close all tabs except ours using the dockFactory via reflection.
+        var dockFactoryField = typeof(MainWindowViewModel)
+            .GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(dockFactoryField);
+        var dockFactory = dockFactoryField!.GetValue(viewModel);
+        Assert.NotNull(dockFactory);
+        var closeDockable = dockFactory!.GetType().GetMethod("CloseDockable",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.FlattenHierarchy);
+        Assert.NotNull(closeDockable);
+
+        var otherDocs = documentDock!.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Where(d => d.Id != "tab-a-single")
+            .ToList();
+        foreach (var doc in otherDocs ?? [])
+        {
+            closeDockable!.Invoke(dockFactory, [doc]);
+        }
+
+        Assert.Equal("tab-a-single", documentDock.ActiveDockable?.Id);
+        viewModel.CycleTabForwardCommand.Execute(null);
+        Assert.Equal("tab-a-single", documentDock.ActiveDockable?.Id);
+    }
+
+    private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)
+    {
+        var contentLayout = viewModel.SelectedWorkspacePane?.ContentLayout;
+        if (contentLayout is null)
+        {
+            return null;
+        }
+
+        return FindDocumentDockIn(contentLayout);
+    }
+
+    private static IDocumentDock? FindDocumentDockIn(IDockable dockable)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            return documentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                var result = FindDocumentDockIn(child);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();
@@ -659,3 +817,4 @@ public sealed class MainWindowIntegrationTests
     }
 
 }
+
