@@ -1,7 +1,12 @@
 using System;
+using System.ComponentModel;
+using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -18,6 +23,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     private string? loadError;
     private AgentViewModel? agent;
     private ObservableLoggerFactory? loggerFactory;
+    private bool wasRunning;
 
     public AgentTabState State
     {
@@ -39,10 +45,13 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
     public ObservableLoggerFactory? LoggerFactory => this.loggerFactory;
 
+    public INotificationService? NotificationService { get; init; }
+
     public void SetReady(AgentViewModel agentViewModel, ObservableLoggerFactory factory)
     {
         this.loggerFactory = factory;
         this.Agent = agentViewModel;
+        agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
         this.State = AgentTabState.Ready;
     }
 
@@ -52,10 +61,69 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         this.State = AgentTabState.Failed;
     }
 
+    private void OnAgentPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(AgentViewModel.IsChatRunning) || sender is not AgentViewModel vm)
+        {
+            return;
+        }
+
+        var isRunning = vm.IsChatRunning;
+
+        if (isRunning && !this.wasRunning)
+        {
+            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, null);
+        }
+        else if (!isRunning && this.wasRunning && !IsInterrupted(vm))
+        {
+            var reason = BuildIdleReason(vm);
+            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, reason);
+        }
+
+        this.wasRunning = isRunning;
+    }
+
+    private static bool IsInterrupted(AgentViewModel vm)
+    {
+        var lastItem = vm.History.LastOrDefault();
+        return lastItem?.Role == AgentChatHistoryItem.DiagnosticChatRole
+            && lastItem.Contents.OfType<TextContent>().Any(
+                c => c.Text?.Contains("Interrupted by user.", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    internal static string BuildIdleReason(AgentViewModel vm)
+    {
+        for (var i = vm.History.Count - 1; i >= 0; i--)
+        {
+            var item = vm.History[i];
+            if (item.Role != ChatRole.Assistant)
+            {
+                continue;
+            }
+
+            var text = string.Concat(item.Contents.OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                return text.Length > 120 ? text[..120] + "\u2026" : text;
+            }
+
+            // Assistant message exists but has no text — check for tool calls.
+            var toolName = item.Contents.OfType<FunctionCallContent>().FirstOrDefault()?.Name;
+            if (toolName is not null)
+            {
+                return $"Completed \u2014 last action: {toolName}";
+            }
+        }
+
+        return "Agent run completed.";
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (this.agent is not null)
         {
+            this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
+            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, null);
             await this.agent.DisposeAsync();
         }
 
