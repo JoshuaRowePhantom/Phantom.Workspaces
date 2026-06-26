@@ -60,6 +60,11 @@
       {
         "kind": "tool",
         "id": "fixed",
+        "name": "workspace-entity"
+      },
+      {
+        "kind": "tool",
+        "id": "fixed",
         "name": "workspace-gui"
       }
     ]
