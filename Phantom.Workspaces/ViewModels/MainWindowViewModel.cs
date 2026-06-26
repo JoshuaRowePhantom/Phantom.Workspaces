@@ -1119,21 +1119,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var workspaceEntityRequests = this.BuildWorkspaceEntityRequests(workspaceData);
-        var requests = new List<GetEntityRequest>
-        {
-            workspaceRequest,
-        };
-        requests.AddRange(workspaceEntityRequests);
-
-        var entities = await this.EntityBroker!.GetEntitiesAsync(requests);
-        var workspaceEntity = entities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
+        // Fetch just the workspace entity to build the skeleton pane
+        var workspaceEntities = await this.EntityBroker!.GetEntitiesAsync([workspaceRequest]);
+        var workspaceEntity = workspaceEntities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
         if (workspaceEntity is null)
         {
             return;
         }
 
-        var workspacePane = await this.CreateWorkspacePaneAsync(workspaceEntity, workspaceData);
+        // Phase 1: create skeleton workspace pane and show it immediately
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
+        workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
+
         var loadingPaneIndex = this.WorkspacePanes.IndexOf(loadingWorkspacePane);
         if (loadingPaneIndex >= 0)
         {
@@ -1144,10 +1141,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.WorkspacePanes.Add(workspacePane);
         }
 
-        // Add workspace pane to the dock layout
         this.AddWorkspacePaneToDock(workspacePane);
-
         this.SelectedWorkspacePane = workspacePane;
+
+        // Phase 2: populate tabs asynchronously (fire and forget)
+        _ = this.PopulateWorkspacePaneTabsAsync(workspacePane, workspaceEntity, workspaceData);
     }
 
     private void AddWorkspacePaneToDock(WorkspacePaneViewModel workspacePane)
@@ -1631,6 +1629,194 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return requests;
+    }
+
+    private async Task PopulateWorkspacePaneTabsAsync(
+        WorkspacePaneViewModel workspacePane,
+        SubscribedEntityViewModel workspaceEntity,
+        JsonElement workspaceData)
+    {
+        var contentDock = this.FindDocumentDock(workspacePane.ContentLayout!);
+        if (contentDock is null)
+        {
+            return;
+        }
+
+        // Collect all tab declarations from regions
+        var tabDeclarations = new List<JsonElement>();
+        if (workspaceData.TryGetProperty("regions", out var regions)
+            && regions.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var region in regions.EnumerateArray())
+            {
+                if (region.ValueKind != JsonValueKind.Object
+                    || !region.TryGetProperty("tabs", out var tabs)
+                    || tabs.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var tab in tabs.EnumerateArray())
+                {
+                    if (tab.ValueKind == JsonValueKind.Object)
+                    {
+                        tabDeclarations.Add(tab);
+                    }
+                }
+            }
+        }
+
+        // Load each tab asynchronously in parallel; add each to the dock as it resolves
+        var tabAdded = false;
+        if (tabDeclarations.Count > 0)
+        {
+            var tabTasks = tabDeclarations.Select(async tabDecl =>
+            {
+                var workspaceTab = await this.TryFetchWorkspaceTabAsync(tabDecl);
+                if (workspaceTab is null)
+                {
+                    return;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    // Guard: workspace may have been closed while tabs were loading
+                    if (!this.WorkspacePanes.Contains(workspacePane))
+                    {
+                        DisposeWorkspaceTab(workspaceTab);
+                        return;
+                    }
+
+                    this.dockFactory.AddWorkspaceTab(contentDock, workspaceTab);
+                    tabAdded = true;
+                });
+            }).ToList();
+
+            await Task.WhenAll(tabTasks);
+        }
+
+        if (!tabAdded)
+        {
+            // Fall back to a default entity view for the workspace itself
+            var defaultTab = new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+            {
+                Id = workspaceEntity.EntityId.ToString(),
+                Title = workspaceEntity.DisplayName,
+                Entity = workspaceEntity,
+                DockRegion = "full",
+            };
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!this.WorkspacePanes.Contains(workspacePane))
+                {
+                    DisposeWorkspaceTab(defaultTab);
+                    return;
+                }
+
+                this.dockFactory.AddWorkspaceTab(contentDock, defaultTab);
+            });
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => this.SyncWorkspacePaneFromDock(workspacePane));
+    }
+
+    private async Task<WorkspaceTabViewModel?> TryFetchWorkspaceTabAsync(JsonElement tab)
+    {
+        if (!tab.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        // Resolve entity from target-entity-name (async, handles both entity-id and entity-name refs)
+        var reference = content.TryReadEntityReference("target-entity-name");
+        if (reference.HasValue)
+        {
+            GetEntityRequest request;
+            if (reference.Value.EntityName is { } entityName)
+            {
+                request = new GetEntityRequest { EntityName = entityName };
+            }
+            else if (reference.Value.EntityId is { } entityId)
+            {
+                request = new GetEntityRequest { EntityId = entityId };
+            }
+            else
+            {
+                return null;
+            }
+
+            var fetched = await this.EntityBroker!.GetEntitiesAsync([request]);
+            var targetEntity = fetched.FirstOrDefault();
+            if (targetEntity is not null)
+            {
+                return await this.CreateTabFromEntityAsync(tab, content, targetEntity);
+            }
+        }
+
+        // Fall back to URL-based tab
+        if (content.TryGetProperty("url", out var url)
+            && url.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(url.GetString()))
+        {
+            return new BrowserWorkspaceTabViewModel
+            {
+                Id = ReadString(tab, "tab-id") ?? url.GetString()!,
+                Title = ReadString(tab, "title") ?? url.GetString()!,
+                Url = url.GetString()!,
+                DockRegion = ReadString(tab, "dock") ?? "full",
+            };
+        }
+
+        return null;
+    }
+
+    private async Task<WorkspaceTabViewModel?> CreateTabFromEntityAsync(
+        JsonElement tab,
+        JsonElement content,
+        SubscribedEntityViewModel targetEntity)
+    {
+        // External entity → embedded browser tab
+        if (targetEntity.IsEntityType("external"))
+        {
+            var urls = OpenExternalEntityShortcutHandler.ParseUrls(targetEntity);
+            if (urls.Count > 0)
+            {
+                var entityUrl = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
+                return new WebViewModel(entityUrl, this)
+                {
+                    Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
+                    Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                    DockRegion = ReadString(tab, "dock") ?? "full",
+                };
+            }
+        }
+
+        // Agent-session entity → restore via dedicated handler
+        if (targetEntity.IsEntityType("agent-session") && this.openAgentSessionShortcutHandler is not null)
+        {
+            var agentSessionTab = await this.openAgentSessionShortcutHandler
+                .TryCreateAgentSessionTabForRestoreAsync(
+                    this,
+                    targetEntity,
+                    tabId: ReadString(tab, "tab-id"),
+                    title: ReadString(tab, "title"),
+                    dockRegion: ReadString(tab, "dock"));
+            if (agentSessionTab is not null)
+            {
+                return agentSessionTab;
+            }
+        }
+
+        // Default: generic entity view
+        return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+        {
+            Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
+            Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+            Entity = targetEntity,
+            DockRegion = ReadString(tab, "dock") ?? "full",
+        };
     }
 
     private async Task<WorkspacePaneViewModel> CreateWorkspacePaneAsync(

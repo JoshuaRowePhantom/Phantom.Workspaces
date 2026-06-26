@@ -1,5 +1,6 @@
 using Avalonia.Media;
 using Avalonia.Headless.XUnit;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -124,7 +125,81 @@ public sealed class MainWindowIntegrationTests
             pane => pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithExternalEntityTab_PopulatesTabAsynchronously()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
 
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Create an external entity referenced by the workspace tab
+        var externalEntityId = new EntityId("bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            externalEntityId,
+            """
+            {
+              "entity-id": "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
+              "entity-types": ["entity", "external"],
+              "names": [["tests", "externals", "tab-async-test"]],
+              "display-name": { "default": "Async Tab Test" },
+              "urls": { "default": "https://example.com" }
+            }
+            """);
+
+        // Create a workspace that references the external entity
+        var workspaceId = new EntityId("cccccccc-cccc-4ccc-cccc-cccccccccccc");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "cccccccc-cccc-4ccc-cccc-cccccccccccc",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "async-tabs"]],
+              "display-name": { "default": "Async Tabs Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "async-tab-1",
+                      "title": "Async Tab",
+                      "kind": "entity",
+                      "dock": "full",
+                      "content": {
+                        "target-entity-name": ["tests", "externals", "tab-async-test"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        // Open the workspace — Phase 1 (skeleton) completes on return; Phase 2 populates tabs async
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        // The workspace pane must be visible immediately after Phase 1
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        // Wait for Phase 2 to add at least one tab (deterministic: watch ContentDock)
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "async-tab-1");
+
+        var tabDoc = contentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .FirstOrDefault(d => d.Id == "async-tab-1");
+        Assert.NotNull(tabDoc);
+        Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
+    }
     [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
@@ -739,8 +814,40 @@ public sealed class MainWindowIntegrationTests
         return null;
     }
 
-    private static async Task WaitForAgentReadyAsync(AgentSessionWorkspaceTabViewModel tab)
+    private static async Task WaitForWorkspaceTabAsync(IDocumentDock contentDock, string tabId)
     {
+        if (contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) == true)
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) == true)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        if (contentDock.VisibleDockables is INotifyCollectionChanged observable)
+        {
+            observable.CollectionChanged += OnCollectionChanged;
+            try
+            {
+                if (contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) != true)
+                {
+                    await signal.Task;
+                }
+            }
+            finally
+            {
+                observable.CollectionChanged -= OnCollectionChanged;
+            }
+        }
+    }
+
+    private static async Task WaitForAgentReadyAsync(AgentSessionWorkspaceTabViewModel tab)    {
         if (tab.State is AgentTabState.Ready or AgentTabState.Failed)
         {
             return;
