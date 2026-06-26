@@ -29,6 +29,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.targetQueue.Changed += this.OnTargetQueueChanged;
         this.SubmitCommand = new RelayCommand(this.Submit);
         this.SubmitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
+        this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.SetQueueImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
 
@@ -79,6 +80,8 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public ICommand SubmitCommand { get; }
 
     public ICommand SubmitToNewQueueCommand { get; }
+
+    public ICommand CreateNewQueueCommand { get; }
 
     public ICommand SetQueueImmediacyCommand { get; }
 
@@ -206,7 +209,15 @@ public sealed class QueueComposerViewModel : ViewModelBase
         }
     }
 
-    public void ToggleHoldAllQueues() => this.parent.ToggleHoldAllQueues();
+    public void CreateNewQueue()
+    {
+        if (this.IsDefaultComposer)
+        {
+            this.parent.CreateNewQueue();
+        }
+    }
+
+    public void ToggleHoldAllQueues()=> this.parent.ToggleHoldAllQueues();
 
     public void HoldAllQueues() => this.parent.HoldAllQueues();
 

@@ -26,6 +26,7 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly ICommand toggleHoldAllQueuesCommand;
     private readonly ICommand submitToMostRecentQueueCommand;
     private readonly ICommand submitToNewQueueCommand;
+    private readonly ICommand createNewQueueCommand;
 
     public InputQueueViewModel(
         AgentChat agentChat,
@@ -42,6 +43,7 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.toggleHoldAllQueuesCommand = new RelayCommand(this.ToggleHoldAllQueues);
         this.submitToMostRecentQueueCommand = new RelayCommand(this.SubmitToMostRecentQueue);
         this.submitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
+        this.createNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.queueCollectionTransformer = new InputQueueCollectionTransformer(this, this.agentChat.InputQueues, this.Queues, this.queueViewModels);
     }
 
@@ -88,6 +90,8 @@ public sealed class InputQueueViewModel : ViewModelBase
     public ICommand SubmitToMostRecentQueueCommand => this.submitToMostRecentQueueCommand;
 
     public ICommand SubmitToNewQueueCommand => this.submitToNewQueueCommand;
+
+    public ICommand CreateNewQueueCommand => this.createNewQueueCommand;
 
     /// <summary>
     /// Enters formatted mode. Called on Shift+Enter in normal mode.
@@ -144,6 +148,20 @@ public sealed class InputQueueViewModel : ViewModelBase
                 : AgentInputQueueImmediacy.Queue);
         this.mostRecentlyCreatedQueue = queue;
         this.SubmitToQueue(queue);
+    }
+
+    public void CreateNewQueue()
+    {
+        if (!this.HasQueueManager)
+        {
+            return;
+        }
+
+        var queue = this.agentChat.QueueManager.CreateInputQueue(
+            immediacy: this.InputQueues.All(queue => queue.IsHeld)
+                ? AgentInputQueueImmediacy.Held
+                : AgentInputQueueImmediacy.Queue);
+        this.mostRecentlyCreatedQueue = queue;
     }
 
     public void ToggleHoldAllQueues()

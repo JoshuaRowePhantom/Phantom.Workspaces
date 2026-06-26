@@ -39,6 +39,8 @@
                                       Header="↵  Send" />
                             <MenuItem Command="{Binding SubmitToNewQueueCommand}"
                                       Header="⊕  Send to new queue" />
+                            <MenuItem Command="{Binding CreateNewQueueCommand}"
+                                      Header="＋  New queue" />
                         </MenuFlyout>
                     </Button.Flyout>
                 </Button>
