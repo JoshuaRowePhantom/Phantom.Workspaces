@@ -31,6 +31,7 @@ public static class FixedToolResources
     /// <summary>
     /// The default set of built-in toolset names exposed as fixed tool resources.
     /// </summary>
+    // NOTE: Update docs/JsonEntities/documentation/agent-configuration.md when built-in tool names change.
     public static IReadOnlyList<string> DefaultNames { get; } =
     [
         WorkspaceEntity,

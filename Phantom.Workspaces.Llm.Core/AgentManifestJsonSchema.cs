@@ -8,6 +8,7 @@ namespace Phantom.Workspaces.Llm;
 /// Agent manifests are declarative agent configurations with tool resource references
 /// that are resolved at runtime based on execution context (user, machine, workspace).
 /// </summary>
+// NOTE: Update docs/JsonEntities/documentation/agent-configuration.md when this schema changes.
 public static class AgentManifestJsonSchema
 {
     private const string ResourceName = "Phantom.Workspaces.Llm.Core.JsonSchemas.agent-manifest.json";

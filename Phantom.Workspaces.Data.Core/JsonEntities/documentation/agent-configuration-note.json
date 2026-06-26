@@ -1,0 +1,22 @@
+{
+  "entity-id": "59beb825-32c9-4516-ab7f-46b3b236992d",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-configuration"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Configuration"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-configuration.md"
+    }
+  }
+}
