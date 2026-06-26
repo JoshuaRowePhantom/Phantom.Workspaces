@@ -63,6 +63,13 @@
     "scheduled-tools-paused": {
       "type": "boolean",
       "description": "When true, the scheduled tools host on this profile starts no new runs and stops in-flight runs (persisted Stop all / Pause state)."
+    },
+    "snoozed-notification-tabs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tab IDs whose notifications are silently auto-read (snoozed). Persisted per-tab."
     }
   },
   "required": [

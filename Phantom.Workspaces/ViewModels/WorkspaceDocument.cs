@@ -5,11 +5,15 @@ namespace Phantom.Workspaces.ViewModels;
 
 public class WorkspaceDocument : Document
 {
+    private bool hasUnreadNotification;
+    private string baseTitle = string.Empty;
+
     public WorkspaceDocument(WorkspaceTabViewModel tabViewModel)
     {
         this.TabViewModel = tabViewModel;
         this.Id = tabViewModel.Id;
-        this.Title = ComputeTitle(tabViewModel);
+        this.baseTitle = ComputeBaseTitle(tabViewModel);
+        this.Title = this.baseTitle;
         this.CanClose = true;
         
         tabViewModel.PropertyChanged += OnTabViewModelPropertyChanged;
@@ -19,7 +23,8 @@ public class WorkspaceDocument : Document
     {
         if (e.PropertyName is nameof(WorkspaceTabViewModel.Title) or nameof(WorkspaceTabViewModel.TabHeader))
         {
-            this.Title = ComputeTitle(this.TabViewModel);
+            this.baseTitle = ComputeBaseTitle(this.TabViewModel);
+            this.UpdateTitle();
         }
     }
 
@@ -30,7 +35,23 @@ public class WorkspaceDocument : Document
     public TabHeaderViewModel EffectiveTabHeader =>
         this.TabViewModel.TabHeader ?? new TabHeaderViewModel { Title = this.TabViewModel.Title };
 
-    private static string ComputeTitle(WorkspaceTabViewModel tabViewModel)
+    public bool HasUnreadNotification
+    {
+        get => this.hasUnreadNotification;
+        set
+        {
+            if (this.hasUnreadNotification == value) return;
+            this.hasUnreadNotification = value;
+            this.UpdateTitle();
+        }
+    }
+
+    private void UpdateTitle()
+    {
+        this.Title = this.hasUnreadNotification ? "! " + this.baseTitle : this.baseTitle;
+    }
+
+    private static string ComputeBaseTitle(WorkspaceTabViewModel tabViewModel)
     {
         var raw = tabViewModel.TabHeader is IconTabHeaderViewModel icon
             ? $"{icon.Icon} {tabViewModel.Title}"

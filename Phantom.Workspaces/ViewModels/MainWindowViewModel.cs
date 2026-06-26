@@ -15,10 +15,11 @@ using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -60,6 +61,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledTools.ScheduledToolPauseStateService? scheduledToolPauseStateService;
     private ScheduledTools.ScheduledToolRunner? scheduledToolRunner;
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
+    private readonly NotificationService notificationService;
+    private NotificationsViewModel? notificationsViewModel;
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -110,6 +113,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
+        this.notificationService = new NotificationService(this);
+        this.notificationsViewModel = new NotificationsViewModel(
+            this.notificationService,
+            tabId => _ = this.NavigateToNotificationTabAsync(tabId));
+        this.NavigateNextNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(+1));
+        this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
+        this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
     }
 
     public RepositorySource RepositorySource { get; }
@@ -135,6 +145,29 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand GoToTabAtIndexCommand { get; }
 
     public RelayCommand GoToWorkspacePaneAtIndexCommand { get; }
+
+    public RelayCommand NavigateNextNotificationCommand { get; }
+    public RelayCommand NavigatePreviousNotificationCommand { get; }
+
+    public NotificationsViewModel? NotificationsViewModel
+    {
+        get => this.notificationsViewModel;
+        private set => this.SetProperty(ref this.notificationsViewModel, value);
+    }
+
+    // IActiveTabProvider implementation
+    public string? ActiveTabId
+    {
+        get
+        {
+            var layout = this.selectedWorkspacePane?.ContentLayout;
+            if (layout is null) return null;
+            var documentDock = this.FindDocumentDock(layout);
+            return documentDock?.ActiveDockable?.Id;
+        }
+    }
+
+    public INotificationService NotificationService => this.notificationService;
 
     public ConnectionStatusViewModel? ConnectionStatus{ get; private set; }
 
@@ -1241,6 +1274,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var nextDockable = dockables[nextIndex];
         this.dockFactory.SetActiveDockable(nextDockable);
         this.dockFactory.SetFocusedDockable(documentDock, nextDockable);
+        if (nextDockable is WorkspaceDocument cycledDoc)
+        {
+            this.notificationService.MarkRead(cycledDoc.Id);
+        }
     }
 
     private void OnGoToTabAtIndex(int index)
@@ -1259,6 +1296,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var target = tabs[index];
         this.dockFactory.SetActiveDockable(target);
         this.dockFactory.SetFocusedDockable(documentDock, target);
+        if (target is WorkspaceDocument doc)
+        {
+            this.notificationService.MarkRead(doc.Id);
+        }
     }
 
     private void OnGoToWorkspacePaneAtIndex(int index)
@@ -1380,6 +1421,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 DisposeWorkspaceTab(tab);
             }
             this.dockFactory.SetActiveDockable(existingDocument);
+            this.notificationService.MarkRead(tab.Id);
             this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
             this.SyncSelectedWorkspacePaneFromDock();
             return;
@@ -2541,8 +2583,80 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return null;
     }
 
+    private void OnNotificationsChanged(object? sender, EventArgs e)
+    {
+        var notifications = this.notificationService.Notifications;
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null) continue;
+            foreach (var dockable in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
+            {
+                var hasUnread = notifications.Any(n => n.TabKey == dockable.Id && !n.IsRead);
+                dockable.HasUnreadNotification = hasUnread;
+            }
+        }
+    }
+
+    private void OnNavigateNotification(int direction)
+    {
+        var notifications = this.notificationService.Notifications;
+        var candidates = notifications
+            .Where(n => !n.IsRead)
+            .OrderByDescending(n => n.Timestamp)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            candidates = notifications
+                .OrderByDescending(n => n.Timestamp)
+                .ToList();
+        }
+        if (candidates.Count == 0) return;
+
+        var activeId = this.ActiveTabId;
+        var currentIndex = candidates.FindIndex(n => n.TabKey == activeId);
+        int nextIndex;
+        if (currentIndex < 0)
+        {
+            nextIndex = direction > 0 ? 0 : candidates.Count - 1;
+        }
+        else
+        {
+            nextIndex = ((currentIndex + direction) % candidates.Count + candidates.Count) % candidates.Count;
+        }
+
+        var target = candidates[nextIndex];
+        this.notificationService.MarkRead(target.TabKey);
+        _ = this.NavigateToNotificationTabAsync(target.TabKey);
+    }
+
+    private async Task NavigateToNotificationTabAsync(string tabId)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null) continue;
+            var doc = documentDock.VisibleDockables
+                .OfType<WorkspaceDocument>()
+                .FirstOrDefault(d => d.Id == tabId);
+            if (doc is not null)
+            {
+                this.dockFactory.SetActiveDockable(doc);
+                this.dockFactory.SetFocusedDockable(documentDock, doc);
+                return;
+            }
+        }
+        // Tab not found open - nothing to do (reopen not implemented in this iteration)
+        await Task.CompletedTask;
+    }
+
     public async ValueTask DisposeAsync()
     {
+        this.notificationService.NotificationsChanged -= this.OnNotificationsChanged;
+        this.notificationsViewModel?.Dispose();
+
         if (this.scheduledToolRunner is not null)
         {
             await this.scheduledToolRunner.DisposeAsync();
