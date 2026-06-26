@@ -19,9 +19,6 @@
         <DataTemplate DataType="vm:RemoteAccessSettingsViewModel">
             <views:RemoteAccessSettingsView />
         </DataTemplate>
-        <DataTemplate DataType="vm:AppearanceSettingsViewModel">
-            <views:AppearanceSettingsView />
-        </DataTemplate>
         <DataTemplate DataType="vm:ProfileAppearanceSettingsViewModel">
             <views:ProfileAppearanceSettingsView />
         </DataTemplate>

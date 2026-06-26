@@ -119,13 +119,6 @@ public sealed record DevTunnelConfiguration
     public string? AccessTokenSource { get; init; }
 }
 
-/// <summary>Visual / application preferences.</summary>
-public sealed record VisualSettings
-{
-    /// <summary>The selected theme variant.</summary>
-    public string Theme { get; init; } = "Fluent";
-}
-
 /// <summary>How the application applies updates discovered from the GitHub Releases feed.</summary>
 public enum AutomaticUpdateMode
 {
@@ -180,9 +173,6 @@ public sealed record WorkspacesConfiguration
 
     /// <summary>Dev tunnel host configuration.</summary>
     public DevTunnelConfiguration DevTunnel { get; init; } = new();
-
-    /// <summary>Visual / application preferences.</summary>
-    public VisualSettings Visual { get; init; } = new();
 
     /// <summary>In-app auto-update preferences.</summary>
     public UpdateSettings Update { get; init; } = new();
