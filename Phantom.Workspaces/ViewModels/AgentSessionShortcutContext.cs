@@ -36,14 +36,22 @@ public sealed class AgentSessionShortcutContext
     {
         var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
         var dataAccessLayer = mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
-        var workspaceEntityToolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
+        var workspaceGuiContextProvider = new WorkspaceGuiContextProvider(
+            new WorkspaceGuiContext
+            {
+                MainWindowViewModel = mainWindowViewModel,
+                ShortcutManager = mainWindowViewModel.ShortcutManager,
+            });
+        var toolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
             dataAccessLayer,
-            ToolsetFactory.CreateDefaultToolsetFactory());
+            ToolsetFactory.CreateWorkspaceGuiToolsetFactory(
+                workspaceGuiContextProvider,
+                ToolsetFactory.CreateDefaultToolsetFactory()));
         return new AgentServices
         {
             AgentPersistenceStoreOverride = agentPersistenceStore,
             LoggerFactory = loggerFactory,
-            ToolsetFactory = workspaceEntityToolsetFactory,
+            ToolsetFactory = toolsetFactory,
             ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
         };
     }

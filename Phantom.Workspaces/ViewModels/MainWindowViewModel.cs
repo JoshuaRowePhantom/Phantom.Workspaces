@@ -284,6 +284,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal EntityBroker EntityBroker => this.entityBroker
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
+    internal ShortcutManager ShortcutManager => this.shortcutManager;
+
     /// <summary>
     /// Reflects the persisted scheduled-tools pause state on the clock / scheduled-tools button, and
     /// toggles it. Null until <see cref="InitializeAsync"/> has composed the scheduled-tools runtime.
@@ -1520,6 +1522,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.notificationService.MarkRead(tab.Id);
             this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
             this.SyncSelectedWorkspacePaneFromDock();
+            if (!this.navigatingViaHistory)
+            {
+                this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+            }
             return;
         }
 
@@ -1628,6 +1634,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             DisposeWorkspaceTab(document.TabViewModel);
             return;
         }
+    }
+
+    internal bool CloseTabById(string tabId)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null)
+            {
+                continue;
+            }
+
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null)
+            {
+                continue;
+            }
+
+            var document = documentDock.VisibleDockables
+                .OfType<WorkspaceDocument>()
+                .FirstOrDefault(doc => string.Equals(doc.Id, tabId, StringComparison.Ordinal));
+
+            if (document is null)
+            {
+                continue;
+            }
+
+            this.dockFactory.CloseDockable(document);
+            DisposeWorkspaceTab(document.TabViewModel);
+            return true;
+        }
+
+        return false;
     }
 
     private IDocumentDock? FindDocumentDock(IDockable dockable)

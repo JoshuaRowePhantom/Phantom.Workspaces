@@ -13,6 +13,9 @@ public static class FixedToolResources
     /// <summary>The workspace entity toolset name.</summary>
     public const string WorkspaceEntity = "workspace-entity";
 
+    /// <summary>The workspace GUI toolset name (open/close panes and tabs, invoke entity shortcuts).</summary>
+    public const string WorkspaceGui = "workspace-gui";
+
     /// <summary>The filesystem toolset name.</summary>
     public const string Filesystem = "filesystem";
 
@@ -31,6 +34,7 @@ public static class FixedToolResources
     public static IReadOnlyList<string> DefaultNames { get; } =
     [
         WorkspaceEntity,
+        WorkspaceGui,
         Filesystem,
         WebSearch,
         WebRequest,

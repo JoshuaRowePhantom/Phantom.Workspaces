@@ -1061,5 +1061,57 @@ public sealed class MainWindowIntegrationTests
         return defaultValueElement.GetString();
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ExistingTab_PushesNavigationEntry()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "nav-push-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "nav-push-b", Title = "Tab B", Url = "https://b.example.com" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB); // push B; B is active
+
+        // Re-open tab A (it already exists) — should push a navigation entry
+        var tabAAgain = new BrowserWorkspaceTabViewModel { Id = "nav-push-a", Title = "Tab A", Url = "https://a.example.com" };
+        await viewModel.OpenTabAsync(tabAAgain);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("nav-push-a", documentDock!.ActiveDockable?.Id);
+
+        // NavigateBack should return to tab B (the entry pushed before re-opening A)
+        viewModel.NavigateBackCommand.Execute(null);
+        Assert.Equal("nav-push-b", documentDock.ActiveDockable?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigateBack_AfterMultipleToolDrivenNavigations_TraversesAllEntries()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new BrowserWorkspaceTabViewModel { Id = "multi-nav-a", Title = "Tab A", Url = "https://a.example.com" };
+        var tabB = new BrowserWorkspaceTabViewModel { Id = "multi-nav-b", Title = "Tab B", Url = "https://b.example.com" };
+        var tabC = new BrowserWorkspaceTabViewModel { Id = "multi-nav-c", Title = "Tab C", Url = "https://c.example.com" };
+
+        // Simulate sequential tool-driven tab openings
+        await viewModel.OpenTabAsync(tabA);  // push A
+        await viewModel.OpenTabAsync(tabB);  // push B
+        await viewModel.OpenTabAsync(tabC);  // push C; C is active
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("multi-nav-c", documentDock!.ActiveDockable?.Id);
+
+        // Back: C → B
+        viewModel.NavigateBackCommand.Execute(null);
+        Assert.Equal("multi-nav-b", documentDock.ActiveDockable?.Id);
+
+        // Back: B → A
+        viewModel.NavigateBackCommand.Execute(null);
+        Assert.Equal("multi-nav-a", documentDock.ActiveDockable?.Id);
+    }
+
 }
 
