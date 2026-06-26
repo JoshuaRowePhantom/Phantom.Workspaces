@@ -9,25 +9,33 @@ public class WorkspaceDocument : Document
     {
         this.TabViewModel = tabViewModel;
         this.Id = tabViewModel.Id;
-        this.Title = TruncateTitle(tabViewModel.Title);
+        this.Title = ComputeTitle(tabViewModel);
         this.CanClose = true;
         
-        // Subscribe to title changes from the view model
         tabViewModel.PropertyChanged += OnTabViewModelPropertyChanged;
     }
     
     private void OnTabViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(WorkspaceTabViewModel.Title))
+        if (e.PropertyName is nameof(WorkspaceTabViewModel.Title) or nameof(WorkspaceTabViewModel.TabHeader))
         {
-            this.Title = TruncateTitle(this.TabViewModel.Title);
+            this.Title = ComputeTitle(this.TabViewModel);
         }
-        else if (e.PropertyName == nameof(WorkspaceTabViewModel.TabTooltip))
-        {
-            // Tooltip changes need to propagate through to the UI
-            // Since Dock.Model.Document doesn't expose tooltips directly,
-            // we rely on the TabViewModel binding in the style
-        }
+    }
+
+    /// <summary>
+    /// The header model for this tab. Falls back to a plain <see cref="TabHeaderViewModel"/>
+    /// derived from the current title when <see cref="WorkspaceTabViewModel.TabHeader"/> is null.
+    /// </summary>
+    public TabHeaderViewModel EffectiveTabHeader =>
+        this.TabViewModel.TabHeader ?? new TabHeaderViewModel { Title = this.TabViewModel.Title };
+
+    private static string ComputeTitle(WorkspaceTabViewModel tabViewModel)
+    {
+        var raw = tabViewModel.TabHeader is IconTabHeaderViewModel icon
+            ? $"{icon.Icon} {tabViewModel.Title}"
+            : tabViewModel.Title;
+        return TruncateTitle(raw);
     }
     
     private static string TruncateTitle(string title)

@@ -59,6 +59,7 @@ public sealed class OpenAgentDefinitionShortcutHandler : ShortcutHandler
             Title = createdAgentSessionEntity.DisplayName,
             DockRegion = "full",
             Entity = createdAgentSessionEntity,
+            TabHeader = new IconTabHeaderViewModel { Icon = "🧠", Title = createdAgentSessionEntity.DisplayName },
         };
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
