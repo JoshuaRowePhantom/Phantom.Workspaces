@@ -325,28 +325,9 @@ public sealed class MainWindowIntegrationTests
 
         Assert.True(handled);
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
-        await WaitForAgentReadyAsync(selectedTab);
-        Assert.Equal(AgentTabState.Ready, selectedTab.State);
-        Assert.NotNull(selectedTab.Agent);
-        Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
-        var names = ReadEntityNames(selectedTab.Entity!.Data);
-        var createdAgentSessionId = selectedTab.Entity.Data is JsonElement selectedEntityData
-            && selectedEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
-                ? agentSessionIdElement.GetString()
-                : null;
-        Assert.False(string.IsNullOrWhiteSpace(createdAgentSessionId));
-        var expectedSessionNamePrefix = $"session-{fixedCurrentTime:yyyy-MM-dd-HH-mm-ss}-";
-        Assert.Contains(names, static name => name.Components.Length >= 5
-            && string.Equals(name.Components[0], "users", StringComparison.Ordinal)
-            && string.Equals(name.Components[3], "agent-sessions", StringComparison.Ordinal));
-        Assert.Contains(
-            names,
-            name => name.Components.Length >= 5
-                && string.Equals(name.Components[0], "users", StringComparison.Ordinal)
-                && string.Equals(name.Components[3], "agent-sessions", StringComparison.Ordinal)
-                && name.Components[^1].StartsWith(expectedSessionNamePrefix, StringComparison.Ordinal)
-                && name.Components[^1].EndsWith(createdAgentSessionId, StringComparison.Ordinal));
+        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(selectedRegion.SelectedTab);
+        Assert.Same(agentDefinitionEntity, launchpadTab.ManifestEntity);
+        Assert.True(launchpadTab.CanStart);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -389,10 +370,9 @@ public sealed class MainWindowIntegrationTests
 
         Assert.True(handled);
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
-        await WaitForAgentReadyAsync(selectedTab);
-        Assert.NotNull(selectedTab.Agent);
-        Assert.True(selectedTab.Entity?.IsEntityType("agent-session"));
+        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(selectedRegion.SelectedTab);
+        Assert.Same(agentManifestEntity, launchpadTab.ManifestEntity);
+        Assert.True(launchpadTab.CanStart);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -437,10 +417,20 @@ public sealed class MainWindowIntegrationTests
 
         Assert.True(handled);
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
-        await WaitForAgentReadyAsync(selectedTab);
-        Assert.NotNull(selectedTab.Agent);
-        Assert.Contains(selectedTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
+        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(selectedRegion.SelectedTab);
+        Assert.Same(agentDefinitionEntity, launchpadTab.ManifestEntity);
+
+        // Create an agent session directly (equivalent to the launchpad's Start Session) to verify tool mapping.
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var createdAgentSession = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(createdAgentSession);
+        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, createdAgentSession!);
+        var sessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(sessionTab);
+        Assert.NotNull(sessionTab.Agent);
+        Assert.Contains(sessionTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -471,19 +461,14 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        // Open the agent via the shortcut handler — this creates the agent-session entity in the store.
+        // Create the agent-session entity directly without going through the shortcut handler.
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         var agentDefinitionEntity = Assert.Single(await entityBroker.GetEntitiesAsync([agentDefinitionId]));
-        var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
-        var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
-        Assert.True(handled);
-
-        // Retrieve the newly-created agent-session entity from the active tab.
-        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
-        var agentSessionEntity = selectedTab.Entity!;
-        var agentSessionEntityId = agentSessionEntity.EntityId.ToString();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+        var agentSessionEntityId = agentSessionEntity!.EntityId.ToString();
 
         // Build a workspace JSON with a tab referencing the agent-session entity by its entity ID.
         // Construct the workspace entity directly (no schema validation) to avoid workspace-schema
@@ -575,16 +560,14 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        // Create the agent-session via the shortcut handler.
+        // Create the agent-session entity directly without going through the shortcut handler.
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
         var agentDefinitionEntity = Assert.Single(await entityBroker.GetEntitiesAsync([agentDefinitionId]));
-        var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
-        Assert.True(await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity));
-
-        var createdSessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
-        var agentSessionEntityId = createdSessionTab.Entity!.EntityId.ToString();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var createdSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(createdSessionEntity);
+        var agentSessionEntityId = createdSessionEntity!.EntityId.ToString();
 
         // Now delete the agent-definition entity so the restore path will fail to find it.
         // ConcurrencyTag is required by MergeProcessingDataAccessLayer for existing entities.

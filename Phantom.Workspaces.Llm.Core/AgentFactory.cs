@@ -9,6 +9,7 @@ using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Collections;
+using System.Collections.Generic;
 using System.ClientModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -253,12 +254,20 @@ public static class AgentFactory
         var manifest = request.AgentManifest
             ?? throw new InvalidOperationException("Create agent definition request does not specify a manifest.");
 
-        var template = manifest.Template
-            ?? throw new InvalidOperationException("Agent manifest does not specify a template agent definition.");
+        // Apply parameter substitution when Parameters are provided; otherwise clone the template.
+        AgentDefinition definition;
+        if (request.Parameters is { } parameterValues)
+        {
+            definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, parameterValues);
+        }
+        else
+        {
+            var template = manifest.Template
+                ?? throw new InvalidOperationException("Agent manifest does not specify a template agent definition.");
 
-        // Clone the template so projecting the manifest does not mutate the manifest's template.
-        var definition = AgentDefinition.FromJson(template.ToJson())
-            ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
+            definition = AgentDefinition.FromJson(template.ToJson())
+                ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
+        }
 
         var toolResources = manifest.Resources?.OfType<ToolResource>().ToArray() ?? [];
         if (toolResources.Length == 0)
@@ -304,12 +313,11 @@ public static class AgentFactory
         ValidateServices(services);
 
         var requestedAgentDefinition = createAgentChatRequest.AgentManifest is { } agentManifest
-            ? await CreateAgentDefinitionAsync(
-                new CreateAgentDefinitionRequest
+            ? await CreateAgentDefinitionAsync(new CreateAgentDefinitionRequest
                 {
                     AgentManifest = agentManifest,
-                    ToolResourceFactory = createAgentChatRequest.ToolResourceFactory
-                        ?? services?.ToolResourceFactory!,
+                    Parameters = createAgentChatRequest.Parameters,
+                    ToolResourceFactory = createAgentChatRequest.ToolResourceFactory ?? services?.ToolResourceFactory,
                 })
             : createAgentChatRequest.AgentDefinition;
 

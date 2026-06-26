@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -141,7 +142,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
             || agentSessionIdElement.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(agentSessionIdElement.GetString())
-            || !agentSessionEntityData.TryGetProperty("agent-definition-entity-id", out var agentDefinitionEntityIdElement)
+            || (!agentSessionEntityData.TryGetProperty("agent-source-entity-id", out var agentDefinitionEntityIdElement)
+                && !agentSessionEntityData.TryGetProperty("agent-definition-entity-id", out agentDefinitionEntityIdElement))
             || agentDefinitionEntityIdElement.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(agentDefinitionEntityIdElement.GetString())
             || !Guid.TryParse(agentDefinitionEntityIdElement.GetString(), out var agentDefinitionEntityIdValue))
@@ -151,6 +153,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 
         var agentSessionId = agentSessionIdElement.GetString();
         var agentDefinitionEntityId = new EntityId(agentDefinitionEntityIdValue);
+        var parameterValues = agentSessionEntityData.TryGetProperty("parameter-values", out var pvElement)
+            ? ReadStringDictionary(pvElement)
+            : null;
         var agentDefinitionEntity = (await mainWindowViewModel.EntityBroker.GetEntitiesAsync([agentDefinitionEntityId]))
             .FirstOrDefault();
         if (agentDefinitionEntity?.Data is not JsonElement agentSourceEntityData)
@@ -177,6 +182,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             createAgentChatRequest = new CreateAgentChatRequest
             {
                 AgentManifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText()),
+                Parameters = parameterValues,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
                 AgentSessionId = agentSessionId,
                 AgentServices = agentServices,
@@ -217,5 +223,22 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     Title = url,
                 }),
         };
+    }
+
+    private static IReadOnlyDictionary<string, string>? ReadStringDictionary(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == JsonValueKind.String)
+            {
+                dict[prop.Name] = prop.Value.GetString()!;
+            }
+        }
+        return dict.Count > 0 ? dict : null;
     }
 }

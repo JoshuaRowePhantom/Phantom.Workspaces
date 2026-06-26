@@ -1,6 +1,7 @@
 using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.Llm;
@@ -23,6 +24,12 @@ public struct CreateAgentChatRequest
     /// Required when <see cref="AgentManifest"/> references tool resources.
     /// </summary>
     public IToolResourceFactory? ToolResourceFactory { get; init; }
+
+    /// <summary>
+    /// Parameter values to substitute into the agent manifest template before resolving tool resources.
+    /// Only used when <see cref="AgentManifest"/> is set.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Parameters { get; init; }
 
     public AgentServices? AgentServices { get; init; }
 

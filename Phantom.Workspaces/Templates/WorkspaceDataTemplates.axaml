@@ -106,6 +106,14 @@
         <templates:StartAgentSessionOnProfileView />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:AgentManifestLaunchpadViewModel">
+        <templates:AgentManifestLaunchpadView />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:AgentManifestEditorViewModel">
+        <templates:AgentManifestEditorView />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">
         <Panel>
             <!-- Loading state -->
