@@ -1,7 +1,7 @@
 # Entity click shortcut handler
 
-> **Status: draft — design for review.** Adds a click-activated shortcut handler that opens certain
-> entity types when their card is clicked, without showing a shortcut button. Tracks todo
+> **Status: implemented.** Adds a click-activated shortcut handler that opens certain entity types
+> when their card is clicked, without showing a shortcut button. Tracks todo
 > `entity-click-shortcut-handler`.
 
 ## Problem & scenario
@@ -48,12 +48,19 @@ instead held directly by the view layer and invoked from the click wiring.
 
 ### GUI wiring
 
-The entity card view binds a **click/`Tapped`** gesture on the card body to a new
-`MainWindowViewModel` command (e.g. `ActivateEntityClickCommand`) that calls the
-`EntityClickShortcutHandler` for the clicked `SubscribedEntityViewModel`. The existing shortcut
-buttons remain unchanged and continue to route through `ActivateShortcutCommand`. Clicks on the
-shortcut buttons themselves must not double-trigger the card click (handled/`e.Handled` on the button
-path). Styling stays in centralized shared styles per the styling convention.
+The entity card view binds a **`Tapped`** event on the card `Border` to `OnEntityCardTapped` in
+`EntityCardControl`, which calls `ActivateEntityClickCommand`. The existing shortcut buttons remain
+unchanged and continue to route through `ActivateShortcutCommand`.
+
+**No double-trigger guarantee:** every interactive child control (all `Button` elements and the raw
+JSON `TextBox`) inside the card AXAML carries a `Tapped="OnInteractiveChildTapped"` handler that
+immediately sets `e.Handled = true`. Because `OnEntityCardTapped` on the `Border` is registered with
+the Avalonia default `handledEventsToo: false`, it is silently skipped whenever a child has already
+claimed the event. An explicit `if (e.Handled) return;` guard at the top of `OnEntityCardTapped`
+provides defence-in-depth for any call path that bypasses the routing (e.g. direct invocation in
+tests). This replaces the former fragile visual-tree walk over a hard-coded type list
+(`IsInteractiveSource`) — see issue #85. Styling stays in centralized shared styles per the styling
+convention.
 
 ### Why delegate to Open rather than open directly
 
@@ -71,13 +78,17 @@ inherited by click automatically. The click handler only decides **which types a
 - **No button is produced:** with the click handler unregistered, `ShortcutManager.GetShortcutsFor`
   for a `workspace` returns the same buttons as before (no extra/duplicate Open from the click
   handler), confirming the click handler contributes no button.
-- **No double-trigger:** clicking a shortcut button does not also fire the card click handler.
+- **No double-trigger:** tapping a shortcut button sets `e.Handled = true` via `OnInteractiveChildTapped`
+  before the event reaches the `Border`'s card handler; the card handler is therefore silently skipped.
+  Verified by `EntityCardControl_WhenTappedEventAlreadyHandled_DoesNotOpenEntity`.
 
-## Implementation steps (after approval)
+## Implementation (completed)
 
 1. `EntityClickShortcutHandler` (configured types + delegates to `Shortcut.Open` via the manager).
 2. `MainWindowViewModel.ActivateEntityClickCommand` invoking the handler for the clicked entity.
-3. Bind the card `Tapped` gesture in the entity card view; ensure button clicks mark the event handled.
+3. `Tapped="OnEntityCardTapped"` on the card `Border`; interactive child controls carry
+   `Tapped="OnInteractiveChildTapped"` to mark the event handled before it can reach the card handler
+   (issue #85 — replaces the former `IsInteractiveSource` visual-tree walk).
 4. Tests above.
 
 ## Open questions
