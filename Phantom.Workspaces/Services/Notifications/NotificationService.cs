@@ -7,7 +7,7 @@ public sealed class NotificationService : INotificationService
 {
     private readonly IActiveTabProvider activeTabProvider;
     private readonly List<NotificationEntry> notifications = [];
-    // TODO: Persist snoozed tab IDs to user-computer-profile entity under "snoozed-notification-tabs" field.
+    // Snooze state is intentionally ephemeral (in-memory only); it resets on restart.
     private readonly HashSet<string> snoozedTabIds = [];
 
     public NotificationService(IActiveTabProvider activeTabProvider)
