@@ -865,6 +865,169 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithFocusedTabId_ActivatesFocusedTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("f0c00001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "f0c00001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "focused-tab-test"]],
+              "display-name": { "default": "Focused Tab Test Workspace" },
+              "focused-tab-id": "tab-second",
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "tab-first",
+                      "title": "First Tab",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://first.example.com" }
+                    },
+                    {
+                      "tab-id": "tab-second",
+                      "title": "Second Tab",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://second.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+
+        await WaitForWorkspaceTabAsync(contentDock!, "tab-first");
+        await WaitForWorkspaceTabAsync(contentDock!, "tab-second");
+
+        Assert.Equal("tab-second", contentDock!.ActiveDockable?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithAbsentFocusedTabId_DoesNotCrash()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("f0c00002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "f0c00002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "no-focused-tab"]],
+              "display-name": { "default": "No Focused Tab Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "only-tab",
+                      "title": "Only Tab",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+
+        await WaitForWorkspaceTabAsync(contentDock!, "only-tab");
+
+        Assert.NotNull(contentDock!.ActiveDockable);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithNonMatchingFocusedTabId_DoesNotCrash()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("f0c00003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "f0c00003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "nonmatching-focused-tab"]],
+              "display-name": { "default": "Non-matching Focused Tab Workspace" },
+              "focused-tab-id": "nonexistent-tab-id",
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "tab-a",
+                      "title": "Tab A",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://a.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+
+        await WaitForWorkspaceTabAsync(contentDock!, "tab-a");
+
+        Assert.NotNull(contentDock!.ActiveDockable);
+    }
+
     private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)
     {
         var contentLayout = viewModel.SelectedWorkspacePane?.ContentLayout;

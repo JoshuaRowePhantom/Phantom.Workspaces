@@ -13,6 +13,7 @@
   "display-name": {
     "default": "Getting Started Workspace"
   },
+  "focused-tab-id": "getting-started-note",
   "regions": [
     {
       "region-id": "editor-center",

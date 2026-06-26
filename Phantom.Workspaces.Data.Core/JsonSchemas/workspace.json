@@ -32,6 +32,10 @@
       "items": {
         "$ref": "#/$defs/workspace-region"
       }
+    },
+    "focused-tab-id": {
+      "type": "string",
+      "description": "The tab-id of the tab that should be active when the workspace is first opened. If absent or unmatched, the default dock behaviour applies."
     }
   },
   "required": [

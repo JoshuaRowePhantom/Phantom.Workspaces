@@ -1950,6 +1950,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             });
         }
 
+        if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
+            && focusedTabIdElement.ValueKind == JsonValueKind.String
+            && focusedTabIdElement.GetString() is { } focusedTabId
+            && !string.IsNullOrEmpty(focusedTabId))
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!this.WorkspacePanes.Contains(workspacePane))
+                {
+                    return;
+                }
+
+                var focusedDoc = contentDock.VisibleDockables
+                    ?.OfType<WorkspaceDocument>()
+                    .FirstOrDefault(d => string.Equals(d.Id, focusedTabId, StringComparison.Ordinal));
+                if (focusedDoc is not null)
+                {
+                    this.dockFactory.SetActiveDockable(focusedDoc);
+                }
+            });
+        }
+
         await Dispatcher.UIThread.InvokeAsync(() => this.SyncWorkspacePaneFromDock(workspacePane));
     }
 
