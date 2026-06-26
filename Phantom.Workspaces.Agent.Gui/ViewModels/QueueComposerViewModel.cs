@@ -28,13 +28,16 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.IsDefaultComposer = isDefaultComposer;
         this.targetQueue.Changed += this.OnTargetQueueChanged;
         this.SubmitCommand = new RelayCommand(this.Submit);
+        this.SubmitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
         this.SetQueueImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
 
     public bool IsDefaultComposer { get; }
 
     public string PlaceholderText => this.IsDefaultComposer
-        ? "Type a message…  (Enter to send, Shift+Enter for multi-line)"
+        ? (this.isFormattedMode
+            ? "Multi-line mode  (Ctrl+Enter · send  |  Enter · new line  |  Esc · cancel)"
+            : "Type a message…  (Enter · send  |  Shift+Enter · multi-line  |  Ctrl+Enter · send to new queue)")
         : "Append to this queue...";
 
     public string SubmitButtonText => this.IsDefaultComposer ? "Send" : "Add";
@@ -64,10 +67,18 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public bool IsFormattedMode
     {
         get => this.isFormattedMode;
-        set => this.SetProperty(ref this.isFormattedMode, value);
+        set
+        {
+            if (this.SetProperty(ref this.isFormattedMode, value))
+            {
+                this.RaisePropertyChanged(nameof(this.PlaceholderText));
+            }
+        }
     }
 
     public ICommand SubmitCommand { get; }
+
+    public ICommand SubmitToNewQueueCommand { get; }
 
     public ICommand SetQueueImmediacyCommand { get; }
 
