@@ -5,7 +5,6 @@
                xmlns:templates="using:Phantom.Workspaces.Templates"
                xmlns:agentControls="using:Phantom.Workspaces.Agent.Gui.Controls"
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
-               xmlns:md="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.Markdown"
                xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
@@ -151,7 +150,7 @@
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
-        <md:Markdown Text="{Binding Text}" />
+        <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityReferenceFieldEditorViewModel">
@@ -289,8 +288,9 @@
               ColumnDefinitions="200,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
-            <md:Markdown Grid.Column="1"
+            <SelectableTextBlock Grid.Column="1"
                          Text="{Binding MarkdownText}"
+                         TextWrapping="Wrap"
                          IsVisible="{Binding IsReadMode}"
                          Classes="workspace-markdown-viewer workspace-json-schema-viewer" />
             <TextBox Grid.Column="1"
@@ -349,7 +349,8 @@
 
     <DataTemplate DataType="vm:MarkdownMimeAttachmentFieldEditorViewModel">
         <Panel>
-            <md:Markdown Text="{Binding TextContent}"
+            <SelectableTextBlock Text="{Binding TextContent}"
+                         TextWrapping="Wrap"
                          Classes="workspace-markdown-viewer"
                          IsVisible="{Binding ShowInlineMarkdownReadMode}" />
             <Expander Header="{Binding FieldName}"
@@ -384,16 +385,18 @@
                           ColumnDefinitions="200,*"
                           IsVisible="{Binding ShowMarkdownReadMode}">
                         <TextBlock Text="content.text" Classes="muted workspace-field-label" />
-                        <md:Markdown Grid.Column="1"
+                        <SelectableTextBlock Grid.Column="1"
                                      Text="{Binding TextContent}"
+                                     TextWrapping="Wrap"
                                      Classes="workspace-markdown-viewer" />
                     </Grid>
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="200,*"
                           IsVisible="{Binding ShowMarkdownEditMode}">
                         <TextBlock Text="content.text" Classes="muted workspace-field-label" />
-                        <md:Markdown Grid.Column="1"
+                        <SelectableTextBlock Grid.Column="1"
                                      Text="{Binding TextContent, Mode=TwoWay}"
+                                     TextWrapping="Wrap"
                                      Classes="workspace-markdown-editor" />
                     </Grid>
                 </StackPanel>

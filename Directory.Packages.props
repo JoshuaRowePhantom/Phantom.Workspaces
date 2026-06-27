@@ -6,9 +6,6 @@
   <ItemGroup>
     <PackageVersion Include="AgentSchema" Version="1.0.0-beta.8" />
     <PackageVersion Include="Avalonia" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Controls.Documents" Version="12.1.3" />
-    <PackageVersion Include="Avalonia.Controls.Markdown" Version="12.1.3" />
-    <PackageVersion Include="Avalonia.Controls.RichTextEditor" Version="12.1.3" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.0.4" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.4" />
     <PackageVersion Include="Avalonia.Headless" Version="12.0.4" />

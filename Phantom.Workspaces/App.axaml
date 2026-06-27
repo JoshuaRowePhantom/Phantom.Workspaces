@@ -7,8 +7,6 @@
     <Application.Styles>
         <FluentTheme />
         <dockFluent:DockFluentTheme CacheDocumentTabContent="True" />
-        <StyleInclude Source="avares://Avalonia.Controls.RichTextEditor/Themes/Default.axaml" />
-        <StyleInclude Source="avares://Avalonia.Controls.Markdown/Themes/Default.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/NotificationsStyles.axaml" />
