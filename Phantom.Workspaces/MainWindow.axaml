@@ -131,7 +131,7 @@
                 </Border>
 
                 <ScrollViewer Grid.Row="1">
-                    <ItemsControl ItemsSource="{Binding SelectedTopLevelView.Entities}">
+                    <ItemsControl ItemsSource="{Binding CurrentViewPopulation.Entities}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ViewEntityViewModel">
                                 <StackPanel Margin="{Binding IndentMargin}"

@@ -159,4 +159,43 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Assert.Contains(repoA, paths);
         Assert.Contains(repoB, paths);
     }
+
+    [Fact]
+    public async Task Run_WithScanRoot_WhenPathDoesNotExist_FallsBackToLocalDrives()
+    {
+        var repo = this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var nonExistentPath = Path.Combine(this.scanRoot, "does-not-exist");
+        // scan-root is configured but the path is absent; local-drive fallback must fire.
+        var context = WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(nonExistentPath)}} }""");
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: () => [this.scanRoot]);
+
+        await tool.ExecuteAsync(context);
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        Assert.Equal(repo, single.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task Run_WithScanRoots_WhenAllPathsDoNotExist_FallsBackToLocalDrives()
+    {
+        var repo = this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var nonExistentA = Path.Combine(this.scanRoot, "gone-a");
+        var nonExistentB = Path.Combine(this.scanRoot, "gone-b");
+        // All scan-roots are absent; local-drive fallback must fire.
+        var context = WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-roots": [{{JsonSerializer.Serialize(nonExistentA)}}, {{JsonSerializer.Serialize(nonExistentB)}}] }""");
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: () => [this.scanRoot]);
+
+        await tool.ExecuteAsync(context);
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        Assert.Equal(repo, single.GetProperty("path").GetString());
+    }
 }
