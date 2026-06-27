@@ -185,6 +185,45 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'theme' command to be re-posted after a spontaneous browser reload.");
     }
 
+    [Fact]
+    public void ThemeVariableResourceKeys_ContainsCopyBtnColor()
+    {
+        var keys = GetThemeVariableResourceKeys();
+        Assert.True(keys.ContainsKey("--copy-btn-color"), "ThemeVariableResourceKeys must contain '--copy-btn-color'.");
+    }
+
+    [Fact]
+    public void ThemeVariableResourceKeys_ContainsCopyBtnHoverColor()
+    {
+        var keys = GetThemeVariableResourceKeys();
+        Assert.True(keys.ContainsKey("--copy-btn-hover-color"), "ThemeVariableResourceKeys must contain '--copy-btn-hover-color'.");
+    }
+
+    [Fact]
+    public void ThemeVariableResourceKeys_ContainsCopyBtnConfirmedColor()
+    {
+        var keys = GetThemeVariableResourceKeys();
+        Assert.True(keys.ContainsKey("--copy-btn-confirmed-color"), "ThemeVariableResourceKeys must contain '--copy-btn-confirmed-color'.");
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_ConfirmedColor_UsesVariable()
+    {
+        var html = ReadShellHtml();
+        // The .copy-gutter-btn.confirmed rule must use the CSS variable, not a hardcoded color.
+        Assert.DoesNotContain(".confirmed {\r\n      color: #4ec9b0;", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(".confirmed {\n      color: #4ec9b0;", html, StringComparison.Ordinal);
+        Assert.Contains("var(--copy-btn-confirmed-color)", html, StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
+    {
+        var field = typeof(AgentChatOutputControl)
+            .GetField("ThemeVariableResourceKeys", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(field!.GetValue(null));
+    }
+
     private static string ReadShellHtml()
     {
         var assembly = typeof(AgentChatOutputControl).Assembly;

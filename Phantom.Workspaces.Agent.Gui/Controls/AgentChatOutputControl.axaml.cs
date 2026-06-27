@@ -34,6 +34,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             ["--chat-error"] = "Theme.Status.Bad",
             ["--chat-uri"] = "Theme.Class.accent.Foreground",
             ["--chat-tool-body-background"] = "Theme.Surface.EntityCard.Background",
+            ["--copy-btn-color"] = "Theme.Class.muted.Foreground",
+            ["--copy-btn-hover-color"] = "Theme.Class.normal.Foreground",
+            ["--copy-btn-confirmed-color"] = "Theme.Class.accent.Foreground",
         };
 
     private static readonly IToolVisualizerFactory DefaultToolFactory = CompositeToolVisualizerFactory.Combine(
