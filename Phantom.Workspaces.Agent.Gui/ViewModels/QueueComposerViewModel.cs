@@ -1,10 +1,13 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows.Input;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
@@ -17,6 +20,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
     private string inputText = string.Empty;
     private bool isFormattedMode;
+    private CancellationTokenSource? completionsCts;
 
     /// <summary>
     /// When set, called with the raw input text when the user submits text starting with '/'.
@@ -25,6 +29,15 @@ public sealed class QueueComposerViewModel : ViewModelBase
     /// interceptor is set and the input starts with '/'.
     /// </summary>
     public Func<string, Task>? SlashCommandInterceptorAsync { get; set; }
+
+    /// <summary>
+    /// When set, called with (commandName, partialArguments, cancellationToken) whenever
+    /// <see cref="InputText"/> starts with '/' to populate the completions popup.
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<IReadOnlyList<SlashCommandCompletion>>>? SlashCompletionsProviderAsync { get; set; }
+
+    /// <summary>Completions popup state driven by <see cref="InputText"/> changes.</summary>
+    public SlashCompletionsViewModel Completions { get; } = new();
 
     public QueueComposerViewModel(
         InputQueueViewModel parent,
@@ -75,7 +88,13 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public string InputText
     {
         get => this.inputText;
-        set => this.SetProperty(ref this.inputText, value);
+        set
+        {
+            if (this.SetProperty(ref this.inputText, value))
+            {
+                this.OnInputTextChanged(value);
+            }
+        }
     }
 
     public bool IsFormattedMode
@@ -263,7 +282,57 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public void Dispose()
     {
         this.targetQueue.Changed -= this.OnTargetQueueChanged;
+        this.completionsCts?.Cancel();
+        this.completionsCts?.Dispose();
+        this.completionsCts = null;
         this.ClearAttachments();
+    }
+
+    private void OnInputTextChanged(string text)
+    {
+        this.completionsCts?.Cancel();
+        this.completionsCts?.Dispose();
+        this.completionsCts = null;
+
+        if (!this.IsDefaultComposer
+            || !text.StartsWith('/')
+            || this.SlashCompletionsProviderAsync is not { } provider)
+        {
+            this.Completions.Dismiss();
+            return;
+        }
+
+        // Split "/commandName rest" → commandName + rest
+        var withoutSlash = text.Substring(1);
+        var parts = withoutSlash.Split(' ', 2);
+        var commandName = parts[0];
+        var partialArgs = parts.Length > 1 ? parts[1] : string.Empty;
+
+        var cts = new CancellationTokenSource();
+        this.completionsCts = cts;
+        _ = this.FetchAndApplyCompletionsAsync(provider, commandName, partialArgs, cts.Token);
+    }
+
+    private async Task FetchAndApplyCompletionsAsync(
+        Func<string, string, CancellationToken, Task<IReadOnlyList<SlashCommandCompletion>>> provider,
+        string commandName,
+        string partialArgs,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<SlashCommandCompletion> completions;
+        try
+        {
+            completions = await provider(commandName, partialArgs, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            this.Completions.SetItems(completions);
+        }
     }
 
     private string FormatImagePlaceholder(int width, int height, string? fileName)
