@@ -3,8 +3,11 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Styling;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using System.IO;
+using System.Text.Json;
 
 namespace Phantom.Workspaces.Agent.Gui;
 
@@ -18,9 +21,50 @@ public partial class App : Application
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
+        ApplyPersistedTheme();
 #if DEBUG
         this.AttachDeveloperTools();
 #endif
+    }
+
+    private static void ApplyPersistedTheme()
+    {
+        var filePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Phantom.Workspaces",
+            "profile.json");
+
+        var isLight = false;
+        if (File.Exists(filePath))
+        {
+            try
+            {
+                using var stream = File.OpenRead(filePath);
+                using var document = JsonDocument.Parse(stream);
+                var root = document.RootElement;
+
+                string? themeName = null;
+                if (root.TryGetProperty("theme", out var themeElement))
+                {
+                    if (themeElement.ValueKind == JsonValueKind.String)
+                    {
+                        themeName = themeElement.GetString();
+                    }
+                    else if (themeElement.ValueKind == JsonValueKind.Object
+                        && themeElement.TryGetProperty("name", out var nameElement))
+                    {
+                        themeName = nameElement.GetString();
+                    }
+                }
+
+                isLight = string.Equals(themeName, "light", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        Application.Current!.RequestedThemeVariant = isLight ? ThemeVariant.Light : ThemeVariant.Dark;
     }
 
     public override void OnFrameworkInitializationCompleted()

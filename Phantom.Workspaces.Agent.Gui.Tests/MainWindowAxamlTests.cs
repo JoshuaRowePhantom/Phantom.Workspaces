@@ -170,6 +170,11 @@ public sealed class MainWindowAxamlTests
             appContent,
             StringComparison.Ordinal);
 
+        Assert.DoesNotContain(
+            "RequestedThemeVariant=\"Dark\"",
+            appContent,
+            StringComparison.Ordinal);
+
         var sharedStylesContent = ReadSharedStylesFile();
         Assert.Contains(
             "TreeView.entity-card-tree TreeViewItem",

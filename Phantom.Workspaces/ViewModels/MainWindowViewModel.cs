@@ -69,14 +69,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
-        WorkspacesConfiguration? configuration = null)
+        WorkspacesConfiguration? configuration = null,
+        ProfileStore? profileStore = null)
     {
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
             repositorySource,
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
-        this.profileStore = ProfileStore.ForCurrentUser();
+        this.profileStore = profileStore ?? ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>();
@@ -96,8 +97,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
-        this.ApplyThemeResources(this.currentProfile.Theme);
-        this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
@@ -206,7 +205,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 return;
             }
 
-            _ = this.SetThemeAsync(normalizedThemeName);
+            _ = this.SetThemeAsync(normalizedThemeName).ContinueWith(
+                static t => Dispatcher.UIThread.Post(() =>
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(
+                        t.Exception!.InnerException ?? t.Exception!)),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
         }
     }
 
@@ -510,7 +515,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ApplyProfile(profile);
     }
 
-    private async Task SetThemeAsync(
+    internal async Task SetThemeAsync(
         string themeName)
     {
         var updatedProfile = await this.profileStore.ChangeProfileAsync(

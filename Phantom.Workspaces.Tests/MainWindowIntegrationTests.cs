@@ -18,9 +18,10 @@ namespace Phantom.Workspaces.Tests;
 public sealed class MainWindowIntegrationTests
 {
     [AvaloniaFact(Timeout = 15_000)]
-    public void ThemeResources_UseFontFamilyType()
+    public async Task ThemeResources_UseFontFamilyType()
     {
-        _ = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
 
         Assert.True(Avalonia.Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
         Assert.IsType<FontFamily>(fontFamilyResource);
@@ -76,6 +77,29 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("light", viewModel.ThemeNames);
         viewModel.SelectedThemeName = "light";
         Assert.Equal("light", viewModel.SelectedThemeName);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task SelectedThemeName_SetToLight_PersistsAcrossViewModelInstances()
+    {
+        var profilePath = CreateTempProfileStorePath();
+        try
+        {
+            var store = new ProfileStore(profilePath);
+
+            var vm1 = new MainWindowViewModel(CreateInMemoryRepositorySource(), profileStore: store);
+            await vm1.InitializeAsync();
+            await vm1.SetThemeAsync("light");
+
+            var vm2 = new MainWindowViewModel(CreateInMemoryRepositorySource(), profileStore: store);
+            await vm2.InitializeAsync();
+
+            Assert.Equal("light", vm2.SelectedThemeName);
+        }
+        finally
+        {
+            DeleteTempProfileStoreDirectory(profilePath);
+        }
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -1194,6 +1218,24 @@ public sealed class MainWindowIntegrationTests
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();
+    }
+
+    private static string CreateTempProfileStorePath()
+    {
+        return Path.Combine(
+            Path.GetTempPath(),
+            "Phantom.Workspaces.Tests",
+            Guid.NewGuid().ToString("N"),
+            "profile.json");
+    }
+
+    private static void DeleteTempProfileStoreDirectory(string profilePath)
+    {
+        var directory = Path.GetDirectoryName(profilePath);
+        if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static EntityBroker GetEntityBroker(
