@@ -141,4 +141,22 @@ public sealed class RunVsCodeTunnelToolTests
         Assert.NotNull(installCall);
         Assert.Contains("my-custom-tunnel", installCall!.Arguments);
     }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_DefaultCliPath_UsesLocatorResolvedPath()
+    {
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                return Task.FromResult(("service is running", 0));
+            },
+            defaultCliPathResolver: () => @"C:\fake\code.cmd");
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.All(calls, c => Assert.Equal(@"C:\fake\code.cmd", c.CliPath));
+    }
 }

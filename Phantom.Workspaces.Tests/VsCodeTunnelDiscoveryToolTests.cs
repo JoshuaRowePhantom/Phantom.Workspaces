@@ -167,4 +167,24 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
             entity1!.Value.GetProperty("entity-id").GetString(),
             entity2!.Value.GetProperty("entity-id").GetString());
     }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_DefaultCliPath_UsesLocatorResolvedPath()
+    {
+        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        string? capturedCliPath = null;
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            (cliPath, _) =>
+            {
+                capturedCliPath = cliPath;
+                return Task.FromResult(0);
+            },
+            defaultCliPathResolver: () => @"C:\fake\code.cmd");
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+
+        Assert.Equal(@"C:\fake\code.cmd", capturedCliPath);
+    }
 }

@@ -17,13 +17,16 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
 
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider;
     private readonly Func<string, string, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner;
+    private readonly Func<string> defaultCliPathResolver;
 
     public RunVsCodeTunnelTool(
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
-        Func<string, string, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner = null)
+        Func<string, string, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner = null,
+        Func<string>? defaultCliPathResolver = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
         this.cliRunner = cliRunner;
+        this.defaultCliPathResolver = defaultCliPathResolver ?? VsCodeCliLocator.ResolveDefaultCliPath;
     }
 
     public string ToolType => "run-vscode-tunnel";
@@ -32,7 +35,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var cliPath = ResolveCliPath(context.Tool.Data);
+        var cliPath = this.ResolveCliPath(context.Tool.Data);
         var tunnelName = this.ResolveTunnelName(context.Tool.Data);
 
         var status = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
@@ -64,7 +67,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         return this.currentExecutionContextProvider.ComputerName;
     }
 
-    private static string ResolveCliPath(JsonElement? toolData)
+    private string ResolveCliPath(JsonElement? toolData)
     {
         if (toolData is JsonElement toolDataValue
             && toolDataValue.ValueKind == JsonValueKind.Object
@@ -75,7 +78,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
             return pathElement.GetString()!;
         }
 
-        return "code";
+        return this.defaultCliPathResolver();
     }
 
     private async Task<VsCodeTunnelServiceStatus> GetServiceStatusAsync(
@@ -114,13 +117,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     private static async Task<(string Output, int ExitCode)> DefaultRunCliAsync(
         string cliPath, string arguments, CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo(cliPath, arguments)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        var psi = VsCodeCliLocator.BuildProcessStartInfo(cliPath, arguments);
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start process: {cliPath}");
