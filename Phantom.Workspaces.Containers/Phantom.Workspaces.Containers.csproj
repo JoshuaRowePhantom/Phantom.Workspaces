@@ -11,6 +11,9 @@
     <PackageReference Include="JsonSchema.Net" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <None Remove="JsonSchemas\*.json" />
   </ItemGroup>
   <ItemGroup>
