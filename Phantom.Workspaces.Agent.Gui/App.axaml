@@ -6,5 +6,6 @@
 
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SlashCompletionsStyles.axaml" />
     </Application.Styles>
 </Application>

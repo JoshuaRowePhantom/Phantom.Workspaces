@@ -41,7 +41,30 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
             return Task.FromResult(ListAllCommands());
         }
 
-        return Task.FromResult(ShowCommandHelp(arguments.Trim()));
+        return ShowCommandHelpAsync(context, arguments.Trim(), cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
+        SlashCommandContext context,
+        string partialArguments,
+        CancellationToken cancellationToken)
+    {
+        var trimmed = partialArguments.TrimStart();
+        var firstWord = trimmed.Split(' ', 2)[0];
+        var exactMatch = this.registry.Commands.FirstOrDefault(
+            c => string.Equals(c.Name, firstWord, StringComparison.OrdinalIgnoreCase));
+
+        if (exactMatch is not null && trimmed.Contains(' '))
+        {
+            var subArgs = trimmed.Substring(firstWord.Length).TrimStart();
+            return await exactMatch.GetCompletionsAsync(context, subArgs, cancellationToken);
+        }
+
+        return this.registry.Commands
+            .Where(c => c.Name.StartsWith(trimmed, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Name, StringComparer.Ordinal)
+            .Select(c => new SlashCommandCompletion(c.Name, $"/{c.Name}", c.Description))
+            .ToArray();
     }
 
     private SlashCommandResult ListAllCommands()
@@ -52,7 +75,10 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
         return new SlashCommandResult { StatusMessage = string.Join('\n', lines) };
     }
 
-    private SlashCommandResult ShowCommandHelp(string commandName)
+    private async Task<SlashCommandResult> ShowCommandHelpAsync(
+        SlashCommandContext context,
+        string commandName,
+        CancellationToken cancellationToken)
     {
         var handler = this.registry.Commands.FirstOrDefault(
             c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase));
@@ -62,7 +88,7 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
             return new SlashCommandResult { StatusMessage = $"Unknown command: /{commandName}" };
         }
 
-        var body = handler.LongDescription ?? handler.Description;
+        var body = await handler.GetHelpAsync(context, string.Empty, cancellationToken);
         var usage = handler.Usage is not null ? $"Usage: {handler.Usage}\n\n" : string.Empty;
         return new SlashCommandResult { StatusMessage = $"{usage}{body}" };
     }

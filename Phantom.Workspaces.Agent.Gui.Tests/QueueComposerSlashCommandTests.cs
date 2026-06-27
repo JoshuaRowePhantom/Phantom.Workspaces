@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
+using System.Collections.Generic;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -86,6 +87,70 @@ public sealed class QueueComposerSlashCommandTests
         composer.Submit();
 
         Assert.Single(chat.DefaultInputQueue.Items);
+
+        inputQueue.Dispose();
+    }
+
+    [AvaloniaFact]
+    public async Task InputText_StartingWithSlash_CallsCompletionsProvider()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = inputQueue.DefaultComposer;
+
+        var providerCalled = false;
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completions = new List<SlashCommandCompletion>
+        {
+            new SlashCommandCompletion("working-directory", "/working-directory", "Set working directory"),
+        };
+
+        composer.SlashCompletionsProviderAsync = (commandName, partialArgs, ct) =>
+        {
+            providerCalled = true;
+            tcs.TrySetResult();
+            return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(completions);
+        };
+
+        composer.InputText = "/working-directory";
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(providerCalled);
+
+        inputQueue.Dispose();
+    }
+
+    [AvaloniaFact]
+    public async Task InputText_NotStartingWithSlash_DismissesCompletions()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = inputQueue.DefaultComposer;
+
+        var completions = new List<SlashCommandCompletion>
+        {
+            new SlashCommandCompletion("working-directory", "/working-directory", "Set working directory"),
+        };
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        composer.SlashCompletionsProviderAsync = (commandName, partialArgs, ct) =>
+        {
+            tcs.TrySetResult();
+            return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(completions);
+        };
+
+        // First trigger completions.
+        composer.InputText = "/working-directory";
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Now type non-slash text — completions should be dismissed.
+        composer.InputText = "hello";
+
+        Assert.False(composer.Completions.IsVisible);
 
         inputQueue.Dispose();
     }
