@@ -390,6 +390,31 @@ public sealed class AgentChat : IAsyncDisposable
     }
 
     /// <summary>
+    /// Adds a diagnostic note to the visible chat history without forwarding it to the LLM.
+    /// Used for slash-command status messages and other host-side notifications.
+    /// </summary>
+    public void EnqueueSystemNote(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                this.AddHistoryItem(new AgentChatHistoryItem
+                {
+                    Role = AgentChatHistoryItem.DiagnosticChatRole,
+                    Contents = [new TextContent(text)],
+                });
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
+    /// <summary>
     /// Requests an interrupt of the current streaming response.
     /// </summary>
     public void Interrupt()

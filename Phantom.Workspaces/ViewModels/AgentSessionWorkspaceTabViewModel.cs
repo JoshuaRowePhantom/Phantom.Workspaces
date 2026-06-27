@@ -66,6 +66,24 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         this.State = AgentTabState.Ready;
     }
 
+    /// <summary>
+    /// Detaches and disposes the current agent and logger so the tab can be re-initialized
+    /// with a new agent (e.g. after a /working-directory change).
+    /// </summary>
+    internal async Task ResetForRecreationAsync()
+    {
+        if (this.agent is not null)
+        {
+            this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
+            await this.agent.DisposeAsync();
+            this.Agent = null;
+        }
+
+        this.loggerFactory?.Dispose();
+        this.loggerFactory = null;
+        this.State = AgentTabState.Loading;
+    }
+
     public void SetFailed(string error)
     {
         this.LoadError = error;

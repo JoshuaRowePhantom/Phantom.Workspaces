@@ -1,10 +1,14 @@
 using AgentSchema;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
+using System.Linq;
+using System.Threading;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -155,6 +159,77 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
 
     public event EventHandler? OpenLogWindowRequested;
+
+    /// <summary>
+    /// Raised when a slash command that requires agent recreation has been successfully executed.
+    /// The status message from the command result is passed as event args; subscribers are
+    /// expected to dispose the current <see cref="AgentChat"/> and recreate it from the updated
+    /// agent-session entity.
+    /// </summary>
+    public event EventHandler<string>? AgentRecreationRequested;
+
+    /// <summary>
+    /// Configures the slash command registry and context factory for this view model.
+    /// The registry is queried for the agent's current definition; the context factory
+    /// produces a <see cref="SlashCommandContext"/> for each command invocation.
+    /// </summary>
+    public void ConfigureSlashCommands(
+        ISlashCommandRegistry registry,
+        Func<SlashCommandContext> contextFactory)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(contextFactory);
+
+        this.InputQueue.DefaultComposer.SlashCommandInterceptorAsync = text =>
+            this.RunSlashCommandAsync(registry, contextFactory, text);
+    }
+
+    private async Task RunSlashCommandAsync(
+        ISlashCommandRegistry registry,
+        Func<SlashCommandContext> contextFactory,
+        string text)
+    {
+        // text starts with "/" — parse "/<name> [args]"
+        var afterSlash = text.Substring(1);
+        var spaceIndex = afterSlash.IndexOf(' ');
+        var commandName = spaceIndex < 0 ? afterSlash : afterSlash.Substring(0, spaceIndex);
+        var arguments = spaceIndex < 0 ? string.Empty : afterSlash.Substring(spaceIndex + 1).Trim();
+
+        var agentDefinition = this.agentChat.AgentDefinition;
+        var commands = registry.GetCommands(agentDefinition);
+        var handler = commands.FirstOrDefault(
+            c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase));
+
+        if (handler is null)
+        {
+            // Unknown slash command — forward to the LLM as a plain message.
+            this.agentChat.EnqueueUserMessage(text);
+            return;
+        }
+
+        var context = contextFactory();
+        SlashCommandResult result;
+        try
+        {
+            result = await handler.ExecuteAsync(context, arguments, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            result = new SlashCommandResult
+            {
+                StatusMessage = $"Command /{commandName} failed: {exception.Message}",
+            };
+        }
+
+        // Show the status message as a system note in the chat history so the user
+        // gets feedback without the message being forwarded to the LLM.
+        this.agentChat.EnqueueSystemNote(result.StatusMessage);
+
+        if (result.RequiresAgentRecreation)
+        {
+            this.AgentRecreationRequested?.Invoke(this, result.StatusMessage);
+        }
+    }
 
     /// <summary>
     /// Called when the user activates a hyperlink in the chat output. The workspace layer

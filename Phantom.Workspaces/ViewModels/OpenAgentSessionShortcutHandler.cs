@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -70,6 +73,12 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 if (result is var (agent, loggerFactory))
                 {
                     tab.SetReady(agent, loggerFactory);
+
+                    agent.AgentRecreationRequested += async (_, _) =>
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(async () => await tab.ResetForRecreationAsync());
+                        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler));
+                    };
                 }
                 else
                 {
@@ -193,6 +202,20 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 
         var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
         var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+
+        agent.ConfigureSlashCommands(
+            SlashCommandRegistry.Default,
+            () => new SlashCommandContext
+            {
+                AgentChat = agentChat,
+                AgentSessionEntityId = agentSessionEntity.EntityId.ToString(),
+                CurrentParameterValues = ReadStringDictionary(
+                    agentSessionEntity.Data is JsonElement d
+                    && d.TryGetProperty("parameter-values", out var pv) ? pv : default),
+                UpdateParameterValuesAsync = (newValues, ct) =>
+                    UpdateParameterValuesInEntityAsync(mainWindowViewModel, agentSessionEntity, newValues),
+            });
+
         return (agent, loggerFactory);
     }
 
@@ -220,6 +243,77 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     Title = url,
                 }),
         };
+    }
+
+    private static async Task UpdateParameterValuesInEntityAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        IReadOnlyDictionary<string, string> newValues)
+    {
+        if (agentSessionEntity.Data is not JsonElement currentData)
+        {
+            return;
+        }
+
+        var mergedJson = MergeParameterValues(currentData, newValues);
+        using var mergedDoc = JsonDocument.Parse(mergedJson);
+        await mainWindowViewModel.EntityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = $"Update parameter-values for {agentSessionEntity.DisplayName}.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = mergedDoc.RootElement.Clone(),
+                    },
+                ],
+            });
+    }
+
+    private static string MergeParameterValues(
+        JsonElement entityData,
+        IReadOnlyDictionary<string, string> newValues)
+    {
+        var paramValuesJson = JsonSerializer.Serialize(newValues);
+        var writer = new StringBuilder();
+        writer.Append('{');
+        var first = true;
+        var hadParameterValues = false;
+        foreach (var prop in entityData.EnumerateObject())
+        {
+            if (!first)
+            {
+                writer.Append(',');
+            }
+            first = false;
+            if (prop.Name == "parameter-values")
+            {
+                hadParameterValues = true;
+                writer.Append($"\"parameter-values\":{paramValuesJson}");
+            }
+            else
+            {
+                writer.Append($"\"{prop.Name}\":{prop.Value.GetRawText()}");
+            }
+        }
+        if (!hadParameterValues)
+        {
+            if (!first)
+            {
+                writer.Append(',');
+            }
+            writer.Append($"\"parameter-values\":{paramValuesJson}");
+        }
+        writer.Append('}');
+        return writer.ToString();
     }
 
     private static IReadOnlyDictionary<string, string>? ReadStringDictionary(JsonElement element)
