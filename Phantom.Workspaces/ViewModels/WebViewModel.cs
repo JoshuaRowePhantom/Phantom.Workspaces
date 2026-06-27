@@ -159,7 +159,7 @@ public class WebViewModel : WorkspaceTabViewModel
             DockRegion = this.DockRegion, // Open in same region
         };
 
-        await this.tabService.OpenTabAsync(newTab);
+        await this.tabService.OpenTabAsync(newTab, insertAfterTabId: this.Id);
     }
 
     public void UpdateCurrentUrl(string url)

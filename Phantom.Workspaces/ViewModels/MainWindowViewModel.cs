@@ -1497,7 +1497,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             });
     }
 
-    public async Task OpenTabAsync(WorkspaceTabViewModel tab)
+    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
@@ -1537,7 +1537,36 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        // Create new document
+        // When a source tab is specified, insert the new tab immediately after it.
+        var visibleDockables = documentDock.VisibleDockables;
+        if (insertAfterTabId is not null && visibleDockables is not null)
+        {
+            var sourceIndex = -1;
+            for (var i = 0; i < visibleDockables.Count; i++)
+            {
+                if (string.Equals(visibleDockables[i].Id, insertAfterTabId, StringComparison.Ordinal))
+                {
+                    sourceIndex = i;
+                    break;
+                }
+            }
+
+            if (sourceIndex >= 0)
+            {
+                var newDocument = new WorkspaceDocument(tab);
+                this.dockFactory.InsertDockable(documentDock, newDocument, sourceIndex + 1);
+                this.dockFactory.SetActiveDockable(newDocument);
+                this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+                this.SyncSelectedWorkspacePaneFromDock();
+                if (!this.navigatingViaHistory)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                }
+                return;
+            }
+        }
+
+        // Default: append the new tab at the end.
         this.dockFactory.AddWorkspaceTab(documentDock, tab);
         this.SyncSelectedWorkspacePaneFromDock();
         if (!this.navigatingViaHistory)

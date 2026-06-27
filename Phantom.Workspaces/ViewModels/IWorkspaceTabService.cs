@@ -10,7 +10,12 @@ public interface IWorkspaceTabService
     /// <summary>
     /// Opens a new workspace tab.
     /// </summary>
-    Task OpenTabAsync(WorkspaceTabViewModel tab);
+    /// <param name="tab">The tab view model to open.</param>
+    /// <param name="insertAfterTabId">
+    /// When set, the new tab is inserted immediately to the right of the tab with this id.
+    /// If the id is not found the tab is appended at the end.
+    /// </param>
+    Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null);
 
     /// <summary>
     /// Replaces an existing workspace tab with a new one.

@@ -280,7 +280,39 @@ public sealed class WebViewModelTests
         Assert.Equal("Repos", webTab.Title);
     }
 
-    // --- Helpers ---
+    // --- RaiseOpenNewWindow: new tab insertion position ---
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RaiseOpenNewWindow_InsertsNewTabImmediatelyRightOfSourceTab()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Open two tabs so we can verify relative insertion position.
+        var tabA = new WebViewModel("https://a.example.com", viewModel) { Id = "web-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com", viewModel) { Id = "web-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        // Simulate a new-window navigation originating from tab A (Id = "web-a").
+        var sourceTab = new WebViewModel("https://a.example.com", viewModel) { Id = "web-a", Title = "A" };
+        sourceTab.RaiseOpenNewWindow("https://new.example.com");
+
+        // Allow the async void to complete.
+        await Task.Yield();
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var tabs = selectedRegion.Tabs!.ToList();
+
+        var indexA = tabs.FindIndex(t => t.Id == "web-a");
+        var indexNew = tabs.FindIndex(t => t is WebViewModel wv && wv.AddressBarUrl == "https://new.example.com");
+
+        Assert.True(indexA >= 0, "Source tab A should be present");
+        Assert.True(indexNew >= 0, "New tab should be present");
+        Assert.Equal(indexA + 1, indexNew);
+    }
+
+
 
     private static SubscribedEntityViewModel CreateExternalEntity(
         string entityId,

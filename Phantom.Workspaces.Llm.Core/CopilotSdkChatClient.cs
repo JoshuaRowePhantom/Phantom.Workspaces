@@ -488,6 +488,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             return;
         }
 
+        // Re-arm the resume id so the next EnsureSessionAsync reconnects to the existing Copilot CLI
+        // session (with its history) rather than creating a blank one (GitHub issue #35, Failure 1).
+        this.pendingResumeSessionId = session.SessionId;
+
         this.currentSessionSignature = null;
         _ = Task.Run(async () =>
         {
