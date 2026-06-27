@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 

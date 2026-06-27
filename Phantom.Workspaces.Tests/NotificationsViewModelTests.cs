@@ -192,11 +192,12 @@ public sealed class NotificationsViewModelTests
     }
 
     [Fact]
-    public void ToggleOpen_RaisesPropertyChangedForIsAutoClosing()
+    public void ToggleOpen_WhenAutoClosing_RaisesPropertyChangedForIsAutoClosing()
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
         var viewModel = new NotificationsViewModel(service, _ => { });
+        viewModel.IsAutoClosing = true;
 
         var changedProperties = new List<string?>();
         viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);

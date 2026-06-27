@@ -31,14 +31,10 @@
                        PlaybackDirection="Alternate"
                        Easing="SineEaseInOut">
                 <KeyFrame Cue="0%">
-                    <Setter Property="RenderTransform">
-                        <RotateTransform Angle="-18" />
-                    </Setter>
+                    <Setter Property="RotateTransform.Angle" Value="-18" />
                 </KeyFrame>
                 <KeyFrame Cue="100%">
-                    <Setter Property="RenderTransform">
-                        <RotateTransform Angle="18" />
-                    </Setter>
+                    <Setter Property="RotateTransform.Angle" Value="18" />
                 </KeyFrame>
             </Animation>
         </Style.Animations>

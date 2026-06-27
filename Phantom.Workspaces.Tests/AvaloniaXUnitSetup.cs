@@ -34,6 +34,10 @@ public static class AvaloniaTestAppBuilder
             {
                 Source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml")
             });
+            Styles.Add(new StyleInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
+            {
+                Source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/NotificationsStyles.axaml")
+            });
 
             foreach (var template in new WorkspaceDataTemplates())
             {

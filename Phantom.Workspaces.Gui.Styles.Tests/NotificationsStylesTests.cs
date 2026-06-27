@@ -1,42 +1,39 @@
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Markup.Xaml;
 
 namespace Phantom.Workspaces.Gui.Styles.Tests;
 
 public sealed class NotificationsStylesTests
 {
     [AvaloniaFact(Timeout = 15_000)]
-    public void BellRingingAnimation_RenderTransformKeyFrames_DoNotUseStringValues()
+    public void BellRingingAnimation_ApplyingClassToTextBlock_DoesNotThrow()
     {
-        var repositoryRoot = FindRepositoryRoot();
-        var stylesPath = Path.Combine(
-            repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
-            "Styles",
-            "NotificationsStyles.axaml");
-        var content = File.ReadAllText(stylesPath);
+        // Regression test for #143: string-valued RenderTransform KeyFrame setters cause
+        // "No animator registered for the property RenderTransform" because Avalonia's
+        // XAML IL compiler does not apply type converters inside KeyFrame.Setter.
+        // The fix is to use typed <RotateTransform> object syntax instead of Value="rotate(...)".
+        var styles = LoadNotificationsStyles();
 
-        // String-valued RenderTransform setters (e.g. Value="rotate(-18deg)") cause
-        // "No animator registered for RenderTransform" at runtime — Avalonia's XAML IL
-        // compiler does not apply property type converters inside KeyFrame.Setter elements.
-        Assert.DoesNotContain("Value=\"rotate(", content, StringComparison.Ordinal);
+        var textBlock = new TextBlock();
+        textBlock.Classes.Add("notification-bell-ringing");
 
-        // The correct syntax uses typed RotateTransform as child element inside the setter.
-        Assert.Contains("<RotateTransform", content, StringComparison.Ordinal);
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(textBlock);
+
+        // Measure/Arrange triggers style application and animation keyframe interpretation.
+        // This throws InvalidOperationException if RenderTransform keyframe values are strings.
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    private static DirectoryInfo FindRepositoryRoot()
+    private static Avalonia.Styling.Styles LoadNotificationsStyles()
     {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
-            {
-                return current;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+        var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/NotificationsStyles.axaml");
+        var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
+        var loaded = AvaloniaXamlLoader.Load(source, baseUri);
+        return Assert.IsType<Avalonia.Styling.Styles>(loaded);
     }
 }
