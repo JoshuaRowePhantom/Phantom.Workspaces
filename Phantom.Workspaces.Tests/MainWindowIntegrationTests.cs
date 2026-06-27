@@ -1,9 +1,11 @@
 using Avalonia.Media;
 using Avalonia.Headless.XUnit;
+using Avalonia.VisualTree;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Phantom.Workspaces.Data;
@@ -1122,6 +1124,69 @@ public sealed class MainWindowIntegrationTests
         {
             tab.PropertyChanged -= OnPropertyChanged;
         }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
+    {
+        // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
+        // set so tab icons and notification indicators are rendered via EffectiveTabHeader.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://example.com") { Id = "header-tmpl-test", Title = "Header Test" };
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        // Force layout passes: DockControl builds its visual tree during render ticks.
+        for (var i = 0; i < 10; i++)
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        }
+
+        // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
+        var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
+        Assert.NotEmpty(tabStrips);
+
+        // Diagnostic: check DataContext types on all tab strips and DockControls
+        var allDockControls = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DockControl>().ToList();
+
+        var contentTabStrip = tabStrips.FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
+        Assert.NotNull(contentTabStrip);
+
+        // Diagnostic: check the full chain from DocumentControl → DocumentTabStrip → PART_HeaderPresenter
+        var documentControl = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DocumentControl>()
+            .FirstOrDefault(dc => dc.GetVisualDescendants().Contains(contentTabStrip));
+        Assert.NotNull(documentControl);
+
+        // Both DocumentControl and DocumentTabStrip should have our ContentControl DataTemplate, not Dock's default.
+        var dcHeaderTemplateTypeName = documentControl!.HeaderTemplate?.GetType().Name ?? "(null)";
+        var dcHeaderTemplateDataType = (documentControl!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
+        var tsHeaderTemplateTypeName = contentTabStrip!.HeaderTemplate?.GetType().Name ?? "(null)";
+        var tsHeaderTemplateDataType = (contentTabStrip!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
+
+        var tabStripItems = contentTabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+        Assert.NotEmpty(tabStripItems);
+
+        var headerPresenter = tabStripItems[0]
+            .GetVisualDescendants()
+            .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+            .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
+        Assert.NotNull(headerPresenter);
+
+        // The child of PART_HeaderPresenter should be a ContentControl (our template), not a TextBlock.
+        // If this fails, check: dcHeaderTemplate={dcHeaderTemplateTypeName}, tsHeaderTemplate={tsHeaderTemplateTypeName}
+        var headerChild = headerPresenter!.GetVisualChildren().FirstOrDefault();
+        Assert.NotNull(headerChild);
+        Assert.True(
+            headerChild is Avalonia.Controls.ContentControl,
+            $"Expected ContentControl but got {headerChild!.GetType().Name}. " +
+            $"DC.HeaderTemplate={dcHeaderTemplateTypeName}(DataType={dcHeaderTemplateDataType}), " +
+            $"TS.HeaderTemplate={tsHeaderTemplateTypeName}(DataType={tsHeaderTemplateDataType})");
+
+        window.Close();
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()

@@ -52,7 +52,7 @@ public class WorkspaceDockFactory : Factory
     /// </summary>
     public IRootDock CreateWorkspaceContentLayout(WorkspacePaneViewModel workspacePane)
     {
-        var contentDock = new DocumentDock
+        var contentDock = new WorkspaceContentDock
         {
             Id = $"WorkspaceContent_{workspacePane.Id}",
             Title = workspacePane.Title,
