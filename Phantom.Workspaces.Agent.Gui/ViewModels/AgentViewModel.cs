@@ -156,6 +156,8 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public bool AutoScrollDisabled => !this.autoScrollEnabled;
 
+    public IAgentStatusSink StatusSink => this.conversationDetail.StatusLine;
+
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
 
     public event EventHandler? OpenLogWindowRequested;

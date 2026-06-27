@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using Markdig;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 
@@ -82,7 +84,7 @@ internal static class ChatOutputHtmlRenderer
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
-            .Append(messageId).Append("\">");
+            .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
         builder.Append(RenderHeader(messageId, roleLabel));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
@@ -99,7 +101,7 @@ internal static class ChatOutputHtmlRenderer
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
 
     public static string RenderHeader(string messageId, string roleLabel)
-        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\">[{HtmlEscape(roleLabel)}]</div>";
+        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
 
     public static string RoleClass(string roleLabel)
         => string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
@@ -109,13 +111,15 @@ internal static class ChatOutputHtmlRenderer
     /// <summary>
     /// Renders a single content block to a <c>div.chat-content</c> (or collapsible <c>details</c>)
     /// element, or returns <see langword="null"/> when the block should not be shown (hidden reasoning
-    /// or empty text).
+    /// or empty text). Each rendered block includes a small inline inspector affordance button.
     /// </summary>
     public static string? RenderContent(
         string contentId,
         AIContent content,
         bool includeReasoning,
-        bool isDiagnostic)
+        bool isDiagnostic,
+        IToolVisualizerFactory? toolFactory = null,
+        IAgentStatusSink? statusSink = null)
     {
         switch (content)
         {
@@ -131,9 +135,37 @@ internal static class ChatOutputHtmlRenderer
             case TextContent text:
                 return string.IsNullOrWhiteSpace(text.Text) ? null : MarkdownBlock(contentId, "chat-text", text.Text);
             case FunctionCallContent call:
+            {
+                if (toolFactory is not null)
+                {
+                    var context = new ToolVisualizationContext(call);
+                    var factoryResult = toolFactory.Visualize(context);
+                    var interpreted = ToolVisualizationInterpreter.Interpret(factoryResult, contentId, statusSink);
+                    if (interpreted is not null)
+                    {
+                        return string.IsNullOrEmpty(interpreted) ? string.Empty : AppendInspector(interpreted, contentId);
+                    }
+                }
+
                 return RenderCollapsible(contentId, "chat-tool", $"tool call: {call.Name}", PrettyJson(call.Arguments));
+            }
+
             case FunctionResultContent result:
+            {
+                if (toolFactory is not null)
+                {
+                    var context = new ToolVisualizationContext(result);
+                    var factoryResult = toolFactory.Visualize(context);
+                    var interpreted = ToolVisualizationInterpreter.Interpret(factoryResult, contentId, statusSink);
+                    if (interpreted is not null)
+                    {
+                        return string.IsNullOrEmpty(interpreted) ? string.Empty : AppendInspector(interpreted, contentId);
+                    }
+                }
+
                 return RenderCollapsible(contentId, "chat-tool", $"tool result: {result.CallId}", PrettyJson(result.Result));
+            }
+
             case DataContent data:
                 return IsImageMediaType(data.MediaType)
                     ? TextBlock(contentId, "chat-meta", string.IsNullOrWhiteSpace(data.MediaType) ? "image" : data.MediaType)
@@ -204,7 +236,7 @@ internal static class ChatOutputHtmlRenderer
     }
 
     private static string TextBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{HtmlEscape(text)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{HtmlEscape(text)}{InspectorAffordance(contentId)}</div>";
 
     /// <summary>
     /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
@@ -212,7 +244,7 @@ internal static class ChatOutputHtmlRenderer
     /// with raw HTML disabled so model output cannot inject markup into the WebView.
     /// </summary>
     private static string MarkdownBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
 
     private static string MarkdownToHtml(string text)
         => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
@@ -220,8 +252,8 @@ internal static class ChatOutputHtmlRenderer
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\">").Append(HtmlEscape(header)).Append("</summary>");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append(InspectorAffordance(contentId)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
             builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(body)).Append("</pre>");
@@ -230,6 +262,26 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("</details>");
         return builder.ToString();
     }
+
+    /// <summary>
+    /// Appends the inline inspector affordance button to an already-rendered HTML block.
+    /// Used for HTML produced by <see cref="ToolVisualizationInterpreter"/> which builds its own
+    /// element wrapper.
+    /// </summary>
+    private static string AppendInspector(string html, string contentId)
+    {
+        // Insert the affordance just before the closing tag of the root element.
+        var closeIndex = html.LastIndexOf("</", StringComparison.Ordinal);
+        if (closeIndex < 0)
+        {
+            return html;
+        }
+
+        return html[..closeIndex] + InspectorAffordance(contentId) + html[closeIndex..];
+    }
+
+    private static string InspectorAffordance(string contentId)
+        => $"<button class=\"chat-inspect\" data-content-id=\"{contentId}\" onclick=\"postInspect(this)\" title=\"Inspect\">…</button>";
 
     private static string DiagnosticHeader(string text)
     {
