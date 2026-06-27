@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 
 namespace Phantom.Workspaces;
@@ -137,6 +138,30 @@ public static class ProcessRunner
             string.Join(Environment.NewLine, stdoutLines),
             string.Join(Environment.NewLine, stderrLines),
             string.Join(Environment.NewLine, combinedLines));
+    }
+
+    /// <summary>
+    /// Runs a process and, if the exit code is non-zero, logs the combined stdout+stderr output
+    /// via the supplied <paramref name="logger"/> at Warning level before returning the result.
+    /// </summary>
+    public static async Task<ProcessResult> RunAndLogAsync(
+        RunProcessParameters parameters,
+        ILogger logger,
+        string? operationDescription = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await RunProcessAsync(parameters, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            logger.LogWarning(
+                "Process '{Command}' exited with code {ExitCode}{Description}.\nOutput:\n{Output}",
+                parameters.Command,
+                result.ExitCode,
+                operationDescription is null ? string.Empty : $" ({operationDescription})",
+                result.StandardOutAndError);
+        }
+
+        return result;
     }
 
     /// <summary>
