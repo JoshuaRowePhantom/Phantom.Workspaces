@@ -3,7 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
+namespace Phantom.Workspaces.Llm.SlashCommands;
 
 /// <summary>
 /// Handles <c>/help [command]</c>.
@@ -13,12 +13,12 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 /// </summary>
 public sealed class HelpSlashCommandHandler : ISlashCommandHandler
 {
-    private readonly IReadOnlyList<ISlashCommandHandler> availableCommands;
+    private readonly ISlashCommandRegistry registry;
 
-    public HelpSlashCommandHandler(IReadOnlyList<ISlashCommandHandler> availableCommands)
+    public HelpSlashCommandHandler(ISlashCommandRegistry registry)
     {
-        ArgumentNullException.ThrowIfNull(availableCommands);
-        this.availableCommands = availableCommands;
+        ArgumentNullException.ThrowIfNull(registry);
+        this.registry = registry;
     }
 
     public string Name => "help";
@@ -46,7 +46,7 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
 
     private SlashCommandResult ListAllCommands()
     {
-        var lines = this.availableCommands
+        var lines = this.registry.Commands
             .OrderBy(static c => c.Name, StringComparer.Ordinal)
             .Select(static c => $"/{c.Name,-24} {c.Description}");
         return new SlashCommandResult { StatusMessage = string.Join('\n', lines) };
@@ -54,7 +54,7 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
 
     private SlashCommandResult ShowCommandHelp(string commandName)
     {
-        var handler = this.availableCommands.FirstOrDefault(
+        var handler = this.registry.Commands.FirstOrDefault(
             c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase));
 
         if (handler is null)

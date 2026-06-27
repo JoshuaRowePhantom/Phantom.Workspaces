@@ -4,4 +4,5 @@ public sealed class TabDescriptor
 {
     public required string TabId { get; init; }
     public string? WorkspaceId { get; init; }
+    public string? TabTitle { get; init; }
 }

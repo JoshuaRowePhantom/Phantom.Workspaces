@@ -11,6 +11,7 @@ using OllamaSharp;
 using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.SlashCommands;
 using System.ClientModel;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -58,6 +59,7 @@ public sealed class AgentChat : IAsyncDisposable
     private readonly List<ToolStateNode> toolRoots = [];
     private readonly SemaphoreSlim toolMutationLock = new(1, 1);
     private readonly CancellationTokenSource cts = new();
+    private readonly SlashCommandRegistry slashCommands = new();
     private Task processTask = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
 
@@ -248,6 +250,8 @@ public sealed class AgentChat : IAsyncDisposable
        this.StartProcessingLoop();
 
        await this.InitializeMcpToolsAsync(this.request.CancellationToken);
+
+       this.RegisterSlashCommands(resolvedClient);
     }
 
     /// <summary>
@@ -293,6 +297,13 @@ public sealed class AgentChat : IAsyncDisposable
     public string AgentSessionId => this.agentSessionId;
 
     public AgentDefinition? AgentDefinition => this.agentDefinition;
+
+    /// <summary>
+    /// The slash commands available for this chat session.
+    /// Provider-specific commands (e.g. <c>/working-directory</c> for GitHub Copilot) are
+    /// registered automatically during initialisation; <c>/help</c> is always present.
+    /// </summary>
+    public ISlashCommandRegistry SlashCommands => this.slashCommands;
 
     public long? TotalInputTokenCount { get; private set; }
 
@@ -1366,6 +1377,16 @@ public sealed class AgentChat : IAsyncDisposable
         {
             this.toolMutationLock.Release();
         }
+    }
+
+    private void RegisterSlashCommands(IChatClient resolvedClient)
+    {
+        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient)
+        {
+            this.slashCommands.Register(new WorkingDirectorySlashCommandHandler());
+        }
+
+        this.slashCommands.Register(new HelpSlashCommandHandler(this.slashCommands));
     }
 
     private async Task<IReadOnlyList<RuntimeContextProviderRegistration>> CreateRuntimeContextProviderRegistrationsAsync(

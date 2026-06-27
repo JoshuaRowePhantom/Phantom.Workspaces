@@ -383,7 +383,7 @@ public sealed class ScheduledToolHostTests
         var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
         var resultEntity = Assert.Single(results);
         Assert.Equal("failed", resultEntity.GetProperty("status").GetString());
-        Assert.Equal("something went wrong", resultEntity.GetProperty("content").GetProperty("default").GetProperty("text").GetString());
+        Assert.Equal("something went wrong", resultEntity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString());
     }
 
     private static async Task<IReadOnlyList<JsonElement>> QueryByTypeAsync(IDataAccessLayer dataAccessLayer, string entityType)

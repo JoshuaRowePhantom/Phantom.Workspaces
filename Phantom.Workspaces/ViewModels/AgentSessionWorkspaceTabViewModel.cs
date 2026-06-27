@@ -103,12 +103,12 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
         if (isRunning && !this.wasRunning)
         {
-            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, "Run started");
+            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id, TabTitle = this.Title }, "Run started");
         }
         else if (!isRunning && this.wasRunning)
         {
             var reason = IsInterrupted(vm) ? "Interrupted" : BuildIdleReason(vm);
-            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, reason);
+            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id, TabTitle = this.Title }, reason);
         }
 
         this.wasRunning = isRunning;
@@ -155,7 +155,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         {
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
             this.NotificationService?.NotifyRunning(this.Id, false);
-            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, null);
+            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id, TabTitle = this.Title }, null);
             await this.agent.DisposeAsync();
         }
 

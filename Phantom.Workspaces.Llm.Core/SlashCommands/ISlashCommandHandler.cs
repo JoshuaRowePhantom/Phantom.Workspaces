@@ -1,7 +1,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
+namespace Phantom.Workspaces.Llm.SlashCommands;
 
 /// <summary>
 /// Handles a single slash command entered in the chat input.

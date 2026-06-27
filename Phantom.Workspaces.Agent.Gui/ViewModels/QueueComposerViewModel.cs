@@ -4,7 +4,6 @@ using System.Linq;
 using System.Windows.Input;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.AI;
-using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;

@@ -1,8 +1,8 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
-using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 

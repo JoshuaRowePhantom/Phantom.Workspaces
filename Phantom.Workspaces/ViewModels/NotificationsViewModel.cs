@@ -11,6 +11,8 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
     private readonly NotificationService notificationService;
     private readonly Action<string> navigateToTab;
     private bool isOpen;
+    private bool isAutoClosing;
+    private int lastKnownUnreadCount;
 
     public NotificationsViewModel(NotificationService notificationService, Action<string> navigateToTab)
     {
@@ -20,6 +22,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.Rows = new ObservableCollection<NotificationRowViewModel>();
         this.RefreshRows();
+        this.lastKnownUnreadCount = this.UnreadCount;
     }
 
     public ObservableCollection<NotificationRowViewModel> Rows { get; }
@@ -32,6 +35,12 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         set => this.SetProperty(ref this.isOpen, value);
     }
 
+    public bool IsAutoClosing
+    {
+        get => this.isAutoClosing;
+        set => this.SetProperty(ref this.isAutoClosing, value);
+    }
+
     public int UnreadCount => this.notificationService.Notifications.Count(e => !e.IsRead);
 
     public bool HasUnread => this.UnreadCount > 0;
@@ -40,9 +49,24 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
 
     public bool HasActiveRun => this.notificationService.HasActiveRun;
 
-    public void ToggleOpen() => this.IsOpen = !this.IsOpen;
+    public void ToggleOpen()
+    {
+        this.IsOpen = !this.IsOpen;
+        this.IsAutoClosing = false;
+    }
 
-    private void OnNotificationsChanged(object? sender, EventArgs e) => this.RefreshRows();
+    private void OnNotificationsChanged(object? sender, EventArgs e)
+    {
+        var previousUnreadCount = this.lastKnownUnreadCount;
+        this.RefreshRows();
+        this.lastKnownUnreadCount = this.UnreadCount;
+
+        if (this.UnreadCount > previousUnreadCount)
+        {
+            this.IsOpen = true;
+            this.IsAutoClosing = true;
+        }
+    }
 
     private void RefreshRows()
     {
