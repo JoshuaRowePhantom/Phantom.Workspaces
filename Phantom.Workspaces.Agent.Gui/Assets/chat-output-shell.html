@@ -33,7 +33,7 @@
     }
 
     body {
-      padding: 8px 8px 8px 2.5em;
+      padding: 8px 2.5em 8px 2.5em;
       box-sizing: border-box;
       overflow-y: auto;
       white-space: normal;
@@ -47,22 +47,10 @@
       color: var(--chat-role);
       font-weight: bold;
       margin-bottom: 2px;
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
     }
 
     .chat-user-message .chat-header {
       color: var(--chat-user);
-    }
-
-    .chat-timestamp {
-      font-style: italic;
-      color: var(--chat-meta);
-      font-size: 0.85em;
-      white-space: nowrap;
-      margin-left: 8px;
-      font-weight: normal;
     }
 
     .chat-content {
@@ -272,6 +260,68 @@
     .sticky-pinned {
       box-shadow: 0 2px 4px rgba(0,0,0,0.15);
     }
+
+    /* details-gutter component ---------------------------------------------- */
+
+    .chat-content-row {
+      position: relative;
+    }
+
+    .details-gutter-btn {
+      position: absolute;
+      right: -2.2em;
+      top: 0.1em;
+      opacity: 0.3;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font-size: inherit;
+      font-family: inherit;
+      padding: 0;
+    }
+
+    .chat-content-row:hover .details-gutter-btn { opacity: 0.6; }
+    .details-gutter-btn:hover { opacity: 1; }
+
+    #raw-details-dialog {
+      position: fixed;
+      top: 10%;
+      left: 10%;
+      right: 10%;
+      max-height: 70vh;
+      overflow-y: auto;
+      background: var(--chat-tool-body-background);
+      color: var(--chat-foreground);
+      border: 1px solid var(--chat-meta);
+      border-radius: 4px;
+      padding: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--chat-font-family);
+      font-size: var(--chat-font-size);
+      z-index: 1000;
+    }
+
+    #raw-details-close-bar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 8px;
+    }
+
+    #raw-details-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--chat-foreground);
+      cursor: pointer;
+      font-size: inherit;
+      opacity: 0.6;
+    }
+
+    #raw-details-close-btn:hover {
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -338,6 +388,83 @@
         var clone = el.cloneNode(true);
         clone.querySelectorAll(".copy-gutter-btn").forEach(function (b) { b.remove(); });
         return clone.innerText;
+      }
+
+      return { init: init };
+    })();
+  </script>
+  <script>
+    /* details-gutter.js — right-gutter raw-details popup component.
+     * Call DetailsGutter.init(root) to wire up all [data-details-target] elements inside root.
+     * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
+     */
+    var DetailsGutter = (function () {
+      "use strict";
+
+      var dialog = null;
+
+      function ensureDialog() {
+        if (dialog) { return dialog; }
+        dialog = document.createElement("dialog");
+        dialog.id = "raw-details-dialog";
+
+        var closeBar = document.createElement("div");
+        closeBar.id = "raw-details-close-bar";
+
+        var closeBtn = document.createElement("button");
+        closeBtn.id = "raw-details-close-btn";
+        closeBtn.textContent = "\u2715"; /* ✕ */
+        closeBtn.addEventListener("click", function () { dialog.close(); });
+        closeBar.appendChild(closeBtn);
+
+        var content = document.createElement("pre");
+        content.id = "raw-details-content";
+
+        dialog.appendChild(closeBar);
+        dialog.appendChild(content);
+        document.body.appendChild(dialog);
+
+        /* Close when clicking on the backdrop (outside the dialog box). */
+        dialog.addEventListener("click", function (e) {
+          if (e.target === dialog) { dialog.close(); }
+        });
+
+        return dialog;
+      }
+
+      function init(root) {
+        root.querySelectorAll("[data-details-target]").forEach(attach);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-details-target")) { attach(node); }
+              node.querySelectorAll("[data-details-target]").forEach(attach);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      function attach(el) {
+        if (el._detailsGutterAttached) { return; }
+        el._detailsGutterAttached = true;
+        el.classList.add("chat-content-row");
+
+        var btn = document.createElement("button");
+        btn.className = "details-gutter-btn";
+        btn.setAttribute("aria-label", "Show raw details");
+        btn.setAttribute("aria-hidden", "true");
+        btn.textContent = "...";
+
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var d = ensureDialog();
+          d.querySelector("#raw-details-content").textContent = el.getAttribute("data-details-target");
+          d.showModal();
+        });
+
+        el.insertBefore(btn, el.firstChild);
       }
 
       return { init: init };
@@ -433,8 +560,9 @@
 
       postToHost({ type: "ready" });
 
-      // Initialise the copy-gutter component once the host bridge is wired up.
+      // Initialise gutter components once the host bridge is wired up.
       CopyGutter.init(document);
+      DetailsGutter.init(document);
     })();
   </script>
   <script>
@@ -549,38 +677,6 @@
       };
 
       window._stickyScrollEngine = new StickyScrollEngine(document.body);
-    })();
-  </script>
-  <script>
-    (function () {
-      "use strict";
-
-      function formatTimestamp(el) {
-        var d = new Date(el.getAttribute("data-utc"));
-        var now = new Date();
-        var sameDay = d.toDateString() === now.toDateString();
-        el.textContent = sameDay
-          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " "
-            + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      }
-
-      function formatAll(root) {
-        root.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-      }
-
-      formatAll(document);
-
-      var timestampObserver = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-          mutation.addedNodes.forEach(function (node) {
-            if (node.nodeType !== 1) { return; }
-            if (node.hasAttribute("data-utc")) { formatTimestamp(node); }
-            node.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-          });
-        });
-      });
-      timestampObserver.observe(document.body, { childList: true, subtree: true });
     })();
   </script>
 </body>

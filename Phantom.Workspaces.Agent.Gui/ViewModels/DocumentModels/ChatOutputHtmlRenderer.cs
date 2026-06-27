@@ -200,13 +200,12 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderMessage(
         string messageId,
         string roleLabel,
-        IReadOnlyList<(string ElementId, string Html)> contents,
-        DateTimeOffset? timestamp = null)
+        IReadOnlyList<(string ElementId, string Html)> contents)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
-        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
+        builder.Append(RenderHeader(messageId, roleLabel));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -225,24 +224,14 @@ internal static class ChatOutputHtmlRenderer
     /// Returns an empty string for the <c>tool</c> role — results are bundled into the assistant
     /// message's tool-group hierarchy and need no separate role header.
     /// </summary>
-    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
+    public static string RenderHeader(string messageId, string roleLabel)
     {
         if (string.Equals(roleLabel, "tool", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }
 
-        var builder = new StringBuilder();
-        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"0\">");
-        builder.Append('[').Append(HtmlEscape(roleLabel)).Append(']');
-        if (timestamp.HasValue)
-        {
-            var utc = timestamp.Value.ToUniversalTime();
-            builder.Append("<span class=\"chat-timestamp\" data-utc=\"").Append(utc.ToString("o")).Append("\"></span>");
-        }
-
-        builder.Append("</div>");
-        return builder.ToString();
+        return $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
     }
 
     public static string RoleClass(string roleLabel)
@@ -378,7 +367,7 @@ internal static class ChatOutputHtmlRenderer
     }
 
     private static string TextBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{HtmlEscape(text)}{InspectorAffordance(contentId)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{HtmlEscape(text)}{InspectorAffordance(contentId)}</div>";
 
     /// <summary>
     /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
@@ -386,7 +375,7 @@ internal static class ChatOutputHtmlRenderer
     /// with raw HTML disabled so model output cannot inject markup into the WebView.
     /// </summary>
     private static string MarkdownBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
 
     private static string MarkdownToHtml(string text)
         => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
@@ -394,7 +383,7 @@ internal static class ChatOutputHtmlRenderer
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-details-target=\"").Append(HtmlEscape(body)).Append("\" data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append(InspectorAffordance(contentId)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {

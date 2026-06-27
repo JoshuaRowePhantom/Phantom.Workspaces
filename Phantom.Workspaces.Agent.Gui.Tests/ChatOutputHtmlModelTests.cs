@@ -291,7 +291,9 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("<table>", html);
         Assert.Contains("<th>", html);
         Assert.Contains("<td>", html);
-        Assert.DoesNotContain("|---|", html);
+        // The raw markdown source is stored in data-details-target; verify the rendered body
+        // contains the HTML table elements (above) rather than checking for absent pipe syntax,
+        // since the attribute now intentionally embeds the original markdown.
     }
 
     [Fact]
@@ -611,5 +613,48 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("3 calls", html);
         Assert.Contains(inner, html);
         Assert.DoesNotContain("<details open", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderContent_FunctionCallContent_EmitsDataDetailsTarget()
+    {
+        var call = new FunctionCallContent("call-1", "my_tool");
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            call,
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("data-details-target=", html);
+    }
+
+    [Fact]
+    public void RenderContent_TextContent_EmitsDataDetailsTargetWithMarkdownSource()
+    {
+        const string markdown = "**bold** text";
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent(markdown),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains($"data-details-target=\"{ChatOutputHtmlRenderer.HtmlEscape(markdown)}\"", html);
+    }
+
+    [Fact]
+    public void RenderContent_TextReasoningContent_EmitsDataDetailsTarget()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextReasoningContent("my reasoning"),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("data-details-target=\"my reasoning\"", html);
     }
 }
