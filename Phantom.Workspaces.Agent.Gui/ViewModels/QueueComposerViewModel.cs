@@ -46,9 +46,14 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public string PlaceholderText => this.IsDefaultComposer
         ? (this.isFormattedMode
-            ? "Multi-line mode  (Ctrl+Enter · send  |  Enter · new line  |  Esc · cancel)"
+            ? "Multi-line mode"
             : "Type a message…  (Enter · send  |  Shift+Enter · multi-line  |  Ctrl+Enter · send to new queue)")
         : "Append to this queue...";
+
+    public string? FormattedModeHint =>
+        this.isFormattedMode && this.IsDefaultComposer
+            ? "Ctrl+Enter · send   Enter · new line   Esc · exit multi-line"
+            : null;
 
     public string SubmitButtonText => this.IsDefaultComposer ? "Send" : "Add";
 
@@ -82,6 +87,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
             if (this.SetProperty(ref this.isFormattedMode, value))
             {
                 this.RaisePropertyChanged(nameof(this.PlaceholderText));
+                this.RaisePropertyChanged(nameof(this.FormattedModeHint));
             }
         }
     }

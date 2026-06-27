@@ -180,9 +180,11 @@ public sealed class AgentChatInputQueueControlKeyTests
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.DefaultComposer.EnterFormattedMode();
 
-        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.PlaceholderText);
-        Assert.Contains("Esc", viewModel.DefaultComposer.PlaceholderText);
-        Assert.DoesNotContain("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
+        // Placeholder is simplified in formatted mode; shortcuts are in FormattedModeHint.
+        Assert.Equal("Multi-line mode", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.FormattedModeHint);
+        Assert.Contains("Esc", viewModel.DefaultComposer.FormattedModeHint);
+        Assert.DoesNotContain("Shift+Enter", viewModel.DefaultComposer.FormattedModeHint);
     }
 
     [Fact]
