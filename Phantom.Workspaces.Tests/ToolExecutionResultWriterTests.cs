@@ -75,7 +75,7 @@ public sealed class ToolExecutionResultWriterTests
         Assert.True(entity.TryGetProperty("end-time", out _));
         Assert.Equal(
             "indexed 5 entities",
-            entity.GetProperty("content").GetProperty("default").GetProperty("text").GetString());
+            entity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString());
     }
 
     [Fact]
@@ -89,6 +89,42 @@ public sealed class ToolExecutionResultWriterTests
 
         var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
         Assert.Equal("failed", entity.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_WithContent_PassesSchemaValidation()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var time = new FixedTimeProvider();
+        var writer = new ToolExecutionResultWriter(dataAccessLayer, time);
+
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
+        time.Now = time.Now.AddMinutes(1);
+
+        // Must not throw (schema validation must pass)
+        await writer.CompleteAsync(handle, success: true, content: "done", TestContext.Current.CancellationToken);
+
+        var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
+
+        var entityTypes = entity.GetProperty("entity-types").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("note", entityTypes);
+
+        Assert.Equal(
+            "done",
+            entity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task StartAsync_RunningState_DoesNotIncludeNoteEntityType()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var writer = new ToolExecutionResultWriter(dataAccessLayer, new FixedTimeProvider());
+
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
+
+        var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
+        var entityTypes = entity.GetProperty("entity-types").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.DoesNotContain("note", entityTypes);
     }
 
     [Fact]
