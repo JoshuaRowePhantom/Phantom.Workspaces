@@ -38,6 +38,8 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
 
     public bool HasRows => this.Rows.Count > 0;
 
+    public bool HasActiveRun => this.notificationService.HasActiveRun;
+
     public void ToggleOpen() => this.IsOpen = !this.IsOpen;
 
     private void OnNotificationsChanged(object? sender, EventArgs e) => this.RefreshRows();
@@ -76,6 +78,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(this.UnreadCount));
         this.RaisePropertyChanged(nameof(this.HasUnread));
         this.RaisePropertyChanged(nameof(this.HasRows));
+        this.RaisePropertyChanged(nameof(this.HasActiveRun));
     }
 
     public void Dispose()
