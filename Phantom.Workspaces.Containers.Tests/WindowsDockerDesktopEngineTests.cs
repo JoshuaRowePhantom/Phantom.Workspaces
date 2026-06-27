@@ -1,3 +1,4 @@
+using Phantom.Workspaces;
 using Phantom.Workspaces.Containers;
 
 namespace Phantom.Workspaces.Containers.Tests;
@@ -8,7 +9,7 @@ public sealed class WindowsDockerDesktopEngineTests
     public async Task CreateAsync_BuildsDockerCreateCommand()
     {
         var runner = new RecordingDockerCommandRunner();
-        runner.Results.Enqueue(new DockerCommandResult(1, string.Empty, "missing"));
+        runner.Results.Enqueue(new ProcessResult(1, string.Empty, "missing", "missing"));
         var engine = new WindowsDockerDesktopEngine(runner);
         var definition = new ContainerDefinition
         {
@@ -102,7 +103,7 @@ public sealed class WindowsDockerDesktopEngineTests
     public async Task UsableAsync_ReturnsFalse_WhenDockerInfoFails()
     {
         var runner = new RecordingDockerCommandRunner();
-        runner.Results.Enqueue(new DockerCommandResult(1, string.Empty, "error"));
+        runner.Results.Enqueue(new ProcessResult(1, string.Empty, "error", "error"));
         var engine = new WindowsDockerDesktopEngine(runner);
 
         var usable = await engine.UsableAsync();
@@ -114,9 +115,9 @@ public sealed class WindowsDockerDesktopEngineTests
     public async Task CreateAsync_WhenContainerExists_RecreatesContainer()
     {
         var runner = new RecordingDockerCommandRunner();
-        runner.Results.Enqueue(new DockerCommandResult(0, "exists", string.Empty));
-        runner.Results.Enqueue(new DockerCommandResult(0, string.Empty, string.Empty));
-        runner.Results.Enqueue(new DockerCommandResult(0, string.Empty, string.Empty));
+        runner.Results.Enqueue(new ProcessResult(0, "exists", string.Empty, "exists"));
+        runner.Results.Enqueue(new ProcessResult(0, string.Empty, string.Empty, string.Empty));
+        runner.Results.Enqueue(new ProcessResult(0, string.Empty, string.Empty, string.Empty));
         var engine = new WindowsDockerDesktopEngine(runner);
 
         await engine.CreateAsync(new ContainerDefinition
@@ -137,9 +138,9 @@ public sealed class WindowsDockerDesktopEngineTests
     {
         public List<IReadOnlyList<string>> Commands { get; } = [];
 
-        public Queue<DockerCommandResult> Results { get; } = new();
+        public Queue<ProcessResult> Results { get; } = new();
 
-        public ValueTask<DockerCommandResult> RunAsync(
+        public ValueTask<ProcessResult> RunAsync(
             IReadOnlyList<string> arguments,
             CancellationToken cancellationToken = default)
         {
@@ -150,7 +151,7 @@ public sealed class WindowsDockerDesktopEngineTests
                 return ValueTask.FromResult(result);
             }
 
-            return ValueTask.FromResult(new DockerCommandResult(0, string.Empty, string.Empty));
+            return ValueTask.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty));
         }
     }
 }

@@ -21,4 +21,7 @@
     <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="JsonSchema.Net" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Phantom.Workspaces.Data.Core.Tests" />
+  </ItemGroup>
 </Project>
