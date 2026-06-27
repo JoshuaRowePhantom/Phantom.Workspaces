@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia.Controls;
 using Phantom.Workspaces.Gui.Styles.Controls;
 
@@ -14,6 +15,9 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
 {
     public string? HtmlShell { get; set; }
 
+    /// <summary>All messages posted via <see cref="PostMessageToJavaScript"/>, in order.</summary>
+    public List<string> PostedMessages { get; } = [];
+
 #pragma warning disable CS0067 // Events are part of the bridge contract; the stub never raises them.
     public event EventHandler? Ready;
 #pragma warning restore CS0067
@@ -26,7 +30,5 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
     {
     }
 
-    public void PostMessageToJavaScript(string message)
-    {
-    }
+    public void PostMessageToJavaScript(string message) => PostedMessages.Add(message);
 }
