@@ -1710,5 +1710,154 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+        var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+
+        var workspaceId = new EntityId("de1a0110-0000-4000-8000-000000000001");
+        await SeedEntityAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "default-startup"]],
+              "display-name": { "default": "Default Startup Workspace" },
+              "regions": []
+            }
+            """);
+
+        var defaultRelId = new EntityId("de1a0110-0000-4000-8000-000000000002");
+        await SeedEntityAsync(
+            entityBroker,
+            defaultRelId,
+            $$"""
+            {
+              "entity-id": "{{defaultRelId}}",
+              "entity-types": ["entity", "default", "relationship"],
+              "names": [["tests", "defaults", "startup-workspace"]],
+              "participants": {
+                "applied-to": "{{profileId}}",
+                "value": "{{workspaceId}}"
+              }
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+        var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+
+        var workspaceId = new EntityId("de1a0110-0000-4000-8000-000000000003");
+        await SeedEntityAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "default-close"]],
+              "display-name": { "default": "Default Close Workspace" },
+              "regions": []
+            }
+            """);
+
+        var defaultRelId = new EntityId("de1a0110-0000-4000-8000-000000000004");
+        await SeedEntityAsync(
+            entityBroker,
+            defaultRelId,
+            $$"""
+            {
+              "entity-id": "{{defaultRelId}}",
+              "entity-types": ["entity", "default", "relationship"],
+              "names": [["tests", "defaults", "close-workspace"]],
+              "participants": {
+                "applied-to": "{{profileId}}",
+                "value": "{{workspaceId}}"
+              }
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        // Close the default workspace — this triggers OpenGettingStartedWorkspaceAsync
+        var defaultPane = viewModel.WorkspacePanes
+            .FirstOrDefault(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(defaultPane);
+        viewModel.CloseWorkspaceCommand.Execute(defaultPane!);
+
+        // After closing, the default workspace should be re-opened instead of Getting Started
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal)
+                || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    private const string GettingStartedWorkspaceId = "6cc39f41-2a36-4be6-ab95-3f3fd355e463";
+
+    private static async Task<EntityBroker> GetEntityBrokerBeforeInitAsync(MainWindowViewModel viewModel)
+    {
+        var entityBrokerTaskField = typeof(MainWindowViewModel).GetField(
+            "entityBrokerTask",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(entityBrokerTaskField);
+        var entityBrokerTask = (Task<EntityBroker>)entityBrokerTaskField!.GetValue(viewModel)!;
+        return await entityBrokerTask;
+    }
+
+    private static async Task SeedEntityAsync(EntityBroker entityBroker, EntityId entityId, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var result = await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = entityId,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                    Data = document.RootElement.Clone(),
+                },
+            ],
+        });
+        var failure = result.EntityResults.FirstOrDefault(static r => r.UpdateState == UpdateState.Failed);
+        Assert.True(
+            failure is null,
+            failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
+    }
+
 }
 

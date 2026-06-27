@@ -1,0 +1,35 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/default.json",
+  "description": "Schema for default relationship entities that record the default entity for a given context.",
+  "allOf": [
+    {
+      "$ref": "relationship.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "contains": {
+        "const": "default"
+      }
+    },
+    "participants": {
+      "properties": {
+        "applied-to": {
+          "$ref": "core.json#/$defs/entity-id"
+        },
+        "value": {
+          "$ref": "core.json#/$defs/entity-id"
+        }
+      },
+      "required": [
+        "applied-to",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

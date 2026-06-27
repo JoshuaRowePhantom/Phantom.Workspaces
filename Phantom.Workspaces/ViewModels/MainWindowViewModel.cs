@@ -2225,6 +2225,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task OpenStartupWorkspaceAsync()
     {
+        var defaultWorkspaceIds = await this.QueryDefaultWorkspaceIdsAsync();
+        if (defaultWorkspaceIds.Count > 0)
+        {
+            foreach (var workspaceId in defaultWorkspaceIds)
+            {
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+            }
+
+            return;
+        }
+
         await this.OpenWorkspaceAsync(
             new GetEntityRequest
             {
@@ -2303,11 +2314,80 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task OpenGettingStartedWorkspaceAsync()
     {
+        var defaultWorkspaceIds = await this.QueryDefaultWorkspaceIdsAsync();
+        if (defaultWorkspaceIds.Count > 0)
+        {
+            foreach (var workspaceId in defaultWorkspaceIds)
+            {
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+            }
+
+            return;
+        }
+
         await this.OpenWorkspaceAsync(
             new GetEntityRequest
             {
                 EntityName = new EntityName("workspaces", "getting-started-workspace"),
             });
+    }
+
+    private async Task<IReadOnlyList<EntityId>> QueryDefaultWorkspaceIdsAsync()
+    {
+        if (this.entityBroker is not { } broker)
+        {
+            return [];
+        }
+
+        var profileId = broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        if (profileId == default)
+        {
+            return [];
+        }
+
+        var queryResult = await broker.EntityRepository.DataAccessLayer.QueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("default-workspaces"),
+                        Clause = new AndQueryClause
+                        {
+                            Clauses =
+                            [
+                                new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["default"]) },
+                                new EntityFieldQueryClause
+                                {
+                                    FieldPath = new FieldPath("participants", "applied-to"),
+                                    ComparisonOperator = FieldComparisonOperator.Equals,
+                                    Value = JsonSerializer.SerializeToElement(profileId.Value.ToString()),
+                                },
+                            ],
+                        },
+                    },
+                ],
+            });
+
+        var workspaceIds = new List<EntityId>();
+        foreach (var snapshot in queryResult.Batches.SelectMany(static batch => batch.Entities))
+        {
+            if (snapshot.Data is not { } data
+                || !data.TryGetProperty("participants", out var participants)
+                || !participants.TryGetProperty("value", out var valueElement))
+            {
+                continue;
+            }
+
+            var reference = valueElement.TryReadEntityReference();
+            if (reference?.EntityId is { } entityId)
+            {
+                workspaceIds.Add(entityId);
+            }
+        }
+
+        return workspaceIds;
     }
 
 
