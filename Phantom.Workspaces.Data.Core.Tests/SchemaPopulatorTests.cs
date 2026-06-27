@@ -788,6 +788,195 @@ public sealed class SchemaPopulatorTests
                     }));
     }
 
+    [Fact]
+    public async Task Populate_SeedsShellEntityType()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var seededNames = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .Where(static data => data.TryGetProperty("names", out var names) && names.ValueKind == JsonValueKind.Array)
+            .SelectMany(static data => data.GetProperty("names").EnumerateArray())
+            .Select(static name => name.TryReadEntityName())
+            .Where(static name => name is not null)
+            .Select(static name => name!.Value.Components)
+            .ToArray();
+
+        Assert.Contains(
+            seededNames,
+            components => components.SequenceEqual(["entity-types", "shell"], StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Populate_ShellEntityType_SchemaContainsModeAndEnvironmentProperties()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var shellEntityType = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray().Select(static part => part.GetString())
+                       .SequenceEqual(["entity-types", "shell"])));
+
+        Assert.True(
+            shellEntityType.TryGetProperty("schema", out var schema)
+            && schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("properties", out var properties)
+            && properties.ValueKind == JsonValueKind.Object
+            && properties.TryGetProperty("mode", out _)
+            && properties.TryGetProperty("environment", out _),
+            "shell schema must define 'mode' and 'environment' properties");
+    }
+
+    [Fact]
+    public async Task SavedShellEntity_WithModeAndEnvironment_PassesSchemaValidation()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var shellEntityId = new EntityId("a1b2c3d4-5e6f-7a8b-9c0d-e1f2a3b4c5d6");
+        using var shellDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{shellEntityId}}",
+              "entity-types": ["entity", "shell"],
+              "names": [["tests", "shells", "powershell-7"]],
+              "display-name": { "default": "PowerShell 7" },
+              "mode": "pty",
+              "command": "pwsh",
+              "command-arguments": ["-NoLogo"],
+              "working-directory": "C:\\src",
+              "environment": { "FOO": "bar" }
+            }
+            """);
+
+        var result = await validatedDataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown { Text = "Create saved shell entity." },
+            },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = shellEntityId,
+                    Data = shellDocument.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        var failures = result.EntityResults
+            .SelectMany(static entityResult => entityResult.Errors)
+            .Select(static error => error.Message)
+            .ToArray();
+        Assert.True(failures.Length == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Fact]
+    public async Task SavedShellEntity_WithModeAndEnvironment_RoundTripsInStore()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var schemaPopulator = new SchemaPopulator(inMemoryDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var shellEntityId = new EntityId("b2c3d4e5-6f7a-8b9c-0d1e-2f3a4b5c6d7e");
+        using var shellDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{shellEntityId}}",
+              "entity-types": ["entity", "shell"],
+              "names": [["tests", "shells", "bash-script"]],
+              "display-name": { "default": "Bash Script Runner" },
+              "mode": "pipe",
+              "command": "bash",
+              "command-arguments": ["-c", "echo hello"],
+              "environment": { "TERM": "xterm-256color", "LANG": "en_US.UTF-8" }
+            }
+            """);
+
+        await inMemoryDataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown { Text = "Round-trip shell entity." },
+            },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = shellEntityId,
+                    Data = shellDocument.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var stored = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Where(snapshot => snapshot.EntityId == shellEntityId)
+            .Select(snapshot => snapshot.Data)
+            .OfType<JsonElement>()
+            .LastOrDefault();
+
+        Assert.True(stored.ValueKind == JsonValueKind.Object, "stored shell entity not found");
+        Assert.True(
+            stored.TryGetProperty("mode", out var mode)
+            && mode.ValueKind == JsonValueKind.String
+            && string.Equals(mode.GetString(), "pipe", StringComparison.Ordinal),
+            "mode 'pipe' did not round-trip");
+        Assert.True(
+            stored.TryGetProperty("environment", out var env)
+            && env.ValueKind == JsonValueKind.Object
+            && env.TryGetProperty("TERM", out var term)
+            && string.Equals(term.GetString(), "xterm-256color", StringComparison.Ordinal),
+            "environment did not round-trip");
+    }
+
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {

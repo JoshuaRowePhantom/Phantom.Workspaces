@@ -150,6 +150,13 @@
         </Panel>
     </DataTemplate>
 
+    <DataTemplate DataType="vm:ShellTabViewModel">
+        <TextBlock Text="{Binding Title}"
+                   VerticalAlignment="Center"
+                   HorizontalAlignment="Center"
+                   Classes="muted" />
+    </DataTemplate>
+
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
         <md:Markdown Text="{Binding Text}" />
     </DataTemplate>

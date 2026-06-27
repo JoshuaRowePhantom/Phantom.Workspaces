@@ -30,7 +30,7 @@
     "default": {
       "mime-type": "text/markdown",
       "content": {
-        "text": "# Shell Entity Type\n\nRepresents an executable shell command with optional working directory and arguments.\n\n## Properties\n\n- **command** (required): Shell command or executable to run (e.g., 'pwsh', 'bash', 'cmd').\n- **working-directory** (optional): Working directory path where the command will be executed.\n- **command-arguments** (optional): Array of command-line arguments passed to the shell.\n\n## Usage\n\nShell entities are opened within their containing user-computer-profile, launching a PTY (pseudo-terminal) view that executes the specified command."
+        "text": "# Shell Entity Type\n\nRepresents a saved shell configuration (command, run mode, arguments, working directory, and optional environment variables). Shell entities are launched against a host chosen at open time; they are not used for ephemeral shells.\n\n## Properties\n\n- **command** (required): Executable to run (e.g., 'pwsh', 'bash', 'cmd').\n- **mode** (optional, default 'pty'): Run mode — 'pty' for a pseudo-terminal (interactive programs, colors, mouse tracking) or 'pipe' for redirected stdio without a terminal.\n- **command-arguments** (optional): Array of arguments passed to the command.\n- **working-directory** (optional): Absolute path on the host where the shell starts.\n- **environment** (optional): Extra environment variables layered over the host defaults.\n\n## Usage\n\nOpening a saved shell entity launches it against the chosen host (or, if contained by a user-computer-profile, that profile's host)."
       }
     }
   },
