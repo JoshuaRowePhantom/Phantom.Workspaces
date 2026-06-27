@@ -16,6 +16,11 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
 {
     private readonly Dictionary<string, ILocalStreamHandler> _streamHandlers = new(StringComparer.Ordinal);
 
+    public LocalTrustedExecutor()
+    {
+        RegisterStreamHandler("shell", new LocalShellStreamHandler());
+    }
+
     /// <inheritdoc />
     public bool CanExecute(string targetClientInstance)
     {
