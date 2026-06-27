@@ -104,18 +104,21 @@ public sealed class AgentChatInputQueueControlKeyTests
     }
 
     [AvaloniaFact]
-    public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToNewQueue()
+    public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToCurrentQueue()
     {
         await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
         {
-            InputText = "hello new queue",
+            InputText = "hello ctrl enter",
         };
 
         var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Enter, KeyModifiers.Control);
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "ctrl+enter normal-mode submission to complete");
 
         Assert.True(handled);
-        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.Single(chat.InputQueues);
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("hello ctrl enter", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
     [AvaloniaFact]
@@ -170,7 +173,8 @@ public sealed class AgentChatInputQueueControlKeyTests
 
         Assert.Contains("Enter", viewModel.DefaultComposer.PlaceholderText);
         Assert.Contains("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
-        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Ctrl+Q", viewModel.DefaultComposer.PlaceholderText);
+        Assert.DoesNotContain("send to new queue", viewModel.DefaultComposer.PlaceholderText);
     }
 
     [Fact]

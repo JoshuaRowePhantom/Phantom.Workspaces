@@ -47,7 +47,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public string PlaceholderText => this.IsDefaultComposer
         ? (this.isFormattedMode
             ? "Multi-line mode"
-            : "Type a message…  (Enter · send  |  Shift+Enter · multi-line  |  Ctrl+Enter · send to new queue)")
+            : "Type a message…  (Enter · send  |  Shift+Enter · multi-line  |  Ctrl+Q · enqueue)")
         : "Append to this queue...";
 
     public string? FormattedModeHint =>
