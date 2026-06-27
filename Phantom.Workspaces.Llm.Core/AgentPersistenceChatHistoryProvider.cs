@@ -157,7 +157,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
                 },
                 NewMessages = responseMessages,
             },
-            cancellationToken).ConfigureAwait(false);
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     private async ValueTask<BsonDocument> SerializeSessionAsync(AgentSession session, CancellationToken cancellationToken)

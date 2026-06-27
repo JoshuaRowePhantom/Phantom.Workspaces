@@ -142,7 +142,7 @@ public sealed class TrustedExecutorTests
         var local = new LocalTrustedExecutor();
 
         Assert.Throws<NotImplementedException>(
-            () => local.OpenStreamAsync(MakeStreamRequest("shell")).GetAwaiter().GetResult());
+            () => local.OpenStreamAsync(MakeStreamRequest("unknown-kind")).GetAwaiter().GetResult());
     }
 
     [Fact]
@@ -168,5 +168,27 @@ public sealed class TrustedExecutorTests
             WasInvoked = true;
             return Task.CompletedTask;
         }
+    }
+
+    [Fact]
+    public async Task LocalExecutor_OpenStreamAsync_ShellKind_ReturnsStream()
+    {
+        var exitTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pty = new FakePseudoTerminal(exitTcs);
+        var local = new LocalTrustedExecutor();
+        local.RegisterStreamHandler("shell", new LocalShellStreamHandler(_ => pty));
+
+        var shellRequest = new TrustedStreamRequest
+        {
+            TargetClientInstance = TrustProfile.LocalClientInstance,
+            StreamKind = "shell",
+            OpenPayload = JsonDocument.Parse("""{"command":"test"}""").RootElement,
+        };
+
+        var stream = await local.OpenStreamAsync(shellRequest);
+
+        Assert.NotNull(stream);
+        await stream.DisposeAsync();
+        exitTcs.TrySetResult(0);
     }
 }

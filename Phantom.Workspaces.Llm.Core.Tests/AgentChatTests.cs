@@ -1247,6 +1247,90 @@ public sealed class AgentChatTests
     }
 
 
+    [Fact]
+    public async Task PerServiceCallPersistence_AssistantResponsePersistedBeforeSecondServiceCallCompletes()
+    {
+        // Arrange: register a zero-argument tool so FunctionInvokingChatClient can execute the
+        // tool call returned by the first LLM response and make a second service call.
+        var simpleTool = AIFunctionFactory.Create(() => "tool result", "simple_tool", "A simple test tool.");
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            "test_tools",
+            (_, _) => Task.FromResult<Microsoft.Agents.AI.AIContextProvider?>(
+                ToolsetFactory.CreateFixedToolset(simpleTool)));
+        var agentServices = new AgentServices { ToolsetFactory = toolsetFactory };
+
+        var client = new DeterministicTestChatClient();
+
+        // First service call: the LLM invokes simple_tool.
+        var firstStream = client.EnqueueStreamingResponse();
+        firstStream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new FunctionCallContent("call-1", "simple_tool", new System.Collections.Generic.Dictionary<string, object?>()),
+        ])
+        {
+            FinishReason = ChatFinishReason.ToolCalls,
+        });
+        firstStream.Complete();
+
+        // Second service call: blocked until the test releases it, keeping the run in-flight.
+        var secondStream = client.EnqueueStreamingResponse(isReady: false);
+
+        var store = new SignalingPersistenceStore();
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [{ "kind": "test_tools", "description": "Test tool set" }]
+            }
+            """);
+
+        // OverrideUseProvidedChatClientAsIs = false so the framework inserts
+        // FunctionInvokingChatClient and PerServiceCallChatHistoryPersistingChatClient.
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = client,
+            DisplayNameOverride = "test-chat",
+            AgentServices = agentServices,
+            OverrideUseProvidedChatClientAsIs = false,
+        });
+
+        // Act: send a user message to start the run.
+        chat.EnqueueUserMessage("call the tool");
+
+        // Wait for two StoreAsync calls:
+        //   1st: ProvideChatHistoryAsync stores the user message before the first LLM call.
+        //   2nd: StoreChatHistoryAsync stores the LLM's tool-call response after the first LLM call.
+        await store.WaitForStoreAsync(CancellationToken.None);
+        await store.WaitForStoreAsync(CancellationToken.None);
+
+        // Assert: the run is still in-flight (second call is blocked) but the store already
+        // contains the assistant's tool-call response from the first service call.
+        var sessionId = chat.AgentSessionId;
+        var messages = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = sessionId },
+            CancellationToken.None);
+
+        Assert.Contains(messages, m =>
+            m.Role == ChatRole.Assistant &&
+            m.Contents.OfType<FunctionCallContent>().Any(c => c.CallId == "call-1"));
+
+        // Release the second service call and let the run complete.
+        secondStream.MarkReady();
+        secondStream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Done.")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        secondStream.Complete();
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "run to complete after releasing the second stream");
+    }
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 
@@ -1371,6 +1455,37 @@ public sealed class AgentChatTests
             public object? GetService(Type serviceType, object? serviceKey = null) => null;
             public void Dispose() { }
         }
+    }
+
+    /// <summary>
+    /// Wraps <see cref="InMemoryAgentPersistenceStore"/> and releases a semaphore after each
+    /// <see cref="StoreAsync"/> call so tests can synchronise deterministically on store writes.
+    /// </summary>
+    private sealed class SignalingPersistenceStore : IAgentPersistenceStore
+    {
+        private readonly InMemoryAgentPersistenceStore inner = new();
+        private readonly SemaphoreSlim storeSignal = new(0);
+
+        public Task WaitForStoreAsync(CancellationToken cancellationToken)
+            => this.storeSignal.WaitAsync(cancellationToken);
+
+        public async ValueTask StoreAsync(
+            StoreRequestAgent request,
+            CancellationToken cancellationToken = default)
+        {
+            await this.inner.StoreAsync(request, cancellationToken).ConfigureAwait(false);
+            this.storeSignal.Release();
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(
+            RestoreRequest request,
+            CancellationToken cancellationToken = default)
+            => this.inner.RestoreAsync(request, cancellationToken);
+
+        public ValueTask<Microsoft.Extensions.AI.ChatMessage[]> ReadMessagesAsync(
+            ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
+            => this.inner.ReadMessagesAsync(request, cancellationToken);
     }
 
 }

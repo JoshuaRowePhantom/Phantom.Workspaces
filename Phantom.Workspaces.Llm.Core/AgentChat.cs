@@ -144,9 +144,10 @@ public sealed class AgentChat : IAsyncDisposable
                this.request.AgentServices,
                queueManager: this.queueManager);
        var resolvedClient = clientInfo.ChatClient;
-       var useProvidedChatClientAsIs = ResolveUseProvidedChatClientAsIs(
-           this.request.ClientOverride is not null,
-           resolvedClient);
+       var useProvidedChatClientAsIs = this.request.OverrideUseProvidedChatClientAsIs
+           ?? ResolveUseProvidedChatClientAsIs(
+               this.request.ClientOverride is not null,
+               resolvedClient);
        if (this.request.AgentServices?.LogChat == true)
        {
            resolvedClient = resolvedClient.AsBuilder().UseLogging(this.request.AgentServices.LoggerFactory).Build();
@@ -182,6 +183,7 @@ public sealed class AgentChat : IAsyncDisposable
            ChatOptions = new ChatOptions(),
            ChatHistoryProvider = this.chatHistoryProvider,
            UseProvidedChatClientAsIs = useProvidedChatClientAsIs,
+           RequirePerServiceCallChatHistoryPersistence = !useProvidedChatClientAsIs,
        };
        AgentFactory.ConfigureChatOptions(resolvedAgentDefinition, this.chatOptions.ChatOptions);
        this.runtimeContextProviderRegistrations = await this.CreateRuntimeContextProviderRegistrationsAsync(
