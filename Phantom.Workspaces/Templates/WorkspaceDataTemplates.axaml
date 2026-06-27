@@ -114,6 +114,10 @@
         <templates:AgentManifestEditorView />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:CloneEntityWorkspaceTabViewModel">
+        <templates:CloneEntityEditorView DataContext="{Binding Editor}" />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">
         <Panel>
             <!-- Loading state -->
