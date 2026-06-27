@@ -37,10 +37,18 @@ If the issue is clear, continue to Step 3.
 
 ## Step 3 — Create a branch from `features`
 
+`C:\dev\phantom.workspaces-design` must stay in **detached HEAD** state at all times — never check out `features` or any feature branch there. Create the new branch directly from the detached HEAD (which must be at the `features` tip):
+
 ```powershell
 cd C:\dev\phantom.workspaces-design
-git checkout features
 git checkout -b <branch-name>
+git checkout --detach   # immediately re-detach; the branch now exists but HEAD is detached
+```
+
+If the main directory is not at the `features` tip, sync it first without checking out the branch:
+
+```powershell
+git fetch origin features:features   # update the features ref without checking it out
 ```
 
 Choose a short, descriptive branch name (e.g. `fix/tab-icons`, `feat/default-workspace`).
@@ -181,17 +189,18 @@ All `error ` lines from the build must be zero. Read `scripts\test-results.log`.
 
 ## Step 13 — Fast-forward `features` to the feature branch
 
+`C:\dev\phantom.workspaces-design` stays in detached HEAD — `features` is fast-forwarded as a ref update without checking it out:
+
 ```powershell
 # Free the worktree by detaching HEAD so it has no associated branch and can be reused
 git checkout --detach
 
 Pop-Location
 cd C:\dev\phantom.workspaces-design
-git checkout features
-git merge --ff-only <branch-name>
+git merge --ff-only <branch-name> features   # update features ref without checking it out
 ```
 
-This succeeds only if `features` is a direct ancestor of the feature branch. If step 12 was done correctly this should always fast-forward cleanly. If it fails, return to step 12.
+Because `C:\dev\phantom.workspaces-design` is in detached HEAD, `git merge --ff-only` updates the `features` branch ref directly. This succeeds only if `features` is a direct ancestor of the feature branch. If step 12 was done correctly this should always fast-forward cleanly. If it fails, return to step 12.
 
 ---
 
@@ -200,7 +209,8 @@ This succeeds only if `features` is a direct ancestor of the feature branch. If 
 1. Always branch from `features`, never from `main` directly.
 2. Worktree names are plain integers (`1`, `2`, …) — never descriptive names.
 3. Never create a worktree that is already checked out to a feature branch held by another worktree.
-4. All build and test commands run from inside the worktree directory.
+4. All work (file edits, builds, tests, commits) runs from inside the worktree directory. Never edit files directly in `C:\dev\phantom.workspaces-design`.
+5. `C:\dev\phantom.workspaces-design` must always remain in **detached HEAD** state. Never check out `features` or any feature branch there.
 5. Tests must pass before committing (step 9 before step 10).
 6. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
 7. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
