@@ -80,13 +80,12 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderMessage(
         string messageId,
         string roleLabel,
-        IReadOnlyList<(string ElementId, string Html)> contents,
-        DateTimeOffset? timestamp = null)
+        IReadOnlyList<(string ElementId, string Html)> contents)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
-        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
+        builder.Append(RenderHeader(messageId, roleLabel));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -101,20 +100,8 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderRunningItemContainer(string runningItemId)
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
 
-    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
-    {
-        var builder = new StringBuilder();
-        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"0\">");
-        builder.Append('[').Append(HtmlEscape(roleLabel)).Append(']');
-        if (timestamp.HasValue)
-        {
-            var utc = timestamp.Value.ToUniversalTime();
-            builder.Append("<span class=\"chat-timestamp\" data-utc=\"").Append(utc.ToString("o")).Append("\"></span>");
-        }
-
-        builder.Append("</div>");
-        return builder.ToString();
-    }
+    public static string RenderHeader(string messageId, string roleLabel)
+        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
 
     public static string RoleClass(string roleLabel)
         => string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
