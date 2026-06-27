@@ -27,6 +27,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     public string TabKey { get; }
     public string TabTitle { get; }
     public string Reason { get; }
+    public bool HasReason => !string.IsNullOrEmpty(this.Reason);
     public DateTimeOffset Timestamp { get; }
 
     public bool IsRead
