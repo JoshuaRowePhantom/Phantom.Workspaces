@@ -135,6 +135,33 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(2, chat.History.Count);
     }
 
+    [AvaloniaFact]
+    public async Task HandleInputKey_CtrlQ_WithEmptyComposer_ReturnsFalse()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        // Composer is empty — no text, no attachments
+        viewModel.InputText = string.Empty;
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Q, KeyModifiers.Control);
+
+        Assert.False(handled);
+        Assert.Empty(chat.History);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_CtrlQ_WithText_ReturnsTrue()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "route to most recent";
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Q, KeyModifiers.Control);
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "Ctrl+Q submission to complete");
+
+        Assert.True(handled);
+    }
+
     [Fact]
     public async Task PlaceholderText_DefaultComposer_ShowsShortcuts()
     {

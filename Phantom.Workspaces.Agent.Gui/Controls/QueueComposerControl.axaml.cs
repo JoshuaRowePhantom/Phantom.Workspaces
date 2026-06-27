@@ -126,14 +126,12 @@ public partial class QueueComposerControl : UserControl
         {
             if (keyModifiers.HasFlag(KeyModifiers.Shift))
             {
-                vm.SubmitToNewQueue();
+                return vm.SubmitToNewQueue();
             }
             else
             {
-                vm.SubmitToMostRecentQueue();
+                return vm.SubmitToMostRecentQueue();
             }
-
-            return true;
         }
         else if (key == Key.Escape && vm.IsFormattedMode)
         {

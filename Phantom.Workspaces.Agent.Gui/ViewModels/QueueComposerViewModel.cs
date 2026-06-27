@@ -37,7 +37,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.IsDefaultComposer = isDefaultComposer;
         this.targetQueue.Changed += this.OnTargetQueueChanged;
         this.SubmitCommand = new RelayCommand(this.Submit);
-        this.SubmitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
+        this.SubmitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.SetQueueImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
@@ -179,10 +179,15 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public void Submit()
     {
+        this.Submit(this.targetQueue);
+    }
+
+    public bool Submit(AgentChatQueue targetQueue)
+    {
         var text = this.SanitizeText(this.InputText);
         if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
         {
-            return;
+            return false;
         }
 
         // Intercept slash commands on the default (primary) composer. Non-default queue
@@ -194,7 +199,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         {
             this.InputText = string.Empty;
             _ = interceptor(text);
-            return;
+            return true;
         }
 
         var contents = new List<AIContent>();
@@ -204,30 +209,36 @@ public sealed class QueueComposerViewModel : ViewModelBase
         }
 
         contents.AddRange(this.attachments);
-        this.parent.AppendToQueue(this.targetQueue, contents);
+        this.parent.AppendToQueue(targetQueue, contents);
         this.InputText = string.Empty;
         this.ClearAttachments();
         this.IsFormattedMode = false;
         if (!this.IsDefaultComposer)
         {
-            this.parent.HideQueueComposer(this.targetQueue);
+            this.parent.HideQueueComposer(targetQueue);
         }
+
+        return true;
     }
 
-    public void SubmitToMostRecentQueue()
+    public bool SubmitToMostRecentQueue()
     {
         if (this.IsDefaultComposer)
         {
-            this.parent.SubmitToMostRecentQueue();
+            return this.parent.SubmitToMostRecentQueue();
         }
+
+        return false;
     }
 
-    public void SubmitToNewQueue()
+    public bool SubmitToNewQueue()
     {
         if (this.IsDefaultComposer)
         {
-            this.parent.SubmitToNewQueue();
+            return this.parent.SubmitToNewQueue();
         }
+
+        return false;
     }
 
     public void CreateNewQueue()

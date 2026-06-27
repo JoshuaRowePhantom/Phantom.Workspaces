@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Windows.Input;
-using Avalonia.Threading;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Llm;
@@ -41,8 +40,8 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.holdAllQueuesCommand = new RelayCommand(this.HoldAllQueues);
         this.unholdAllQueuesCommand = new RelayCommand(this.UnholdAllQueues);
         this.toggleHoldAllQueuesCommand = new RelayCommand(this.ToggleHoldAllQueues);
-        this.submitToMostRecentQueueCommand = new RelayCommand(this.SubmitToMostRecentQueue);
-        this.submitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
+        this.submitToMostRecentQueueCommand = new RelayCommand(() => this.SubmitToMostRecentQueue());
+        this.submitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.createNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.queueCollectionTransformer = new InputQueueCollectionTransformer(this, this.agentChat.InputQueues, this.Queues, this.queueViewModels);
     }
@@ -117,37 +116,32 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.DefaultComposer.Submit();
     }
 
-    public void SubmitToMostRecentQueue()
+    public bool SubmitToMostRecentQueue()
     {
-        if (!this.HasQueueManager)
-        {
-            this.SubmitToDefaultQueue();
-            return;
-        }
-
-        var queue = this.mostRecentlyCreatedQueue ?? this.DefaultInputQueue;
-        this.SubmitToQueue(queue);
+        var queue = this.HasQueueManager
+            ? (this.mostRecentlyCreatedQueue ?? this.DefaultInputQueue)
+            : this.DefaultInputQueue;
+        return this.DefaultComposer.Submit(queue);
     }
 
-    public void SubmitToNewQueue()
+    public bool SubmitToNewQueue()
     {
         if (!this.HasQueueManager)
         {
-            this.SubmitToDefaultQueue();
-            return;
+            return this.DefaultComposer.Submit(this.DefaultInputQueue);
         }
 
         if (string.IsNullOrWhiteSpace(this.InputText))
         {
-            return;
+            return false;
         }
 
         var queue = this.agentChat.QueueManager.CreateInputQueue(
-            immediacy: this.InputQueues.All(queue => queue.IsHeld)
+            immediacy: this.InputQueues.All(q => q.IsHeld)
                 ? AgentInputQueueImmediacy.Held
                 : AgentInputQueueImmediacy.Queue);
         this.mostRecentlyCreatedQueue = queue;
-        this.SubmitToQueue(queue);
+        return this.DefaultComposer.Submit(queue);
     }
 
     public void CreateNewQueue()
@@ -341,20 +335,6 @@ public sealed class InputQueueViewModel : ViewModelBase
         {
             this.RefreshQueue(queue);
         }
-    }
-
-    private void SubmitToQueue(AgentChatQueue queue)
-    {
-        var text = this.InputText;
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return;
-        }
-
-        this.agentChat.EnqueueUserContents([new TextContent(text)], queue);
-        this.InputText = string.Empty;
-        this.IsFormattedMode = false;
-        this.RefreshQueue(queue);
     }
 
     private sealed class InputQueueCollectionTransformer : CollectionTransformer<AgentChatQueue, InputQueueGroupViewModel>
