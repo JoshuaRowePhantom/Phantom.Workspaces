@@ -1,0 +1,41 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Templates.CloneEntityEditorView"
+             x:DataType="vm:CloneEntityEditorViewModel">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+    <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,20">
+      <TextBlock Text="Clone Entity"
+                 FontSize="24"
+                 FontWeight="Bold" />
+      <TextBlock Text="{Binding CloneEntityId}"
+                 Classes="muted" />
+    </StackPanel>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <ItemsControl ItemsSource="{Binding Relationships}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:CloneRelationshipSelectionItemViewModel">
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4">
+              <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+              <TextBlock Text="{Binding RelationshipId}"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <StackPanel Grid.Row="2"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="10"
+                Margin="0,20,0,0">
+      <Button Content="Cancel"
+              Command="{Binding CancelCommand}" />
+      <Button Content="Save Clone"
+              Command="{Binding SaveCloneCommand}"
+              Classes="accent" />
+    </StackPanel>
+  </Grid>
+</UserControl>
