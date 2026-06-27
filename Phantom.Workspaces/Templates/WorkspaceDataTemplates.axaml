@@ -525,6 +525,11 @@
                     <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
                         <TextBlock Text="{Binding Icon}" />
                     </DataTemplate>
+                    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+                        <TextBlock Text="🧠"
+                                   Classes="agent-chat-status-line-brain"
+                                   Classes.thinking="{Binding IsRunning}" />
+                    </DataTemplate>
                     <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
                         <!-- Always occupies space; opacity hides it when there is no unread notification -->
                         <TextBlock Text="❗"

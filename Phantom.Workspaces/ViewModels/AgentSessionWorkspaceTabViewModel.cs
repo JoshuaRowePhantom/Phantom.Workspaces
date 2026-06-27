@@ -24,6 +24,15 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     private AgentViewModel? agent;
     private ObservableLoggerFactory? loggerFactory;
     private bool wasRunning;
+    private readonly AgentRunningIndicatorTabHeaderItemViewModel agentRunningIndicator;
+
+    public AgentSessionWorkspaceTabViewModel()
+    {
+        this.agentRunningIndicator = new AgentRunningIndicatorTabHeaderItemViewModel();
+        var header = new TabHeaderViewModel { Title = string.Empty };
+        header.Items.Add(this.agentRunningIndicator);
+        this.TabHeader = header;
+    }
 
     public AgentTabState State
     {
@@ -52,6 +61,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         this.loggerFactory = factory;
         this.Agent = agentViewModel;
         agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
+        this.agentRunningIndicator.IsRunning = agentViewModel.IsChatRunning;
+        this.wasRunning = agentViewModel.IsChatRunning;
         this.State = AgentTabState.Ready;
     }
 
@@ -69,6 +80,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         }
 
         var isRunning = vm.IsChatRunning;
+        this.agentRunningIndicator.IsRunning = isRunning;
 
         if (isRunning && !this.wasRunning)
         {

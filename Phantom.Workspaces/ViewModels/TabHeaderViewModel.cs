@@ -17,6 +17,21 @@ public sealed class IconTabHeaderItemViewModel : TabHeaderItemViewModel
 }
 
 /// <summary>
+/// A tab header item that shows a pulsating brain icon while an agent is running.
+/// Set <see cref="IsRunning"/> to true while the agent is actively processing.
+/// </summary>
+public sealed class AgentRunningIndicatorTabHeaderItemViewModel : TabHeaderItemViewModel
+{
+    private bool isRunning;
+
+    public bool IsRunning
+    {
+        get => this.isRunning;
+        set => this.SetProperty(ref this.isRunning, value);
+    }
+}
+
+/// <summary>
 /// A tab header item that shows a notification indicator. The indicator is always
 /// present in the layout; its <see cref="HasUnread"/> property controls visibility
 /// via an opacity converter so the tab width never changes.

@@ -162,7 +162,6 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
             Title = createdAgentSessionEntity.DisplayName,
             DockRegion = "full",
             Entity = createdAgentSessionEntity,
-            TabHeader = TabHeaderViewModel.WithIcon("🧠", createdAgentSessionEntity.DisplayName),
             NotificationService = this.mainWindowViewModel.NotificationService,
         };
         await this.mainWindowViewModel.OpenTabAsync(loadingTab);

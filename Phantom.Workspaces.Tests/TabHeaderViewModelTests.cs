@@ -8,6 +8,70 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class TabHeaderViewModelTests
 {
+    // ── AgentRunningIndicatorTabHeaderItemViewModel ──────────────────────────
+
+    [Fact]
+    public void AgentRunningIndicator_IsRunning_DefaultIsFalse()
+    {
+        var indicator = new AgentRunningIndicatorTabHeaderItemViewModel();
+        Assert.False(indicator.IsRunning);
+    }
+
+    [Fact]
+    public void AgentRunningIndicator_SetIsRunning_RaisesPropertyChanged()
+    {
+        var indicator = new AgentRunningIndicatorTabHeaderItemViewModel();
+        var raised = false;
+        indicator.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(indicator.IsRunning))
+                raised = true;
+        };
+
+        indicator.IsRunning = true;
+
+        Assert.True(raised);
+    }
+
+    // ── AgentSessionWorkspaceTabViewModel – always has agent indicator ───────
+
+    [Fact]
+    public void AgentSessionTab_TabHeader_AlwaysContainsAgentRunningIndicator()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        var indicator = tab.TabHeader!.Items
+            .OfType<AgentRunningIndicatorTabHeaderItemViewModel>()
+            .FirstOrDefault();
+
+        Assert.NotNull(indicator);
+    }
+
+    [Fact]
+    public void AgentSessionTab_AgentRunningIndicator_IsNotRunning_Initially()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        var indicator = tab.TabHeader!.Items
+            .OfType<AgentRunningIndicatorTabHeaderItemViewModel>()
+            .Single();
+
+        Assert.False(indicator.IsRunning);
+    }
+
+    [Fact]
+    public void AgentSessionTab_EffectiveTabHeader_ContainsAgentRunningIndicator()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+        var doc = new WorkspaceDocument(tab);
+
+        var indicator = doc.EffectiveTabHeader.Items
+            .OfType<AgentRunningIndicatorTabHeaderItemViewModel>()
+            .FirstOrDefault();
+
+        Assert.NotNull(indicator);
+    }
+
     // ── NotificationIndicatorTabHeaderItemViewModel ──────────────────────────
 
     [Fact]
