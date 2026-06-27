@@ -106,6 +106,85 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'theme' command to be posted after the theme variant changed.");
     }
 
+    [Fact]
+    public void HeadlessControllableBrowser_HtmlShellSet_RaisesReadySynchronously()
+    {
+        var browser = new HeadlessControllableBrowser();
+        var readyCount = 0;
+        browser.Ready += (_, _) => readyCount++;
+
+        browser.HtmlShell = "<html></html>";
+
+        Assert.Equal(1, readyCount);
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_HtmlShellSetToNull_DoesNotRaiseReady()
+    {
+        var browser = new HeadlessControllableBrowser();
+        var readyCount = 0;
+        browser.Ready += (_, _) => readyCount++;
+
+        browser.HtmlShell = null;
+
+        Assert.Equal(0, readyCount);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatOutputControl_OnBrowserReady_PostsThemeCommand()
+    {
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        browser.PostedMessages.Clear();
+        browser.FireReady();
+
+        Assert.True(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "theme";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected a 'theme' command to be posted when the browser reports ready.");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatOutputControl_SpuriousReload_PostsThemeCommandAgain()
+    {
+        // Verify that a spontaneous reload (Ready firing without HtmlShell being reassigned)
+        // causes the control to re-post the theme command so the browser page is correctly
+        // themed after the reload.
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        browser.FireReady();
+        browser.PostedMessages.Clear();
+
+        // Simulate a spontaneous WebView reload.
+        browser.FireReady();
+
+        Assert.True(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "theme";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected a 'theme' command to be re-posted after a spontaneous browser reload.");
+    }
+
     private static string ReadShellHtml()
     {
         var assembly = typeof(AgentChatOutputControl).Assembly;
