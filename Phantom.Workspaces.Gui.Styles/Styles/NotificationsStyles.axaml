@@ -21,18 +21,24 @@
     </Style>
 
     <Style Selector="TextBlock.notification-bell-ringing">
-        <Setter Property="RenderTransform" Value="rotate(0deg)" />
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Setter Property="RenderTransform">
+            <RotateTransform Angle="0" />
+        </Setter>
         <Style.Animations>
             <Animation IterationCount="INFINITE"
                        Duration="0:0:0.5"
                        PlaybackDirection="Alternate"
                        Easing="SineEaseInOut">
                 <KeyFrame Cue="0%">
-                    <Setter Property="RenderTransform" Value="rotate(-18deg)" />
+                    <Setter Property="RenderTransform">
+                        <RotateTransform Angle="-18" />
+                    </Setter>
                 </KeyFrame>
                 <KeyFrame Cue="100%">
-                    <Setter Property="RenderTransform" Value="rotate(18deg)" />
+                    <Setter Property="RenderTransform">
+                        <RotateTransform Angle="18" />
+                    </Setter>
                 </KeyFrame>
             </Animation>
         </Style.Animations>
