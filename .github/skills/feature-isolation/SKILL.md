@@ -54,7 +54,7 @@ List existing worktrees:
 git worktree list
 ```
 
-A worktree is **free** when its line shows `(detached HEAD)` or `[features]`. A worktree is **occupied** when it shows a feature branch like `[fix/something]`.
+A worktree is **free** when its line shows `(detached HEAD)`. A worktree is **occupied** when it shows a branch name like `[fix/something]`.
 
 If a free worktree exists (path `worktrees/<N>`), reuse it by checking out the new branch inside it:
 ```powershell
@@ -171,8 +171,8 @@ Read `scripts\test-results.log`. If any tests fail:
 ## Step 13 — Fast-forward `features` to the feature branch
 
 ```powershell
-# Free the worktree by checking out features inside it (so it can be reused next time)
-git checkout features
+# Free the worktree by detaching HEAD so it has no associated branch and can be reused
+git checkout --detach
 
 Pop-Location
 cd C:\dev\phantom.workspaces-design
@@ -193,7 +193,7 @@ This succeeds only if `features` is a direct ancestor of the feature branch. If 
 5. Tests must pass before committing (step 9 before step 10).
 6. After merging `features` into the branch (step 12), always build and run tests; fix any failures before fast-forwarding.
 7. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
-8. At the end of step 13, always `git checkout features` inside the worktree to free it for reuse.
+8. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
 9. Do not push any branch unless explicitly instructed.
 10. Never commit without passing tests.
 11. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
