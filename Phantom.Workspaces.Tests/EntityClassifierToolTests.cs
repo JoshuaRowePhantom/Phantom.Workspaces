@@ -106,7 +106,7 @@ public sealed class EntityClassifierToolTests
         await new EntityClassifierTool(runner, batchSize: 1).ExecuteAsync(Context(dataAccessLayer));
 
         Assert.Equal(2, runner.Requests.Count);
-        var drained = await dataAccessLayer.ProcessQueueAsync(new ProcessQueueRequest { QueueName = EntityClassifierTool.QueueName, Count = 10 });
+        var drained = await dataAccessLayer.ProcessQueueAsync(new ProcessQueueRequest { QueueName = EntityClassifierTool.QueueName, Count = 10 }, TestContext.Current.CancellationToken);
         Assert.Empty(drained.Entities);
     }
 
@@ -129,7 +129,7 @@ public sealed class EntityClassifierToolTests
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
             ],
-        });
+        }, TestContext.Current.CancellationToken);
         await AddEntityAsync(dataAccessLayer, "target", "the entity body text");
         var runner = new RecordingRunner();
 
@@ -179,7 +179,7 @@ public sealed class EntityClassifierToolTests
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
             ],
-        });
+        }, TestContext.Current.CancellationToken);
         await AddEntityAsync(dataAccessLayer, "target", "the entity body text");
         var runner = new RecordingRunner();
 

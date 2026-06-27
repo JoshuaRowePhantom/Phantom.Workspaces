@@ -75,7 +75,7 @@ public sealed class CopilotToolEventMapperTests
             Data = new ToolExecutionStartData
             {
                 ToolCallId = "call-4",
-                ToolName = null,
+                ToolName = null!,
                 McpToolName = "mcp_tool",
             },
         };

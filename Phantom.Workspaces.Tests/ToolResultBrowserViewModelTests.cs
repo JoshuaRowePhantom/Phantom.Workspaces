@@ -101,7 +101,7 @@ public sealed class ToolResultBrowserViewModelTests
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, new AdvancingTimeProvider());
-        await writer.StartAsync(HostName, "vector-indexer");
+        await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
 
         var browser = new ToolResultBrowserViewModel(new PoolThreadQueryDataAccessLayer(dataAccessLayer));
 
@@ -121,12 +121,12 @@ public sealed class ToolResultBrowserViewModelTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, new AdvancingTimeProvider());
 
-        var run = await writer.StartAsync(HostName, "vector-indexer");
-        await writer.StartChildAsync(run, "sub-task");
-        await writer.CompleteAsync(run, success: true);
+        var run = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
+        await writer.StartChildAsync(run, "sub-task", TestContext.Current.CancellationToken);
+        await writer.CompleteAsync(run, success: true, cancellationToken: TestContext.Current.CancellationToken);
 
         var browser = new ToolResultBrowserViewModel(dataAccessLayer);
-        await browser.RefreshAsync();
+        await browser.RefreshAsync(TestContext.Current.CancellationToken);
 
         var host = Assert.Single(browser.Hosts);
         Assert.Equal("computer / this-machine", host.Label);
@@ -152,11 +152,11 @@ public sealed class ToolResultBrowserViewModelTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, new AdvancingTimeProvider());
 
-        await writer.StartAsync(["computer", "alpha"], "git-workspace-scan");
-        await writer.StartAsync(["computer", "beta"], "vector-indexer");
+        await writer.StartAsync(["computer", "alpha"], "git-workspace-scan", TestContext.Current.CancellationToken);
+        await writer.StartAsync(["computer", "beta"], "vector-indexer", TestContext.Current.CancellationToken);
 
         var browser = new ToolResultBrowserViewModel(dataAccessLayer);
-        await browser.RefreshAsync();
+        await browser.RefreshAsync(TestContext.Current.CancellationToken);
 
         var hostLabels = browser.Hosts.Select(host => host.Label).ToHashSet();
         Assert.Equal(2, browser.Hosts.Count);
@@ -170,7 +170,7 @@ public sealed class ToolResultBrowserViewModelTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var browser = new ToolResultBrowserViewModel(dataAccessLayer);
 
-        await browser.RefreshAsync();
+        await browser.RefreshAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(browser.Hosts);
     }

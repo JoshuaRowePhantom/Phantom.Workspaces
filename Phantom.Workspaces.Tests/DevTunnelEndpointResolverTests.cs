@@ -16,7 +16,7 @@ public sealed class DevTunnelEndpointResolverTests
         var lookupClient = new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280]));
         var resolver = new DevTunnelEndpointResolver(lookupClient);
 
-        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private);
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
         Assert.Equal(new Uri("https://tunnel-abc-5280.usw2.devtunnels.ms/"), resolution.BaseUri);
         Assert.Null(resolution.TunnelAuthToken);
@@ -31,7 +31,7 @@ public sealed class DevTunnelEndpointResolverTests
             accessTokenSource: "PW_TUNNEL_TOKEN",
             tokenSourceResolver: _ => "should-not-be-used");
 
-        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private);
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
         Assert.Null(resolution.TunnelAuthToken);
     }
@@ -44,7 +44,7 @@ public sealed class DevTunnelEndpointResolverTests
             accessTokenSource: "PW_TUNNEL_TOKEN",
             tokenSourceResolver: sourceName => sourceName == "PW_TUNNEL_TOKEN" ? "secret-token" : null);
 
-        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token);
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token, TestContext.Current.CancellationToken);
 
         Assert.Equal("secret-token", resolution.TunnelAuthToken);
     }
@@ -56,7 +56,7 @@ public sealed class DevTunnelEndpointResolverTests
             new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280])));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token));
+            () => resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -65,12 +65,12 @@ public sealed class DevTunnelEndpointResolverTests
         var resolverNoPorts = new DevTunnelEndpointResolver(
             new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [])));
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => resolverNoPorts.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private));
+            () => resolverNoPorts.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken));
 
         var resolverTwoPorts = new DevTunnelEndpointResolver(
             new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280, 6000])));
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => resolverTwoPorts.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private));
+            () => resolverTwoPorts.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public sealed class DevTunnelEndpointResolverTests
         var lookupClient = new FakeLookupClient(new DevTunnelLookupResult("tunnel-auto", "usw2", [5280]));
         var resolver = new DevTunnelEndpointResolver(lookupClient);
 
-        var resolution = await resolver.ResolveAsync("auto", DevTunnelAccessMode.Private);
+        var resolution = await resolver.ResolveAsync("auto", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
         Assert.Equal(new Uri("https://tunnel-auto-5280.usw2.devtunnels.ms/"), resolution.BaseUri);
         Assert.True(lookupClient.DiscoverCalled);
@@ -92,7 +92,7 @@ public sealed class DevTunnelEndpointResolverTests
         var lookupClient = new FakeLookupClient(new DevTunnelLookupResult("tunnel-auto", "usw2", [5280]));
         var resolver = new DevTunnelEndpointResolver(lookupClient);
 
-        var resolution = await resolver.ResolveAsync("   ", DevTunnelAccessMode.Private);
+        var resolution = await resolver.ResolveAsync("   ", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
         Assert.Equal(new Uri("https://tunnel-auto-5280.usw2.devtunnels.ms/"), resolution.BaseUri);
         Assert.True(lookupClient.DiscoverCalled);
@@ -105,7 +105,7 @@ public sealed class DevTunnelEndpointResolverTests
         var resolver = new DevTunnelEndpointResolver(lookupClient);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => resolver.ResolveAsync("auto", DevTunnelAccessMode.Private));
+            () => resolver.ResolveAsync("auto", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken));
     }
 
     private sealed class FakeLookupClient : IDevTunnelLookupClient

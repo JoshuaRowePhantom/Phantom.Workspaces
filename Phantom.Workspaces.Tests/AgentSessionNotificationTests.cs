@@ -35,7 +35,9 @@ public sealed class AgentSessionNotificationTests
 
         public IReadOnlyList<NotificationEntry> Notifications => [];
 
+#pragma warning disable CS0067 // Required by INotificationService but never raised in this fake
         public event EventHandler? NotificationsChanged;
+#pragma warning restore CS0067
 
         public IReadOnlyList<(TabDescriptor Tab, string? Reason)> Calls => this.calls;
 

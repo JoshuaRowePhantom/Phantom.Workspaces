@@ -81,7 +81,7 @@ public sealed class ScheduledToolPauseStateServiceTests
 
         var service = CreateService(dataAccessLayer);
 
-        Assert.False(await service.RefreshAsync(new EntityId(hostId)));
+        Assert.False(await service.RefreshAsync(new EntityId(hostId), TestContext.Current.CancellationToken));
         Assert.False(service.IsPaused);
     }
 
@@ -92,11 +92,11 @@ public sealed class ScheduledToolPauseStateServiceTests
         var hostId = Guid.NewGuid();
         await AddHostProfileAsync(dataAccessLayer, hostId);
 
-        await CreateService(dataAccessLayer).SetPausedAsync(new EntityId(hostId), paused: true);
+        await CreateService(dataAccessLayer).SetPausedAsync(new EntityId(hostId), paused: true, TestContext.Current.CancellationToken);
 
         // A fresh service instance (simulating an app restart) reads the persisted flag.
         var restartedService = CreateService(dataAccessLayer);
-        Assert.True(await restartedService.RefreshAsync(new EntityId(hostId)));
+        Assert.True(await restartedService.RefreshAsync(new EntityId(hostId), TestContext.Current.CancellationToken));
         Assert.True(restartedService.IsPaused);
     }
 
@@ -111,9 +111,9 @@ public sealed class ScheduledToolPauseStateServiceTests
         var changeCount = 0;
         service.PauseStateChanged += (_, _) => changeCount++;
 
-        await service.SetPausedAsync(new EntityId(hostId), paused: true);
-        await service.SetPausedAsync(new EntityId(hostId), paused: true);
-        await service.SetPausedAsync(new EntityId(hostId), paused: false);
+        await service.SetPausedAsync(new EntityId(hostId), paused: true, TestContext.Current.CancellationToken);
+        await service.SetPausedAsync(new EntityId(hostId), paused: true, TestContext.Current.CancellationToken);
+        await service.SetPausedAsync(new EntityId(hostId), paused: false, TestContext.Current.CancellationToken);
 
         Assert.Equal(2, changeCount);
     }
@@ -145,10 +145,10 @@ public sealed class ScheduledToolPauseStateServiceTests
         var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([new BlockingTool(started)]), timeProvider: new FixedTimeProvider());
         var service = new ScheduledToolPauseStateService(dataAccessLayer, host);
 
-        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName);
+        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
         await started.Task;
 
-        await service.SetPausedAsync(new EntityId(hostId), paused: true);
+        await service.SetPausedAsync(new EntityId(hostId), paused: true, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
         Assert.True(service.IsPaused);

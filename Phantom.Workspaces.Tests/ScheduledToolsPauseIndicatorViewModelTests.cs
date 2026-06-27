@@ -77,14 +77,14 @@ public sealed class ScheduledToolsPauseIndicatorViewModelTests
             }
         };
 
-        await indicator.TogglePauseAsync();
+        await indicator.TogglePauseAsync(TestContext.Current.CancellationToken);
 
         Assert.True(indicator.IsPaused);
         Assert.Equal("⏸", indicator.ButtonGlyph);
         Assert.Equal("Scheduled tasks (paused)", indicator.ToolTip);
         Assert.True(glyphChanges >= 1);
 
-        await indicator.TogglePauseAsync();
+        await indicator.TogglePauseAsync(TestContext.Current.CancellationToken);
 
         Assert.False(indicator.IsPaused);
         Assert.Equal("⏱", indicator.ButtonGlyph);
@@ -102,7 +102,7 @@ public sealed class ScheduledToolsPauseIndicatorViewModelTests
         using var indicator = new ScheduledToolsPauseIndicatorViewModel(service, hostId);
 
         // A pause performed through the service (e.g. from the scheduled tasks tab) updates the button.
-        await service.SetPausedAsync(hostId, paused: true);
+        await service.SetPausedAsync(hostId, paused: true, TestContext.Current.CancellationToken);
 
         Assert.True(indicator.IsPaused);
         Assert.Equal("⏸", indicator.ButtonGlyph);
@@ -129,7 +129,7 @@ public sealed class ScheduledToolsPauseIndicatorViewModelTests
             }
         };
 
-        await service.SetPausedAsync(hostId, paused: true);
+        await service.SetPausedAsync(hostId, paused: true, TestContext.Current.CancellationToken);
 
         Assert.False(glyphChanged);
     }

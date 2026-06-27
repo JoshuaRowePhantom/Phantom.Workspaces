@@ -17,7 +17,7 @@ public struct CreateAgentDefinitionRequest
     /// <summary>
     /// The factory used to resolve each tool resource into a concrete tool.
     /// </summary>
-    public IToolResourceFactory ToolResourceFactory { get; init; }
+    public IToolResourceFactory? ToolResourceFactory { get; init; }
 
     /// <summary>
     /// Parameter values to substitute into the manifest template before resolving tool resources.

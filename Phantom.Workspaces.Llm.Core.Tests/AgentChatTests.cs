@@ -500,10 +500,9 @@ public sealed class AgentChatTests
         chat.EnqueueUserMessage("hello");
         await WaitForConditionAsync(chat.RunningItems, () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
 
-        Assert.Equal(1, chat.History.Count);
+        Assert.Single(chat.History);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
-        Assert.Equal(1, chat.RunningItems.Count);
-        var runningAssistant = chat.RunningItems[0];
+        var runningAssistant = Assert.Single(chat.RunningItems);
         Assert.Equal(ChatRole.Assistant, runningAssistant.Items[0].Role);
     }
 
@@ -593,9 +592,9 @@ public sealed class AgentChatTests
                 && chat.RunningItems.Count == 1,
             "running item to appear after first streamed token");
 
-        Assert.Equal(1, chat.History.Count);
+        Assert.Single(chat.History);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
-        Assert.Equal(1, chat.RunningItems.Count);
+        Assert.Single(chat.RunningItems);
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();
         await WaitForConditionAsync(
@@ -641,7 +640,7 @@ public sealed class AgentChatTests
                 && RunningItemContents(chat).OfType<FunctionResultContent>().Any(content => content.CallId == "call-1"),
             "tool call and result to stream into the running item before completion");
 
-        Assert.Equal(1, chat.RunningItems.Count);
+        Assert.Single(chat.RunningItems);
 
         blockedFinal.MarkReady();
         blockedComplete.MarkReady();
@@ -1006,7 +1005,7 @@ public sealed class AgentChatTests
 
         chat.EnqueueUserMessage("queued while busy", queue);
         Assert.Single(queue.Items);
-        Assert.Equal(1, chat.History.Count);
+        Assert.Single(chat.History);
 
         blockedSecond.MarkReady();
         blockedComplete.MarkReady();
@@ -1065,9 +1064,9 @@ public sealed class AgentChatTests
             "error content turn to be appended after provider exception");
 
         var assistantErrorTurn = Assert.Single(
-            chat.History.Where(item =>
-                item.Role == ChatRole.Assistant &&
-                item.Contents.OfType<ErrorContent>().Any()));
+            chat.History,
+            item => item.Role == ChatRole.Assistant &&
+                item.Contents.OfType<ErrorContent>().Any());
         var error = Assert.Single(assistantErrorTurn.Contents.OfType<ErrorContent>());
         Assert.Contains("budget limit", error.Message);
     }

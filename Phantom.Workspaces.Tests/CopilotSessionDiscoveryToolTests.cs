@@ -125,7 +125,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         await tool.ExecuteAsync(this.Context(dataAccessLayer));
         await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
-        var export = await dataAccessLayer.ExportAsync(new ExportRequest());
+        var export = await dataAccessLayer.ExportAsync(new ExportRequest(), TestContext.Current.CancellationToken);
         var agentDefinitions = export.ChangeBatches
             .SelectMany(b => b.Entities)
             .Select(e => e.EntityId)
@@ -142,7 +142,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
 
         await new CopilotSessionDiscoveryTool().ExecuteAsync(this.Context(dataAccessLayer));
 
-        var export = await dataAccessLayer.ExportAsync(new ExportRequest());
+        var export = await dataAccessLayer.ExportAsync(new ExportRequest(), TestContext.Current.CancellationToken);
         Assert.Empty(export.ChangeBatches.SelectMany(b => b.Entities));
     }
 
@@ -257,7 +257,7 @@ public sealed class CopilotSessionDiscoveryToolTests : IDisposable
         await tool.ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
         await tool.ExecuteAsync(this.ContextWithMcpConfig(dataAccessLayer, mcpConfigPath));
 
-        var export = await dataAccessLayer.ExportAsync(new ExportRequest());
+        var export = await dataAccessLayer.ExportAsync(new ExportRequest(), TestContext.Current.CancellationToken);
         var distinctEntities = export.ChangeBatches.SelectMany(b => b.Entities).Select(e => e.EntityId).Distinct().Count();
         Assert.Equal(1, distinctEntities);
     }

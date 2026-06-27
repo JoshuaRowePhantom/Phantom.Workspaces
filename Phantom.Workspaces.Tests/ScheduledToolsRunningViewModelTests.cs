@@ -71,7 +71,7 @@ public sealed class ScheduledToolsRunningViewModelTests
 
         Assert.False(viewModel.HasRunningTools);
 
-        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName);
+        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
 
         // The host adds the running execution (and raises the event) before the tool body runs, so by
         // the time the tool signals "started" the view-model already reflects the in-flight run.

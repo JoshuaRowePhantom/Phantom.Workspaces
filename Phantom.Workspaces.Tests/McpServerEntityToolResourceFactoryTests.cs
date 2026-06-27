@@ -31,7 +31,7 @@ public sealed class McpServerEntityToolResourceFactoryTests
             endpoint: "https://api.githubcopilot.com/mcp/");
         var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
 
-        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"));
+        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
 
         var mcpTool = Assert.IsType<McpTool>(tool);
         Assert.Equal("github", mcpTool.ServerName);
@@ -55,7 +55,7 @@ public sealed class McpServerEntityToolResourceFactoryTests
             endpoint: "https://local.example/mcp/");
         var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
 
-        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"));
+        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
 
         var mcpTool = Assert.IsType<McpTool>(tool);
         var connection = Assert.IsType<ApiKeyConnection>(mcpTool.Connection);
@@ -68,7 +68,7 @@ public sealed class McpServerEntityToolResourceFactoryTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, GlobalPrefix]);
 
-        var tool = await factory.ResolveToolResourceAsync(McpServerResource("nonexistent"));
+        var tool = await factory.ResolveToolResourceAsync(McpServerResource("nonexistent"), TestContext.Current.CancellationToken);
 
         Assert.Null(tool);
     }
@@ -84,7 +84,7 @@ public sealed class McpServerEntityToolResourceFactoryTests
             Kind = "tool",
             Id = "fixed",
             Name = "github",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Null(tool);
     }

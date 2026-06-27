@@ -471,7 +471,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
 
     private static bool TryParseEntityChange(JsonElement changeElement, out EntityChange entityChange)
     {
-        entityChange = default;
+        entityChange = default!;
         if (!TryParseEntityChangeMode(changeElement, out var entityChangeMode))
         {
             return false;
@@ -652,7 +652,7 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
         var values = propertyValue
             .EnumerateArray()
             .Where(static item => item.ValueKind == JsonValueKind.String)
-            .Select(static item => item.GetString())
+            .Select(static item => item.GetString()!)
             .Where(static item => !string.IsNullOrWhiteSpace(item))
             .ToArray();
         return values.Length == 0 ? [] : values;

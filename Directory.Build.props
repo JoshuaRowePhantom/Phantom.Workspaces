@@ -4,5 +4,6 @@
        the app.manifest identity (kept in sync), and the release tag. -->
   <PropertyGroup>
     <Version>0.1.0</Version>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>

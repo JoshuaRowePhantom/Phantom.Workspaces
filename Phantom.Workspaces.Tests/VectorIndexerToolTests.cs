@@ -63,7 +63,7 @@ public sealed class VectorIndexerToolTests
         {
             QueueName = VectorIndexerTool.QueueName,
             Count = 10,
-        });
+        }, TestContext.Current.CancellationToken);
         Assert.Empty(drained.Entities);
     }
 
@@ -93,7 +93,7 @@ public sealed class VectorIndexerToolTests
                 },
             ],
         };
-        var result = await dataAccessLayer.QueryAsync(query);
+        var result = await dataAccessLayer.QueryAsync(query, TestContext.Current.CancellationToken);
         var match = Assert.Single(Assert.Single(result.Batches).Entities);
         Assert.Equal(apple, match.EntityId);
     }
@@ -114,7 +114,7 @@ public sealed class VectorIndexerToolTests
         {
             QueueName = VectorIndexerTool.QueueName,
             Count = 10,
-        });
+        }, TestContext.Current.CancellationToken);
         Assert.Empty(drained.Entities);
     }
 }

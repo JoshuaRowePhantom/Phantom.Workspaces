@@ -34,7 +34,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
-        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "my-tunnel");
+        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "my-tunnel", TestContext.Current.CancellationToken);
 
         Assert.Equal("tunnel-new", descriptor.TunnelId);
         Assert.Equal("my-tunnel", descriptor.TunnelName);
@@ -54,7 +54,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .ReturnsAsync([existing]);
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
-        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "my-tunnel");
+        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "my-tunnel", TestContext.Current.CancellationToken);
 
         Assert.Equal("tunnel-existing", descriptor.TunnelId);
         management.Verify(
@@ -72,7 +72,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .ReturnsAsync([existing]);
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
-        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "auto");
+        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "auto", TestContext.Current.CancellationToken);
 
         Assert.Equal("tunnel-auto", descriptor.TunnelId);
         management.Verify(
@@ -94,7 +94,7 @@ public sealed class DevTunnelManagementClientWrapperTests
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "auto"));
+            () => wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "auto", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
-        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "my-tunnel");
+        var descriptor = await wrapper.EnsureTunnelAsync(tunnelId: null, tunnelName: "my-tunnel", TestContext.Current.CancellationToken);
 
         // The foreign tunnel (no marker) is not reused; a new Workspaces tunnel is created.
         Assert.Equal("tunnel-new", descriptor.TunnelId);
@@ -143,7 +143,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .Callback<Tunnel, TunnelPort, TunnelRequestOptions, CancellationToken>((_, port, _, _) => createdPort = port)
             .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
 
-        await wrapper.SetSingleForwardedPortAsync("tunnel-1", localPort: 5280, protocol: "https");
+        await wrapper.SetSingleForwardedPortAsync("tunnel-1", localPort: 5280, protocol: "https", TestContext.Current.CancellationToken);
 
         Assert.Equal([(ushort)9000], deletedPorts); // only the non-matching port removed
         Assert.NotNull(createdPort);
@@ -170,7 +170,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .Callback<Tunnel, TunnelRequestOptions, CancellationToken>((updated, _, _) => updatedTunnel = updated)
             .ReturnsAsync((Tunnel updated, TunnelRequestOptions _, CancellationToken _) => updated);
 
-        await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Private);
+        await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
         Assert.NotNull(updatedTunnel);
         Assert.Null(updatedTunnel!.Ports);
@@ -190,7 +190,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .Callback<Tunnel, TunnelRequestOptions, CancellationToken>((updated, _, _) => updatedTunnel = updated)
             .ReturnsAsync((Tunnel updated, TunnelRequestOptions _, CancellationToken _) => updated);
 
-        await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Anonymous);
+        await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Anonymous, TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(updatedTunnel!.AccessControl!.Entries!);
         Assert.Equal(TunnelAccessControlEntryType.Anonymous, entry.Type);
@@ -210,7 +210,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             ]);
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
-        var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel");
+        var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
 
         Assert.Equal("wanted", result.TunnelId);
         Assert.Equal("usw2", result.ClusterId);
@@ -227,7 +227,7 @@ public sealed class DevTunnelManagementClientWrapperTests
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("missing"));
+            () => ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("missing", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -243,7 +243,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             ]);
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
-        var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync();
+        var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("ours", result.TunnelId);
         Assert.Equal([5280], result.ForwardedPorts);
@@ -259,7 +259,7 @@ public sealed class DevTunnelManagementClientWrapperTests
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync());
+            () => ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public sealed class DevTunnelManagementClientWrapperTests
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync());
+            () => ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -290,7 +290,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(refreshed);
 
-        var result = await wrapper.GetConnectReadyTunnelAsync("tunnel-1");
+        var result = await wrapper.GetConnectReadyTunnelAsync("tunnel-1", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result.Ports);
         Assert.Same(refreshed, result);
@@ -309,7 +309,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(refreshed);
 
-        var result = await wrapper.GetConnectReadyTunnelAsync("tunnel-1");
+        var result = await wrapper.GetConnectReadyTunnelAsync("tunnel-1", TestContext.Current.CancellationToken);
 
         var port = Assert.Single(result.Ports!);
         Assert.Equal(5280, port.PortNumber);
