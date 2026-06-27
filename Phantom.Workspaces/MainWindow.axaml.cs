@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.ViewModels;
@@ -21,6 +22,50 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         this.DataContext = viewModel;
+        this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
+    }
+
+    private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        var index = GetDigitIndex(e.PhysicalKey);
+        if (index < 0)
+        {
+            return;
+        }
+
+        if (e.KeyModifiers == KeyModifiers.Alt)
+        {
+            viewModel.GoToTabAtIndexCommand.Execute(index.ToString());
+            e.Handled = true;
+        }
+        else if (e.KeyModifiers == KeyModifiers.Control)
+        {
+            viewModel.GoToWorkspacePaneAtIndexCommand.Execute(index.ToString());
+            e.Handled = true;
+        }
+    }
+
+    private static int GetDigitIndex(PhysicalKey key)
+    {
+        return key switch
+        {
+            PhysicalKey.Digit1 => 0,
+            PhysicalKey.Digit2 => 1,
+            PhysicalKey.Digit3 => 2,
+            PhysicalKey.Digit4 => 3,
+            PhysicalKey.Digit5 => 4,
+            PhysicalKey.Digit6 => 5,
+            PhysicalKey.Digit7 => 6,
+            PhysicalKey.Digit8 => 7,
+            PhysicalKey.Digit9 => 8,
+            PhysicalKey.Digit0 => 9,
+            _ => -1,
+        };
     }
 
     private async void OnOpenSettingsClicked(

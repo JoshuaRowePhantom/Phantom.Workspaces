@@ -1,5 +1,7 @@
 using Avalonia.Media;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.VisualTree;
 using System.Collections.Specialized;
 using System.Linq;
@@ -1469,6 +1471,201 @@ public sealed class MainWindowIntegrationTests
             .ToList();
 
         Assert.Equal(["null-order-a", "null-order-c"], tabIds);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-b", Title = "Tab B" };
+        var tabC = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        for (var i = 0; i < 10; i++)
+        {
+            var tab = new AgentSessionWorkspaceTabViewModel { Id = $"kb-alt0-tab{i}", Title = $"Tab {i}" };
+            await viewModel.OpenTabAsync(tab);
+        }
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal(documentDock!.VisibleDockables![9], documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt-oob-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt-oob-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var activeBefore = documentDock!.ActiveDockable;
+
+        window.KeyPressQwerty(PhysicalKey.Digit9, RawInputModifiers.Alt);
+
+        Assert.Equal(activeBefore, documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Ctrl1_ActivatesFirstWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("11111111-1111-4111-8111-111111111111");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "11111111-1111-4111-8111-111111111111",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane-a"]],
+              "display-name": { "default": "KB Pane A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("22222222-2222-4222-8222-222222222222");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "22222222-2222-4222-8222-222222222222",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane-b"]],
+              "display-name": { "default": "KB Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Control);
+
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Ctrl2_ActivatesSecondWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("33333333-3333-4333-8333-333333333333");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "33333333-3333-4333-8333-333333333333",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane2-a"]],
+              "display-name": { "default": "KB Pane 2 A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("44444444-4444-4444-8444-444444444444");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "44444444-4444-4444-8444-444444444444",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane2-b"]],
+              "display-name": { "default": "KB Pane 2 B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
+
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_CtrlDigit_WithIndexOutOfRange_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        var selectedBefore = viewModel.SelectedWorkspacePane;
+
+        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
+
+        Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
+
+        window.Close();
     }
 
 }
