@@ -9,10 +9,10 @@ using AgentSchema;
 using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
-using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -73,12 +73,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 if (result is var (agent, loggerFactory))
                 {
                     tab.SetReady(agent, loggerFactory);
-
-                    agent.AgentRecreationRequested += async (_, _) =>
-                    {
-                        await Dispatcher.UIThread.InvokeAsync(async () => await tab.ResetForRecreationAsync());
-                        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler));
-                    };
                 }
                 else
                 {
@@ -204,7 +198,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
 
         agent.ConfigureSlashCommands(
-            SlashCommandRegistry.Default,
             () => new SlashCommandContext
             {
                 AgentChat = agentChat,

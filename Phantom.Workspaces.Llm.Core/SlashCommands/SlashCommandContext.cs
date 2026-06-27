@@ -1,9 +1,8 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Phantom.Workspaces.Llm;
 
-namespace Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
+namespace Phantom.Workspaces.Llm.SlashCommands;
 
 /// <summary>
 /// Context passed to every slash command handler at execution time.

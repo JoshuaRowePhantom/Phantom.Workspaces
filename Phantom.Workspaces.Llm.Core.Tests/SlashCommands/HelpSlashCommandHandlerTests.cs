@@ -3,11 +3,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
-using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
-using Phantom.Workspaces.Llm;
-using Xunit;
+using Phantom.Workspaces.Llm.SlashCommands;
 
-namespace Phantom.Workspaces.Agent.Gui.Tests;
+namespace Phantom.Workspaces.Llm.Tests.SlashCommands;
 
 public sealed class HelpSlashCommandHandlerTests
 {
@@ -29,23 +27,26 @@ public sealed class HelpSlashCommandHandlerTests
     [Fact]
     public void Name_IsHelp()
     {
-        var handler = new HelpSlashCommandHandler([]);
+        var registry = new SlashCommandRegistry();
+        var handler = new HelpSlashCommandHandler(registry);
         Assert.Equal("help", handler.Name);
     }
 
     [Fact]
     public void Description_IsNotEmpty()
     {
-        var handler = new HelpSlashCommandHandler([]);
+        var registry = new SlashCommandRegistry();
+        var handler = new HelpSlashCommandHandler(registry);
         Assert.False(string.IsNullOrWhiteSpace(handler.Description));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ExecuteAsync_WithNoArgument_ListsAllCommands()
     {
-        var cmd1 = new FakeCommandHandler("alpha", "Does alpha");
-        var cmd2 = new FakeCommandHandler("beta", "Does beta");
-        var handler = new HelpSlashCommandHandler([cmd1, cmd2]);
+        var registry = new SlashCommandRegistry();
+        registry.Register(new FakeCommandHandler("alpha", "Does alpha"));
+        registry.Register(new FakeCommandHandler("beta", "Does beta"));
+        var handler = new HelpSlashCommandHandler(registry);
 
         await using var chat = await CreateChatAsync();
         var context = new SlashCommandContext { AgentChat = chat };
@@ -54,27 +55,27 @@ public sealed class HelpSlashCommandHandlerTests
         Assert.Contains("/alpha", result.StatusMessage);
         Assert.Contains("/beta", result.StatusMessage);
         Assert.Contains("Does alpha", result.StatusMessage);
-        Assert.False(result.RequiresAgentRecreation);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ExecuteAsync_WithKnownCommandName_ShowsDetailedHelp()
     {
-        var cmd = new FakeCommandHandler("alpha", "Does alpha", longDescription: "Alpha long help");
-        var handler = new HelpSlashCommandHandler([cmd]);
+        var registry = new SlashCommandRegistry();
+        registry.Register(new FakeCommandHandler("alpha", "Does alpha", longDescription: "Alpha long help"));
+        var handler = new HelpSlashCommandHandler(registry);
 
         await using var chat = await CreateChatAsync();
         var context = new SlashCommandContext { AgentChat = chat };
         var result = await handler.ExecuteAsync(context, "alpha", CancellationToken.None);
 
         Assert.Contains("Alpha long help", result.StatusMessage);
-        Assert.False(result.RequiresAgentRecreation);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ExecuteAsync_WithUnknownCommandName_ReturnsErrorStatus()
     {
-        var handler = new HelpSlashCommandHandler([]);
+        var registry = new SlashCommandRegistry();
+        var handler = new HelpSlashCommandHandler(registry);
 
         await using var chat = await CreateChatAsync();
         var context = new SlashCommandContext { AgentChat = chat };
@@ -84,11 +85,12 @@ public sealed class HelpSlashCommandHandlerTests
         Assert.Contains("/nonexistent", result.StatusMessage);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ExecuteAsync_WithCommandHavingNoLongDescription_FallsBackToDescription()
     {
-        var cmd = new FakeCommandHandler("alpha", "Does alpha", longDescription: null);
-        var handler = new HelpSlashCommandHandler([cmd]);
+        var registry = new SlashCommandRegistry();
+        registry.Register(new FakeCommandHandler("alpha", "Does alpha", longDescription: null));
+        var handler = new HelpSlashCommandHandler(registry);
 
         await using var chat = await CreateChatAsync();
         var context = new SlashCommandContext { AgentChat = chat };
