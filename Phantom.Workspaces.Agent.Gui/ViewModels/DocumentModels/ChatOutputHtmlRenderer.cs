@@ -43,6 +43,39 @@ internal static class ChatOutputHtmlRenderer
 
     public static string RunningItemContentsId(string runningItemId) => $"{runningItemId}-contents";
 
+    public static string ToolCallGroupId(int sequence) => $"grp-{sequence}";
+
+    public static string ToolCallGroupSummaryId(string groupId) => $"{groupId}-summary";
+
+    public static string ToolCallGroupBodyId(string groupId) => $"{groupId}-body";
+
+    /// <summary>
+    /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
+    /// tool-call messages. <paramref name="bodyContent"/> is the pre-rendered HTML of the first
+    /// message and is placed directly inside the body container.
+    /// </summary>
+    public static string RenderToolCallGroup(string groupId, string lastToolName, int callCount, string bodyContent)
+    {
+        var builder = new StringBuilder();
+        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
+        builder.Append(RenderToolCallGroupSummary(groupId, lastToolName, callCount));
+        builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolCallGroupBodyId(groupId)).Append("\">");
+        builder.Append(bodyContent);
+        builder.Append("</div></details>");
+        return builder.ToString();
+    }
+
+    /// <summary>Builds the <c>summary</c> element for an existing tool-call group (used when the group is extended).</summary>
+    public static string RenderToolCallGroupSummary(string groupId, string lastToolName, int callCount)
+    {
+        var builder = new StringBuilder();
+        builder.Append("<summary class=\"chat-collapsible-summary\" id=\"").Append(ToolCallGroupSummaryId(groupId)).Append("\">");
+        builder.Append("tool call: <span class=\"tool-name\">").Append(HtmlEscape(lastToolName)).Append("</span>");
+        builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
+        builder.Append("</summary>");
+        return builder.ToString();
+    }
+
     /// <summary>Builds the full <c>div.chat-message</c> element for a message and its visible contents.</summary>
     public static string RenderMessage(
         string messageId,
@@ -51,7 +84,7 @@ internal static class ChatOutputHtmlRenderer
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
-            .Append(messageId).Append("\">");
+            .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
         builder.Append(RenderHeader(messageId, roleLabel));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
@@ -68,7 +101,7 @@ internal static class ChatOutputHtmlRenderer
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
 
     public static string RenderHeader(string messageId, string roleLabel)
-        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\">[{HtmlEscape(roleLabel)}]</div>";
+        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
 
     public static string RoleClass(string roleLabel)
         => string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
@@ -219,8 +252,8 @@ internal static class ChatOutputHtmlRenderer
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\">").Append(HtmlEscape(header)).Append(InspectorAffordance(contentId)).Append("</summary>");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append(InspectorAffordance(contentId)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
             builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(body)).Append("</pre>");
