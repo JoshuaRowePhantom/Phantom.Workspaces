@@ -1,0 +1,221 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using Phantom.Workspaces;
+
+namespace Phantom.Workspaces.Data.Tests;
+
+public sealed class ProcessRunnerTests
+{
+    // -----------------------------------------------------------------------
+    // Basic result capture
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunProcessAsync_ReturnsZeroExitCode_ForSuccessfulProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "exit", "0"]));
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_ReturnsNonZeroExitCode_ForFailingProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "exit", "42"]));
+
+        Assert.Equal(42, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_CapturesStandardOut()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "echo hello"]));
+
+        Assert.Contains("hello", result.StandardOut);
+        Assert.Empty(result.StandardError);
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_CapturesStandardError()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "echo error 1>&2"]));
+
+        Assert.Contains("error", result.StandardError);
+        Assert.Empty(result.StandardOut);
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_StandardOutAndError_ContainsBothStreams()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "echo out && echo err 1>&2"]));
+
+        Assert.Contains("out", result.StandardOutAndError);
+        Assert.Contains("err", result.StandardOutAndError);
+        Assert.Contains("out", result.StandardOut);
+        Assert.Contains("err", result.StandardError);
+    }
+
+    // -----------------------------------------------------------------------
+    // Cancellation
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunProcessAsync_ThrowsOperationCanceledException_WhenCancelledBeforeProcessExits()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await ProcessRunner.RunProcessAsync(
+                new RunProcessParameters(
+                    Command: "cmd.exe",
+                    Arguments: ["/c", "ping", "-n", "9999", "127.0.0.1"]),
+                cts.Token));
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_ThrowsOperationCanceledException_PreservesOriginalToken()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var ex = await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await ProcessRunner.RunProcessAsync(
+                new RunProcessParameters(
+                    Command: "cmd.exe",
+                    Arguments: ["/c", "ping", "-n", "9999", "127.0.0.1"]),
+                cts.Token));
+
+        Assert.Equal(cts.Token, ex.CancellationToken);
+    }
+
+    // -----------------------------------------------------------------------
+    // Timeout
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunProcessAsync_ThrowsTimeoutException_WhenTimeoutExpires()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parameters = new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "ping", "-n", "9999", "127.0.0.1"],
+            Timeout: TimeSpan.FromMilliseconds(1));
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await ProcessRunner.RunProcessAsync(parameters));
+    }
+
+    // -----------------------------------------------------------------------
+    // KillOnClose / Windows Job Object
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void AssignToWindowsJobObject_AssignsProcessToJobObject()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var process = Process.Start(new ProcessStartInfo("cmd.exe", "/c pause")
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        }) ?? throw new InvalidOperationException("Failed to start process.");
+
+        try
+        {
+            ProcessRunner.AssignToWindowsJobObject(process);
+            Assert.True(IsProcessInAnyJob(process.Handle));
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_KillOnCloseKillTree_CompletesSuccessfully_OnWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = await ProcessRunner.RunProcessAsync(new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "exit", "0"],
+            KillOnClose: KillOnCloseAction.KillTree));
+
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    [SupportedOSPlatform("windows")]
+    private static extern bool IsProcessInJob(
+        IntPtr processHandle,
+        IntPtr jobHandle,
+        [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+    [SupportedOSPlatform("windows")]
+    private static bool IsProcessInAnyJob(IntPtr processHandle)
+    {
+        IsProcessInJob(processHandle, IntPtr.Zero, out var result);
+        return result;
+    }
+}
