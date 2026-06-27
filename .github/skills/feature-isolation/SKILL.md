@@ -118,7 +118,17 @@ Make the minimal changes to make the tests pass. Do not fix unrelated issues.
 - No `Debug.WriteLine` calls
 - No `dotnet test` — always use the script
 
-## Step 9 — Run tests
+## Step 9 — Build and run tests
+
+First, verify the entire solution builds (this catches errors in projects excluded from the test suite):
+
+```powershell
+dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
+```
+
+All lines matching `error ` must be zero. Fix any build errors before proceeding.
+
+Then run the fast test suite:
 
 ```powershell
 .\scripts\run-tests.ps1 -Mode fast
@@ -154,13 +164,14 @@ Pull any upstream changes from `features` before merging back:
 git merge features --no-edit
 ```
 
-Resolve any conflicts, then **build and run the full fast test suite**:
+Resolve any conflicts, then **build the full solution and run the fast test suite**:
 
 ```powershell
+dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
 .\scripts\run-tests.ps1 -Mode fast
 ```
 
-Read `scripts\test-results.log`. If any tests fail:
+All `error ` lines from the build must be zero. Read `scripts\test-results.log`. If either the build or any tests fail:
 1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
 2. Fix the failing test or code.
 3. Run tests again.
@@ -191,7 +202,7 @@ This succeeds only if `features` is a direct ancestor of the feature branch. If 
 3. Never create a worktree that is already checked out to a feature branch held by another worktree.
 4. All build and test commands run from inside the worktree directory.
 5. Tests must pass before committing (step 9 before step 10).
-6. After merging `features` into the branch (step 12), always build and run tests; fix any failures before fast-forwarding.
+6. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
 7. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
 8. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
 9. Do not push any branch unless explicitly instructed.
