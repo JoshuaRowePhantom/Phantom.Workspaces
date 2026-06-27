@@ -77,32 +77,6 @@ public sealed class AgentChatStatusLineViewModelTests
     }
 
     [AvaloniaFact]
-    public async Task ReasoningIndicatorText_WhenIsReasoningVisibleIsTrue_ReturnsShowingText()
-    {
-        using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
-        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
-
-        agentViewModel.SetReasoningVisibility(true);
-
-        Assert.Equal("🧠 Showing Reasoning", statusLine.ReasoningIndicatorText);
-        Assert.True(statusLine.IsReasoningVisible);
-    }
-
-    [AvaloniaFact]
-    public async Task ReasoningIndicatorText_WhenIsReasoningVisibleIsFalse_ReturnsNotShowingText()
-    {
-        using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
-        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
-
-        agentViewModel.SetReasoningVisibility(false);
-
-        Assert.Equal("🚫🧠 Not Showing Reasoning", statusLine.ReasoningIndicatorText);
-        Assert.False(statusLine.IsReasoningVisible);
-    }
-
-    [AvaloniaFact]
     public async Task IsReasoningVisible_WhenAgentPropertyChanges_PropagatesChange()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -115,17 +89,13 @@ public sealed class AgentChatStatusLineViewModelTests
         agentViewModel.SetReasoningVisibility(true);
 
         Assert.Contains(nameof(AgentChatStatusLineViewModel.IsReasoningVisible), changedProperties);
-        Assert.Contains(nameof(AgentChatStatusLineViewModel.ReasoningIndicatorText), changedProperties);
         Assert.True(statusLine.IsReasoningVisible);
-        Assert.Equal("🧠 Showing Reasoning", statusLine.ReasoningIndicatorText);
 
         changedProperties.Clear();
         agentViewModel.SetReasoningVisibility(false);
 
         Assert.Contains(nameof(AgentChatStatusLineViewModel.IsReasoningVisible), changedProperties);
-        Assert.Contains(nameof(AgentChatStatusLineViewModel.ReasoningIndicatorText), changedProperties);
         Assert.False(statusLine.IsReasoningVisible);
-        Assert.Equal("🚫🧠 Not Showing Reasoning", statusLine.ReasoningIndicatorText);
     }
 
     [AvaloniaFact]
