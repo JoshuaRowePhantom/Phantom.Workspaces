@@ -161,6 +161,27 @@
       overflow-x: auto;
     }
 
+    .chat-tool-group > summary {
+      cursor: pointer;
+      user-select: none;
+      color: var(--chat-tool-summary);
+    }
+
+    .tool-count-badge {
+      font-size: 0.75em;
+      opacity: 0.6;
+      margin-left: 0.5em;
+    }
+
+    .chat-tool-group[open] .tool-count-badge {
+      display: none;
+    }
+
+    .chat-tool-group-body {
+      padding-left: 1em;
+      border-left: 2px solid var(--chat-tool-summary);
+    }
+
     /* copy-gutter component ------------------------------------------------- */
 
     .copy-gutter-host {
