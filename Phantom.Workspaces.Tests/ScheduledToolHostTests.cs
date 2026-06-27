@@ -62,6 +62,14 @@ public sealed class ScheduledToolHostTests
         }
     }
 
+    private sealed class FailingTool : IWorkspaceTool
+    {
+        public string ToolType => "stub";
+
+        public Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context) =>
+            Task.FromResult(WorkspaceToolExecutionResult.Failure("something went wrong"));
+    }
+
     private static readonly string[] HostName = ["computer", "this-machine"];
 
     private static async Task AddEntityAsync(IDataAccessLayer dataAccessLayer, Guid id, string json)
@@ -350,6 +358,32 @@ public sealed class ScheduledToolHostTests
         host.StopAllRunningExecutions();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+    }
+
+    [Fact]
+    public async Task RunDueTools_ToolReturnsFailure_RecordsFailedResult()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var tool = new FailingTool();
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());
+
+        var ranCount = await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, ranCount);
+        var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
+        var resultEntity = Assert.Single(results);
+        Assert.Equal("failed", resultEntity.GetProperty("status").GetString());
+        Assert.Equal("something went wrong", resultEntity.GetProperty("content").GetProperty("default").GetProperty("text").GetString());
     }
 
     private static async Task<IReadOnlyList<JsonElement>> QueryByTypeAsync(IDataAccessLayer dataAccessLayer, string entityType)

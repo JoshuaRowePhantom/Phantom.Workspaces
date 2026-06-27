@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -44,11 +45,19 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
         if (tunnelName is null)
         {
-            return new WorkspaceToolExecutionResult();
+            return WorkspaceToolExecutionResult.Failure($"Tunnel JSON not found or unreadable at {tunnelJsonPath}");
         }
 
         var cliPath = this.ResolveCliPath(context.Tool.Data);
-        var active = await this.CheckTunnelActiveAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+        bool active;
+        try
+        {
+            active = await this.CheckTunnelActiveAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return WorkspaceToolExecutionResult.Failure($"Failed to run VS Code CLI: {ex.Message}");
+        }
 
         var entityName = this.BuildEntityName();
         var entityId = CreateDeterministicEntityId(entityName);
@@ -74,7 +83,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             },
             context.CancellationToken).ConfigureAwait(false);
 
-        return new WorkspaceToolExecutionResult();
+        return WorkspaceToolExecutionResult.Success();
     }
 
     private EntityName BuildEntityName()
@@ -160,16 +169,9 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
     private async Task<bool> CheckTunnelActiveAsync(string cliPath, CancellationToken cancellationToken)
     {
-        try
-        {
-            var runner = this.processRunner ?? DefaultRunTunnelStatusAsync;
-            var exitCode = await runner(cliPath, cancellationToken).ConfigureAwait(false);
-            return exitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
+        var runner = this.processRunner ?? DefaultRunTunnelStatusAsync;
+        var exitCode = await runner(cliPath, cancellationToken).ConfigureAwait(false);
+        return exitCode == 0;
     }
 
     private static async Task<int> DefaultRunTunnelStatusAsync(string cliPath, CancellationToken cancellationToken)
