@@ -37,10 +37,11 @@ If the issue is clear, continue to Step 3.
 
 ## Step 3 — Create a branch from `features`
 
+`C:\dev\phantom.workspaces-design` stays on the `design` branch at all times — never check out `features` or any feature branch there. Create the new branch from the `features` ref directly without switching:
+
 ```powershell
 cd C:\dev\phantom.workspaces-design
-git checkout features
-git checkout -b <branch-name>
+git branch <branch-name> features
 ```
 
 Choose a short, descriptive branch name (e.g. `fix/tab-icons`, `feat/default-workspace`).
@@ -156,14 +157,20 @@ Resolve any conflicts, then run tests again to confirm correctness.
 
 ## Step 13 — Fast-forward `features` to the feature branch
 
+`C:\dev\phantom.workspaces-design` stays on the `design` branch — update `features` as a ref without switching branches:
+
 ```powershell
+# Free the worktree by detaching HEAD so it can be reused
+Push-Location C:\dev\phantom.workspaces-design\worktrees\<N>
+git checkout --detach
 Pop-Location
+
+# Fast-forward features ref without checking it out
 cd C:\dev\phantom.workspaces-design
-git checkout features
-git merge --ff-only <branch-name>
+git fetch . <branch-name>:features
 ```
 
-This succeeds only if `features` is a direct ancestor of the feature branch. If step 12 was done correctly this should always fast-forward cleanly. If it fails, return to step 12.
+This succeeds only if `features` is a direct ancestor of the feature branch. If it fails, return to step 12.
 
 ---
 
@@ -172,7 +179,8 @@ This succeeds only if `features` is a direct ancestor of the feature branch. If 
 1. Always branch from `features`, never from `main` directly.
 2. Worktree names are plain integers (`1`, `2`, …) — never descriptive names.
 3. Never create a worktree that is already checked out to a branch held by another worktree.
-4. All build and test commands run from inside the worktree directory.
+4. All work (file edits, builds, tests, commits) runs from inside the worktree directory. Never edit source files directly in `C:\dev\phantom.workspaces-design`.
+5. `C:\dev\phantom.workspaces-design` always stays on the `design` branch. Never check out `features` or any feature branch there.
 5. Tests must pass before committing (step 9 before step 10).
 6. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
 7. Do not push any branch unless explicitly instructed.
