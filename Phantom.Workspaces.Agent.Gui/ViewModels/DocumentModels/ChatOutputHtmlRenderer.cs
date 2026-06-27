@@ -171,7 +171,7 @@ internal static class ChatOutputHtmlRenderer
     }
 
     private static string TextBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" id=\"{contentId}\">{HtmlEscape(text)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{HtmlEscape(text)}</div>";
 
     /// <summary>
     /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
@@ -179,7 +179,7 @@ internal static class ChatOutputHtmlRenderer
     /// with raw HTML disabled so model output cannot inject markup into the WebView.
     /// </summary>
     private static string MarkdownBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
 
     private static string MarkdownToHtml(string text)
         => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
@@ -187,7 +187,7 @@ internal static class ChatOutputHtmlRenderer
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" id=\"").Append(contentId).Append("\" data-sticky-base-level=\"1\">");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
