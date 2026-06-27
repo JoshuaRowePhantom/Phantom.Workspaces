@@ -47,22 +47,10 @@
       color: var(--chat-role);
       font-weight: bold;
       margin-bottom: 2px;
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
     }
 
     .chat-user-message .chat-header {
       color: var(--chat-user);
-    }
-
-    .chat-timestamp {
-      font-style: italic;
-      color: var(--chat-meta);
-      font-size: 0.85em;
-      white-space: nowrap;
-      margin-left: 8px;
-      font-weight: normal;
     }
 
     .chat-content {
@@ -519,38 +507,6 @@
       };
 
       window._stickyScrollEngine = new StickyScrollEngine(document.body);
-    })();
-  </script>
-  <script>
-    (function () {
-      "use strict";
-
-      function formatTimestamp(el) {
-        var d = new Date(el.getAttribute("data-utc"));
-        var now = new Date();
-        var sameDay = d.toDateString() === now.toDateString();
-        el.textContent = sameDay
-          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " "
-            + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      }
-
-      function formatAll(root) {
-        root.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-      }
-
-      formatAll(document);
-
-      var timestampObserver = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-          mutation.addedNodes.forEach(function (node) {
-            if (node.nodeType !== 1) { return; }
-            if (node.hasAttribute("data-utc")) { formatTimestamp(node); }
-            node.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-          });
-        });
-      });
-      timestampObserver.observe(document.body, { childList: true, subtree: true });
     })();
   </script>
 </body>

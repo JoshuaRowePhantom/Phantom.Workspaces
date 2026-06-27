@@ -62,8 +62,7 @@ internal sealed class ChatMessageHtmlModel
         return ChatOutputHtmlRenderer.RenderMessage(
             this.ElementId,
             roleLabel,
-            this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
-            this.source.Timestamp);
+            this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList());
     }
 
     public void Update(AgentChatHistoryItem newSource)
@@ -123,7 +122,7 @@ internal sealed class ChatMessageHtmlModel
             this.sink.UpdateContent(
                 ChatOutputHtmlRenderer.HeaderId(this.ElementId),
                 ChatOutputUpdateLocation.Replace,
-                ChatOutputHtmlRenderer.RenderHeader(this.ElementId, roleLabel, this.source.Timestamp));
+                ChatOutputHtmlRenderer.RenderHeader(this.ElementId, roleLabel));
         }
 
         for (var index = 0; index < newBindings.Count; index++)
