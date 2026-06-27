@@ -107,4 +107,32 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.NotNull(html);
         Assert.Contains("data-copy-target", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RenderHeader_WithTimestamp_EmitsChatTimestampSpan()
+    {
+        var timestamp = new DateTimeOffset(2026, 6, 27, 15, 13, 0, TimeSpan.Zero);
+
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant", timestamp);
+
+        Assert.Contains("chat-timestamp", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_WithTimestamp_EmitsDataUtcAttribute()
+    {
+        var timestamp = new DateTimeOffset(2026, 6, 27, 15, 13, 0, TimeSpan.Zero);
+
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant", timestamp);
+
+        Assert.Contains("data-utc=\"2026-06-27T15:13:00.0000000+00:00\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_WithoutTimestamp_DoesNotEmitChatTimestampSpan()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant");
+
+        Assert.DoesNotContain("chat-timestamp", html, StringComparison.Ordinal);
+    }
 }
