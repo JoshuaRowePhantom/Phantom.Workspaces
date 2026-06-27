@@ -23,6 +23,35 @@
                                                 Orientation="Horizontal"
                                                 Spacing="8"
                                                 HorizontalAlignment="Right">
+                                        <Border Classes="queue-status-pill dynamic"
+                                                IsVisible="{Binding !IsDefault}">
+                                            <Button Classes="queue-action-button queue-status-picker-button">
+                                                <Button.Flyout>
+                                                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                                                  CommandParameter="{Binding ImmediateImmediacyOption}"
+                                                                  Header="{Binding ImmediateImmediacyOption}"
+                                                                  Classes="queue-immediacy-menu-item"/>
+                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                                                  CommandParameter="{Binding QueuedImmediacyOption}"
+                                                                  Header="{Binding QueuedImmediacyOption}"
+                                                                  Classes="queue-immediacy-menu-item"/>
+                                                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                                                  CommandParameter="{Binding HeldImmediacyOption}"
+                                                                  Header="{Binding HeldImmediacyOption}"
+                                                                  Classes="queue-immediacy-menu-item"/>
+                                                    </MenuFlyout>
+                                                </Button.Flyout>
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="6"
+                                                            VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding SelectedImmediacyOption.Label}"
+                                                               Classes="queue-immediacy-label queue-status-label"/>
+                                                    <TextBlock Text="▾"
+                                                               Classes="queue-immediacy-caret queue-status-caret"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </Border>
                                         <Button Command="{Binding ToggleComposerCommand}"
                                                 Content="+"
                                                 Classes="queue-glyph-button"
