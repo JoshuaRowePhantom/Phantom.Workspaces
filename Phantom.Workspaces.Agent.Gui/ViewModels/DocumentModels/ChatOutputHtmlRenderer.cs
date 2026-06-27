@@ -49,7 +49,7 @@ internal static class ChatOutputHtmlRenderer
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
-            .Append(messageId).Append("\">");
+            .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
         builder.Append(RenderHeader(messageId, roleLabel));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
@@ -66,7 +66,7 @@ internal static class ChatOutputHtmlRenderer
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
 
     public static string RenderHeader(string messageId, string roleLabel)
-        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\">[{HtmlEscape(roleLabel)}]</div>";
+        => $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
 
     public static string RoleClass(string roleLabel)
         => string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
@@ -187,8 +187,8 @@ internal static class ChatOutputHtmlRenderer
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\">").Append(HtmlEscape(header)).Append("</summary>");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" id=\"").Append(contentId).Append("\" data-sticky-base-level=\"1\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
             builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(body)).Append("</pre>");

@@ -158,6 +158,16 @@
       word-break: break-word;
       overflow-x: auto;
     }
+
+    [data-sticky-level] {
+      position: sticky;
+      background: var(--chat-background);
+      z-index: 0;
+    }
+
+    .sticky-pinned {
+      box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+    }
   </style>
 </head>
 <body>
@@ -252,6 +262,120 @@
       }, true);
 
       postToHost({ type: "ready" });
+    })();
+  </script>
+  <script>
+    (function () {
+      "use strict";
+
+      function StickyScrollEngine(scrollRoot) {
+        this._scrollRoot = scrollRoot;
+        this._update = this.update.bind(this);
+
+        scrollRoot.addEventListener("scroll", this._update, { passive: true });
+
+        this._resizeObserver = new ResizeObserver(this._update);
+        this._resizeObserver.observe(scrollRoot);
+
+        this._mutationObserver = new MutationObserver(this._update);
+        this._mutationObserver.observe(scrollRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] });
+      }
+
+      StickyScrollEngine.prototype.update = function () {
+        var scrollRoot = this._scrollRoot;
+        var rootRect = scrollRoot.getBoundingClientRect();
+        var scrollTop = scrollRoot.scrollTop;
+
+        var allItems = Array.prototype.slice.call(scrollRoot.querySelectorAll("[data-sticky-level]"));
+
+        // Compute effective level and natural top position for each item.
+        var items = allItems.map(function (el) {
+          var level = parseInt(el.getAttribute("data-sticky-level"), 10);
+          var ancestor = el.parentElement;
+          while (ancestor && ancestor !== scrollRoot) {
+            var base = ancestor.getAttribute("data-sticky-base-level");
+            if (base !== null) {
+              level += parseInt(base, 10);
+            }
+            ancestor = ancestor.parentElement;
+          }
+          var naturalTop = el.getBoundingClientRect().top - rootRect.top + scrollTop;
+          return { el: el, level: level, naturalTop: naturalTop };
+        });
+
+        // Sort ascending by effective level, then by natural top position.
+        items.sort(function (a, b) {
+          if (a.level !== b.level) { return a.level - b.level; }
+          return a.naturalTop - b.naturalTop;
+        });
+
+        // ComputeAxisPins: same algorithm as StickyLayoutSelector.ComputeAxisPins.
+        var pins = []; // { el, level, pinY }
+        var accumOffset = 0;
+
+        // Group by level ascending.
+        var levels = [];
+        items.forEach(function (item) {
+          var last = levels.length > 0 ? levels[levels.length - 1] : null;
+          if (!last || last.level !== item.level) {
+            levels.push({ level: item.level, items: [item] });
+          } else {
+            last.items.push(item);
+          }
+        });
+
+        levels.forEach(function (group) {
+          // Find the item at this level that has scrolled past the current accumulated offset.
+          var pinned = null;
+          for (var i = 0; i < group.items.length; i++) {
+            var item = group.items[i];
+            if (item.naturalTop <= accumOffset) {
+              pinned = item;
+            } else {
+              break;
+            }
+          }
+          if (!pinned) { return; }
+
+          // Check if the next item at any level is approaching and would overlap.
+          var pinnedHeight = pinned.el.getBoundingClientRect().height;
+          var pushUpTo = accumOffset;
+          for (var j = i; j < group.items.length; j++) {
+            var nextItem = group.items[j];
+            var gap = nextItem.naturalTop - (accumOffset + pinnedHeight);
+            if (gap < 0) {
+              pushUpTo = Math.max(accumOffset + gap, 0);
+              break;
+            }
+          }
+
+          pins.push({ el: pinned.el, level: group.level, pinY: pushUpTo });
+          accumOffset += pinnedHeight;
+        });
+
+        // Apply pins.
+        var pinnedSet = new Set(pins.map(function (p) { return p.el; }));
+        items.forEach(function (item) {
+          if (pinnedSet.has(item.el)) {
+            var pin = pins.find(function (p) { return p.el === item.el; });
+            item.el.style.top = pin.pinY + "px";
+            item.el.style.zIndex = String(2000 - pin.level);
+            item.el.classList.add("sticky-pinned");
+          } else {
+            item.el.style.top = "";
+            item.el.style.zIndex = "";
+            item.el.classList.remove("sticky-pinned");
+          }
+        });
+      };
+
+      StickyScrollEngine.prototype.destroy = function () {
+        this._scrollRoot.removeEventListener("scroll", this._update);
+        this._resizeObserver.disconnect();
+        this._mutationObserver.disconnect();
+      };
+
+      window._stickyScrollEngine = new StickyScrollEngine(document.body);
     })();
   </script>
 </body>
