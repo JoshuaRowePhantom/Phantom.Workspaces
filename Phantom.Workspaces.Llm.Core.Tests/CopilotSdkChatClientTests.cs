@@ -1,7 +1,10 @@
 using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using GitHub.Copilot.SDK;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Xunit;
@@ -117,6 +120,41 @@ public sealed class CopilotSdkChatClientTests
         public bool Disposed { get; private set; }
 
         public void Dispose() => this.Disposed = true;
+    }
+
+    [Fact]
+    public void AfterInterrupt_InvalidateCopilotSession_SetsPendingResumeSessionId()
+    {
+        // Regression test for GitHub issue #35 (Failure 1): interrupting a turn must re-arm
+        // pendingResumeSessionId so the next EnsureSessionAsync resumes the existing Copilot CLI
+        // session (with its history) rather than creating a blank new one.
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        const string expectedSessionId = "test-copilot-session-id";
+
+        // Build a fake CopilotSession (sealed; no public ctor) by bypassing the constructor and
+        // injecting a known SessionId via its compiler-generated backing field.
+        var fakeSession = (CopilotSession)RuntimeHelpers.GetUninitializedObject(typeof(CopilotSession));
+        typeof(CopilotSession)
+            .GetField("<SessionId>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(fakeSession, expectedSessionId);
+
+        // Place the fake session into the client's private copilotSession field so the CAS inside
+        // InvalidateCopilotSession succeeds (it requires copilotSession == session by reference).
+        typeof(CopilotSdkChatClient)
+            .GetField("copilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(client, fakeSession);
+
+        // Invoke the private method the interrupt path calls.
+        typeof(CopilotSdkChatClient)
+            .GetMethod("InvalidateCopilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(client, [fakeSession]);
+
+        // After invalidation the resume id must be re-armed so the next turn resumes the session.
+        var pendingResumeSessionId = (string?)typeof(CopilotSdkChatClient)
+            .GetField("pendingResumeSessionId", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(client);
+
+        Assert.Equal(expectedSessionId, pendingResumeSessionId);
     }
 
     [Fact]
