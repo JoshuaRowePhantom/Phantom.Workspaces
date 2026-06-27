@@ -178,6 +178,7 @@ public sealed class AgentChat : IAsyncDisposable
        this.persistenceProvider = new AgentPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore);
        this.chatHistoryProvider = new AgentFrameworkChatHistoryProvider(this.persistenceProvider);
        this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider);
+#pragma warning disable MAAI001
        this.chatOptions = new ChatClientAgentOptions
        {
            ChatOptions = new ChatOptions(),
@@ -185,6 +186,7 @@ public sealed class AgentChat : IAsyncDisposable
            UseProvidedChatClientAsIs = useProvidedChatClientAsIs,
            RequirePerServiceCallChatHistoryPersistence = !useProvidedChatClientAsIs,
        };
+#pragma warning restore MAAI001
        AgentFactory.ConfigureChatOptions(resolvedAgentDefinition, this.chatOptions.ChatOptions);
        this.runtimeContextProviderRegistrations = await this.CreateRuntimeContextProviderRegistrationsAsync(
            resolvedAgentDefinition,

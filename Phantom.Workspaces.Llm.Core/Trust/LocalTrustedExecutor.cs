@@ -33,7 +33,7 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
         => new(trustProfile);
 
     /// <summary>Registers a handler for a specific stream kind (e.g. <c>"shell"</c>).</summary>
-    public void RegisterStreamHandler(string kind, ILocalStreamHandler handler)
+    internal void RegisterStreamHandler(string kind, ILocalStreamHandler handler)
     {
         ArgumentNullException.ThrowIfNull(kind);
         ArgumentNullException.ThrowIfNull(handler);

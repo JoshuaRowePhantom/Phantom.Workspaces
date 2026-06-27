@@ -84,9 +84,10 @@ public sealed class LocalShellStreamHandlerTests
         byte[] payload = [10, 20, 30];
         await stream.WriteAsync(payload, Failsafe);
 
-        // Read back from Output (echo confirms the bytes reached pty.Input)
+        // Read back from the client stream: input pump forwards bytes to pty.Input, which feeds
+        // pty.Output, which the output pump sends back as a Data frame — readable via the stream.
         var buffer = new byte[payload.Length];
-        await pty.Output.ReadExactlyAsync(buffer, Failsafe);
+        await stream.ReadExactlyAsync(buffer, Failsafe);
 
         Assert.Equal(payload, buffer);
 
