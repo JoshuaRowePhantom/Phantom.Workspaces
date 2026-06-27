@@ -1,5 +1,6 @@
 using System.Text.Json;
 using LibGit2Sharp;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 
@@ -310,5 +311,50 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         {
             return localDriveRoots;
         }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenGetGitMetadataFails_LogsDebug()
+    {
+        // A directory with a .git sub-directory but no valid git internals — LibGit2Sharp will throw
+        // RepositoryNotFoundException when opened.
+        var invalidRepoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "invalid-repo"));
+        Directory.CreateDirectory(Path.Combine(invalidRepoPath, ".git"));
+
+        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            this.temporaryRootPath,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
+
+        var tool = new GitWorkspaceDiscoveryTool(
+            new FixedLocalDriveRootProvider([this.temporaryRootPath]),
+            logger);
+
+        await tool.ExecuteAsync(context);
+
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Debug);
+    }
+}
+
+internal sealed class TestLogger<T> : ILogger<T>
+{
+    public sealed record LogEntry(LogLevel Level, Exception? Exception, string Message);
+
+    public List<LogEntry> Entries { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        this.Entries.Add(new LogEntry(logLevel, exception, formatter(state, exception)));
     }
 }

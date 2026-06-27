@@ -10,4 +10,11 @@ public sealed record WorkspaceToolExecutionResult
     public bool IsSuccess { get; init; } = true;
 
     public string? ErrorMessage { get; init; }
+
+    /// <summary>
+    /// Optional human-readable content to persist on the <c>tool-execution-result</c> entity (e.g. a
+    /// diagnostic summary). When set it takes precedence over <see cref="ErrorMessage"/> as the
+    /// persisted result content.
+    /// </summary>
+    public string? ResultContent { get; init; }
 }
