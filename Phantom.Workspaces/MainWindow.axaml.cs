@@ -32,6 +32,23 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Ctrl+F7 / Ctrl+F8: non-interceptable notification navigation aliases.
+        if (e.KeyModifiers == KeyModifiers.Control)
+        {
+            if (e.Key == Key.F7)
+            {
+                viewModel.NavigatePreviousNotificationCommand.Execute(null);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.F8)
+            {
+                viewModel.NavigateNextNotificationCommand.Execute(null);
+                e.Handled = true;
+                return;
+            }
+        }
+
         var index = GetDigitIndex(e.PhysicalKey);
         if (index < 0)
         {
