@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Tools;
@@ -197,5 +199,65 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var entities = await GitEntitiesAsync(dataAccessLayer);
         var single = Assert.Single(entities);
         Assert.Equal(repo, single.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDriveEnumerationFails_LogsWarning()
+    {
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var driveEnumerationException = new IOException("simulated drive enumeration failure");
+        IEnumerable<string> ThrowOnDriveEnum()
+        {
+            throw driveEnumerationException;
+        }
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        // No scan-root configured — falls back to drive provider (which throws).
+        var context = WorkspaceToolExecutionContextTestFactory.Create(
+            dataAccessLayer,
+            """{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan" }""");
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: ThrowOnDriveEnum, logger: logger);
+
+        await tool.ExecuteAsync(context);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Warning
+            && e.Exception == driveEnumerationException);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReturnsResultContentWithScanSummary()
+    {
+        this.MakeRepo("project-a");
+        this.MakeRepo("project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new GitWorkspaceScanTool();
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("2", result.ResultContent, StringComparison.Ordinal);
+        Assert.Contains(this.scanRoot, result.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+internal sealed class TestLogger<T> : ILogger<T>
+{
+    public sealed record LogEntry(LogLevel Level, Exception? Exception, string Message);
+
+    public List<LogEntry> Entries { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        this.Entries.Add(new LogEntry(logLevel, exception, formatter(state, exception)));
     }
 }
