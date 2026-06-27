@@ -89,18 +89,88 @@ internal sealed class ChatMessageHtmlModel
             AgentChatHistoryItem.DiagnosticChatRole.Value,
             StringComparison.OrdinalIgnoreCase);
 
-        var newBindings = new List<ContentBinding>(this.source.Contents.Count);
+        // Pre-scan: build a CallId → result lookup for content-level call+result pairing.
+        Dictionary<string, FunctionResultContent>? resultLookup = null;
         foreach (var content in this.source.Contents)
         {
-            var elementId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
-            var html = ChatOutputHtmlRenderer.RenderContent(elementId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
-            if (html is null)
+            if (content is FunctionResultContent result && result.CallId is not null)
             {
+                resultLookup ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
+                resultLookup.TryAdd(result.CallId, result);
+            }
+        }
+
+        // Determine which result CallIds are "claimed" (have a matching call in this message).
+        HashSet<string>? claimedResultCallIds = null;
+        if (resultLookup is not null)
+        {
+            foreach (var content in this.source.Contents)
+            {
+                if (content is FunctionCallContent call && call.CallId is not null && resultLookup.ContainsKey(call.CallId))
+                {
+                    claimedResultCallIds ??= new HashSet<string>(StringComparer.Ordinal);
+                    claimedResultCallIds.Add(call.CallId);
+                }
+            }
+        }
+
+        var newBindings = new List<ContentBinding>(this.source.Contents.Count);
+        var contentIndex = 0;
+        var contentCount = this.source.Contents.Count;
+
+        while (contentIndex < contentCount)
+        {
+            var content = this.source.Contents[contentIndex];
+
+            if (content is FunctionCallContent firstCall)
+            {
+                // Collect the maximal run of consecutive FunctionCallContent items.
+                var calls = new List<FunctionCallContent> { firstCall };
+                contentIndex++;
+                while (contentIndex < contentCount && this.source.Contents[contentIndex] is FunctionCallContent nextCall)
+                {
+                    calls.Add(nextCall);
+                    contentIndex++;
+                }
+
+                var elementId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
+
+                // Composite key: concatenation of each call's key and its matched result's key.
+                var keyParts = new List<string>(calls.Count * 2);
+                foreach (var call in calls)
+                {
+                    keyParts.Add(ChatOutputHtmlRenderer.ComputeContentKey(call, isDiagnostic));
+                    if (call.CallId is not null && resultLookup is not null && resultLookup.TryGetValue(call.CallId, out var matchedResult))
+                    {
+                        keyParts.Add(ChatOutputHtmlRenderer.ComputeContentKey(matchedResult, isDiagnostic));
+                    }
+                }
+
+                var groupKey = "group:" + string.Join("\x02", keyParts);
+                var groupHtml = ChatOutputHtmlRenderer.RenderToolGroup(elementId, calls, resultLookup);
+                newBindings.Add(new ContentBinding(groupKey, elementId, groupHtml));
                 continue;
             }
 
-            var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
-            newBindings.Add(new ContentBinding(key, elementId, html));
+            // Skip FunctionResultContent items claimed by a tool group.
+            if (content is FunctionResultContent claimedResult &&
+                claimedResult.CallId is not null &&
+                claimedResultCallIds is not null &&
+                claimedResultCallIds.Contains(claimedResult.CallId))
+            {
+                contentIndex++;
+                continue;
+            }
+
+            var contentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
+            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
+            if (html is not null)
+            {
+                var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
+                newBindings.Add(new ContentBinding(key, contentId, html));
+            }
+
+            contentIndex++;
         }
 
         if (emit)

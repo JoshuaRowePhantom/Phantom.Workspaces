@@ -146,6 +146,36 @@
       color: var(--chat-uri);
     }
 
+    details.chat-tool-group-wrapper > summary,
+    details.chat-tool-group-item > summary,
+    details.chat-tool-call > summary,
+    details.chat-tool-result > summary {
+      cursor: pointer;
+      color: var(--chat-tool-summary);
+      white-space: pre-wrap;
+    }
+
+    details.chat-tool-group-wrapper,
+    details.chat-tool-group-item {
+      margin: 1px 0;
+    }
+
+    details.chat-tool-group-wrapper > details.chat-tool-group-item,
+    details.chat-tool-group-item > details.chat-tool-call,
+    details.chat-tool-group-item > details.chat-tool-result {
+      margin-left: 12px;
+    }
+
+    details.chat-tool-call > pre,
+    details.chat-tool-result > pre {
+      margin: 4px 0 4px 12px;
+      padding: 6px 8px;
+      background: var(--chat-tool-body-background);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+    }
+
     details.chat-content > summary {
       cursor: pointer;
       color: var(--chat-tool-summary);
