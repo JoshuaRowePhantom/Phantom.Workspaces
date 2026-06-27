@@ -114,7 +114,7 @@ public partial class QueueComposerControl : UserControl
 
                 if (keyModifiers.HasFlag(KeyModifiers.Control))
                 {
-                    vm.SubmitToNewQueue();
+                    vm.Submit();
                     return true;
                 }
 

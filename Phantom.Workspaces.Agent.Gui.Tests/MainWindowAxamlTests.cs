@@ -412,6 +412,42 @@ public sealed class MainWindowAxamlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatInputQueueControl_NonDefaultQueueHeader_ContainsStatusPillBoundToSetImmediacyCommand()
+    {
+        // Issue #127: non-default queue cards must show a status pill in the group header
+        // even when the composer is collapsed, bound to SetImmediacyCommand and
+        // SelectedImmediacyOption.Label so the user can see and change immediacy at all times.
+        var content = ReadAxaml("AgentChatInputQueueControl.axaml");
+
+        Assert.Contains(
+            "IsVisible=\"{Binding !IsDefault}\"",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Command=\"{Binding SetImmediacyCommand}\"",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Text=\"{Binding SelectedImmediacyOption.Label}\"",
+            content,
+            StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void QueueComposerControl_StatusPill_IsHiddenForNonDefaultComposer()
+    {
+        // Issue #127: the status pill inside QueueComposerControl must be hidden for
+        // non-default composers because it is now rendered in the group header instead,
+        // preventing a duplicate pill when the composer is expanded.
+        var content = ReadAxaml("QueueComposerControl.axaml");
+
+        Assert.Contains(
+            "IsVisible=\"{Binding IsDefaultComposer}\"",
+            content,
+            StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_AutoScrollCheckbox_UsesScrollLockedClassForAnimation()
     {
         // Issue #130: the auto-scroll checkbox (and preceding separator) must animate between opacity

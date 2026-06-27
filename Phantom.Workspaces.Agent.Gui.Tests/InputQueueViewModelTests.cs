@@ -412,6 +412,26 @@ public sealed class InputQueueViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task NonDefaultQueue_SetImmediacyCommand_ChangesSelectedImmediacyOptionLabel()
+    {
+        // Issue #127: the header status pill binds SetImmediacyCommand on InputQueueGroupViewModel.
+        // Verify the command path correctly updates SelectedImmediacyOption.Label.
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "one";
+        viewModel.SubmitToNewQueue();
+
+        var queueVm = viewModel.Queues[1];
+        Assert.Equal("queued", queueVm.SelectedImmediacyOption.Label);
+
+        queueVm.SetImmediacyCommand.Execute(queueVm.HeldImmediacyOption);
+
+        Assert.Equal("held", queueVm.SelectedImmediacyOption.Label);
+        Assert.True(queueVm.IsHeld);
+    }
+
+    [AvaloniaFact]
     public async Task HoldAndUnholdAllQueues_PreserveQueueViewModels()
     {
         await using var chat = await CreateChatAsync();
