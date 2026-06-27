@@ -110,11 +110,18 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             configuredRoots = [.. configuredRoots, singleRoot];
         }
 
-        var roots = configuredRoots.Count > 0
-            ? configuredRoots
-            : this.localFixedDriveRootsProvider().ToList();
+        var existingConfiguredRoots = configuredRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        return roots
+        if (existingConfiguredRoots.Count > 0)
+        {
+            return existingConfiguredRoots;
+        }
+
+        return this.localFixedDriveRootsProvider()
             .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
