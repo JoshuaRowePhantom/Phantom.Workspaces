@@ -94,6 +94,52 @@ public partial class QueueComposerControl : UserControl
 
     internal static bool HandleInputKey(QueueComposerViewModel vm, Key key, KeyModifiers keyModifiers)
     {
+        // Completions popup intercepts Tab, Esc, and arrow keys.
+        if (vm.Completions.IsVisible)
+        {
+            if (key == Key.Escape)
+            {
+                vm.Completions.Dismiss();
+                return true;
+            }
+
+            if (key == Key.Down)
+            {
+                vm.Completions.SelectNext();
+                return true;
+            }
+
+            if (key == Key.Up)
+            {
+                vm.Completions.SelectPrevious();
+                return true;
+            }
+
+            if (key == Key.Tab)
+            {
+                if (vm.Completions.SelectedItem is null)
+                {
+                    vm.Completions.SelectNext();
+                }
+                else
+                {
+                    var accepted = vm.Completions.Accept();
+                    if (accepted is not null)
+                    {
+                        vm.InputText = "/" + accepted;
+                    }
+                }
+
+                return true;
+            }
+
+            // Block Enter from submitting while the popup is open.
+            if (key == Key.Enter || key == Key.Return)
+            {
+                return true;
+            }
+        }
+
         if (key == Key.Enter || key == Key.Return)
         {
             if (vm.IsFormattedMode)

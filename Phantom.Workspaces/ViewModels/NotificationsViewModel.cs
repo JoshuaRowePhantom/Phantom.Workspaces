@@ -74,7 +74,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         // Newest first, unread at top
         var sorted = this.notificationService.Notifications
             .OrderBy(e => e.IsRead)
-            .ThenByDescending(e => e.Timestamp);
+            .ThenByDescending(e => e.When);
 
         foreach (var entry in sorted)
         {

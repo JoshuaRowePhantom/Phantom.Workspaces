@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
@@ -34,6 +35,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             ["--chat-error"] = "Theme.Status.Bad",
             ["--chat-uri"] = "Theme.Class.accent.Foreground",
             ["--chat-tool-body-background"] = "Theme.Surface.EntityCard.Background",
+            ["--copy-btn-color"] = "Theme.Class.muted.Foreground",
+            ["--copy-btn-hover-color"] = "Theme.Class.normal.Foreground",
+            ["--copy-btn-confirmed-color"] = "Theme.Class.accent.Foreground",
         };
 
     private static readonly IToolVisualizerFactory DefaultToolFactory = CompositeToolVisualizerFactory.Combine(
@@ -138,6 +142,17 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         return reader.ReadToEnd();
     }
 
+    internal static string InjectThemeIntoHtml(
+        string html,
+        IReadOnlyDictionary<string, string> variables)
+    {
+        var sb = new StringBuilder("<style>:root{");
+        foreach (var (key, value) in variables)
+            sb.Append(key).Append(':').Append(value).Append(';');
+        sb.Append("}</style>");
+        return html.Replace("</head>", sb + "</head>", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void AttachOutputModel()
     {
         this.DetachOutputModel();
@@ -153,7 +168,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         // Reload the shell so a reused control starts from an empty page.
         // OnBrowserReady creates the ChatOutputHtmlModel once the shell is ready, and again on
         // every subsequent reload, so both the first-load and spontaneous-reload paths are unified.
-        this.browser.HtmlShell = ReadShellHtml();
+        var html = ReadShellHtml();
+        var themeVariables = this.BuildThemeVariables();
+        this.browser.HtmlShell = InjectThemeIntoHtml(html, themeVariables);
     }
 
     private void DetachOutputModel()

@@ -1,10 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using AgentSchema;
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Agent.Gui.Controls;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -185,6 +189,136 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'theme' command to be re-posted after a spontaneous browser reload.");
     }
 
+    [Fact]
+    public void ThemeVariableResourceKeys_ContainsCopyBtnColor()
+    {
+        var keys = GetThemeVariableResourceKeys();
+        Assert.True(keys.ContainsKey("--copy-btn-color"), "ThemeVariableResourceKeys must contain '--copy-btn-color'.");
+    }
+
+    [Fact]
+    public void ThemeVariableResourceKeys_ContainsCopyBtnHoverColor()
+    {
+        var keys = GetThemeVariableResourceKeys();
+        Assert.True(keys.ContainsKey("--copy-btn-hover-color"), "ThemeVariableResourceKeys must contain '--copy-btn-hover-color'.");
+    }
+
+    [Fact]
+    public void ThemeVariableResourceKeys_ContainsCopyBtnConfirmedColor()
+    {
+        var keys = GetThemeVariableResourceKeys();
+        Assert.True(keys.ContainsKey("--copy-btn-confirmed-color"), "ThemeVariableResourceKeys must contain '--copy-btn-confirmed-color'.");
+    }
+
+    [Fact]
+    public void InjectThemeIntoHtml_EmptyVariables_InjectsEmptyStyleBeforeHeadClose()
+    {
+        var html = "<html><head><title>x</title></head><body></body></html>";
+        var result = AgentChatOutputControl.InjectThemeIntoHtml(html, new Dictionary<string, string>());
+
+        Assert.Contains("<style>:root{}</style></head>", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void InjectThemeIntoHtml_WithVariables_InjectsVariablesIntoStyle()
+    {
+        var html = "<html><head><title>x</title></head><body></body></html>";
+        var variables = new Dictionary<string, string> { ["--chat-background"] = "#123456" };
+        var result = AgentChatOutputControl.InjectThemeIntoHtml(html, variables);
+
+        Assert.Contains("--chat-background:#123456;", result, StringComparison.Ordinal);
+        Assert.Contains("<style>:root{", result, StringComparison.Ordinal);
+        Assert.Contains("}</style></head>", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AttachOutputModel_HtmlShellAlreadyContainsInjectedThemeStyle()
+    {
+        // Verify that HtmlShell is set with the theme <style> block baked in before Ready fires
+        // (i.e., before any PostMessageToJavaScript call).
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        // Set isAttached = true so AttachOutputModel proceeds past its guard.
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        // Setting DataContext triggers OnPropertyChanged → AttachOutputModel.
+        control.DataContext = viewModel;
+
+        // HtmlShell must contain the injected <style>:root{ block.
+        Assert.NotNull(browser.HtmlShell);
+        Assert.Contains("<style>:root{", browser.HtmlShell, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_AfterHtmlShellSet_StillPostsThemeCommand()
+    {
+        // Even after the theme is baked into HtmlShell, OnBrowserReady must still post
+        // a "theme" command so live theme-switching works while the page is running.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        // Trigger AttachOutputModel with a real DataContext.
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+        control.DataContext = viewModel;
+
+        // Clear messages from the initial Ready, then fire Ready again (live theme-switch scenario).
+        browser.PostedMessages.Clear();
+        browser.FireReady();
+
+        Assert.True(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "theme";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected a 'theme' command to be posted by OnBrowserReady for live theme switching.");
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_ConfirmedColor_UsesVariable()
+    {
+        var html = ReadShellHtml();
+        // The .copy-gutter-btn.confirmed rule must use the CSS variable, not a hardcoded color.
+        Assert.DoesNotContain(".confirmed {\r\n      color: #4ec9b0;", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(".confirmed {\n      color: #4ec9b0;", html, StringComparison.Ordinal);
+        Assert.Contains("var(--copy-btn-confirmed-color)", html, StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
+    {
+        var field = typeof(AgentChatOutputControl)
+            .GetField("ThemeVariableResourceKeys", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(field!.GetValue(null));
+    }
+
     private static string ReadShellHtml()
     {
         var assembly = typeof(AgentChatOutputControl).Assembly;
@@ -196,4 +330,19 @@ public sealed class AgentChatOutputControlTests
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
+
+    private static AgentDefinition CreateAgentDefinition()
+        => AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
 }

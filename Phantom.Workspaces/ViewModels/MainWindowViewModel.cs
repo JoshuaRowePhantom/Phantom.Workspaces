@@ -2940,12 +2940,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var notifications = this.notificationService.Notifications;
         var candidates = notifications
             .Where(n => !n.IsRead)
-            .OrderByDescending(n => n.Timestamp)
+            .OrderByDescending(n => n.When)
             .ToList();
         if (candidates.Count == 0)
         {
             candidates = notifications
-                .OrderByDescending(n => n.Timestamp)
+                .OrderByDescending(n => n.When)
                 .ToList();
         }
         if (candidates.Count == 0) return;

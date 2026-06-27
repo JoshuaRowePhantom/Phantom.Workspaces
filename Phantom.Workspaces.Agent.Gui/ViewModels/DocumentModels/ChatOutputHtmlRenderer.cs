@@ -76,17 +76,136 @@ internal static class ChatOutputHtmlRenderer
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Renders the outer "tools (N calls)" wrapper used only when there are more than one call in a
+    /// group. The <paramref name="summary"/> is a pre-formatted one-liner such as
+    /// <c>last_tool(…)</c>. <paramref name="innerHtml"/> is the pre-rendered set of
+    /// <c>details.chat-tool-group-item</c> elements placed directly inside.
+    /// </summary>
+    public static string RenderToolGroupWrapper(string contentId, int callCount, string summary, string innerHtml)
+    {
+        var builder = new StringBuilder();
+        builder.Append("<details class=\"chat-content chat-tool-group-wrapper\" id=\"").Append(contentId).Append("\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\">tools  ").Append(HtmlEscape(summary))
+            .Append("  (").Append(callCount).Append(" calls)</summary>");
+        builder.Append(innerHtml);
+        builder.Append("</details>");
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Renders one "tool &lt;name&gt;" row as a <c>details.chat-tool-group-item</c> element
+    /// containing call and optional result sub-details. When <paramref name="contentId"/> is
+    /// non-null the outer element gets that value as its <c>id</c> attribute (used for the
+    /// standalone N=1 case where the element must be DOM-addressable). Pass
+    /// <see langword="null"/> for items nested inside a <see cref="RenderToolGroupWrapper"/>.
+    /// </summary>
+    public static string RenderToolCallPair(
+        string? contentId,
+        string name,
+        string callJson,
+        string? resultJson)
+    {
+        var callSummary = HtmlEscape(name) + "(…)";
+        var builder = new StringBuilder();
+        builder.Append("<details class=\"chat-content chat-tool-group-item\"");
+        if (!string.IsNullOrEmpty(contentId))
+        {
+            builder.Append(" id=\"").Append(contentId).Append("\"");
+        }
+
+        builder.Append(">");
+        builder.Append("<summary class=\"chat-collapsible-summary\">tool ").Append(callSummary).Append("</summary>");
+
+        builder.Append("<details class=\"chat-tool-call\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\">call  ").Append(callSummary).Append("</summary>");
+        if (!string.IsNullOrEmpty(callJson))
+        {
+            builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(callJson)).Append("</pre>");
+        }
+
+        builder.Append("</details>");
+
+        if (resultJson is not null)
+        {
+            var resultSummary = FirstLine(resultJson);
+            builder.Append("<details class=\"chat-tool-result\">");
+            builder.Append("<summary class=\"chat-collapsible-summary\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
+            if (!string.IsNullOrEmpty(resultJson))
+            {
+                builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(resultJson)).Append("</pre>");
+            }
+
+            builder.Append("</details>");
+        }
+
+        builder.Append("</details>");
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Renders a content-level tool group for a run of consecutive
+    /// <see cref="FunctionCallContent"/> items, pairing each with its matching
+    /// <see cref="FunctionResultContent"/> from <paramref name="resultLookup"/> (keyed by
+    /// <c>CallId</c>). When the group has exactly one call the outer wrapper is omitted and
+    /// the single <c>details.chat-tool-group-item</c> is returned with <paramref name="contentId"/>
+    /// as its DOM id. When there are multiple calls the result is a
+    /// <c>details.chat-tool-group-wrapper</c> containing all pairs.
+    /// </summary>
+    public static string RenderToolGroup(
+        string contentId,
+        IReadOnlyList<FunctionCallContent> calls,
+        IReadOnlyDictionary<string, FunctionResultContent>? resultLookup)
+    {
+        if (calls.Count == 1)
+        {
+            var call = calls[0];
+            FunctionResultContent? result = null;
+            if (call.CallId is not null)
+            {
+                resultLookup?.TryGetValue(call.CallId, out result);
+            }
+
+            return RenderToolCallPair(
+                contentId,
+                call.Name ?? string.Empty,
+                PrettyJson(call.Arguments),
+                result is not null ? PrettyJson(result.Result) : null);
+        }
+        else
+        {
+            var innerBuilder = new StringBuilder();
+            var lastCallName = string.Empty;
+            foreach (var call in calls)
+            {
+                FunctionResultContent? result = null;
+                if (call.CallId is not null)
+                {
+                    resultLookup?.TryGetValue(call.CallId, out result);
+                }
+
+                innerBuilder.Append(RenderToolCallPair(
+                    null,
+                    call.Name ?? string.Empty,
+                    PrettyJson(call.Arguments),
+                    result is not null ? PrettyJson(result.Result) : null));
+                lastCallName = call.Name ?? string.Empty;
+            }
+
+            return RenderToolGroupWrapper(contentId, calls.Count, lastCallName + "(…)", innerBuilder.ToString());
+        }
+    }
+
     /// <summary>Builds the full <c>div.chat-message</c> element for a message and its visible contents.</summary>
     public static string RenderMessage(
         string messageId,
         string roleLabel,
-        IReadOnlyList<(string ElementId, string Html)> contents,
-        DateTimeOffset? timestamp = null)
+        IReadOnlyList<(string ElementId, string Html)> contents)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
-        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
+        builder.Append(RenderHeader(messageId, roleLabel));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -101,19 +220,18 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderRunningItemContainer(string runningItemId)
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
 
-    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
+    /// <summary>
+    /// Returns an empty string for the <c>tool</c> role — results are bundled into the assistant
+    /// message's tool-group hierarchy and need no separate role header.
+    /// </summary>
+    public static string RenderHeader(string messageId, string roleLabel)
     {
-        var builder = new StringBuilder();
-        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"0\">");
-        builder.Append('[').Append(HtmlEscape(roleLabel)).Append(']');
-        if (timestamp.HasValue)
+        if (string.Equals(roleLabel, "tool", StringComparison.OrdinalIgnoreCase))
         {
-            var utc = timestamp.Value.ToUniversalTime();
-            builder.Append("<span class=\"chat-timestamp\" data-utc=\"").Append(utc.ToString("o")).Append("\"></span>");
+            return string.Empty;
         }
 
-        builder.Append("</div>");
-        return builder.ToString();
+        return $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
     }
 
     public static string RoleClass(string roleLabel)
@@ -249,7 +367,7 @@ internal static class ChatOutputHtmlRenderer
     }
 
     private static string TextBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{HtmlEscape(text)}{InspectorAffordance(contentId)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{HtmlEscape(text)}{InspectorAffordance(contentId)}</div>";
 
     /// <summary>
     /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
@@ -257,7 +375,7 @@ internal static class ChatOutputHtmlRenderer
     /// with raw HTML disabled so model output cannot inject markup into the WebView.
     /// </summary>
     private static string MarkdownBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
 
     private static string MarkdownToHtml(string text)
         => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
@@ -265,7 +383,7 @@ internal static class ChatOutputHtmlRenderer
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-details-target=\"").Append(HtmlEscape(body)).Append("\" data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append(InspectorAffordance(contentId)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
@@ -295,6 +413,13 @@ internal static class ChatOutputHtmlRenderer
 
     private static string InspectorAffordance(string contentId)
         => $"<button class=\"chat-inspect\" data-content-id=\"{contentId}\" onclick=\"postInspect(this)\" title=\"Inspect\">…</button>";
+
+    private static string FirstLine(string text)
+    {
+        var trimmed = text.TrimEnd();
+        var newlineIdx = trimmed.IndexOf('\n');
+        return newlineIdx >= 0 ? trimmed[..newlineIdx].TrimEnd('\r') : trimmed;
+    }
 
     private static string DiagnosticHeader(string text)
     {
