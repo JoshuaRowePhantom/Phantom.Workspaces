@@ -3,6 +3,9 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+# Git worktrees used by the feature-isolation skill
+worktrees/
+
 # dotenv files
 .env
 

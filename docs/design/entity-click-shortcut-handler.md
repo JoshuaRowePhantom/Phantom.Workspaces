@@ -1,6 +1,6 @@
 # Entity click shortcut handler
 
-> **Status: draft — design for review.** Adds a click-activated shortcut handler that opens certain
+> **Status: implemented.** Adds a click-activated shortcut handler that opens certain
 > entity types when their card is clicked, without showing a shortcut button. Tracks todo
 > `entity-click-shortcut-handler`.
 
@@ -48,12 +48,9 @@ instead held directly by the view layer and invoked from the click wiring.
 
 ### GUI wiring
 
-The entity card view binds a **click/`Tapped`** gesture on the card body to a new
-`MainWindowViewModel` command (e.g. `ActivateEntityClickCommand`) that calls the
-`EntityClickShortcutHandler` for the clicked `SubscribedEntityViewModel`. The existing shortcut
-buttons remain unchanged and continue to route through `ActivateShortcutCommand`. Clicks on the
-shortcut buttons themselves must not double-trigger the card click (handled/`e.Handled` on the button
-path). Styling stays in centralized shared styles per the styling convention.
+The entity card view binds a **click/`Tapped`** gesture on the card body (`<Border Tapped="OnEntityCardTapped">`) to `MainWindowViewModel.ActivateEntityClickCommand`, which calls the `EntityClickShortcutHandler` for the clicked `SubscribedEntityViewModel`. The existing shortcut buttons remain unchanged and continue to route through `ActivateShortcutCommand`.
+
+Clicks on interactive child controls (Buttons, TextBox) must not double-trigger the card click. Suppression relies on Avalonia's routed-event `Handled` flag: each interactive child element in `EntityCardControl.axaml` carries a `Tapped="OnInteractiveChildTapped"` binding that sets `e.Handled = true`. Because the Border's `Tapped="OnEntityCardTapped"` handler is registered with the default `handledEventsToo: false` routing, a pre-handled event stops delivery naturally — no visual-tree walk is needed. Avalonia's `Button` does not mark the Tapped gesture as handled when its command fires (it only marks `PointerReleased` as handled), so the explicit per-element handler is required for correct suppression. Styling stays in centralized shared styles per the styling convention.
 
 ### Why delegate to Open rather than open directly
 

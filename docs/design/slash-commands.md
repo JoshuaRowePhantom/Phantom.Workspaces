@@ -3,9 +3,9 @@
 ## Purpose
 
 Define a slash-command model for the Phantom.Workspaces chat input that lets users issue
-structured control directives (such as `/cwd`) without sending them as natural-language
-messages to the underlying LLM. Slash commands are agent-type-aware: a command may be
-valid only for specific providers or agent configurations.
+structured control directives (such as `/working-directory`) without sending them as
+natural-language messages to the underlying LLM. Slash commands are agent-type-aware: a
+command may be valid only for specific providers or agent configurations.
 
 ## Background
 
@@ -18,6 +18,9 @@ handled before a message reaches the LLM and should never pollute the conversati
 Separately, the GitHub Copilot SDK exposes a `SessionConfig.Commands` list that registers
 named in-process handlers recognized by the Copilot CLI process for its own command
 dispatch. These are two distinct layers (see §Two command layers below).
+
+A command picker popup appears as the user types a `/` prefix, providing discoverability
+and reducing typing errors (see §Command picker popup).
 
 ## Two command layers
 
@@ -51,8 +54,8 @@ Characteristics:
 - **Not** appropriate for commands that require a new `CopilotClient` instance (such as
   changing `CopilotClientOptions.Cwd`).
 
-For `/cwd`, Layer 1 is the correct mechanism because changing the process-level working
-directory requires a new `CopilotClient` (see §Working directory section in
+For `/working-directory`, Layer 1 is the correct mechanism because changing the process-level
+working directory requires a new `CopilotClient` (see §Working directory section in
 `github-copilot-provider-support.md`).
 
 ## Core contracts
@@ -130,49 +133,107 @@ Returns the set of commands applicable to a given agent definition. Agent-type-s
 commands (e.g., Copilot-only `/cwd`) are included only when the definition's provider
 matches.
 
-## `/cwd` command
+## `/working-directory` command
 
-`/cwd` sets the working directory for the agent session.
+`/working-directory` sets the working directory for the agent session.
 
 ```
-/cwd <path>
-/cwd          (with no argument: prints the current working directory)
+/working-directory <path>
+/working-directory          (with no argument: prints the current working directory)
 ```
 
 ### Behavior
 
-1. If no argument is provided, respond with the current CWD from the `agent-session`
-   entity's `cwd` field (or the process default if unset).
+1. If no argument is provided, respond with the current working directory from the
+   `agent-session` entity's `working-directory` field (or the process default if unset).
 2. If a path is provided:
    a. Resolve and normalize the path.
    b. Validate that the path exists and is a directory. Return an error status if not.
-   c. Update the `agent-session` entity's `cwd` field to the new path.
+   c. Update the `agent-session` entity's `working-directory` field to the new path.
    d. Return `SlashCommandResult { RequiresAgentRecreation = true }`.
 3. The chat UI tears down the current `AgentChat` (which disposes the `CopilotClient`
-   process) and constructs a new one, picking up the updated `cwd` from the session entity.
+   process) and constructs a new one, picking up the updated `working-directory` from
+   the session entity.
 
 ### Why recreation is required
 
-The Copilot CLI working directory is fixed at process startup via `CopilotClientOptions.Cwd`.
-The `CopilotSdkChatClient` reuses one `CopilotClient` per instance and only creates a new
-`CopilotSession` when the session signature changes. Since `Cwd` is on `CopilotClientOptions`
-(not `SessionConfig`), changing the CWD requires a new `CopilotClient` instance, which means
-a new `CopilotSdkChatClient` and a new `AgentChat`.
+The Copilot CLI working directory is fixed at process startup via
+`CopilotClientOptions.CurrentWorkingDirectory`. The `CopilotSdkChatClient` reuses one
+`CopilotClient` per instance and only creates a new `CopilotSession` when the session
+signature changes. Since `CurrentWorkingDirectory` is on `CopilotClientOptions` (not
+`SessionConfig`), changing it requires a new `CopilotClient` instance, which means a new
+`CopilotSdkChatClient` and a new `AgentChat`.
 
-`SessionConfig.WorkingDirectory` is also forwarded and is part of the session signature, so
-it changes with every session recreation anyway. Neither field can be mutated on a live
+`SessionConfig.WorkingDirectory` is also forwarded and is part of the session signature,
+so it changes with every session recreation anyway. Neither field can be mutated on a live
 session.
 
 ### Applicable agent types
 
-`/cwd` is registered only when the agent definition uses provider `github-copilot`. Other
-providers (e.g., `github-models`, `ollama`) do not use the Copilot CLI and may not have a
-concept of a process-level working directory; a similar command may be added for them
-separately if warranted.
+`/working-directory` is registered only when the agent definition uses provider
+`github-copilot`. Other providers (e.g., `github-models`, `ollama`) do not use the Copilot
+CLI and may not have a concept of a process-level working directory; a similar command may
+be added for them separately if warranted.
+
+## `/help` command
+
+`/help` lists all available slash commands or shows detailed help for a single command.
+
+```
+/help                   (lists all available commands)
+/help <command-name>    (shows detailed help for the named command)
+```
+
+### Behavior
+
+`/help` is available for all agent types; it requires no agent-specific context.
+
+1. **No argument**: returns a `StatusMessage` listing every command registered for the
+   current agent definition, one per line in the format:
+   ```
+   /command-name  description
+   ```
+   The list is sorted alphabetically.
+
+2. **With `<command-name>`**: looks up the named command (without the leading `/`) in the
+   registry. If found, returns its full description and usage line. If not found, returns
+   an error status: `Unknown command: /command-name`.
+
+### Detailed help protocol
+
+`ISlashCommandHandler` gains an optional `Usage` property for a one-line usage string and
+a `LongDescription` property for multi-line help text:
+
+```csharp
+public interface ISlashCommandHandler
+{
+    string Name { get; }
+    string Description { get; }
+
+    /// <summary>One-line usage string, e.g. "/working-directory [path]". Optional.</summary>
+    string? Usage { get; }
+
+    /// <summary>Extended help text shown by /help. Optional; falls back to Description.</summary>
+    string? LongDescription { get; }
+
+    Task<SlashCommandResult> ExecuteAsync(
+        SlashCommandContext context,
+        string arguments,
+        CancellationToken cancellationToken);
+}
+```
+
+`HelpSlashCommandHandler` reads these properties at execution time; no additional
+registration or metadata is needed.
+
+### Applicable agent types
+
+`/help` is registered for all agent types. `ISlashCommandRegistry.GetCommands` always
+includes it.
 
 ## General framework for session-property commands
 
-Commands that control agent session properties follow the same pattern as `/cwd`:
+Commands that control agent session properties follow the same pattern as `/working-directory`:
 
 1. The command reads or writes a field on the `agent-session` workspace entity.
 2. If the change requires recreating the agent (any property baked into `CopilotClientOptions`
@@ -185,7 +246,7 @@ Commands that control agent session properties follow the same pattern as `/cwd`
 
 | Property | `CopilotClientOptions` field | `SessionConfig` field |
 | --- | --- | --- |
-| Working directory | `Cwd` | `WorkingDirectory` |
+| Working directory | `CurrentWorkingDirectory` | `WorkingDirectory` |
 | CLI path | `CliPath` | — |
 | GitHub token | `GitHubToken` | `GitHubToken` |
 | Model | — | `Model` |
@@ -204,15 +265,65 @@ No currently identified `SessionConfig` properties can be mutated after session 
 If the Copilot SDK adds mutable session properties in a future release, the corresponding
 commands would set `RequiresAgentRecreation = false` and directly invoke SDK APIs.
 
+## Command picker popup
+
+The command picker is a floating popup that appears above the chat input whenever the
+user's text begins with `/`. It provides discovery, autocomplete, and keyboard navigation.
+
+### Trigger and filtering
+
+- The popup opens as soon as `/` is the first character in the input.
+- As the user continues typing, the list is filtered to commands whose name starts with
+  the typed text (after the leading `/`, case-insensitive). Typing `/h` shows only
+  commands whose name begins with `h`.
+- The popup closes when:
+  - The input no longer begins with `/` (user deleted the `/` or pasted different text).
+  - The user presses **Escape**.
+  - The user commits (Enter) or dismisses (clicks away from input + popup).
+
+### Layout and content
+
+- Positioned directly above the chat input box, anchored to its left edge.
+- Each row shows: **command name** (bold, monospace) and **description** (muted, regular).
+  Example: `/working-directory  Set the working directory for this session`
+- Rows are ordered alphabetically by name, with the best prefix match highlighted first.
+- Maximum visible rows: 8; scrollable when more match.
+- Width matches the chat input width.
+
+### Keyboard navigation
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move selection |
+| `Tab` or `→` | Complete the selected command name into the input (appends a space) |
+| `Enter` | If a row is selected, complete + submit; otherwise submit as typed |
+| `Escape` | Dismiss popup; focus stays in input |
+| Any other key | Continues filtering; selection resets to the first match |
+
+### Mouse interaction
+
+Clicking a row completes the command name into the input and moves focus back to the
+input so the user can type arguments.
+
+### Avalonia implementation notes
+
+- Implemented as a `Popup` (`PlacementMode.Top`, `PlacementTarget` = the input TextBox)
+  inside `AgentChatEditorControl.axaml`.
+- The popup's `ItemsControl` is bound to a `SlashCommandSuggestionsViewModel` (a
+  filtered observable collection derived from `ISlashCommandRegistry`).
+- `IsOpen` is driven by a computed property on `AgentChatEditorViewModel`:
+  `IsSlashCommandPickerOpen = Text.StartsWith("/") && AvailableCommands.Count > 0`.
+
 ## UI integration
 
 The chat input editor (`AgentChatEditorControl`) intercepts input beginning with `/` and
 before the user commits (presses Enter):
 
 1. Queries `ISlashCommandRegistry` for matching commands.
-2. Shows a completion picker listing matching command names and descriptions.
+2. Shows the command picker popup (see §Command picker popup above).
 3. On commit:
-   - If a `/` message matches exactly one command, execute the command handler.
+   - Parse the input as `/command-name [arguments]`.
+   - If `command-name` matches a registered command exactly, execute the command handler.
    - If no command matches, forward the message as a normal chat message (allows legitimate
      slash-prefixed prompts to reach the model if the user explicitly confirms).
 
@@ -230,11 +341,11 @@ If `RequiresAgentRecreation` is true, the UI:
 
 ### `agent-session` entity schema (workspace data layer)
 
-Add a `cwd` property to the `agent-session` JSON schema
+Add a `working-directory` property to the `agent-session` JSON schema
 (`Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json`):
 
 ```json
-"cwd": {
+"working-directory": {
   "type": "string",
   "description": "Runtime working-directory override for the agent session. When set, overrides the working directory specified in the agent definition."
 }
@@ -242,44 +353,39 @@ Add a `cwd` property to the `agent-session` JSON schema
 
 ### `AgentDefinition` schema (Llm.Core)
 
-Add a top-level `workingDirectory` property to `AgentDefinition.json` so a default CWD can
-be declared at the definition level:
-
-```json
-"workingDirectory": {
-  "type": "string",
-  "description": "Default working directory for the agent. For github-copilot agents, forwarded to CopilotClientOptions.Cwd and SessionConfig.WorkingDirectory."
-}
-```
-
-The `agent-session` entity's `cwd` field takes precedence over this value at runtime.
+`AgentDefinition.json` gains a `parameters` block (see the model parameter substitution
+design in `github-copilot-provider-support.md`). The `working-directory` parameter is
+declared per definition, not as a top-level hardcoded field.
 
 ### `agent-manifest` entity schema (workspace data layer)
 
 The `agent-manifest` entity embeds a full `AgentDefinition` template, so no separate
 schema change is needed for the manifest entity; the change to `AgentDefinition.json`
 propagates automatically. Optionally, the manifest `parameters` block can declare a
-`cwd` parameter to make it configurable per instantiation site.
+`working-directory` parameter to make it configurable per instantiation site.
 
 ## Source layout
 
 In `Phantom.Workspaces.Agent.Gui`:
 
-- `ViewModels/SlashCommands/ISlashCommandHandler.cs` (new)
+- `ViewModels/SlashCommands/ISlashCommandHandler.cs` (new) — includes `Usage` and `LongDescription`
 - `ViewModels/SlashCommands/SlashCommandContext.cs` (new)
 - `ViewModels/SlashCommands/SlashCommandResult.cs` (new)
 - `ViewModels/SlashCommands/ISlashCommandRegistry.cs` (new)
 - `ViewModels/SlashCommands/CompositeSlashCommandRegistry.cs` (new)
-- `ViewModels/SlashCommands/CwdSlashCommandHandler.cs` (new)
-- `Controls/AgentChatEditorControl.axaml.cs` (integrate completion picker + interception)
+- `ViewModels/SlashCommands/WorkingDirectorySlashCommandHandler.cs` (new)
+- `ViewModels/SlashCommands/HelpSlashCommandHandler.cs` (new)
+- `ViewModels/SlashCommands/SlashCommandSuggestionsViewModel.cs` (new) — filtered list for popup binding
+- `Controls/AgentChatEditorControl.axaml` (modify) — add `Popup` for command picker
+- `Controls/AgentChatEditorControl.axaml.cs` (modify) — integrate popup open/close + interception
 
 In `Phantom.Workspaces.Llm.Core`:
 
-- `AgentDefinition.json` — add `workingDirectory` field
+- `AgentDefinition.json` — add `parameters` block
 
 In `Phantom.Workspaces.Data.Core`:
 
-- `JsonSchemas/agent-session.json` — add `cwd` field
+- `JsonSchemas/agent-session.json` — add `working-directory` field
 
 ## Non-goals
 
