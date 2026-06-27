@@ -55,11 +55,11 @@
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Separator.Foreground}" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Margin" Value="8,0,8,0" />
-        <Style.Transitions>
+        <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" Easing="LinearEasing" />
             </Transitions>
-        </Style.Transitions>
+        </Setter>
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-separator.scroll-locked">
@@ -87,11 +87,11 @@
         <Setter Property="Padding" Value="4,0,0,0" />
         <Setter Property="MinHeight" Value="0" />
         <Setter Property="Opacity" Value="1.0" />
-        <Style.Transitions>
+        <Setter Property="Transitions">
             <Transitions>
                 <DoubleTransition Property="Opacity" Duration="0:0:0.15" Easing="LinearEasing" />
             </Transitions>
-        </Style.Transitions>
+        </Setter>
     </Style>
 
     <Style Selector="CheckBox.agent-chat-autoscroll-toggle.scroll-locked">

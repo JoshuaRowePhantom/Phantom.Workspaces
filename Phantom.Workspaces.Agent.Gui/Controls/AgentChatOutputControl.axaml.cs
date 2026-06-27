@@ -57,6 +57,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
         this.browser.Ready += this.OnBrowserReady;
         this.browser.JavaScriptMessageReceived += this.OnBrowserMessageReceived;
         this.BrowserHost.Child = browserControl;
+        this.ActualThemeVariantChanged += (_, _) =>
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
     }
 
     public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
