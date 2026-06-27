@@ -46,7 +46,8 @@
                 </Button>
             </StackPanel>
             <Border Grid.Column="2"
-                    Classes="queue-status-pill dynamic">
+                    Classes="queue-status-pill dynamic"
+                    IsVisible="{Binding IsDefaultComposer}">
                 <Button Classes="queue-action-button queue-status-picker-button">
                     <Button.Flyout>
                         <MenuFlyout Placement="BottomEdgeAlignedLeft">
