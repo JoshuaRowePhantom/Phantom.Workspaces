@@ -1,5 +1,3 @@
-using System.Collections.ObjectModel;
-
 namespace Phantom.Workspaces.ViewModels;
 
 public sealed class ViewDefinitionViewModel : ViewModelBase
@@ -15,6 +13,4 @@ public sealed class ViewDefinitionViewModel : ViewModelBase
     public bool IsEntityBrowser { get; init; }
 
     public SubscribedEntityViewModel? ViewEntity { get; init; }
-
-    public ObservableCollection<ViewEntityViewModel> Entities { get; } = new();
 }
