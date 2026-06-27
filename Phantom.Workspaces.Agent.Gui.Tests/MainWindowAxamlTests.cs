@@ -322,12 +322,16 @@ public sealed class MainWindowAxamlTests
             "IsChecked=\"{Binding Agent.AutoScrollEnabled, Mode=TwoWay}\"",
             editorControlContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "IsHitTestVisible=\"{Binding Agent.AutoScrollDisabled}\"",
             editorControlContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "Opacity=\"{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes.scroll-locked=\"{Binding Agent.AutoScrollEnabled}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -407,6 +411,37 @@ public sealed class MainWindowAxamlTests
         Assert.True(unholdGesture.Matches(ctrlShiftBreak));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_AutoScrollCheckbox_UsesScrollLockedClassForAnimation()
+    {
+        // Issue #130: the auto-scroll checkbox (and preceding separator) must animate between opacity
+        // levels via a CSS .scroll-locked class rather than becoming fully invisible.
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+        var statusLineStylesContent = ReadGuiStylesFile(Path.Combine("Styles", "AgentChatStatusLineStyles.axaml"));
+
+        // New behaviour: .scroll-locked class drives the animation.
+        Assert.Contains(
+            "Classes.scroll-locked=\"{Binding Agent.AutoScrollEnabled}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+
+        // Old behaviour must be absent — checkbox is always interactive.
+        Assert.DoesNotContain(
+            "IsHitTestVisible=\"{Binding Agent.AutoScrollDisabled}\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+
+        // Styles file must define the .scroll-locked variant and a DoubleTransition.
+        Assert.Contains(
+            "agent-chat-autoscroll-toggle.scroll-locked",
+            statusLineStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DoubleTransition",
+            statusLineStylesContent,
+            StringComparison.Ordinal);
+    }
+
     private static string ReadMainWindowAxaml()
     {
         return ReadAgentGuiFile("MainWindow.axaml");
@@ -436,6 +471,17 @@ public sealed class MainWindowAxamlTests
             "Phantom.Workspaces.Gui.Styles",
             "Styles",
             "SharedStyles.axaml");
+
+        return File.ReadAllText(filePath);
+    }
+
+    private static string ReadGuiStylesFile(string relativePath)
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var filePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Styles",
+            relativePath);
 
         return File.ReadAllText(filePath);
     }
