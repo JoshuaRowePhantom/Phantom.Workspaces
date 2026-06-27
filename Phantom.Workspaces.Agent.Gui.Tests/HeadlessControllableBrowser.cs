@@ -13,18 +13,36 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 /// </summary>
 internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrowser
 {
-    public string? HtmlShell { get; set; }
+    private string? htmlShell;
+
+    /// <summary>
+    /// Setting this to a non-empty value fires <see cref="Ready"/> synchronously, mirroring what
+    /// <see cref="ControllableWebViewControl"/> does via <c>NavigationCompleted</c>.
+    /// </summary>
+    public string? HtmlShell
+    {
+        get => this.htmlShell;
+        set
+        {
+            this.htmlShell = value;
+            if (!string.IsNullOrEmpty(value))
+            {
+                this.Ready?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
 
     /// <summary>All messages posted via <see cref="PostMessageToJavaScript"/>, in order.</summary>
     public List<string> PostedMessages { get; } = [];
 
-#pragma warning disable CS0067 // Events are part of the bridge contract; the stub never raises them.
     public event EventHandler? Ready;
-#pragma warning restore CS0067
 
     public event EventHandler<string>? JavaScriptMessageReceived;
 
     public void FireMessage(string message) => JavaScriptMessageReceived?.Invoke(this, message);
+
+    /// <summary>Fires <see cref="Ready"/> directly, simulating a spontaneous WebView reload in tests.</summary>
+    public void FireReady() => this.Ready?.Invoke(this, EventArgs.Empty);
 
     public void AddStartupScript(string script)
     {

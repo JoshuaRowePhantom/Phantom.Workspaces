@@ -133,17 +133,13 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
             return;
         }
 
-        // Reload the shell so a reused control starts from an empty page; the model's initial
-        // operations are queued by the bridge until the reloaded shell is ready.
-        this.browser.HtmlShell = ReadShellHtml();
-
         this.subscribedViewModel = agentViewModel;
         agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
-        this.outputModel = new ChatOutputHtmlModel(
-            agentViewModel.History,
-            agentViewModel.RunningItems,
-            () => agentViewModel.IsReasoningVisible,
-            this);
+
+        // Reload the shell so a reused control starts from an empty page.
+        // OnBrowserReady creates the ChatOutputHtmlModel once the shell is ready, and again on
+        // every subsequent reload, so both the first-load and spontaneous-reload paths are unified.
+        this.browser.HtmlShell = ReadShellHtml();
     }
 
     private void DetachOutputModel()
@@ -173,7 +169,26 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
     }
 
     private void OnBrowserReady(object? sender, EventArgs e)
-        => this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+    {
+        // Always post the theme first so CSS variables are set before any DOM operations arrive.
+        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+
+        // Dispose any model left from a previous load cycle, then rebuild from scratch.
+        // This fires on both the initial load and every spontaneous reload, so both paths share
+        // the same code. subscribedViewModel is null when the control has no DataContext, in
+        // which case only the theme is posted and no model is created.
+        this.outputModel?.Dispose();
+        this.outputModel = null;
+
+        if (this.subscribedViewModel is { } vm)
+        {
+            this.outputModel = new ChatOutputHtmlModel(
+                vm.History,
+                vm.RunningItems,
+                () => vm.IsReasoningVisible,
+                this);
+        }
+    }
 
     private void OnBrowserMessageReceived(object? sender, string message)
     {
