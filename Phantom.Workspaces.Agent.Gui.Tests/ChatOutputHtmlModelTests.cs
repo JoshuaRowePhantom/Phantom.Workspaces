@@ -351,4 +351,143 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("<img", html);
         Assert.Contains("&lt;img", html);
     }
+
+    private static AgentChatHistoryItem ToolCallMessage(string toolName, string callId = "call-1")
+        => new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent(callId, toolName)] };
+
+    [Fact]
+    public void SingleToolCallMessage_IsInsertedStandalone_WithoutGroupWrapper()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file"),
+        };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal("update", op.Kind);
+        Assert.DoesNotContain("chat-tool-group", op.Content);
+        Assert.Contains("chat-message", op.Content);
+    }
+
+    [Fact]
+    public void TwoConsecutiveToolCalls_AreGroupedIntoSingleDetailsElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(ToolCallMessage("write_file", "c2"));
+
+        var contentOps = sink.ContentOperations;
+        Assert.True(contentOps.Count >= 2, "Expected Replace + Append + summary update");
+
+        // First op: replace msg-0 with group wrapping it
+        var replaceOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Path);
+        Assert.Contains("grp-", replaceOp.Content);
+        Assert.Contains("read_file", replaceOp.Content);
+        Assert.Contains("chat-tool-group-body", replaceOp.Content);
+        Assert.Contains(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Content);
+
+        // Second message appended into the group body
+        var appendOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        Assert.Contains("write_file", appendOp.Content);
+
+        // Summary updated to count 2
+        var summaryOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.Contains("2 calls", summaryOp.Content);
+        Assert.Contains("write_file", summaryOp.Content);
+    }
+
+    [Fact]
+    public void ThreeConsecutiveToolCalls_GroupIsExtendedInPlace()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolCallMessage("write_file", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(ToolCallMessage("list_files", "c3"));
+
+        var contentOps = sink.ContentOperations;
+
+        // No Replace that creates a new chat-tool-group — group already exists
+        Assert.DoesNotContain(contentOps, op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+
+        // Third message appended into group body
+        var appendOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        Assert.Contains("list_files", appendOp.Content);
+
+        // Summary updated to count 3
+        var summaryOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.Contains("3 calls", summaryOp.Content);
+    }
+
+    [Fact]
+    public void TextThenToolCall_ToolCallIsStandalone_NoGroupWrapper()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "thinking"),
+            ToolCallMessage("read_file"),
+        };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var contentOps = sink.ContentOperations;
+        Assert.Equal(2, contentOps.Count);
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group"));
+    }
+
+    [Fact]
+    public void ToolCallThenText_TextInsertsAfterToolCallMessage()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.Assistant, "done"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains(">done<", op.Content);
+    }
+
+    [Fact]
+    public void ConsecutiveToolCallsThenText_TextAnchorsAfterGroupElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolCallMessage("write_file", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.Assistant, "finished"));
+
+        var contentOps = sink.ContentOperations;
+        var insertOp = contentOps.First(op => op.Content.Contains("finished"));
+        Assert.Equal(ChatOutputUpdateLocation.After, insertOp.Location);
+        Assert.StartsWith("grp-", insertOp.Path);
+    }
 }

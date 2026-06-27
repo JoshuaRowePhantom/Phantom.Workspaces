@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -187,9 +186,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
     private static EntityId CreateDeterministicEntityId(EntityName entityName)
     {
-        var canonicalName = JsonSerializer.Serialize(entityName.Components);
-        var hash = MD5.HashData(Encoding.UTF8.GetBytes(canonicalName));
-        return new EntityId(new Guid(hash));
+        return DeterministicEntityId.Create(entityName.Components);
     }
 
     private static string BuildVsCodeTunnelJson(

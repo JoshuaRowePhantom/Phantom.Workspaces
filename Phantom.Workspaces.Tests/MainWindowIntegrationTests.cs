@@ -1968,5 +1968,23 @@ public sealed class MainWindowIntegrationTests
             failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
+    {
+        // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
+        // setters (e.g. Value="rotate(-18deg)"). Avalonia's XAML IL compiler does not apply
+        // type converters inside KeyFrame.Setter, so the value arrived as a boxed string with
+        // no registered animator, throwing InvalidOperationException on first style application.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
+        // and interprets animation keyframes. The bug caused a throw here.
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+    }
+
 }
 

@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 using Phantom.Workspaces.Gui.Styles.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
@@ -19,7 +20,7 @@ namespace Phantom.Workspaces.Agent.Gui.Controls;
 /// The browser is built via <see cref="ControllableBrowserFactory"/> so headless tests can substitute
 /// a stub. An external "auto-scroll" toggle controls whether content updates follow the bottom.
 /// </summary>
-public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
+public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, IAgentStatusSink
 {
     private static readonly IReadOnlyDictionary<string, string> ThemeVariableResourceKeys =
         new Dictionary<string, string>
@@ -35,6 +36,10 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
             ["--chat-tool-body-background"] = "Theme.Surface.EntityCard.Background",
         };
 
+    private static readonly IToolVisualizerFactory DefaultToolFactory = CompositeToolVisualizerFactory.Combine(
+        new WorkspaceVisualizerFactory(),
+        new CopilotToolVisualizerFactory());
+
     private readonly IControllableBrowser browser;
     private ChatOutputHtmlModel? outputModel;
     private AgentViewModel? subscribedViewModel;
@@ -47,6 +52,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
     /// to open the URL; this event is provided for testability.
     /// </summary>
     public event EventHandler<string>? UrlNavigationRequested;
+
+    /// <summary>
+    /// Raised when the user clicks the inspect affordance on a content block.
+    /// The event argument is the element id of the content block to inspect.
+    /// </summary>
+    public event EventHandler<string>? InspectorRequested;
 
     public AgentChatOutputControl()
     {
@@ -77,6 +88,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
 
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
     }
+
+    public void UpdateStatus(AgentStatusField field, string? value)
+        => this.subscribedViewModel?.StatusSink.UpdateStatus(field, value);
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -186,6 +200,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
                 vm.History,
                 vm.RunningItems,
                 () => vm.IsReasoningVisible,
+                this,
+                DefaultToolFactory,
                 this);
         }
     }
@@ -224,6 +240,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
                     {
                         this.UrlNavigationRequested?.Invoke(this, url);
                         this.subscribedViewModel?.OpenUrlHandler?.Invoke(url);
+                    }
+                }
+                break;
+            }
+            case "inspect":
+            {
+                if (root.TryGetProperty("contentId", out var contentIdProp))
+                {
+                    var contentId = contentIdProp.GetString();
+                    if (!string.IsNullOrEmpty(contentId))
+                    {
+                        this.InspectorRequested?.Invoke(this, contentId);
                     }
                 }
                 break;

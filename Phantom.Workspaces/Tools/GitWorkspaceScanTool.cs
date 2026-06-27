@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -84,7 +83,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
                 changes.Add(new EntityChange
                 {
-                    EntityId = new EntityId(DeterministicId(repositoryPath)),
+                    EntityId = DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath)),
                     ConcurrencyTag = null,
                     Data = document.RootElement.Clone(),
                     EntityChangeMode = EntityChangeMode.Replace,
@@ -210,11 +209,9 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         return Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git"));
     }
 
-    private static Guid DeterministicId(string repositoryPath)
+    private static string NormalizeRepositoryPath(string repositoryPath)
     {
-        var normalized = Path.GetFullPath(repositoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var bytes = MD5.HashData(Encoding.UTF8.GetBytes("git-workspace-scan:" + normalized.ToLowerInvariant()));
-        return new Guid(bytes);
+        return Path.GetFullPath(repositoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
     }
 
     private static string BuildGitEntityJson(string repositoryPath)
@@ -226,7 +223,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteString("entity-id", DeterministicId(repositoryPath).ToString());
+            writer.WriteString("entity-id", DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath)).ToString());
 
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();

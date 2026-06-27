@@ -366,7 +366,8 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
             string? message = null;
             if (entity.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.Object
                 && contentEl.TryGetProperty("default", out var defaultEl) && defaultEl.ValueKind == JsonValueKind.Object
-                && defaultEl.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
+                && defaultEl.TryGetProperty("content", out var innerContentEl) && innerContentEl.ValueKind == JsonValueKind.Object
+                && innerContentEl.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
             {
                 message = textEl.GetString();
             }
