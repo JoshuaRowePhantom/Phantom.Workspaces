@@ -206,4 +206,70 @@ public sealed class NotificationsViewModelTests
 
         Assert.Contains(nameof(viewModel.IsAutoClosing), changedProperties);
     }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenNotificationRemoved_DoesNotAutoShow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(Tab("tab-1"), "notification");  // unread count goes 0 → 1, auto-shows
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        service.Notify(Tab("tab-1"), null);  // removes the notification, unread count goes 1 → 0
+
+        Assert.False(viewModel.IsOpen);
+        Assert.False(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenNotificationMarkedRead_DoesNotAutoShow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(Tab("tab-1"), "notification");  // unread count goes 0 → 1, auto-shows
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        service.MarkRead("tab-1");  // unread count goes 1 → 0
+
+        Assert.False(viewModel.IsOpen);
+        Assert.False(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenSecondNotificationAddedAfterFirstRead_AutoShows()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(Tab("tab-1"), "first");   // unread 0 → 1
+        service.MarkRead("tab-1");               // unread 1 → 0
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        service.Notify(Tab("tab-2"), "second");  // unread 0 → 1 — should auto-show again
+
+        Assert.True(viewModel.IsOpen);
+        Assert.True(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenRunStateChangesWithNoUnreadIncrease_DoesNotAutoShow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        // HasActiveRun change fires NotificationsChanged but should not auto-show.
+        service.NotifyRunning("tab-1", true);
+
+        Assert.False(viewModel.IsOpen);
+        Assert.False(viewModel.IsAutoClosing);
+    }
 }

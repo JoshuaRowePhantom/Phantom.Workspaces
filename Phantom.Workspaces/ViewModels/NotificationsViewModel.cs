@@ -12,6 +12,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
     private readonly Action<string> navigateToTab;
     private bool isOpen;
     private bool isAutoClosing;
+    private int lastKnownUnreadCount;
 
     public NotificationsViewModel(NotificationService notificationService, Action<string> navigateToTab)
     {
@@ -21,6 +22,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.Rows = new ObservableCollection<NotificationRowViewModel>();
         this.RefreshRows();
+        this.lastKnownUnreadCount = this.UnreadCount;
     }
 
     public ObservableCollection<NotificationRowViewModel> Rows { get; }
@@ -55,9 +57,15 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
 
     private void OnNotificationsChanged(object? sender, EventArgs e)
     {
+        var previousUnreadCount = this.lastKnownUnreadCount;
         this.RefreshRows();
-        this.IsOpen = true;
-        this.IsAutoClosing = true;
+        this.lastKnownUnreadCount = this.UnreadCount;
+
+        if (this.UnreadCount > previousUnreadCount)
+        {
+            this.IsOpen = true;
+            this.IsAutoClosing = true;
+        }
     }
 
     private void RefreshRows()
