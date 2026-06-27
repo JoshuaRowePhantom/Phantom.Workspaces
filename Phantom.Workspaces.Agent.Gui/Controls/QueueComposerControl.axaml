@@ -80,6 +80,10 @@
                 </Button>
             </Border>
         </Grid>
+        <TextBlock Text="{Binding FormattedModeHint}"
+                   IsVisible="{Binding FormattedModeHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   Classes="caption muted"
+                   Margin="4,0,0,0" />
         <ItemsControl ItemsSource="{Binding AttachmentPreviews}"
                       IsVisible="{Binding HasAttachments}">
             <ItemsControl.ItemsPanel>
