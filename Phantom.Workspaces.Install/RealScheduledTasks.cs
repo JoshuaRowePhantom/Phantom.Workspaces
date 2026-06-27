@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
+using Phantom.Workspaces;
 
 namespace Phantom.Workspaces.Install;
 
@@ -14,7 +14,7 @@ public sealed class RealScheduledTasks : IScheduledTasks
     public bool Exists(string taskName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(taskName);
-        return RunSchtasks("/Query", "/TN", taskName) == 0;
+        return RunSchtasks("/Query", "/TN", taskName).ExitCode == 0;
     }
 
     /// <inheritdoc />
@@ -25,7 +25,7 @@ public sealed class RealScheduledTasks : IScheduledTasks
         ArgumentException.ThrowIfNullOrWhiteSpace(definition.ExecutablePath);
 
         var commandLine = BuildTaskRunCommand(definition);
-        var exitCode = RunSchtasks(
+        var result = RunSchtasks(
             "/Create",
             "/F",
             "/SC",
@@ -34,10 +34,13 @@ public sealed class RealScheduledTasks : IScheduledTasks
             definition.TaskName,
             "/TR",
             commandLine);
-        if (exitCode != 0)
+        if (result.ExitCode != 0)
         {
+            var detail = string.IsNullOrWhiteSpace(result.StandardError)
+                ? string.Empty
+                : $"\n{result.StandardError}";
             throw new InvalidOperationException(
-                $"schtasks failed (exit {exitCode}) registering '{definition.TaskName}'.");
+                $"schtasks failed (exit {result.ExitCode}) registering '{definition.TaskName}'.{detail}");
         }
     }
 
@@ -50,10 +53,14 @@ public sealed class RealScheduledTasks : IScheduledTasks
             return;
         }
 
-        var exitCode = RunSchtasks("/Delete", "/F", "/TN", taskName);
-        if (exitCode != 0)
+        var result = RunSchtasks("/Delete", "/F", "/TN", taskName);
+        if (result.ExitCode != 0)
         {
-            throw new InvalidOperationException($"schtasks failed (exit {exitCode}) deleting '{taskName}'.");
+            var detail = string.IsNullOrWhiteSpace(result.StandardError)
+                ? string.Empty
+                : $"\n{result.StandardError}";
+            throw new InvalidOperationException(
+                $"schtasks failed (exit {result.ExitCode}) deleting '{taskName}'.{detail}");
         }
     }
 
@@ -68,23 +75,12 @@ public sealed class RealScheduledTasks : IScheduledTasks
         return command;
     }
 
-    private static int RunSchtasks(params string[] arguments)
+    private static ProcessResult RunSchtasks(params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo("schtasks.exe")
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start schtasks.exe.");
-        process.WaitForExit();
-        return process.ExitCode;
+        return ProcessRunner.RunProcessAsync(
+            new RunProcessParameters(
+                Command: "schtasks.exe",
+                Arguments: arguments))
+            .GetAwaiter().GetResult();
     }
 }

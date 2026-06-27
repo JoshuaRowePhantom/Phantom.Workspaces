@@ -75,6 +75,19 @@
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <Style Selector="TextBlock.agent-chat-status-line-brain-glyph">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-cancel-overlay">
+        <Setter Property="Foreground" Value="#CC3030" />
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+
     <Style Selector="Button.agent-chat-status-line-reasoning-toggle:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
     </Style>

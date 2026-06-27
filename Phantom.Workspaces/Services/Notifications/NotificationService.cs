@@ -9,6 +9,7 @@ public sealed class NotificationService : INotificationService
     private readonly List<NotificationEntry> notifications = [];
     // Snooze state is intentionally ephemeral (in-memory only); it resets on restart.
     private readonly HashSet<string> snoozedTabIds = [];
+    private readonly HashSet<string> activeRunTabIds = [];
 
     public NotificationService(IActiveTabProvider activeTabProvider)
     {
@@ -18,6 +19,20 @@ public sealed class NotificationService : INotificationService
     public event EventHandler? NotificationsChanged;
 
     public IReadOnlyList<NotificationEntry> Notifications => this.notifications;
+
+    public bool HasActiveRun => this.activeRunTabIds.Count > 0;
+
+    public void NotifyRunning(string tabId, bool isRunning)
+    {
+        ArgumentNullException.ThrowIfNull(tabId);
+        var changed = isRunning
+            ? this.activeRunTabIds.Add(tabId)
+            : this.activeRunTabIds.Remove(tabId);
+        if (changed)
+        {
+            this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     public void Notify(TabDescriptor tab, string? reason)
     {

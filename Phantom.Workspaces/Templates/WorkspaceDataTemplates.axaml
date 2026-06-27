@@ -515,6 +515,7 @@
     <!-- Tab header templates -->
     <DataTemplate DataType="vm:TabHeaderViewModel">
         <StackPanel Orientation="Horizontal" Spacing="4">
+            <TextBlock Text="{Binding Title}" />
             <ItemsControl ItemsSource="{Binding Items}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -539,7 +540,6 @@
                     </DataTemplate>
                 </ItemsControl.DataTemplates>
             </ItemsControl>
-            <TextBlock Text="{Binding Title}" />
         </StackPanel>
     </DataTemplate>
 </DataTemplates>

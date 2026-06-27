@@ -19,4 +19,22 @@
         <Setter Property="CornerRadius" Value="{DynamicResource Theme.Notifications.Panel.CornerRadius}" />
         <Setter Property="BoxShadow" Value="{DynamicResource Theme.Notifications.Panel.BoxShadow}" />
     </Style>
+
+    <Style Selector="TextBlock.notification-bell-ringing">
+        <Setter Property="RenderTransform" Value="rotate(0deg)" />
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        <Style.Animations>
+            <Animation IterationCount="INFINITE"
+                       Duration="0:0:0.5"
+                       PlaybackDirection="Alternate"
+                       Easing="SineEaseInOut">
+                <KeyFrame Cue="0%">
+                    <Setter Property="RenderTransform" Value="rotate(-18deg)" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="RenderTransform" Value="rotate(18deg)" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
 </Styles>

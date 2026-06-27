@@ -105,4 +105,67 @@ public sealed class NotificationServiceTests
         Assert.True(entry.IsRead);
         Assert.True(entry.IsSnoozed);
     }
+
+    [Fact]
+    public void NotifyRunning_WhenRunActive_HasActiveRunIsTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+
+        service.NotifyRunning("tab-1", true);
+
+        Assert.True(service.HasActiveRun);
+    }
+
+    [Fact]
+    public void NotifyRunning_WhenAllRunsStop_HasActiveRunIsFalse()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        service.NotifyRunning("tab-1", true);
+
+        service.NotifyRunning("tab-1", false);
+
+        Assert.False(service.HasActiveRun);
+    }
+
+    [Fact]
+    public void NotifyRunning_WithTwoTabsRunning_HasActiveRunRemainsTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        service.NotifyRunning("tab-1", true);
+        service.NotifyRunning("tab-2", true);
+
+        service.NotifyRunning("tab-1", false);
+
+        Assert.True(service.HasActiveRun);
+    }
+
+    [Fact]
+    public void NotifyRunning_WhenRunActive_FiresNotificationsChanged()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var fired = false;
+        service.NotificationsChanged += (_, _) => fired = true;
+
+        service.NotifyRunning("tab-1", true);
+
+        Assert.True(fired);
+    }
+
+    [Fact]
+    public void NotifyRunning_WhenRunStops_FiresNotificationsChanged()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        service.NotifyRunning("tab-1", true);
+        var fired = false;
+        service.NotificationsChanged += (_, _) => fired = true;
+
+        service.NotifyRunning("tab-1", false);
+
+        Assert.True(fired);
+    }
 }
