@@ -62,6 +62,71 @@ public sealed class NotificationsViewModelTests
     }
 
     [Fact]
+    public void HasActiveRun_WhenServiceHasActiveRun_ReturnsTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.NotifyRunning("tab-1", true);
+
+        Assert.True(viewModel.HasActiveRun);
+    }
+
+    [Fact]
+    public void HasActiveRun_WhenNoRunActive_ReturnsFalse()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        Assert.False(viewModel.HasActiveRun);
+    }
+
+    [Fact]
+    public void HasActiveRun_RaisesPropertyChanged_WhenRunStarts()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        bool hasActiveRunChanged = false;
+        viewModel.PropertyChanged += (sender, args) =>
+        {
+            if (args.PropertyName == nameof(viewModel.HasActiveRun))
+            {
+                hasActiveRunChanged = true;
+            }
+        };
+
+        service.NotifyRunning("tab-1", true);
+
+        Assert.True(hasActiveRunChanged);
+    }
+
+    [Fact]
+    public void HasActiveRun_RaisesPropertyChanged_WhenRunStops()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.NotifyRunning("tab-1", true);
+
+        bool hasActiveRunChanged = false;
+        viewModel.PropertyChanged += (sender, args) =>
+        {
+            if (args.PropertyName == nameof(viewModel.HasActiveRun))
+            {
+                hasActiveRunChanged = true;
+            }
+        };
+
+        service.NotifyRunning("tab-1", false);
+
+        Assert.True(hasActiveRunChanged);
+    }
+
+    [Fact]
     public void OnNotificationsChanged_WhenNotificationArrives_SetsIsOpenTrue()
     {
         var provider = new FakeActiveTabProvider();

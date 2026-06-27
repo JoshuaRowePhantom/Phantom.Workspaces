@@ -35,6 +35,8 @@ public sealed class AgentSessionNotificationTests
 
         public IReadOnlyList<NotificationEntry> Notifications => [];
 
+        public bool HasActiveRun { get; private set; }
+
 #pragma warning disable CS0067 // Required by INotificationService but never raised in this fake
         public event EventHandler? NotificationsChanged;
 #pragma warning restore CS0067
@@ -52,6 +54,11 @@ public sealed class AgentSessionNotificationTests
         }
 
         public void MarkRead(string tabId) { }
+
+        public void NotifyRunning(string tabId, bool isRunning)
+        {
+            this.HasActiveRun = isRunning;
+        }
 
         public event Action<TabDescriptor, string?>? NotifyCallReceived;
     }
@@ -176,7 +183,7 @@ public sealed class AgentSessionNotificationTests
     }
 
     [Fact]
-    public async Task AgentSessionNotification_WhenAgentStartsNewRun_ClearsNotification()
+    public async Task AgentSessionNotification_WhenAgentStartsNewRun_PostsRunStartedNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
@@ -192,11 +199,11 @@ public sealed class AgentSessionNotificationTests
         };
         tab.SetReady(agentViewModel, loggerFactory);
 
-        // First run — agent becomes idle → notification posted.
+        // First run — agent becomes idle → idle notification posted.
         var firstIdleTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        notificationService.NotifyCallReceived += (tab, reason) =>
+        notificationService.NotifyCallReceived += (_, reason) =>
         {
-            if (reason is not null)
+            if (reason is not null and not "Run started")
             {
                 firstIdleTcs.TrySetResult();
             }
@@ -209,25 +216,25 @@ public sealed class AgentSessionNotificationTests
         cts1.Token.Register(() => firstIdleTcs.TrySetCanceled());
         await firstIdleTcs.Task;
 
-        // Second run — agent starts processing → clear (null reason) should be called.
-        var clearTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Second run — agent starts → "Run started" notification should be posted.
+        var runStartedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         notificationService.NotifyCallReceived += (tabDesc, reason) =>
         {
-            if (reason is null && tabDesc.TabId == "agent-tab-2")
+            if (reason == "Run started" && tabDesc.TabId == "agent-tab-2")
             {
-                clearTcs.TrySetResult();
+                runStartedTcs.TrySetResult();
             }
         };
 
         agentChat.EnqueueUserMessage("hello again");
 
         using var cts2 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
-        cts2.Token.Register(() => clearTcs.TrySetCanceled());
-        await clearTcs.Task;
+        cts2.Token.Register(() => runStartedTcs.TrySetCanceled());
+        await runStartedTcs.Task;
 
         lock (notificationService.Calls)
         {
-            Assert.Contains(notificationService.Calls, call => call.Reason is null && call.Tab.TabId == "agent-tab-2");
+            Assert.Contains(notificationService.Calls, call => call.Reason == "Run started" && call.Tab.TabId == "agent-tab-2");
         }
 
         await WaitForRunningItemsEmptyAsync(agentChat);
