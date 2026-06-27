@@ -18,7 +18,7 @@ public sealed class CloneEntityShortcutHandler : ShortcutHandler
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        var tab = new CloneEntityWorkspaceTabViewModel(entityViewModel, mainWindowViewModel);
+        var tab = CloneEntityWorkspaceTabViewModel.Create(entityViewModel, mainWindowViewModel);
         await mainWindowViewModel.OpenTabAsync(tab);
         return true;
     }

@@ -2,17 +2,22 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class CloneEntityWorkspaceTabViewModel : WorkspaceTabViewModel
 {
-    public CloneEntityEditorViewModel Editor { get; }
+    public CloneEntityEditorViewModel? Editor { get; private set; }
 
-    public CloneEntityWorkspaceTabViewModel(
+    public static CloneEntityWorkspaceTabViewModel Create(
         SubscribedEntityViewModel sourceEntity,
         MainWindowViewModel mainWindowViewModel)
     {
-        this.Id = $"clone-entity-{sourceEntity.EntityId}";
-        this.Title = $"Clone: {sourceEntity.DisplayName}";
-        this.DockRegion = "full";
-        this.Entity = sourceEntity;
-        this.TabHeader = TabHeaderViewModel.WithIcon("⧉", this.Title);
-        this.Editor = new CloneEntityEditorViewModel(sourceEntity, mainWindowViewModel, this);
+        var title = $"Clone: {sourceEntity.DisplayName}";
+        var tab = new CloneEntityWorkspaceTabViewModel
+        {
+            Id = $"clone-entity-{sourceEntity.EntityId}",
+            Title = title,
+            DockRegion = "full",
+            Entity = sourceEntity,
+            TabHeader = TabHeaderViewModel.WithIcon("⧉", title),
+        };
+        tab.Editor = new CloneEntityEditorViewModel(sourceEntity, mainWindowViewModel, tab);
+        return tab;
     }
 }
