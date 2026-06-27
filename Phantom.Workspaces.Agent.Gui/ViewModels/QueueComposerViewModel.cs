@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows.Input;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -17,6 +18,14 @@ public sealed class QueueComposerViewModel : ViewModelBase
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
     private string inputText = string.Empty;
     private bool isFormattedMode;
+
+    /// <summary>
+    /// When set, called with the raw input text when the user submits text starting with '/'.
+    /// The interceptor is responsible for executing the slash command (or showing an error
+    /// for unknown commands). The message is never forwarded to the agent queue when this
+    /// interceptor is set and the input starts with '/'.
+    /// </summary>
+    public Func<string, Task>? SlashCommandInterceptorAsync { get; set; }
 
     public QueueComposerViewModel(
         InputQueueViewModel parent,
@@ -173,6 +182,18 @@ public sealed class QueueComposerViewModel : ViewModelBase
         var text = this.SanitizeText(this.InputText);
         if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
         {
+            return;
+        }
+
+        // Intercept slash commands on the default (primary) composer. Non-default queue
+        // composers are used to append steering messages; slash commands are not applicable there.
+        if (this.IsDefaultComposer
+            && text.StartsWith('/')
+            && this.attachments.Count == 0
+            && this.SlashCommandInterceptorAsync is { } interceptor)
+        {
+            this.InputText = string.Empty;
+            _ = interceptor(text);
             return;
         }
 
