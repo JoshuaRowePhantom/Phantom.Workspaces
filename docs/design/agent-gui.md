@@ -130,6 +130,22 @@ The shell exposes two container elements that map directly onto the two zones: `
 
 > **Testing note:** the model and command layers are covered by ordinary headless unit tests; real-browser behavior is covered by the `Phantom.Workspaces.Agent.Gui.WebViewTests` project (Trait `Category=WebView`), which hosts a real native WebView on an STA thread and is excluded from default runs (use `.\scripts\run-tests.ps1 -IncludeWebView`).
 
+#### Multi-level sticky headers
+
+The shell includes a `StickyScrollEngine` that mirrors the Avalonia `StickyScroll`/`StickyItem`/`StickyLayoutSelector` system for the browser surface. The following data attributes drive it:
+
+| HTML attribute | Meaning |
+|---|---|
+| `data-sticky-level="N"` | This element is sticky at declared level N. Its effective level is N plus the sum of all ancestor `data-sticky-base-level` values up to the scroll root. |
+| `data-sticky-base-level="N"` | This container adds N to the effective level of all sticky descendants. |
+
+Conventions used by `ChatOutputHtmlRenderer`:
+
+- **Message headers** (`.chat-header`): `data-sticky-level="0"`. The containing `.chat-message` div carries `data-sticky-base-level="0"` as a neutral scroll-root boundary marker.
+- **Tool-call/result collapsibles** (`<details>`): `data-sticky-base-level="1"` on the `<details>` element; `data-sticky-level="0"` on the `<summary>` element. This makes the summary pin at the top while the user scrolls through an expanded body.
+
+The engine attaches to `document.body` as the scroll root and calls `update()` on `scroll` (passive listener), `ResizeObserver`, and `MutationObserver` (covers `<details>` open/close and streamed DOM mutations). The core pin algorithm (`ComputeAxisPins`) matches `StickyLayoutSelector.ComputeAxisPins`: items are processed in ascending effective-level order; each pinned item advances the accumulated top offset so higher-level items push lower-level ones upward.
+
 #### History zone rendering
 
 - Rendered into the `#chat-history` container as completed turns are appended.
@@ -169,6 +185,7 @@ A single text box sits at the bottom of the control. The text box operates in on
 | Gesture | Action |
 |---|---|
 | **Enter** | Append the composed text to the **default input queue** (the immediate/first queue). |
+| **Ctrl+Enter** | Append the composed text to the **default input queue** (same as Enter). |
 | **Ctrl+Q** | Append the composed text to the **most recently created queue**. |
 | **Ctrl+Shift+Q** | **Create a new queue** and append the composed text to it. The new queue becomes the most recently created queue for subsequent Ctrl+Q presses. |
 | **Shift+Enter** | Switch to **formatted mode** without enqueuing. The text box expands to show multiple lines. |
