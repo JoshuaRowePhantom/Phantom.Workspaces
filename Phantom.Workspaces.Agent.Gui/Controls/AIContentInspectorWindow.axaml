@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Phantom.Workspaces.Agent.Gui.Controls.AIContentInspectorWindow"
+        Width="800"
+        Height="600"
+        MinWidth="400"
+        MinHeight="300"
+        WindowStartupLocation="CenterOwner"
+        Title="Content Inspector"
+        Classes="agent-window">
+    <DockPanel Classes="agent-dialog-root compact">
+        <StackPanel DockPanel.Dock="Bottom"
+                    Classes="agent-dialog-actions">
+            <Button Content="Close"
+                    Click="OnCloseClicked"
+                    Classes="queue-action-button"/>
+        </StackPanel>
+
+        <Border Classes="agent-surface compact">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto">
+                <TextBox x:Name="PayloadTextBox"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         Classes="chat-monospace"/>
+            </ScrollViewer>
+        </Border>
+    </DockPanel>
+</Window>

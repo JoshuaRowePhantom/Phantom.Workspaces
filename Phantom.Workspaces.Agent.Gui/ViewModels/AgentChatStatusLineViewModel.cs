@@ -1,15 +1,17 @@
 using System.ComponentModel;
 using System.Globalization;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable
+public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable, IAgentStatusSink
 {
     private readonly AgentViewModel agent;
     private bool isThinking;
     private string modelDisplay = "(none)";
     private string providerDisplay = "(none)";
     private string? tokensDisplay;
+    private string? intentDisplay;
 
     public AgentChatStatusLineViewModel(AgentViewModel agent)
     {
@@ -25,9 +27,25 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable
         {
             if (this.SetProperty(ref this.isThinking, value))
             {
+                if (!value)
+                {
+                    this.IntentDisplay = null;
+                }
+
                 this.RaisePropertyChanged(nameof(this.HasVisibleContent));
             }
         }
+    }
+
+    /// <summary>
+    /// Short description of what the agent is currently doing, populated from
+    /// <see cref="StatusUpdate"/> results and cleared when <see cref="IsThinking"/> transitions to
+    /// false. Shown in a muted/italic style between the brain icon and model/provider fields.
+    /// </summary>
+    public string? IntentDisplay
+    {
+        get => this.intentDisplay;
+        private set => this.SetProperty(ref this.intentDisplay, value);
     }
 
     public string ModelDisplay
@@ -82,6 +100,14 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
+    }
+
+    public void UpdateStatus(AgentStatusField field, string? value)
+    {
+        if (field == AgentStatusField.Intent)
+        {
+            this.IntentDisplay = string.IsNullOrEmpty(value) ? null : value;
+        }
     }
 
     private static string CreateDisplayText(string value)
