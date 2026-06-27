@@ -1,4 +1,7 @@
+using System.IO;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 using Xunit;
 
@@ -120,5 +123,50 @@ public sealed class TrustedExecutorTests
             TrustedExecutionRequest request,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+
+        public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+    }
+
+    private static TrustedStreamRequest MakeStreamRequest(string kind = "test")
+        => new()
+        {
+            TargetClientInstance = TrustProfile.LocalClientInstance,
+            StreamKind = kind,
+            OpenPayload = JsonDocument.Parse("{}").RootElement,
+        };
+
+    [Fact]
+    public void LocalExecutor_OpenStreamAsync_UnknownKind_ThrowsNotImplemented()
+    {
+        var local = new LocalTrustedExecutor();
+
+        Assert.Throws<NotImplementedException>(
+            () => local.OpenStreamAsync(MakeStreamRequest("shell")).GetAwaiter().GetResult());
+    }
+
+    [Fact]
+    public async Task LocalExecutor_OpenStreamAsync_RegisteredHandler_ReturnsStream()
+    {
+        var local = new LocalTrustedExecutor();
+        var handler = new FakeLocalStreamHandler();
+        local.RegisterStreamHandler("shell", handler);
+
+        var stream = await local.OpenStreamAsync(MakeStreamRequest("shell"));
+
+        Assert.NotNull(stream);
+        Assert.True(handler.WasInvoked);
+        await stream.DisposeAsync();
+    }
+
+    private sealed class FakeLocalStreamHandler : ILocalStreamHandler
+    {
+        public bool WasInvoked { get; private set; }
+
+        public Task HandleAsync(JsonElement openPayload, IStreamMessageChannel hostEnd, CancellationToken ct)
+        {
+            WasInvoked = true;
+            return Task.CompletedTask;
+        }
     }
 }

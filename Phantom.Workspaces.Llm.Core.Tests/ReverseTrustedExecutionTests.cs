@@ -112,4 +112,19 @@ public sealed class ReverseTrustedExecutionTests
             TargetClientInstance = "computer-a",
         }));
     }
+
+    [Fact]
+    public async Task ReverseTrustedExecutor_OpenStreamAsync_ThrowsNotImplemented()
+    {
+        var registry = new ReverseExecutionRegistry();
+        var executor = new ReverseTrustedExecutor(registry);
+        var request = new TrustedStreamRequest
+        {
+            TargetClientInstance = "computer-a",
+            StreamKind = "shell",
+            OpenPayload = System.Text.Json.JsonDocument.Parse("{}").RootElement,
+        };
+
+        await Assert.ThrowsAsync<NotImplementedException>(() => executor.OpenStreamAsync(request));
+    }
 }

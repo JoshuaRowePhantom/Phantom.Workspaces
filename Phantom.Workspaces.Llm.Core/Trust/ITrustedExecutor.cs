@@ -1,3 +1,4 @@
+using System.IO;
 using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces;
 
@@ -42,4 +43,7 @@ public interface ITrustedExecutor
     Task<AgentChat> CreateAgentChatAsync(
         TrustedExecutionRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Opens a streaming session and returns its duplex byte stream.</summary>
+    Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default);
 }

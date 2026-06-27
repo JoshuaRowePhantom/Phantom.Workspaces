@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -60,4 +61,9 @@ public sealed class ReverseTrustedExecutor : ITrustedExecutor
             AgentServices = services,
         });
     }
+
+    /// <inheritdoc />
+    public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
+        => throw new NotImplementedException(
+               "OpenStreamAsync over the reverse tunnel is not yet implemented.");
 }

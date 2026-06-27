@@ -1,3 +1,6 @@
+using System.IO;
+using Phantom.Workspaces.Llm.Shell;
+
 namespace Phantom.Workspaces.Llm.Trust;
 
 /// <summary>
@@ -11,6 +14,8 @@ namespace Phantom.Workspaces.Llm.Trust;
 /// </remarks>
 public sealed class LocalTrustedExecutor : ITrustedExecutor
 {
+    private readonly Dictionary<string, ILocalStreamHandler> _streamHandlers = new(StringComparer.Ordinal);
+
     /// <inheritdoc />
     public bool CanExecute(string targetClientInstance)
     {
@@ -21,6 +26,14 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
     /// <summary>Creates a tool-call authorizer enforcing the request's trust profile.</summary>
     public static TrustToolCallAuthorizer CreateToolCallAuthorizer(TrustProfile trustProfile)
         => new(trustProfile);
+
+    /// <summary>Registers a handler for a specific stream kind (e.g. <c>"shell"</c>).</summary>
+    public void RegisterStreamHandler(string kind, ILocalStreamHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        ArgumentNullException.ThrowIfNull(handler);
+        _streamHandlers[kind] = handler;
+    }
 
     /// <inheritdoc />
     public Task<AgentChat> CreateAgentChatAsync(
@@ -41,5 +54,19 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
             AgentSessionId = request.AgentSessionId,
             AgentServices = request.AgentServices,
         });
+    }
+
+    /// <inheritdoc />
+    public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!_streamHandlers.TryGetValue(request.StreamKind, out var handler))
+            throw new NotImplementedException(
+                $"No local handler is registered for stream kind '{request.StreamKind}'.");
+
+        var pair = new InMemoryStreamMessageChannelPair();
+        _ = handler.HandleAsync(request.OpenPayload, pair.HostEnd, ct);
+        return Task.FromResult<Stream>(new StreamMessageChannelStream(pair.ClientEnd));
     }
 }
