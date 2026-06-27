@@ -1,17 +1,22 @@
 using System.Text.Json.Nodes;
 using LibGit2Sharp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Tools;
 
 public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
 {
+    private readonly ILogger<GitWorkspaceDiscoveryTool> logger;
     private readonly ILocalDriveRootProvider localDriveRootProvider;
 
     public GitWorkspaceDiscoveryTool(
-        ILocalDriveRootProvider? localDriveRootProvider = null)
+        ILocalDriveRootProvider? localDriveRootProvider = null,
+        ILogger<GitWorkspaceDiscoveryTool>? logger = null)
     {
         this.localDriveRootProvider = localDriveRootProvider ?? new LocalDriveRootProvider();
+        this.logger = logger ?? NullLogger<GitWorkspaceDiscoveryTool>.Instance;
     }
 
     public string ToolType => "git-workspace-discovery";
@@ -40,7 +45,7 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         foreach (var discoveredWorktreePath in discoveredWorktreePaths)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
-            var gitMetadata = GetGitMetadata(discoveredWorktreePath);
+            var gitMetadata = this.GetGitMetadata(discoveredWorktreePath);
             var gitWorktreeEntityName = new EntityName("git-worktrees", discoveredWorktreePath);
             var names = new JsonArray(new JsonArray("git-worktrees", discoveredWorktreePath));
             if (currentProfileNames.Length > 0)
@@ -196,7 +201,7 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
             || File.Exists(Path.Combine(directoryPath, ".git"));
     }
 
-    private static GitMetadata GetGitMetadata(
+    private GitMetadata GetGitMetadata(
         string repositoryPath)
     {
         try
@@ -209,12 +214,14 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
                 OriginRemoteUrl = repository.Network.Remotes["origin"]?.Url,
             };
         }
-        catch (RepositoryNotFoundException)
+        catch (RepositoryNotFoundException ex)
         {
+            this.logger.LogDebug(ex, "Path '{RepositoryPath}' looks like a repository but could not be opened.", repositoryPath);
             return new GitMetadata();
         }
-        catch (LibGit2SharpException)
+        catch (LibGit2SharpException ex)
         {
+            this.logger.LogDebug(ex, "Path '{RepositoryPath}' looks like a repository but could not be opened.", repositoryPath);
             return new GitMetadata();
         }
     }

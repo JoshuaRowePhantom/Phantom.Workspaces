@@ -273,7 +273,7 @@ public sealed class ScheduledToolHost
         {
             var result = await tool.ExecuteAsync(executionContext).ConfigureAwait(false);
 
-            await this.resultWriter.CompleteAsync(handle, success: result.IsSuccess, content: result.ErrorMessage, cancellationToken).ConfigureAwait(false);
+            await this.resultWriter.CompleteAsync(handle, success: result.IsSuccess, content: result.ResultContent ?? result.ErrorMessage, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (Exception exception)
