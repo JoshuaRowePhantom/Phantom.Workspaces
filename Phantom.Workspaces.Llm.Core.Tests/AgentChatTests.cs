@@ -951,11 +951,11 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task Constructor_DefaultQueueStartsQueued_AndImmediateQueueStartsImmediate()
+    public async Task Constructor_DefaultQueueStartsImmediate_AndImmediateQueueStartsImmediate()
     {
         await using var chat = CreateChat();
 
-        Assert.Equal(AgentInputQueueImmediacy.Queue, chat.DefaultInputQueue.Immediacy);
+        Assert.Equal(AgentInputQueueImmediacy.Immediate, chat.DefaultInputQueue.Immediacy);
         Assert.True(chat.ImmediateInputQueue.IsImmediate);
         Assert.Equal(AgentInputQueueImmediacy.Immediate, chat.ImmediateInputQueue.Immediacy);
     }
@@ -1134,6 +1134,119 @@ public sealed class AgentChatTests
             "queued user message to start processing and produce assistant output");
     }
 
+    [Fact]
+    public async Task SteeringMessage_InjectedWhileRunActive_AppearsAtInjectionPointInRunningItem()
+    {
+        // Arrange: a chat client that exposes a ToolResultSteeringMiddleware via GetService while
+        // delegating actual streaming to a DeterministicTestChatClient. This lets the test fire
+        // MessagesInjected (via a real tool-result middleware call) mid-stream, verifying that the
+        // steering message ends up at the update-count boundary where it was injected (#42).
+        var innerClient = new DeterministicTestChatClient();
+        var stream = innerClient.EnqueueStreamingResponse();
+
+        // "first " arrives immediately; "second" is held until after steering injection.
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "first "));
+        var blockedSecond = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "second") { FinishReason = ChatFinishReason.Stop },
+            isReady: false);
+        var blockedComplete = stream.Complete(isReady: false);
+
+        var queueManager = new AgentInputQueueManager();
+        await using var compositeClient = new SteeringPassthroughChatClient(innerClient, queueManager);
+        await using var chat = CreateChat(compositeClient);
+
+        // Act: start the run, wait for "first " to land in the running item, then inject steering
+        // at that boundary before releasing the rest of the stream.
+        chat.EnqueueUserMessage("user turn");
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count > 0
+                  && chat.RunningItems[0].Items.Count > 0
+                  && GetText(chat.RunningItems[0].Items[0].Contents).Contains("first"),
+            "first streaming update to appear in running item");
+
+        queueManager.Enqueue(
+            queueManager.ImmediateQueue,
+            [new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "steer me")] }]);
+        await compositeClient.SteeringMiddleware.GetResponseAsync(
+            [new ChatMessage(ChatRole.Tool, [new FunctionResultContent("call-1", "done")])]);
+
+        blockedSecond.MarkReady();
+        blockedComplete.MarkReady();
+
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 4, "history to contain user + first + steer + second");
+
+        // Assert: user turn, then assistant "first ", then steering user message, then assistant "second".
+        // The steering appears at the update boundary where it was injected, not before or after the full turn.
+        Assert.Equal(4, chat.History.Count);
+        Assert.Equal(ChatRole.User, chat.History[0].Role);
+        Assert.Equal(ChatRole.Assistant, chat.History[1].Role);
+        Assert.Equal("first ", GetText(chat.History[1].Contents));
+        Assert.Equal(ChatRole.User, chat.History[2].Role);
+        Assert.Equal("steer me", GetText(chat.History[2].Contents));
+        Assert.Equal(ChatRole.Assistant, chat.History[3].Role);
+        Assert.Equal("second", GetText(chat.History[3].Contents));
+    }
+
+    [Fact]
+    public async Task CreateAsync_OnTaskRunThread_WithExplicitForegroundScheduler_UsesThatSchedulerAndProcessesMessages()
+    {
+        // Regression test for GitHub issue #70: before e51ec14, AgentChat was created on the UI thread
+        // so SynchronizationContext.Current was the Avalonia dispatcher. After e51ec14, creation moved
+        // inside Task.Run where SynchronizationContext.Current is null, causing AgentChat to fall back
+        // to its internal ConcurrentExclusiveSchedulerPair rather than the UI scheduler. The fix
+        // captures the UI scheduler before entering Task.Run and passes it via ForegroundScheduler so
+        // the processing loop always uses the correct scheduler regardless of the construction thread.
+
+        // Arrange: set up a response stream and capture an explicit scheduler to simulate the UI
+        // scheduler that would be captured on the real UI thread before Task.Run.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+
+        // Use a distinct ConcurrentExclusiveSchedulerPair as a stand-in for the UI scheduler.
+        var uiSchedulerPair = new System.Threading.Tasks.ConcurrentExclusiveSchedulerPair();
+        var capturedForegroundScheduler = uiSchedulerPair.ExclusiveScheduler;
+
+        // Act: create the chat inside Task.Run (no SynchronizationContext on that thread), but
+        // supply the pre-captured scheduler so the processing loop uses the right scheduler.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        await using var chat = await Task.Run(async () =>
+            await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                ConfiguredStore = persistenceStore,
+                ClientOverride = client,
+                DisplayNameOverride = "test-chat",
+                ForegroundScheduler = capturedForegroundScheduler,
+            }));
+
+        // Assert: the private foregroundScheduler field is the one we passed in, not the internal
+        // fallback ExclusiveScheduler that would be chosen when SynchronizationContext.Current is null.
+        var foregroundSchedulerField = typeof(AgentChat).GetField(
+            "foregroundScheduler",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(foregroundSchedulerField);
+        var actualScheduler = foregroundSchedulerField!.GetValue(chat);
+        Assert.Same(capturedForegroundScheduler, actualScheduler);
+
+        // Also verify messages are processed end-to-end on that scheduler.
+        chat.EnqueueUserMessage("ping");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2 && chat.History[^1].Role == ChatRole.Assistant,
+            "assistant response to complete");
+
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("pong", GetText(chat.History[1].Contents));
+    }
+
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 
@@ -1198,6 +1311,66 @@ public sealed class AgentChatTests
             ?? throw new InvalidOperationException("session field not found.");
         sessionField.SetValue(chat, agentChatSession);
         return chat;
+    }
+
+    // Delegates streaming to an inner DeterministicTestChatClient while exposing a separate
+    // ToolResultSteeringMiddleware via GetService so that AgentChat.InitializeAsync subscribes
+    // to MessagesInjected. This lets tests fire steering injection mid-run by calling
+    // SteeringMiddleware.GetResponseAsync with a tool-result message.
+    private sealed class SteeringPassthroughChatClient : IAsyncDisposable, IChatClient
+    {
+        private readonly DeterministicTestChatClient inner;
+        private readonly ToolResultSteeringMiddleware steeringMiddleware;
+
+        public SteeringPassthroughChatClient(DeterministicTestChatClient inner, AgentInputQueueManager queueManager)
+        {
+            this.inner = inner;
+            var stub = new StubInnerForSteering();
+            this.steeringMiddleware = new ToolResultSteeringMiddleware(stub, queueManager);
+        }
+
+        public ToolResultSteeringMiddleware SteeringMiddleware => this.steeringMiddleware;
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetResponseAsync(messages, options, cancellationToken);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetStreamingResponseAsync(messages, options, cancellationToken);
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(ToolResultSteeringMiddleware)
+                ? this.steeringMiddleware
+                : this.inner.GetService(serviceType, serviceKey);
+
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class StubInnerForSteering : IChatClient
+        {
+            public Task<ChatResponse> GetResponseAsync(
+                IEnumerable<ChatMessage> messages,
+                ChatOptions? options = null,
+                CancellationToken cancellationToken = default)
+                => Task.FromResult(new ChatResponse());
+
+            public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+                IEnumerable<ChatMessage> messages,
+                ChatOptions? options = null,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+            {
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            public object? GetService(Type serviceType, object? serviceKey = null) => null;
+            public void Dispose() { }
+        }
     }
 
 }

@@ -277,6 +277,10 @@ public sealed class FieldEditorFactory
 
         switch (resolvedType.TypeName)
         {
+            case "boolean":
+                return new BooleanToggleFieldEditorViewModel(
+                    fieldName,
+                    fieldValue.ValueKind == JsonValueKind.True);
             case "local-string":
                 if (fieldValue.ValueKind == JsonValueKind.String)
                 {

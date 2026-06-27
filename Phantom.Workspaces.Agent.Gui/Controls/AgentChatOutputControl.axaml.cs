@@ -1,254 +1,250 @@
 using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Avalonia.Controls;
-using Avalonia.Controls.Documents;
-using Avalonia.Input;
-using Avalonia.Interactivity;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
 using Avalonia;
-using Avalonia.Threading;
-using Avalonia.VisualTree;
+using Avalonia.Controls;
+using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+using Phantom.Workspaces.Gui.Styles.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
-public partial class AgentChatOutputControl : UserControl
+/// <summary>
+/// Renders the agent chat output in a browser-hosted surface. A <see cref="ChatOutputHtmlModel"/>
+/// turns the live history/running collections into incremental HTML operations, which this control
+/// forwards (as JSON commands) into the page through an <see cref="IControllableBrowser"/> bridge.
+/// The browser is built via <see cref="ControllableBrowserFactory"/> so headless tests can substitute
+/// a stub. An external "auto-scroll" toggle controls whether content updates follow the bottom.
+/// </summary>
+public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
 {
-    public static readonly StyledProperty<AgentChatOutputMode> OutputModeProperty =
-        AvaloniaProperty.Register<AgentChatOutputControl, AgentChatOutputMode>(
-            nameof(OutputMode),
-            AgentChatOutputMode.FlowDocument);
+    private static readonly IReadOnlyDictionary<string, string> ThemeVariableResourceKeys =
+        new Dictionary<string, string>
+        {
+            ["--chat-background"] = "Theme.Surface.EntityPane.Background",
+            ["--chat-foreground"] = "Theme.Class.normal.Foreground",
+            ["--chat-role"] = "Theme.Class.accent.Foreground",
+            ["--chat-user"] = "Theme.Class.accent.Foreground",
+            ["--chat-reasoning"] = "Theme.Class.muted.Foreground",
+            ["--chat-meta"] = "Theme.Class.muted.Foreground",
+            ["--chat-error"] = "Theme.Status.Bad",
+            ["--chat-uri"] = "Theme.Class.accent.Foreground",
+            ["--chat-tool-body-background"] = "Theme.Surface.EntityCard.Background",
+        };
 
-    private bool hasAppliedInitialOutputScroll;
-    private bool hasAppliedInitialSelectableOutputScroll;
-    private bool selectableOutputPinnedToBottom = true;
-    private Span? selectableOutputRootSpan;
+    private readonly IControllableBrowser browser;
+    private ChatOutputHtmlModel? outputModel;
     private AgentViewModel? subscribedViewModel;
+    private bool isAttached;
+    private bool suppressScrollOnEnable;
+
+    /// <summary>
+    /// Raised when the page requests opening a URL in an external browser.
+    /// The event argument is the URL string. The control also calls <see cref="Process.Start"/>
+    /// to open the URL; this event is provided for testability.
+    /// </summary>
+    public event EventHandler<string>? UrlNavigationRequested;
 
     public AgentChatOutputControl()
     {
         this.InitializeComponent();
-        this.Loaded += this.OnLoaded;
-        this.Unloaded += this.OnUnloaded;
-        this.SelectableOutputScrollViewer.ScrollChanged += this.OnSelectableOutputScrollChanged;
-        // Avalonia's ScrollViewer already pages with Page Up/Down; it does not handle Home/End, so add
-        // those (scroll to top/bottom). A bubble handler suffices because nothing else consumes them.
-        this.AddHandler(KeyDownEvent, this.OnSelectableOutputKeyDown, RoutingStrategies.Bubble);
-        this.ApplyOutputModeVisibility();
+
+        var browserControl = ControllableBrowserFactory.Create();
+        this.browser = (IControllableBrowser)browserControl;
+        this.browser.Ready += this.OnBrowserReady;
+        this.browser.JavaScriptMessageReceived += this.OnBrowserMessageReceived;
+        this.BrowserHost.Child = browserControl;
     }
 
-    public AgentChatOutputMode OutputMode
+    public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
+        => this.browser.PostMessageToJavaScript(
+            ChatOutputBrowserCommands.Update(path, ToWireLocation(location), content));
+
+    public void RemoveContent(string path)
+        => this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove(path));
+
+    public void ScrollToBottom()
     {
-        get => this.GetValue(OutputModeProperty);
-        set => this.SetValue(OutputModeProperty, value);
+        if (this.subscribedViewModel?.AutoScrollEnabled == false)
+        {
+            return;
+        }
+
+        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        this.isAttached = true;
+        this.AttachOutputModel();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        this.isAttached = false;
+        this.DetachOutputModel();
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
 
-        if (change.Property == OutputModeProperty)
+        if (change.Property == DataContextProperty && this.isAttached)
         {
-            this.ApplyOutputModeVisibility();
-        }
-
-        if (change.Property == DataContextProperty)
-        {
-            this.AttachSelectableInlineRootSpan();
+            this.AttachOutputModel();
         }
     }
 
-    private void OnLoaded(object? sender, RoutedEventArgs e)
+    private static string ToWireLocation(ChatOutputUpdateLocation location) => location switch
     {
-        this.AttachSelectableInlineRootSpan();
-        this.ApplyOutputModeVisibility();
-        if (this.OutputMode == AgentChatOutputMode.SelectableTextBox
-            && !this.hasAppliedInitialSelectableOutputScroll)
-        {
-            this.hasAppliedInitialSelectableOutputScroll = true;
-            this.ScheduleSelectableOutputScrollToBottom();
-        }
+        ChatOutputUpdateLocation.Replace => "replace",
+        ChatOutputUpdateLocation.Before => "before",
+        ChatOutputUpdateLocation.After => "after",
+        ChatOutputUpdateLocation.Append => "append",
+        _ => throw new ArgumentOutOfRangeException(nameof(location), location, null),
+    };
 
-        if (this.OutputMode != AgentChatOutputMode.FlowDocument)
+    private static string ReadShellHtml()
+    {
+        var assembly = typeof(AgentChatOutputControl).Assembly;
+        var resourceName = Array.Find(
+            assembly.GetManifestResourceNames(),
+            name => name.EndsWith("chat-output-shell.html", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("Embedded chat-output-shell.html resource was not found.");
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("Could not open the chat-output-shell.html resource stream.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private void AttachOutputModel()
+    {
+        this.DetachOutputModel();
+
+        if (!this.isAttached || this.DataContext is not AgentViewModel agentViewModel)
         {
             return;
         }
 
-        if (this.hasAppliedInitialOutputScroll)
-        {
-            return;
-        }
+        // Reload the shell so a reused control starts from an empty page; the model's initial
+        // operations are queued by the bridge until the reloaded shell is ready.
+        this.browser.HtmlShell = ReadShellHtml();
 
-        this.hasAppliedInitialOutputScroll = true;
-        this.ScrollHistoryToBottom();
-
-        bool hasPendingChange = false;
-        this.HistoryDocument.Document?.EnsureTextDocument().Changed += (s, e) =>
-        {
-            if (!hasPendingChange)
-            {
-                hasPendingChange = true;
-                Task.Factory.StartNew(async () =>
-                {
-                    await Task.Delay(250);
-                    var document = this.HistoryDocument.Document;
-                    this.HistoryDocument.Document = null;
-                    this.HistoryDocument.Document = document;
-                    hasPendingChange = false;
-                },
-                CancellationToken.None,
-                TaskCreationOptions.DenyChildAttach,
-                TaskScheduler.FromCurrentSynchronizationContext());
-            }
-        };
-             
-    }
-
-    private void OnUnloaded(object? sender, RoutedEventArgs e)
-    {
-        this.DetachSelectableOutputSubscription();
-    }
-
-    private void ScrollHistoryToBottom()
-    {
-        var viewer = this.HistoryDocument.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
-        if (viewer is null)
-        {
-            return;
-        }
-
-        var maxVerticalOffset = Math.Max(0, viewer.Extent.Height - viewer.Viewport.Height);
-        viewer.Offset = new Avalonia.Vector(viewer.Offset.X, maxVerticalOffset);
-    }
-
-    private void OnSelectableOutputContentChanged(object? sender, EventArgs e)
-    {
-        if (this.OutputMode != AgentChatOutputMode.SelectableTextBox)
-        {
-            return;
-        }
-
-        if (!this.selectableOutputPinnedToBottom)
-        {
-            return;
-        }
-
-        this.ScheduleSelectableOutputScrollToBottom();
-    }
-
-    private void OnSelectableOutputScrollChanged(
-        object? sender,
-        ScrollChangedEventArgs e)
-    {
-        var maxVerticalOffset = Math.Max(
-            0,
-            this.SelectableOutputScrollViewer.Extent.Height - this.SelectableOutputScrollViewer.Viewport.Height);
-        this.selectableOutputPinnedToBottom = maxVerticalOffset <= 0
-            || this.SelectableOutputScrollViewer.Offset.Y >= maxVerticalOffset - 1;
-    }
-
-    private void OnSelectableOutputKeyDown(
-        object? sender,
-        KeyEventArgs e)
-    {
-        if (e.Handled || this.OutputMode != AgentChatOutputMode.SelectableTextBox)
-        {
-            return;
-        }
-
-        var scrollViewer = this.SelectableOutputScrollViewer;
-        var newOffset = SelectableOutputScrollMath.ComputeVerticalOffset(
-            e.Key,
-            scrollViewer.Viewport.Height,
-            scrollViewer.Extent.Height);
-        if (newOffset is not double targetY)
-        {
-            return;
-        }
-
-        scrollViewer.Offset = new Vector(scrollViewer.Offset.X, targetY);
-        e.Handled = true;
-    }
-
-    private void ScheduleSelectableOutputScrollToBottom()
-    {
-        Dispatcher.UIThread.Post(
-            this.ScrollSelectableOutputToBottom,
-            DispatcherPriority.Background);
-    }
-
-    private void ScrollSelectableOutputToBottom()
-    {
-        var maxVerticalOffset = Math.Max(
-            0,
-            this.SelectableOutputScrollViewer.Extent.Height - this.SelectableOutputScrollViewer.Viewport.Height);
-        this.SelectableOutputScrollViewer.Offset = new Avalonia.Vector(
-            this.SelectableOutputScrollViewer.Offset.X,
-            maxVerticalOffset);
-    }
-
-    private void ApplyOutputModeVisibility()
-    {
-        var isFlowDocument = this.OutputMode == AgentChatOutputMode.FlowDocument;
-        this.HistoryDocument.IsVisible = isFlowDocument;
-        this.SelectableOutputContainer.IsVisible = !isFlowDocument;
-
-        if (!isFlowDocument)
-        {
-            this.ScheduleSelectableOutputScrollToBottom();
-        }
-    }
-
-    private void AttachSelectableInlineRootSpan()
-    {
-        var selectableOutputText = this.SelectableOutputText;
-        if (selectableOutputText is null)
-        {
-            return;
-        }
-
-        if (this.DataContext is not AgentViewModel agentViewModel)
-        {
-            selectableOutputText.Inlines.Clear();
-            this.selectableOutputRootSpan = null;
-            this.DetachSelectableOutputSubscription();
-            return;
-        }
-
-        this.AttachSelectableOutputSubscription(agentViewModel);
-
-        var rootSpan = agentViewModel.OutputSelectableRootSpan;
-        if (ReferenceEquals(this.selectableOutputRootSpan, rootSpan))
-        {
-            return;
-        }
-
-        selectableOutputText.Inlines.Clear();
-        selectableOutputText.Inlines.Add(rootSpan);
-        this.selectableOutputRootSpan = rootSpan;
-    }
-
-    private void AttachSelectableOutputSubscription(AgentViewModel agentViewModel)
-    {
-        if (ReferenceEquals(this.subscribedViewModel, agentViewModel))
-        {
-            return;
-        }
-
-        this.DetachSelectableOutputSubscription();
         this.subscribedViewModel = agentViewModel;
-        agentViewModel.SelectableOutputContentChanged += this.OnSelectableOutputContentChanged;
+        agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
+        this.outputModel = new ChatOutputHtmlModel(
+            agentViewModel.History,
+            agentViewModel.RunningItems,
+            () => agentViewModel.IsReasoningVisible,
+            this);
     }
 
-    private void DetachSelectableOutputSubscription()
+    private void DetachOutputModel()
+    {
+        if (this.subscribedViewModel is not null)
+        {
+            this.subscribedViewModel.PropertyChanged -= this.OnViewModelPropertyChanged;
+            this.subscribedViewModel = null;
+        }
+
+        this.outputModel?.Dispose();
+        this.outputModel = null;
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible))
+        {
+            this.outputModel?.Refresh();
+        }
+        else if (e.PropertyName == nameof(AgentViewModel.AutoScrollEnabled)
+            && this.subscribedViewModel?.AutoScrollEnabled == true
+            && !this.suppressScrollOnEnable)
+        {
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+        }
+    }
+
+    private void OnBrowserReady(object? sender, EventArgs e)
+        => this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+
+    private void OnBrowserMessageReceived(object? sender, string message)
+    {
+        JsonElement root;
+        try
+        {
+            root = JsonSerializer.Deserialize<JsonElement>(message);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (!root.TryGetProperty("type", out var typeProp))
+        {
+            return;
+        }
+
+        switch (typeProp.GetString())
+        {
+            case "scrollState":
+            {
+                var atBottom = root.TryGetProperty("atBottom", out var ab) && ab.GetBoolean();
+                this.SetAutoScrollFromPage(atBottom);
+                break;
+            }
+            case "openUrl":
+            {
+                if (root.TryGetProperty("url", out var urlProp))
+                {
+                    var url = urlProp.GetString();
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        this.UrlNavigationRequested?.Invoke(this, url);
+                        this.subscribedViewModel?.OpenUrlHandler?.Invoke(url);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    private void SetAutoScrollFromPage(bool atBottom)
     {
         if (this.subscribedViewModel is null)
         {
             return;
         }
 
-        this.subscribedViewModel.SelectableOutputContentChanged -= this.OnSelectableOutputContentChanged;
-        this.subscribedViewModel = null;
+        // Suppress the "scroll to bottom" side-effect that fires when AutoScrollEnabled
+        // transitions to true — the page is already at the bottom when atBottom is true.
+        this.suppressScrollOnEnable = true;
+        this.subscribedViewModel.AutoScrollEnabled = atBottom;
+        this.suppressScrollOnEnable = false;
     }
+
+    private IReadOnlyDictionary<string, string> BuildThemeVariables()
+    {
+        var variables = new Dictionary<string, string>();
+        foreach (var (cssVariable, resourceKey) in ThemeVariableResourceKeys)
+        {
+            if (this.TryFindResource(resourceKey, out var resource)
+                && resource is ISolidColorBrush brush)
+            {
+                variables[cssVariable] = ToCssColor(brush.Color);
+            }
+        }
+
+        return variables;
+    }
+
+    private static string ToCssColor(Color color)
+        => color.A == 255
+            ? $"#{color.R:x2}{color.G:x2}{color.B:x2}"
+            : $"rgba({color.R}, {color.G}, {color.B}, {(color.A / 255.0):0.###})";
 }

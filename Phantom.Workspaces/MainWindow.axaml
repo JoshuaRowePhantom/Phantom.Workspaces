@@ -4,6 +4,9 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
+        xmlns:dmc="using:Dock.Model.Controls"
+
+        xmlns:controls="using:Phantom.Workspaces.Controls"
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -14,9 +17,38 @@
         MinHeight="700"
         FontFamily="{DynamicResource Theme.FontFamily}"
         Title="Phantom.Workspaces">
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+W"         Command="{Binding CloseActiveTabCommand}" />
+        <KeyBinding Gesture="Ctrl+Tab"       Command="{Binding CycleTabForwardCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Tab" Command="{Binding CycleTabBackwardCommand}" />
+        <KeyBinding Gesture="Alt+1" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="0" />
+        <KeyBinding Gesture="Alt+2" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="1" />
+        <KeyBinding Gesture="Alt+3" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="2" />
+        <KeyBinding Gesture="Alt+4" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="3" />
+        <KeyBinding Gesture="Alt+5" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="4" />
+        <KeyBinding Gesture="Alt+6" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="5" />
+        <KeyBinding Gesture="Alt+7" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="6" />
+        <KeyBinding Gesture="Alt+8" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="7" />
+        <KeyBinding Gesture="Alt+9" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="8" />
+        <KeyBinding Gesture="Alt+0" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="9" />
+        <KeyBinding Gesture="Ctrl+1" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="0" />
+        <KeyBinding Gesture="Ctrl+2" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="1" />
+        <KeyBinding Gesture="Ctrl+3" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="2" />
+        <KeyBinding Gesture="Ctrl+4" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="3" />
+        <KeyBinding Gesture="Ctrl+5" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="4" />
+        <KeyBinding Gesture="Ctrl+6" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="5" />
+        <KeyBinding Gesture="Ctrl+7" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="6" />
+        <KeyBinding Gesture="Ctrl+8" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="7" />
+        <KeyBinding Gesture="Ctrl+9" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="8" />
+        <KeyBinding Gesture="Ctrl+0" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="9" />
+        <KeyBinding Gesture="F7" Command="{Binding NavigatePreviousNotificationCommand}" />
+        <KeyBinding Gesture="F8" Command="{Binding NavigateNextNotificationCommand}" />
+        <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding NavigateBackCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+OemMinus" Command="{Binding NavigateForwardCommand}" />
+    </Window.KeyBindings>
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
-            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto">
                 <StackPanel Grid.Column="0"
                             VerticalAlignment="Center"
                             Spacing="2">
@@ -67,11 +99,33 @@
 
                 <Button Grid.Column="3"
                         Classes="settings-gear"
-                        Content="⏱"
-                        ToolTip.Tip="Scheduled tasks"
+                        Content="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
+                        ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
                         Click="OnOpenScheduledTasksClicked" />
 
-                <Button Grid.Column="4"
+                <Panel Grid.Column="4">
+                    <Button x:Name="NotificationBellButton"
+                            Classes="settings-gear"
+                            Content="🔔"
+                            ToolTip.Tip="Notifications"
+                            Command="{Binding NotificationsViewModel.ToggleOpenCommand}" />
+                    <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
+                               IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
+                               Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
+                               FontSize="9"
+                               FontWeight="Bold"
+                               IsHitTestVisible="False"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Top"
+                               Margin="0,-2,-2,0" />
+                    <Popup IsOpen="{Binding NotificationsViewModel.IsOpen, Mode=TwoWay}"
+                           PlacementTarget="{Binding #NotificationBellButton}"
+                           IsLightDismissEnabled="True">
+                        <controls:NotificationsControl DataContext="{Binding NotificationsViewModel}" />
+                    </Popup>
+                </Panel>
+
+                <Button Grid.Column="5"
                         Classes="settings-gear"
                         Content="⚙"
                         ToolTip.Tip="Settings"
@@ -116,8 +170,28 @@
                 <dock:DockControl.DataTemplates>
                     <!-- Workspace-level tab: shows the workspace's ContentLayout -->
                     <DataTemplate DataType="vm:WorkspacePaneDocument">
-                        <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}">
+                        <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}"
+                                         AutoCreateDataTemplates="False">
                             <dock:DockControl.DataTemplates>
+                                <!-- Supply root dock template (normally auto-created). -->
+                                <DataTemplate DataType="dmc:IRootDock">
+                                    <dock:RootDockControl />
+                                </DataTemplate>
+                                <!-- WorkspaceContentDock is our typed subclass of DocumentDock.
+                                     Using a concrete subtype means Dock's FuncDataTemplate<IDocumentDock>
+                                     (on PART_ContentControl) is bypassed, so AutoCreateDataTemplates=False
+                                     lets our DataTemplate on DockControl be found first. Setting
+                                     HeaderTemplate here is a local value (priority 1), which beats the
+                                     ControlTheme setter (priority 3). -->
+                                <DataTemplate DataType="vm:WorkspaceContentDock">
+                                    <dock:DocumentControl>
+                                        <dock:DocumentControl.HeaderTemplate>
+                                            <DataTemplate x:DataType="vm:WorkspaceDocument">
+                                                <ContentControl Content="{Binding EffectiveTabHeader}" />
+                                            </DataTemplate>
+                                        </dock:DocumentControl.HeaderTemplate>
+                                    </dock:DocumentControl>
+                                </DataTemplate>
                                 <!-- Content-level tab: shows the tab's ViewModel -->
                                 <DataTemplate DataType="vm:WorkspaceDocument">
                                     <ContentControl Content="{Binding TabViewModel}" />

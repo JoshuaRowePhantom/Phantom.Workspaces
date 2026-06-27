@@ -11,6 +11,6 @@
         <StyleInclude Source="avares://Avalonia.Controls.Markdown/Themes/Default.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
-        <StyleInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/ChatDocumentStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/NotificationsStyles.axaml" />
     </Application.Styles>
 </Application>

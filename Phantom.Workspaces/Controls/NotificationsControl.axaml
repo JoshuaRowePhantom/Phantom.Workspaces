@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Controls.NotificationsControl"
+             x:CompileBindings="False">
+    <Border Classes="notifications-panel"
+            Width="360"
+            MaxHeight="480">
+        <Grid RowDefinitions="Auto,*">
+            <Border Grid.Row="0" 
+                    Padding="12,8">
+                <TextBlock Text="Notifications" 
+                           FontWeight="SemiBold" />
+            </Border>
+            
+            <!-- Empty state message -->
+            <TextBlock Grid.Row="1"
+                       Text="There are no notifications."
+                       Classes="muted"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       Margin="16"
+                       IsVisible="{Binding !HasRows}" />
+            
+            <!-- Notification list -->
+            <ScrollViewer Grid.Row="1" 
+                          MaxHeight="420"
+                          IsVisible="{Binding HasRows}">
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NotificationRowViewModel">
+                            <Border Classes="interactive-row" Padding="8,4" Margin="4,2">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Button Grid.Column="0"
+                                            Command="{Binding NavigateCommand}"
+                                            HorizontalAlignment="Stretch"
+                                            HorizontalContentAlignment="Left"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Padding="4">
+                                        <StackPanel Spacing="2">
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <TextBlock Text="{Binding TabTitle}" />
+                                                <TextBlock Text=" · " />
+                                                <TextBlock Text="{Binding Reason}" Classes="muted" />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding RelativeTime}" 
+                                                       Classes="caption" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Grid.Column="1"
+                                            Command="{Binding SnoozeCommand}"
+                                            Content="💤"
+                                            VerticalAlignment="Top"
+                                            Padding="6,4" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</UserControl>

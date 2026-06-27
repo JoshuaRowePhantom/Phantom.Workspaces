@@ -16,6 +16,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
     private readonly ProviderSessionState<SessionState> sessionState;
     private readonly BsonDocument? agentDefinitionJson;
     private readonly IAgentPersistenceStore store;
+    private volatile string? copilotSdkSessionId;
     private Func<AgentSession, CancellationToken, ValueTask<BsonDocument>>? serializeSession;
 
     public AgentPersistenceChatHistoryProvider(
@@ -36,6 +37,19 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
         Func<AgentSession, CancellationToken, ValueTask<BsonDocument>> serializeSession)
     {
         this.serializeSession = serializeSession ?? throw new ArgumentNullException(nameof(serializeSession));
+    }
+
+    /// <summary>
+    /// Records the live GitHub Copilot SDK session id so it is persisted alongside the agent state
+    /// and can be used to resume the CLI session (with its history) after a restart (issue #3).
+    /// A known id is never cleared by a subsequent null.
+    /// </summary>
+    public void SetCopilotSdkSessionId(string? sessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            this.copilotSdkSessionId = sessionId;
+        }
     }
 
     public override object? GetService(Type serviceType, object? serviceKey = null)
@@ -106,6 +120,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
                         AgentSessionId = agentSessionId,
                         AgentSessionJson = await this.SerializeSessionAsync(context.Session, cancellationToken).ConfigureAwait(false),
                         AgentDefinitionJson = this.agentDefinitionJson,
+                        CopilotSdkSessionId = this.copilotSdkSessionId,
                     },
                     NewMessages = requestMessages,
                 },
@@ -138,6 +153,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
                     AgentSessionId = agentSessionId,
                     AgentSessionJson = await this.SerializeSessionAsync(context.Session, cancellationToken).ConfigureAwait(false),
                     AgentDefinitionJson = this.agentDefinitionJson,
+                    CopilotSdkSessionId = this.copilotSdkSessionId,
                 },
                 NewMessages = responseMessages,
             },

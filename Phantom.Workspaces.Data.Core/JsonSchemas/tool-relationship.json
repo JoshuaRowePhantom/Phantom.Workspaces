@@ -48,6 +48,15 @@
         "target"
       ],
       "unevaluatedProperties": false
+    },
+    "paused": {
+      "type": "boolean",
+      "description": "When true, this relationship is skipped even if its schedule is due."
+    },
+    "last-started": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC date-time set by the host immediately before a run is launched; the due-check indicator for whether to start a new run."
     }
   }
 }

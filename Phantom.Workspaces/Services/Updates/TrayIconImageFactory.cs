@@ -20,20 +20,18 @@ internal static class TrayIconImageFactory
     /// <summary>Creates the tray icon, optionally badged to indicate an available update.</summary>
     public static WindowIcon Create(bool updateAvailable)
     {
-        var background = updateAvailable ? Color.FromRgb(0x2E, 0x7D, 0x32) : Color.FromRgb(0x1F, 0x6F, 0xEB);
         var pixelSize = new PixelSize(Size, Size);
         var dpi = new Vector(96, 96);
         using var bitmap = new RenderTargetBitmap(pixelSize, dpi);
         using (var context = bitmap.CreateDrawingContext())
         {
-            context.DrawRectangle(new SolidColorBrush(background), null, new Rect(0, 0, Size, Size), 6, 6);
             var text = new FormattedText(
-                "P",
+                "🧠",
                 System.Globalization.CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
                 Typeface.Default,
-                20,
-                Brushes.White);
+                18,
+                Brushes.Black);
             var origin = new Point((Size - text.Width) / 2, (Size - text.Height) / 2);
             context.DrawText(text, origin);
         }

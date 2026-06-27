@@ -173,18 +173,15 @@ public sealed class WorkspacesSettingsViewModelTests
         var settings = new WorkspacesSettingsViewModel(service);
         settings.Repository.Mode = DataAccessMode.Web;
         settings.Repository.Web.Endpoint = "https://workspaces.example/";
-        settings.Theme = "FluentDark";
 
         try
         {
             var saved = await settings.SaveAsync();
 
             Assert.Equal(DataAccessMode.Web, saved.DataAccess.Mode);
-            Assert.Equal("FluentDark", saved.Visual.Theme);
 
             var reloaded = await service.LoadAsync(path);
             Assert.Equal("https://workspaces.example/", reloaded.DataAccess.WebEndpoint);
-            Assert.Equal("FluentDark", reloaded.Visual.Theme);
         }
         finally
         {
@@ -206,7 +203,7 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
-    public void Settings_Sections_ExposeRepositoryRemoteAccessAndAppearance()
+    public void Settings_Sections_ExposeRepositoryAndRemoteAccess()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
         var settings = new WorkspacesSettingsViewModel(service);
@@ -222,11 +219,6 @@ public sealed class WorkspacesSettingsViewModelTests
             {
                 Assert.Equal("Remote access", section.Title);
                 Assert.Same(settings.RemoteAccess, section.Content);
-            },
-            section =>
-            {
-                Assert.Equal("Appearance", section.Title);
-                Assert.Same(settings.Appearance, section.Content);
             });
 
         // The master-detail layout starts on the first section.
@@ -239,12 +231,12 @@ public sealed class WorkspacesSettingsViewModelTests
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
         var settings = new WorkspacesSettingsViewModel(service);
 
-        settings.SelectedSection = settings.Sections[2];
-        Assert.Equal("Appearance", settings.SelectedSection.Title);
+        settings.SelectedSection = settings.Sections[1];
+        Assert.Equal("Remote access", settings.SelectedSection.Title);
 
         // ListBox clears SelectedItem to null transiently; keep the last real selection.
         settings.SelectedSection = null!;
-        Assert.Equal("Appearance", settings.SelectedSection.Title);
+        Assert.Equal("Remote access", settings.SelectedSection.Title);
     }
 
     [AvaloniaFact]
@@ -259,20 +251,6 @@ public sealed class WorkspacesSettingsViewModelTests
         // Blank override projects as null, not an empty string.
         settings.RemoteAccess.UserComputerProfileOverride = "   ";
         Assert.Null(settings.BuildConfiguration().UserComputerProfileOverride);
-    }
-
-    [AvaloniaFact]
-    public void Settings_Theme_DelegatesToAppearanceSection()
-    {
-        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
-        var settings = new WorkspacesSettingsViewModel(service);
-
-        settings.Theme = "FluentDark";
-        Assert.Equal("FluentDark", settings.Appearance.Theme);
-
-        settings.Appearance.Theme = "FluentLight";
-        Assert.Equal("FluentLight", settings.Theme);
-        Assert.Equal("FluentLight", settings.BuildConfiguration().Visual.Theme);
     }
 
     [AvaloniaFact]

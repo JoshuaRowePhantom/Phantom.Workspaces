@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using System.Collections.Generic;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -100,6 +101,74 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.True(handled);
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("hello from return", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToNewQueue()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
+        {
+            InputText = "hello new queue",
+        };
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Enter, KeyModifiers.Control);
+
+        Assert.True(handled);
+        Assert.Equal(2, chat.InputQueues.Count);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_CtrlEnter_InFormattedMode_Submits()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
+        {
+            InputText = "multi-line submit",
+        };
+        viewModel.DefaultComposer.EnterFormattedMode();
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Enter, KeyModifiers.Control);
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "ctrl+enter formatted submission to complete");
+
+        Assert.True(handled);
+        Assert.Equal(2, chat.History.Count);
+    }
+
+    [Fact]
+    public async Task PlaceholderText_DefaultComposer_ShowsShortcuts()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+
+        Assert.Contains("Enter", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.PlaceholderText);
+    }
+
+    [Fact]
+    public async Task PlaceholderText_DefaultComposer_FormattedMode_ShowsFormattedShortcuts()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.DefaultComposer.EnterFormattedMode();
+
+        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Esc", viewModel.DefaultComposer.PlaceholderText);
+        Assert.DoesNotContain("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
+    }
+
+    [Fact]
+    public async Task PlaceholderText_ChangesWhenFormattedModeChanges()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var changedProperties = new List<string?>();
+        viewModel.DefaultComposer.PropertyChanged += (_, e) => changedProperties.Add(e.PropertyName);
+
+        viewModel.DefaultComposer.EnterFormattedMode();
+
+        Assert.Contains(nameof(viewModel.DefaultComposer.PlaceholderText), changedProperties);
     }
 
     private static async Task WaitForConditionAsync(

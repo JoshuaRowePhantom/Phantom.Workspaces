@@ -1,6 +1,8 @@
 using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -23,6 +25,12 @@ public struct CreateAgentChatRequest
     /// </summary>
     public IToolResourceFactory? ToolResourceFactory { get; init; }
 
+    /// <summary>
+    /// Parameter values to substitute into the agent manifest template before resolving tool resources.
+    /// Only used when <see cref="AgentManifest"/> is set.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Parameters { get; init; }
+
     public AgentServices? AgentServices { get; init; }
 
     /// <summary>
@@ -31,4 +39,13 @@ public struct CreateAgentChatRequest
     /// construction fails.
     /// </summary>
     public ITrustProfileProvider? TrustProfileProvider { get; init; }
+
+    /// <summary>
+    /// The scheduler used to run UI-bound work (history mutations, running-item updates, the
+    /// processing loop).  Capture <see cref="TaskScheduler.FromCurrentSynchronizationContext"/>
+    /// on the UI thread and pass it here whenever the agent chat is constructed off the UI thread
+    /// (e.g. inside <c>Task.Run</c>), so the foreground scheduler is always the UI scheduler
+    /// regardless of which thread builds the request.
+    /// </summary>
+    public TaskScheduler? ForegroundScheduler { get; init; }
 }

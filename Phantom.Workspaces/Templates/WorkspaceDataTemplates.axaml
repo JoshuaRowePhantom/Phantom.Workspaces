@@ -1,6 +1,7 @@
 <DataTemplates xmlns="https://github.com/avaloniaui"
                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                xmlns:vm="using:Phantom.Workspaces.ViewModels"
+               xmlns:converters="using:Phantom.Workspaces.Converters"
                xmlns:templates="using:Phantom.Workspaces.Templates"
                xmlns:agentControls="using:Phantom.Workspaces.Agent.Gui.Controls"
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
@@ -106,8 +107,47 @@
         <templates:StartAgentSessionOnProfileView />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:AgentManifestLaunchpadViewModel">
+        <templates:AgentManifestLaunchpadView />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:AgentManifestEditorViewModel">
+        <templates:AgentManifestEditorView />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel">
-        <agentControls:AgentChatEditorControl DataContext="{Binding Agent}" />
+        <Panel>
+            <!-- Loading state -->
+            <StackPanel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Loading}}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12">
+                <TextBlock Text="Loading agent session…"
+                           Classes="muted"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Ready state: wrap in Panel so IsVisible binds to AgentSessionWorkspaceTabViewModel,
+                 not to the AgentViewModel set as DataContext on the inner control -->
+            <Panel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Ready}}">
+                <agentControls:AgentChatEditorControl DataContext="{Binding Agent}" />
+            </Panel>
+
+            <!-- Failed state -->
+            <StackPanel IsVisible="{Binding State, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:AgentTabState.Failed}}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12"
+                        MaxWidth="400">
+                <TextBlock Text="Failed to load agent session"
+                           Classes="heading"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding LoadError}"
+                           Classes="muted"
+                           TextWrapping="Wrap"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+        </Panel>
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
@@ -185,6 +225,24 @@
                      Text="{Binding Value, Mode=TwoWay}"
                      IsVisible="{Binding IsEditMode}"
                      Classes="workspace-field-value" />
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:BooleanToggleFieldEditorViewModel">
+        <Grid Classes="workspace-field-row"
+              ColumnDefinitions="200,*"
+              RowDefinitions="Auto">
+            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <TextBlock Grid.Column="1"
+                       Text="{Binding DisplayValue}"
+                       Classes="workspace-field-read-value"
+                       IsVisible="{Binding IsReadMode}" />
+            <ToggleSwitch Grid.Column="1"
+                          IsChecked="{Binding Value, Mode=TwoWay}"
+                          OnContent="true"
+                          OffContent="false"
+                          IsVisible="{Binding IsEditMode}"
+                          Classes="workspace-field-value" />
         </Grid>
     </DataTemplate>
 
@@ -395,12 +453,6 @@
         <templates:EntityBrowserWorkspaceTabView />
     </DataTemplate>
 
-    <DataTemplate DataType="vm:BrowserWorkspaceTabViewModel">
-        <StackPanel Classes="workspace-template-browser-root">
-            <TextBlock Text="Browser" Classes="heading" />
-            <TextBlock Text="{Binding Url}" />
-        </StackPanel>
-    </DataTemplate>
 
     <DataTemplate DataType="vm:WorkspacePaneViewModel">
         <Grid RowDefinitions="Auto,*">
@@ -459,5 +511,35 @@
                 </ContentControl>
             </Grid>
         </Grid>
+    </DataTemplate>
+    <!-- Tab header templates -->
+    <DataTemplate DataType="vm:TabHeaderViewModel">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+            <ItemsControl ItemsSource="{Binding Items}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="2" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.DataTemplates>
+                    <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
+                        <TextBlock Text="{Binding Icon}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+                        <TextBlock Text="🧠"
+                                   Classes="agent-chat-status-line-brain"
+                                   Classes.thinking="{Binding IsRunning}" />
+                    </DataTemplate>
+                    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
+                        <!-- Always occupies space; opacity hides it when there is no unread notification -->
+                        <TextBlock Text="❗"
+                                   Foreground="Red"
+                                   FontWeight="Bold"
+                                   Opacity="{Binding HasUnread, Converter={x:Static converters:BoolToOpacityConverter.Instance}}" />
+                    </DataTemplate>
+                </ItemsControl.DataTemplates>
+            </ItemsControl>
+            <TextBlock Text="{Binding Title}" />
+        </StackPanel>
     </DataTemplate>
 </DataTemplates>

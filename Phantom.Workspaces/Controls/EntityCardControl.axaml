@@ -35,7 +35,8 @@
                                             Classes="workspace-entity-badge-button"
                                             Classes.workspace-entity-badge-active="{Binding IsActive}"
                                             Command="{Binding $parent[ItemsControl].DataContext.ToggleInterestCommand}"
-                                            CommandParameter="{Binding}" />
+                                            CommandParameter="{Binding}"
+                                            Tapped="OnInteractiveChildTapped" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
@@ -62,7 +63,8 @@
                                 ToolTip.Tip="Toggle edit mode"
                                 Classes="workspace-entity-shortcut-button"
                                 IsVisible="{Binding ShowEditIndicator}"
-                                Command="{Binding ToggleEditModeCommand}" />
+                                Command="{Binding ToggleEditModeCommand}"
+                                Tapped="OnInteractiveChildTapped" />
                         <ItemsControl IsVisible="{Binding HasShortcuts}"
                                       IsEnabled="{Binding AreShortcutsEnabled}"
                                       ItemsSource="{Binding Shortcuts}">
@@ -78,22 +80,26 @@
                                             IsEnabled="{Binding IsEnabled}"
                                             Classes="workspace-entity-shortcut-button"
                                             Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"
-                                            CommandParameter="{Binding}" />
+                                            CommandParameter="{Binding}"
+                                            Tapped="OnInteractiveChildTapped" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <Button Content="{Binding JsonButtonText}"
                                 Classes="workspace-edit-indicator-button"
                                 IsVisible="{Binding ShowJsonButton}"
-                                Command="{Binding ToggleJsonViewCommand}" />
+                                Command="{Binding ToggleJsonViewCommand}"
+                                Tapped="OnInteractiveChildTapped" />
                         <Button Content="💾"
                                 Classes="workspace-edit-action-button"
                                 IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding SaveEditModeCommand}" />
+                                Command="{Binding SaveEditModeCommand}"
+                                Tapped="OnInteractiveChildTapped" />
                         <Button Content="✖"
                                 Classes="workspace-edit-action-button"
                                 IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding DiscardEditModeCommand}" />
+                                Command="{Binding DiscardEditModeCommand}"
+                                Tapped="OnInteractiveChildTapped" />
                     </StackPanel>
                 </Grid>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
@@ -101,7 +107,8 @@
                 <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
                          IsVisible="{Binding ShowRawJsonEditor}"
                          IsReadOnly="{Binding IsRawJsonReadOnly}"
-                         Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor" />
+                         Classes="workspace-field-value workspace-markdown-content workspace-json-schema-editor"
+                         Tapped="OnInteractiveChildTapped" />
                 <TextBlock Text="{Binding Validation.StatusText}"
                            IsVisible="{Binding ShowEditActions}"
                            Classes="workspace-validation-status"

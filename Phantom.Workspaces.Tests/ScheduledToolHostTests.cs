@@ -46,6 +46,22 @@ public sealed class ScheduledToolHostTests
         }
     }
 
+    private sealed class BlockingTool : IWorkspaceTool
+    {
+        private readonly TaskCompletionSource started;
+
+        public BlockingTool(TaskCompletionSource started) => this.started = started;
+
+        public string ToolType => "stub";
+
+        public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
+        {
+            this.started.SetResult();
+            await Task.Delay(Timeout.Infinite, context.CancellationToken);
+            return new WorkspaceToolExecutionResult();
+        }
+    }
+
     private static readonly string[] HostName = ["computer", "this-machine"];
 
     private static async Task AddEntityAsync(IDataAccessLayer dataAccessLayer, Guid id, string json)
@@ -95,6 +111,27 @@ public sealed class ScheduledToolHostTests
               "entity-types": ["entity", "tool-relationship"],
               "names": [["tool-relationships","test"]],
               "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] }
+            }
+            """);
+    }
+
+    private static async Task AddRelationshipAsync(
+        IDataAccessLayer dataAccessLayer,
+        Guid relationshipId,
+        Guid toolId,
+        Guid scheduleId,
+        Guid hostId,
+        string nameSuffix,
+        bool paused)
+    {
+        var pausedJson = paused ? ", \"paused\": true" : string.Empty;
+        await AddEntityAsync(dataAccessLayer, relationshipId,
+            $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "tool-relationship"],
+              "names": [["tool-relationships","{{nameSuffix}}"]],
+              "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{hostId}}"] }{{pausedJson}}
             }
             """);
     }
@@ -203,6 +240,116 @@ public sealed class ScheduledToolHostTests
         Assert.Equal(1, await host.RunDueToolsAsync(new EntityId(hostId), HostName));
         Assert.Equal(0, await host.RunDueToolsAsync(new EntityId(hostId), HostName));
         Assert.Equal(1, tool.RunCount);
+    }
+
+    [Fact]
+    public async Task RunDueTools_WhenHostPaused_DoesNotRunAnyTool()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var tool = new RecordingTool();
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());
+
+        // Persist the host stop-all/pause flag on the profile entity through the real write path.
+        await new ScheduledToolPauseStateService(dataAccessLayer, host).SetPausedAsync(new EntityId(hostId), paused: true);
+
+        var ranCount = await host.RunDueToolsAsync(new EntityId(hostId), HostName);
+
+        Assert.Equal(0, ranCount);
+        Assert.Equal(0, tool.RunCount);
+    }
+
+    [Fact]
+    public async Task RunDueTools_WhenRelationshipPaused_SkipsThatRelationshipButRunsOthers()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var runnableRelationshipId = Guid.NewGuid();
+        var pausedRelationshipId = Guid.NewGuid();
+
+        // The first relationship is runnable; add a second paused relationship bound to the same tool.
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, runnableRelationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+        await AddRelationshipAsync(dataAccessLayer, pausedRelationshipId, toolId, scheduleId, hostId, "paused", paused: true);
+
+        var tool = new RecordingTool();
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());
+
+        var ranCount = await host.RunDueToolsAsync(new EntityId(hostId), HostName);
+
+        // Only the non-paused relationship ran.
+        Assert.Equal(1, ranCount);
+        Assert.Equal(1, tool.RunCount);
+    }
+
+    [Fact]
+    public async Task RunDueTools_RecordsLastStartedOnRelationship_AndUsesItForDueCheck()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        // Hourly interval; the fixed clock does not advance between runs.
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "01:00:00Z", "days-of-week": [], "start-at": [] }""");
+
+        var tool = new RecordingTool();
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());
+
+        Assert.Equal(1, await host.RunDueToolsAsync(new EntityId(hostId), HostName));
+
+        // The host stamped last-started on the relationship before the run.
+        var relationship = Assert.Single(await QueryByTypeAsync(dataAccessLayer, "tool-relationship"));
+        Assert.True(relationship.TryGetProperty("last-started", out var lastStarted));
+        Assert.Equal(JsonValueKind.String, lastStarted.ValueKind);
+
+        // The recorded last-started keeps the hourly schedule from running again at the same clock.
+        Assert.Equal(0, await host.RunDueToolsAsync(new EntityId(hostId), HostName));
+        Assert.Equal(1, tool.RunCount);
+    }
+
+    [Fact]
+    public async Task StopAllRunningExecutions_CancelsRunningTool()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tool = new BlockingTool(started);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());
+
+        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName);
+
+        // Deterministically wait until the tool has started and is registered as running.
+        await started.Task;
+        host.StopAllRunningExecutions();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
     }
 
     private static async Task<IReadOnlyList<JsonElement>> QueryByTypeAsync(IDataAccessLayer dataAccessLayer, string entityType)

@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
+             xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatEditorControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel">
@@ -11,11 +12,15 @@
         <KeyBinding Gesture="Ctrl+L"
                    Command="{Binding RequestOpenLogWindowCommand}" />
         <!-- Interrupt / queue hold work from anywhere in the agent chat (input box or output),
-             so they are bound on this control which contains both. -->
-        <KeyBinding Gesture="Cancel" Command="{Binding InterruptCommand}" />
+             so they are bound on this control which contains both.
+             Windows turns the Pause/Break key into VK_CANCEL (Key.Cancel) whenever Ctrl is held, so
+             Ctrl+Break and Ctrl+Shift+Break are matched as Ctrl+Cancel / Ctrl+Shift+Cancel — binding
+             them as "Cancel" or "Ctrl+Shift+Pause" never fires because the real key is Cancel and the
+             Ctrl modifier is present. -->
+        <KeyBinding Gesture="Ctrl+Cancel" Command="{Binding InterruptCommand}" />
         <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
         <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Ctrl+Shift+Pause" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
     </UserControl.KeyBindings>
 
     <UserControl.Resources>
@@ -36,28 +41,53 @@
                         <TextBlock Classes="agent-chat-status-line-brain"
                                    FontFamily="Segoe UI Emoji"
                                    Text="🧠"
-                                   IsVisible="{Binding StatusLine.IsThinking}"/>
+                                   VerticalAlignment="Center"
+                                   Classes.thinking="{Binding StatusLine.IsThinking}"/>
                         <TextBlock Classes="agent-chat-status-line-value"
                                    Text="{Binding StatusLine.ModelDisplay}"
+                                   VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasModel}"/>
                         <TextBlock Classes="agent-chat-status-line-separator"
                                    Text="•"
+                                   VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasProvider}"/>
                         <TextBlock Classes="agent-chat-status-line-label"
                                    Text="{Binding StatusLine.ProviderDisplay}"
+                                   VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasProvider}"/>
                         <TextBlock Classes="agent-chat-status-line-separator"
                                    Text="•"
+                                   VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasTokens}"/>
                         <TextBlock Classes="agent-chat-status-line-label"
                                    Text="{Binding StatusLine.TokensDisplay}"
+                                   VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasTokens}"/>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   VerticalAlignment="Center"
+                                   Opacity="{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"/>
+                        <CheckBox Classes="agent-chat-autoscroll-toggle"
+                                  Content="Auto-scroll"
+                                  VerticalAlignment="Center"
+                                  IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
+                                  IsHitTestVisible="{Binding Agent.AutoScrollDisabled}"
+                                  Opacity="{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"/>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   VerticalAlignment="Center" />
+                        <Button Classes="agent-chat-status-line-reasoning-toggle"
+                                VerticalAlignment="Center"
+                                Command="{Binding Agent.ToggleReasoningVisibilityCommand}"
+                                ToolTip.Tip="Toggle reasoning text visibility (Ctrl+T)">
+                            <TextBlock Text="{Binding StatusLine.ReasoningIndicatorText}"
+                                       Classes.muted="{Binding !Agent.IsReasoningVisible}" />
+                        </Button>
                     </StackPanel>
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"/>
-                <controls:AgentChatOutputControl DataContext="{Binding Agent}"
-                                                OutputMode="SelectableTextBox"/>
+                <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </DataTemplate>
         <DataTemplate DataType="vm:AgentChatDetailsViewModel">

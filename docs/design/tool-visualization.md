@@ -8,14 +8,18 @@ render rich, tool-specific output for:
 1. embedded Phantom.Workspaces tools, and
 2. external tools surfaced by providers such as GitHub Copilot.
 
-The layer must work for both chat output containers:
+The layer renders into the browser-hosted chat output (a single HTML surface; see
+[agent-gui.md](agent-gui.md)). It preserves the existing fallback behavior for any content that has no
+special visualizer. Every rendered `AIContent` item must also expose a clickable inline inspector
+affordance that opens a full content visualization (including metadata and raw payload details).
 
-- SelectableTextBox mode
-- FlowDocument mode
-
-and preserve the existing fallback behavior for any content that has no special visualizer.
-Every rendered `AIContent` item must also expose a clickable inline inspector affordance that opens a
-full content visualization (including metadata and raw payload details).
+> **Note (superseded by #32):** Earlier revisions of this document targeted two distinct Avalonia
+> output containers — a `SelectableTextBlock` ("SelectableTextBox") mode and a `FlowDocument` mode.
+> Both renderers have been removed in favor of a single browser-hosted HTML renderer. References below
+> to `containerType`, `typeof(SelectableTextBlock)`/`typeof(FlowDocument)`, `InlineUIContainer`/
+> `BlockUIContainer`, and the per-container model files (`SelectableTextBlockChatOutputModels.cs`,
+> `ChatMessageDocumentModel.cs`) are historical: the equivalent behavior is now expressed as HTML
+> emitted through `ChatOutputHtmlRenderer`/`ChatOutputHtmlModel` and applied via the WebView bridge.
 
 ## Current state
 

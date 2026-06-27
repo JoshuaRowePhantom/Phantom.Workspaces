@@ -44,7 +44,6 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
             configuration.RemoteHosting,
             configuration.DevTunnel,
             configuration.UserComputerProfileOverride);
-        this.Appearance = new AppearanceSettingsViewModel(configuration.Visual.Theme);
 
         this.Repository.PropertyChanged += this.OnSectionChanged;
         this.RemoteAccess.PropertyChanged += this.OnSectionChanged;
@@ -53,7 +52,6 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         {
             new("Repository", this.Repository),
             new("Remote access", this.RemoteAccess),
-            new("Appearance", this.Appearance),
         };
 
         // When opened from the running application, surface the live profile theme/debugging controls
@@ -81,9 +79,6 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
 
     /// <summary>Remote-hosting and dev tunnel settings.</summary>
     public RemoteAccessSettingsViewModel RemoteAccess { get; }
-
-    /// <summary>Appearance/visual settings.</summary>
-    public AppearanceSettingsViewModel Appearance { get; }
 
     /// <summary>
     /// Live profile theme/debugging section, present only when the dialog is opened from the running
@@ -113,13 +108,6 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>The selected visual theme.</summary>
-    public string Theme
-    {
-        get => this.Appearance.Theme;
-        set => this.Appearance.Theme = value;
-    }
-
     /// <summary>Whether all sections are valid and the configuration can be saved.</summary>
     public bool CanSave => this.Repository.IsValid && this.RemoteAccess.IsValid;
 
@@ -129,7 +117,6 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         DataAccess = this.Repository.ToProfile(),
         RemoteHosting = this.RemoteAccess.ToRemoteHostingSettings(),
         DevTunnel = this.RemoteAccess.ToDevTunnelConfiguration(this.baseConfiguration.DevTunnel),
-        Visual = this.baseConfiguration.Visual with { Theme = this.Appearance.Theme },
         Update = this.Updates is null
             ? this.baseConfiguration.Update
             : this.Updates.ToSettings(this.baseConfiguration.Update),

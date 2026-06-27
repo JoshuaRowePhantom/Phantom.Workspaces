@@ -18,9 +18,11 @@ public class WebViewModel : WorkspaceTabViewModel
     private string currentUrl = string.Empty;
 
     private readonly IWorkspaceTabService? tabService;
+    private readonly bool titleFixed;
 
-    public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null)
+    public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null, bool titleFixed = false)
     {
+        this.titleFixed = titleFixed;
         this.addressBarUrl = initialUrl;
         this.currentUrl = initialUrl;
         this.sourceUri = Uri.TryCreate(initialUrl, UriKind.Absolute, out var uri) ? uri : null;
@@ -51,11 +53,9 @@ public class WebViewModel : WorkspaceTabViewModel
         get => this.canGoBack;
         set
         {
-            System.Diagnostics.Debug.WriteLine($"[WebViewModel] CanGoBack set to {value}");
             if (this.SetProperty(ref this.canGoBack, value))
             {
                 (this.GoBackCommand as RelayCommand)?.RaiseCanExecuteChanged();
-                System.Diagnostics.Debug.WriteLine($"[WebViewModel] Raised CanExecuteChanged for GoBackCommand");
             }
         }
     }
@@ -65,11 +65,9 @@ public class WebViewModel : WorkspaceTabViewModel
         get => this.canGoForward;
         set
         {
-            System.Diagnostics.Debug.WriteLine($"[WebViewModel] CanGoForward set to {value}");
             if (this.SetProperty(ref this.canGoForward, value))
             {
                 (this.GoForwardCommand as RelayCommand)?.RaiseCanExecuteChanged();
-                System.Diagnostics.Debug.WriteLine($"[WebViewModel] Raised CanExecuteChanged for GoForwardCommand");
             }
         }
     }
@@ -107,14 +105,12 @@ public class WebViewModel : WorkspaceTabViewModel
 
     private void GoBack()
     {
-        System.Diagnostics.Debug.WriteLine($"[WebViewModel] GoBack called, CanGoBack={this.CanGoBack}");
         // WebView control should handle this via binding
         this.RaiseNavigationRequested(NavigationDirection.Back);
     }
 
     private void GoForward()
     {
-        System.Diagnostics.Debug.WriteLine($"[WebViewModel] GoForward called, CanGoForward={this.CanGoForward}");
         // WebView control should handle this via binding
         this.RaiseNavigationRequested(NavigationDirection.Forward);
     }
@@ -143,13 +139,15 @@ public class WebViewModel : WorkspaceTabViewModel
         this.NavigationRequested?.Invoke(this, direction);
     }
 
+    public void RaiseCloseTab()
+    {
+        this.tabService?.CloseTab(this);
+    }
+
     public async void RaiseOpenNewWindow(string url)
     {
-        System.Diagnostics.Debug.WriteLine($"[WebViewModel] RaiseOpenNewWindow: {url}");
-        
         if (this.tabService == null)
         {
-            System.Diagnostics.Debug.WriteLine($"[WebViewModel] No tab service available");
             return;
         }
         
@@ -161,13 +159,11 @@ public class WebViewModel : WorkspaceTabViewModel
             DockRegion = this.DockRegion, // Open in same region
         };
 
-        System.Diagnostics.Debug.WriteLine($"[WebViewModel] Opening new tab via service: {newTab.Id}");
         await this.tabService.OpenTabAsync(newTab);
     }
 
     public void UpdateCurrentUrl(string url)
     {
-        System.Diagnostics.Debug.WriteLine($"[WebViewModel] UpdateCurrentUrl called: {url}");
         this.AddressBarUrl = url;
         this.currentUrl = url;
         UpdateTooltip();
@@ -175,9 +171,11 @@ public class WebViewModel : WorkspaceTabViewModel
     
     public void SetPageTitle(string pageTitle)
     {
-        System.Diagnostics.Debug.WriteLine($"[WebViewModel] SetPageTitle called: {pageTitle}");
         this.fullTitle = pageTitle;
-        this.Title = pageTitle; // Don't truncate here - let WorkspaceDocument handle it
+        if (!this.titleFixed)
+        {
+            this.Title = pageTitle;
+        }
         UpdateTooltip();
     }
     

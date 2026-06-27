@@ -67,6 +67,15 @@ public sealed class AgentChat : IAsyncDisposable
     private CancellationTokenSource? activeRunCancellation;
     private int disposeStarted;
 
+    // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
+    // are injected into the active PartialResponseConflator so they appear at the tool-result
+    // boundary where they were sent to the agent, not before or after the full turn.
+    // When no run is active, steering adds directly to History.
+    // Guarded by steeringLock because the Copilot path fires SteeringMessageForwarded from
+    // the UI thread while the processing loop runs on its own task.
+    private PartialResponseConflator? activeConflator;
+    private readonly object steeringLock = new();
+
     // Serializes foreground work when the chat is created without a synchronization context (for
     // example in tests or non-GUI hosts). In production the captured UI synchronization context
     // already runs foreground work one-at-a-time; this provides the same single-threaded guarantee
@@ -89,9 +98,10 @@ public sealed class AgentChat : IAsyncDisposable
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
        this.ownedResources = request.OwnedResources?.ToList() ?? [];
        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
-       this.foregroundScheduler = SynchronizationContext.Current is not null
-           ? TaskScheduler.FromCurrentSynchronizationContext()
-           : this.foregroundSchedulerPair.ExclusiveScheduler;
+       this.foregroundScheduler = request.ForegroundScheduler
+           ?? (SynchronizationContext.Current is not null
+               ? TaskScheduler.FromCurrentSynchronizationContext()
+               : this.foregroundSchedulerPair.ExclusiveScheduler);
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
@@ -128,9 +138,12 @@ public sealed class AgentChat : IAsyncDisposable
 
        this.agentDefinition = resolvedAgentDefinition;
        var clientInfo = this.request.ClientOverride is not null
-           ? (this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : AgentFactory.CreateChatClient(resolvedAgentDefinition, this.request.AgentServices);
-       var resolvedClient = clientInfo.Item1;
+           ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
+           : AgentFactory.CreateChatClient(
+               resolvedAgentDefinition,
+               this.request.AgentServices,
+               queueManager: this.queueManager);
+       var resolvedClient = clientInfo.ChatClient;
        var useProvidedChatClientAsIs = ResolveUseProvidedChatClientAsIs(
            this.request.ClientOverride is not null,
            resolvedClient);
@@ -140,7 +153,21 @@ public sealed class AgentChat : IAsyncDisposable
        }
 
        this.client = resolvedClient;
-       this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.Item2;
+       this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
+
+       // Steering messages are injected into the model call deep in the chat-client pipeline
+       // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
+       // Copilot session by CopilotSdkChatClient). Subscribe so those injected messages are also
+       // recorded in the visible chat history (issue #17).
+       if (resolvedClient.GetService(typeof(ToolResultSteeringMiddleware)) is ToolResultSteeringMiddleware steeringMiddleware)
+       {
+           steeringMiddleware.MessagesInjected += injected => this.AppendSteeringMessagesToHistory(injected);
+       }
+
+       if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
+       {
+           copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
+       }
 
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)
        {
@@ -188,6 +215,22 @@ public sealed class AgentChat : IAsyncDisposable
        if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
        {
            this.persistenceProvider.SetAgentSessionId(frameworkSession, this.request.AgentSessionId);
+       }
+
+       // Resume the GitHub Copilot CLI session (and its model-visible history) after a restart by
+       // replaying the stored SDK session id, and keep the persisted id current as new sessions are
+       // established (issue #3).
+       if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
+       {
+           var restoredCopilotSdkSessionId = restoredAgent?.CopilotSdkSessionId;
+           if (!string.IsNullOrWhiteSpace(restoredCopilotSdkSessionId))
+           {
+               copilotSdkClient.SetResumeSessionId(restoredCopilotSdkSessionId);
+               this.persistenceProvider.SetCopilotSdkSessionId(restoredCopilotSdkSessionId);
+           }
+
+           copilotSdkClient.SessionEstablished += establishedSessionId =>
+               this.persistenceProvider.SetCopilotSdkSessionId(establishedSessionId);
        }
 
        var resolvedAgentSessionId = this.persistenceProvider.ExtractAgentSessionId(frameworkSession);
@@ -432,6 +475,57 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
+    // Steering messages injected mid-run must not be added to History immediately: the streaming
+    // assistant response is still in RunningItems, so adding the steering message now would place
+    // it before the assistant turn in the History list. Buffer the items and flush them to History
+    // in RunProcessLoopAsync after CompleteRunningItem moves the assistant turn to History.
+    private void AppendSteeringMessagesToHistory(IReadOnlyList<ChatMessage> requestMessages)
+    {
+        var items = new List<AgentChatHistoryItem>();
+        foreach (var message in requestMessages)
+        {
+            if (message.Role != ChatRole.User)
+            {
+                continue;
+            }
+
+            items.Add(new AgentChatHistoryItem
+            {
+                Role = ChatRole.User,
+                Contents = message.Contents.ToArray(),
+            });
+        }
+
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        PartialResponseConflator? conflator;
+        lock (this.steeringLock)
+        {
+            conflator = this.activeConflator;
+        }
+
+        if (conflator is not null)
+        {
+            // Active run: inject into the conflator at the current update-count boundary so the
+            // steering message appears at the tool-result boundary where it was sent to the agent.
+            foreach (var item in items)
+            {
+                conflator.InjectInterstitialAfterCurrentUpdates(item);
+            }
+        }
+        else
+        {
+            // No active run — add directly to history.
+            foreach (var item in items)
+            {
+                this.AddHistoryItem(item);
+            }
+        }
+    }
+
     public void RegisterOwnedResource(IAsyncDisposable resource)
     {
         ArgumentNullException.ThrowIfNull(resource);
@@ -525,17 +619,23 @@ public sealed class AgentChat : IAsyncDisposable
     // messages is inherently O(n) per update (O(n^2) over a run), so the list is built on a background
     // task; the running-item population then runs as a separate task on the captured foreground
     // scheduler (the UI thread in production), so the UI-bound collections are only mutated there.
+    // To minimise downstream collection churn, CoalesceAsync re-uses the cached AgentChatHistoryItem
+    // reference from the previous frame whenever an item's content is structurally unchanged.  This
+    // lets SyncItems' reference-equality guard suppress Replace notifications (and the HTML re-render
+    // work they would trigger) for every item that did not actually change in this streaming tick.
     private sealed class PartialResponseConflator
     {
         private readonly AgentChat owner;
         private readonly AgentChatRunningItem runningItem;
         private readonly TaskScheduler foregroundScheduler;
         private readonly List<AgentResponseUpdate> updates = new();
+        private readonly List<(int AfterUpdateCount, AgentChatHistoryItem Item)> interstitials = new();
         private readonly object gate = new();
         private long version;
         private long processedVersion;
         private bool workerRunning;
         private Task worker = Task.CompletedTask;
+        private AgentChatHistoryItem[] cachedItems = [];
 
         public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem)
         {
@@ -550,6 +650,32 @@ public sealed class AgentChat : IAsyncDisposable
             lock (this.gate)
             {
                 this.updates.Add(update);
+                this.version++;
+                if (!this.workerRunning)
+                {
+                    this.workerRunning = true;
+                    startWorker = true;
+                }
+            }
+
+            if (startWorker)
+            {
+                this.worker = this.RunWorkerAsync();
+            }
+        }
+
+        /// <summary>
+        /// Records a steering message to appear at the current update-count boundary in the
+        /// running item. Steering injected at update N will appear after the items coalesced
+        /// from updates 0..N-1 and before those from N onwards — i.e. at the tool-result boundary
+        /// where it was sent to the agent.
+        /// </summary>
+        internal void InjectInterstitialAfterCurrentUpdates(AgentChatHistoryItem item)
+        {
+            bool startWorker = false;
+            lock (this.gate)
+            {
+                this.interstitials.Add((this.updates.Count, item));
                 this.version++;
                 if (!this.workerRunning)
                 {
@@ -579,6 +705,7 @@ public sealed class AgentChat : IAsyncDisposable
             while (true)
             {
                 AgentResponseUpdate[] snapshot;
+                (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitialSnapshot;
                 long targetVersion;
                 lock (this.gate)
                 {
@@ -590,10 +717,18 @@ public sealed class AgentChat : IAsyncDisposable
 
                     targetVersion = this.version;
                     snapshot = this.updates.ToArray();
+                    interstitialSnapshot = [..this.interstitials];
                 }
 
+                // Capture the current cached items before the background task so that the
+                // background work does not race with a foreground assignment to cachedItems.
+                var previousItems = this.cachedItems;
+
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot));
+
+                // Store the newly-coalesced result so the next cycle can reuse stable references.
+                this.cachedItems = chatHistoryItems;
 
                 // Populate the running item on the foreground scheduler so the UI-bound collection is
                 // only ever mutated there, even though the producer loop may run off the foreground.
@@ -610,33 +745,146 @@ public sealed class AgentChat : IAsyncDisposable
             }
         }
 
-        private static async Task<AgentChatHistoryItem[]> CoalesceAsync(AgentResponseUpdate[] snapshot)
+        private static async Task<AgentChatHistoryItem[]> CoalesceAsync(
+            AgentResponseUpdate[] snapshot,
+            AgentChatHistoryItem[] previous,
+            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials)
         {
-            var chatResponseUpdates = snapshot.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
+            AgentChatHistoryItem[] newItems;
+
+            if (interstitials.Length == 0)
+            {
+                // Fast path: no interstitials, single pass.
+                newItems = await CoalesceSegmentAsync(snapshot);
+            }
+            else
+            {
+                // Interstitials mark "inject this item after the first N streaming updates."
+                // Split the snapshot at each boundary, coalesce each segment independently,
+                // then interleave the injected items so they appear at the right position.
+                var result = new List<AgentChatHistoryItem>();
+                int segStart = 0;
+
+                foreach (var (afterCount, item) in interstitials.OrderBy(static x => x.AfterUpdateCount))
+                {
+                    int segEnd = Math.Min(afterCount, snapshot.Length);
+                    if (segEnd > segStart)
+                    {
+                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd]));
+                    }
+
+                    result.Add(item);
+                    segStart = segEnd;
+                }
+
+                // Tail: remaining updates after the last interstitial.
+                if (segStart < snapshot.Length)
+                {
+                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..]));
+                }
+
+                newItems = result.ToArray();
+            }
+
+            // Add a blank assistant placeholder if the full snapshot ends with a tool result,
+            // indicating the agent is still waiting to respond to the tool output.
+            var lastIsToolResult = snapshot.Length > 0
+                && snapshot[^1].Contents.OfType<ToolResultContent>().Any();
+            if (lastIsToolResult)
+            {
+                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant }];
+            }
+
+            // Re-use the cached reference for each item whose content is structurally unchanged.
+            // This lets AgentRunningItems.SyncItems' ReferenceEquals guard suppress unnecessary
+            // Replace notifications (and their downstream HTML re-render work) for stable items.
+            ReuseUnchangedItemReferences(previous, newItems);
+            return newItems;
+        }
+
+        // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
+        // returns an empty array; no assistant placeholder is added here (that is handled by the
+        // caller on the full snapshot).
+        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates)
+        {
+            if (updates.Length == 0)
+            {
+                return [];
+            }
+
+            var chatResponseUpdates = updates.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
             var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
 
-            var lastIsToolResult = snapshot.Length > 0
-                && Enumerable.OfType<ToolResultContent>(snapshot[^1].Contents).Any();
-            IEnumerable<AgentChatHistoryItem> finalItem = lastIsToolResult
-                ? new[]
-                {
-                    new AgentChatHistoryItem
-                    {
-                        Role = ChatRole.Assistant,
-                    },
-                }
-                : Array.Empty<AgentChatHistoryItem>();
-
             return chatResponse.Messages
-                .Reverse()
                 .Select(message => new AgentChatHistoryItem
                 {
                     Role = message.Role,
                     Contents = message.Contents.ToArray(),
                 })
-                .Reverse()
-                .Concat(finalItem)
                 .ToArray();
+        }
+
+        /// <summary>
+        /// For each position where the new item is structurally identical to the cached previous
+        /// item, replaces the new instance with the cached one so callers can use reference
+        /// equality to detect unchanged items cheaply.
+        /// </summary>
+        private static void ReuseUnchangedItemReferences(
+            AgentChatHistoryItem[] previous,
+            AgentChatHistoryItem[] current)
+        {
+            var reuseCount = Math.Min(previous.Length, current.Length);
+            for (var i = 0; i < reuseCount; i++)
+            {
+                if (AreStructurallyEqual(previous[i], current[i]))
+                {
+                    current[i] = previous[i];
+                }
+            }
+        }
+
+        internal static bool AreStructurallyEqual(AgentChatHistoryItem a, AgentChatHistoryItem b)
+        {
+            if (!string.Equals(a.Role.Value, b.Role.Value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var ac = a.Contents;
+            var bc = b.Contents;
+            if (ac.Count != bc.Count)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < ac.Count; i++)
+            {
+                if (!AreContentsEqual(ac[i], bc[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool AreContentsEqual(AIContent a, AIContent b)
+        {
+            if (a.GetType() != b.GetType())
+            {
+                return false;
+            }
+
+            return (a, b) switch
+            {
+                (TextContent ta, TextContent tb) => ta.Text == tb.Text,
+                (TextReasoningContent ra, TextReasoningContent rb) => ra.Text == rb.Text,
+                (FunctionCallContent ca, FunctionCallContent cb) =>
+                    ca.CallId == cb.CallId && ca.Name == cb.Name,
+                (FunctionResultContent ra, FunctionResultContent rb) => ra.CallId == rb.CallId,
+                (ErrorContent ea, ErrorContent eb) => ea.Message == eb.Message,
+                _ => false,
+            };
         }
     }
 
@@ -702,6 +950,11 @@ public sealed class AgentChat : IAsyncDisposable
                         this,
                         currentPartialTextResponseItem
                             ?? throw new InvalidOperationException("Running item was unexpectedly null while starting a run."));
+
+                    lock (this.steeringLock)
+                    {
+                        this.activeConflator = partialResponses;
+                    }
 
                     providerEnumerator = this.StartRun(
                             chatMessagesToSubmit.ToArray(),
@@ -789,6 +1042,12 @@ public sealed class AgentChat : IAsyncDisposable
                     // on a canceled read cannot block the agent. The in-flight read is observed before
                     // disposing to honor the async-enumerator contract.
                     _ = CleanUpRunAsync(providerEnumerator, pendingMoveNext, runCancellation);
+
+                    lock (this.steeringLock)
+                    {
+                        this.activeConflator = null;
+                    }
+
                     this.CompleteRunningItem(currentPartialTextResponseItem);
                 }
             }

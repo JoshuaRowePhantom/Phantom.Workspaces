@@ -16,22 +16,72 @@
     <Style Selector="TextBlock.agent-chat-status-line-brain">
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-brain.thinking">
+        <Setter Property="Opacity" Value="1" />
+        <Style.Animations>
+            <Animation IterationCount="INFINITE"
+                       Duration="0:0:1"
+                       PlaybackDirection="Alternate"
+                       Easing="SineEaseInOut">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="1" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.4" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-value">
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Value.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-label">
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Label.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-separator">
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Separator.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Margin" Value="8,0,8,0" />
+    </Style>
+
+    <Style Selector="Button.agent-chat-status-line-reasoning-toggle">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="Button.agent-chat-status-line-reasoning-toggle:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <Style Selector="CheckBox.agent-chat-autoscroll-toggle">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Label.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="4,0,0,0" />
+        <Setter Property="MinHeight" Value="0" />
+    </Style>
+
+    <Style Selector="CheckBox.agent-chat-autoscroll-toggle /template/ Border#NormalRectangle">
+        <Setter Property="Width" Value="10" />
+        <Setter Property="Height" Value="10" />
+        <Setter Property="CornerRadius" Value="2" />
     </Style>
 </Styles>

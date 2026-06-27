@@ -263,6 +263,41 @@ public sealed class InputQueueViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task CreateNewQueueCommand_CreatesQueueWithoutSending()
+    {
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "unsent text";
+
+        viewModel.CreateNewQueue();
+
+        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.Equal("unsent text", viewModel.InputText);
+        Assert.Empty(chat.History);
+        Assert.Equal(2, viewModel.Queues.Count);
+    }
+
+    [AvaloniaFact]
+    public async Task CreateNewQueueCommand_SelectsNewQueueAsActive()
+    {
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "first";
+        viewModel.CreateNewQueue();
+
+        viewModel.InputText = "second";
+        viewModel.SubmitToMostRecentQueue();
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "submission to most recent queue");
+
+        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.Equal("second", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static c => c.Text)));
+        Assert.Empty(viewModel.InputText);
+    }
+
+
+    [AvaloniaFact]
     public async Task ToggleHoldAllQueues_WhenAnyNotHeld_HoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();

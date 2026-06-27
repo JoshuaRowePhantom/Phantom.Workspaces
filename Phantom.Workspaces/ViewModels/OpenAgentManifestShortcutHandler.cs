@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Threading.Tasks;
-using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -26,43 +25,31 @@ public sealed class OpenAgentManifestShortcutHandler : ShortcutHandler
             && entityViewModel.IsEntityType("agent-manifest");
     }
 
-    public override async Task<bool> Handle(
+    public override Task<bool> Handle(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        if (entityViewModel.Data is not JsonElement agentManifestEntityData
-            || !agentManifestEntityData.TryGetProperty("manifest", out var manifestElement))
+        if (entityViewModel.Data is not JsonElement)
         {
-            return false;
+            return Task.FromResult(false);
         }
 
-        var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText());
-        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
-        var agentChat = await AgentFactory.CreateAgentChatAsync(
-            new CreateAgentChatRequest
-            {
-                AgentManifest = agentManifest,
-                ToolResourceFactory = agentServices.ToolResourceFactory,
-                AgentServices = agentServices,
-            });
-
-        try
+        var launchpadTab = new AgentManifestLaunchpadViewModel(
+            entityViewModel,
+            this.agentSessionShortcutContext,
+            this.openAgentSessionShortcutHandler,
+            mainWindowViewModel)
         {
-            var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-                mainWindowViewModel,
-                entityViewModel,
-                agentChat.AgentSessionId);
-            if (createdAgentSessionEntity is null)
-            {
-                return false;
-            }
+            Id = $"launchpad-{entityViewModel.EntityId}",
+            Title = entityViewModel.DisplayName,
+            DockRegion = "full",
+            Entity = entityViewModel,
+            TabHeader = TabHeaderViewModel.WithIcon("🚀", entityViewModel.DisplayName),
+        };
 
-            return await this.openAgentSessionShortcutHandler.Handle(mainWindowViewModel, shortcut, createdAgentSessionEntity);
-        }
-        finally
-        {
-            await agentChat.DisposeAsync();
-        }
+        _ = mainWindowViewModel.OpenTabAsync(launchpadTab);
+        return Task.FromResult(true);
     }
 }
+

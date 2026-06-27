@@ -1,0 +1,33 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Templates.AgentManifestEditorView"
+             x:DataType="vm:AgentManifestEditorViewModel">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+    <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,20">
+      <TextBlock Text="{Binding ManifestEntity.DisplayName}"
+                 FontSize="24"
+                 FontWeight="Bold" />
+    </StackPanel>
+
+    <TextBox Grid.Row="1"
+             Text="{Binding ManifestJson}"
+             AcceptsReturn="True"
+             AcceptsTab="True"
+             FontFamily="Consolas,Monospace"
+             TextWrapping="NoWrap" />
+
+    <StackPanel Grid.Row="2"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="10"
+                Margin="0,20,0,0">
+      <Button Content="Start Session"
+              Command="{Binding StartSessionCommand}" />
+      <Button Content="Save"
+              Command="{Binding SaveCommand}"
+              IsEnabled="{Binding IsDirty}"
+              Classes="accent" />
+    </StackPanel>
+  </Grid>
+</UserControl>

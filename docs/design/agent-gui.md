@@ -116,34 +116,36 @@ The control is split into two vertical zones stacked from top to bottom:
 
 The active items zone is never virtualized because there are at most a handful of items running at any time.
 
-#### Rendering primitive: `SelectableTextBlock` with `Inlines`
+#### Rendering primitive: browser-hosted HTML output
 
-Both zones render each item using an Avalonia `SelectableTextBlock` with an `InlineCollection`.
-This gives:
+Both zones are rendered inside a single browser-hosted surface — a native WebView (`ControllableWebViewControl` in `Phantom.Workspaces.Gui.Styles`) that loads a static HTML shell (`chat-output-shell.html`) and is driven through a bidirectional JavaScript bridge. This replaced the earlier `FlowDocument`/`SelectableTextBlock` Avalonia renderers, which did not scale to long conversations. The browser surface gives:
 
-- mouse-drag text selection and keyboard copy within each item
-- rich inline formatting via `Run` and `Span` elements: per-run `Foreground`, `FontWeight`, `FontStyle`, `FontSize`, `FontFamily`
-- streaming word-by-word updates by appending `Run` inlines in place rather than replacing the full text
+- mouse-drag text selection and keyboard copy, including cross-message selection (a native limitation of the previous per-item `SelectableTextBlock` model)
+- rich inline formatting and layout via ordinary HTML/CSS, themed through CSS custom properties injected by the host
+- streaming incremental updates by mutating only the changed DOM elements rather than rebuilding the view
 
-**Selection trade-off:** `SelectableTextBlock` provides per-item selection. Cross-item drag selection (spanning from one chat message to another) is not supported without discarding virtualization. This is the same model used by most chat applications. The trade-off is accepted: virtualization of history is required for long conversations and takes priority over cross-item selection.
+The host never manipulates the DOM directly. A testable, push-based model (`ChatOutputHtmlModel`) computes the minimal set of operations — replace, insert before/after, append, remove — and emits them through `IChatOutputHtmlSink`. The renderer control (`AgentChatOutputControl`) serializes each operation with `ChatOutputBrowserCommands` (JSON) and posts it across the bridge, where the shell's `applyCommand` handler applies it. Element ids are assigned by `ChatOutputHtmlRenderer` so updates target stable nodes.
+
+The shell exposes two container elements that map directly onto the two zones: `#chat-history` (completed turns) and `#chat-running` (active items). The page posts `ready`/`scrollState` messages back to the host so it can flush queued commands once the shell has loaded and own the auto-scroll policy.
+
+> **Testing note:** the model and command layers are covered by ordinary headless unit tests; real-browser behavior is covered by the `Phantom.Workspaces.Agent.Gui.WebViewTests` project (Trait `Category=WebView`), which hosts a real native WebView on an STA thread and is excluded from default runs (use `.\scripts\run-tests.ps1 -IncludeWebView`).
 
 #### History zone rendering
 
-- Rendered as a virtualizing `ItemsControl` (backed by `VirtualizingStackPanel`) so only items in the viewport are live.
-- Each history entry is a `DataTemplate` containing a `SelectableTextBlock` with pre-built `InlineCollection`.
-- Scroll is anchored to the bottom; new entries cause the view to scroll down unless the user has scrolled up.
+- Rendered into the `#chat-history` container as completed turns are appended.
+- Scroll is anchored to the bottom; new entries cause the view to scroll down unless the user has scrolled up (tracked via the `scrollState` messages the page posts to the host).
 
 #### Active items zone rendering
 
 Each active item renders two things side by side:
 
-1. **Animation indicator** — a looping Avalonia `Animation` (keyframe-driven opacity or rotation) on a small icon or shape, indicating the item is in progress. The animation stops and the indicator changes state when the item completes or errors.
-2. **State text** — a `SelectableTextBlock` with `Inlines` showing the item's current state:
-   - For a streaming chat or thinking response: words are appended as `Run` inlines as they arrive from the model, producing a live word-by-word display.
+1. **Animation indicator** — an in-progress indicator (CSS-driven) shown while the item is running. It changes state when the item completes or errors.
+2. **State text** showing the item's current state:
+   - For a streaming chat or thinking response: text is appended incrementally as it arrives from the model, producing a live word-by-word display.
    - For a tool call: shows "calling *tool name*…", then the result or error when finished.
    - For a sub-agent invocation: shows the sub-agent name and its current status.
 
-When an active item completes, it transitions from the active items zone into the history zone (moved to the bottom of the history list and the active item row is removed).
+When an active item completes, it transitions from the `#chat-running` container into `#chat-history` (moved to the bottom of the history list and the active item row is removed).
 
 ### Input queue control
 

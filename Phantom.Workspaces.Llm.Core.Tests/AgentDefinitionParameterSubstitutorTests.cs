@@ -1,0 +1,162 @@
+using System.Collections.Generic;
+using AgentSchema;
+using Phantom.Workspaces.Llm;
+
+namespace Phantom.Workspaces.Llm.Core.Tests;
+
+public sealed class AgentDefinitionParameterSubstitutorTests
+{
+    [Fact]
+    public void Substitute_WithNoParameters_ReturnsClonedTemplate()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, null);
+
+        Assert.NotNull(definition);
+        Assert.IsType<PromptAgent>(definition);
+    }
+
+    [Fact]
+    public void Substitute_WithProvidedValue_SubstitutesPlaceholder()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": true }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(
+            manifest,
+            new Dictionary<string, string> { ["working-directory"] = "C:\\Projects\\MyApp" });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.Equal("C:\\Projects\\MyApp", promptAgent.Model?.Options?.AdditionalProperties?["working-directory"]);
+    }
+
+    [Fact]
+    public void Substitute_WithDefaultValue_UsesDefault()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": false, "default": "C:\\Default" }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, null);
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.Equal("C:\\Default", promptAgent.Model?.Options?.AdditionalProperties?["working-directory"]);
+    }
+
+    [Fact]
+    public void Substitute_RequiredParameterWithNoValue_ThrowsArgumentException()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": true }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+          }
+        }
+        """);
+
+        Assert.Throws<ArgumentException>(() =>
+            AgentDefinitionParameterSubstitutor.Substitute(manifest, null));
+    }
+
+    [Fact]
+    public void Substitute_DoesNotMutateManifestTemplate()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": true }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        AgentDefinitionParameterSubstitutor.Substitute(
+            manifest,
+            new Dictionary<string, string> { ["working-directory"] = "C:\\Projects" });
+
+        var template = Assert.IsType<PromptAgent>(manifest.Template);
+        Assert.Equal("${working-directory}", template.Model?.Options?.AdditionalProperties?["working-directory"]);
+    }
+}

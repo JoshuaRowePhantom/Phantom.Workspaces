@@ -13,15 +13,19 @@ public partial class EntityCardControl : UserControl
         InitializeComponent();
     }
 
-    private void OnEntityCardTapped(object? sender, TappedEventArgs e)
+    internal void OnEntityCardTapped(object? sender, TappedEventArgs e)
     {
-        // Don't trigger if the tap was on a button (shortcut buttons should not double-trigger)
-        if (e.Source is Button)
+        if (e.Handled)
         {
             return;
         }
 
-        // Find the MainWindowViewModel by walking up the visual tree
+        ActivateCard();
+        e.Handled = true;
+    }
+
+    internal virtual void ActivateCard()
+    {
         var mainWindow = this.FindAncestorOfType<MainWindow>();
         if (mainWindow?.DataContext is MainWindowViewModel mainWindowViewModel &&
             this.DataContext is EntityCardViewModel { Entity: { } entityViewModel })
@@ -31,7 +35,10 @@ public partial class EntityCardControl : UserControl
                 mainWindowViewModel.ActivateEntityClickCommand.Execute(entityViewModel);
             }
         }
+    }
 
+    internal void OnInteractiveChildTapped(object? sender, TappedEventArgs e)
+    {
         e.Handled = true;
     }
 }

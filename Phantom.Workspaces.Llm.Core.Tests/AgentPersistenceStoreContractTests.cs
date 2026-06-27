@@ -194,6 +194,54 @@ public abstract class AgentPersistenceStoreContractTests
         Assert.Null(restoredAgent);
     }
 
+    [Fact]
+    public async Task StoreAsync_ThenRestoreAsync_PreservesCopilotSdkSessionId()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var persistedAgent = CreatePersistedAgent("session-contract-copilot-1", "contract-agent-copilot-1")
+            with { CopilotSdkSessionId = "copilot-sdk-session-abc" };
+
+        await store.StoreAsync(
+            new StoreRequestAgent { Agent = persistedAgent },
+            CancellationToken.None);
+
+        var restoredAgent = await store.RestoreAsync(
+            new RestoreRequest { AgentSessionId = persistedAgent.AgentSessionId },
+            CancellationToken.None);
+
+        Assert.NotNull(restoredAgent);
+        Assert.Equal("copilot-sdk-session-abc", restoredAgent.Value.CopilotSdkSessionId);
+    }
+
+    [Fact]
+    public async Task StoreAsync_WhenCopilotSdkSessionIdMissing_DoesNotClearStored()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var persistedAgent = CreatePersistedAgent("session-contract-copilot-2", "contract-agent-copilot-2")
+            with { CopilotSdkSessionId = "copilot-sdk-session-xyz" };
+
+        await store.StoreAsync(
+            new StoreRequestAgent { Agent = persistedAgent },
+            CancellationToken.None);
+
+        await store.StoreAsync(
+            new StoreRequestAgent
+            {
+                Agent = persistedAgent with { CopilotSdkSessionId = null },
+                NewMessages = [new ChatMessage(ChatRole.User, "hello")],
+            },
+            CancellationToken.None);
+
+        var restoredAgent = await store.RestoreAsync(
+            new RestoreRequest { AgentSessionId = persistedAgent.AgentSessionId },
+            CancellationToken.None);
+
+        Assert.NotNull(restoredAgent);
+        Assert.Equal("copilot-sdk-session-xyz", restoredAgent.Value.CopilotSdkSessionId);
+    }
+
     private static PersistedAgent CreatePersistedAgent(string agentSessionId, string agentName)
     {
         return new PersistedAgent

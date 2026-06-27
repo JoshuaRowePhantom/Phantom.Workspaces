@@ -16,4 +16,9 @@ public interface IWorkspaceTabService
     /// Replaces an existing workspace tab with a new one.
     /// </summary>
     Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab);
+
+    /// <summary>
+    /// Closes the specified tab and disposes it.
+    /// </summary>
+    void CloseTab(WorkspaceTabViewModel tab);
 }

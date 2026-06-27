@@ -22,6 +22,9 @@
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#2A2A2A</SolidColorBrush>
         <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#5EA0FF</SolidColorBrush>
 
+        <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#2C2C2C</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.Popup.Border">#3A3A3A</SolidColorBrush>
+
         <SolidColorBrush x:Key="Theme.Class.normal.Foreground">#E6E6E6</SolidColorBrush>
         <x:Double x:Key="Theme.Class.normal.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.normal.FontSize">13</x:Double>
@@ -162,6 +165,24 @@
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
     </Style>
+    <Style Selector="Border.interactive-row">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.12" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.interactive-row:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+
     <Style Selector="Button.entity-card-expand-button">
         <Setter Property="Padding" Value="0,2" />
         <Setter Property="FontSize" Value="8" />
@@ -192,7 +213,8 @@
                                 HorizontalContentAlignment="Center"
                                 Command="{Binding ToggleExpandCommand}" />
                     </Border>
-                    <ItemsPresenter Margin="20,0,0,0" />
+                    <ItemsPresenter Margin="20,0,0,0"
+                                    IsVisible="{Binding IsExpanded}" />
                 </StackPanel>
             </ControlTemplate>
         </Setter>
@@ -889,8 +911,9 @@
         <Setter Property="Foreground" Value="#6EC06E" />
     </Style>
     
-    <!-- Dock tab tooltips binding -->
-    <Style Selector="TabStripItem">
+    <!-- Dock tab header binding -->
+    <Style Selector="DocumentTabStripItem">
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
     </Style>
+
 </Styles>

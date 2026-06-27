@@ -5,5 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Controls.WebView" />
+    <PackageReference Include="Dock.Avalonia" />
   </ItemGroup>
 </Project>

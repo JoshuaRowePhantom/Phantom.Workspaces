@@ -9,6 +9,8 @@ param(
     [ValidateSet('full', 'fast')]
     [string] $Mode = 'full',
     [Parameter()]
+    [switch] $IncludeWebView,
+    [Parameter()]
     [switch] $NoBuild
 )
 
@@ -50,6 +52,14 @@ if ($Mode -eq 'fast')
 {
     $filterClauses += '(Category!=SlowGit)'
     $filterClauses += '(Category!=SlowDocker)'
+}
+
+# WebView integration tests require a real desktop browser host (native WebView2) and are
+# excluded by default. Run them with -IncludeWebView (or by targeting them with -TestNames)
+# whenever you touch WebView/browser-hosted rendering code.
+if (-not $IncludeWebView -and (-not $TestNames -or $TestNames.Count -eq 0))
+{
+    $filterClauses += '(Category!=WebView)'
 }
 
 if ($filterClauses.Count -gt 0)

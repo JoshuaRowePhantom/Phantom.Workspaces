@@ -4,6 +4,7 @@
   <Project Path="Phantom.Workspaces.Containers/Phantom.Workspaces.Containers.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui.Tests/Phantom.Workspaces.Agent.Gui.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui/Phantom.Workspaces.Agent.Gui.csproj" />
+  <Project Path="Phantom.Workspaces.Agent.Gui.WebViewTests/Phantom.Workspaces.Agent.Gui.WebViewTests.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Cli/Phantom.Workspaces.Agent.Cli.csproj" />
   <Folder Name="/Solution Items/">
     <File Path="Avalonia.Licensing.props" />

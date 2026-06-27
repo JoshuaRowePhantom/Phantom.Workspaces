@@ -57,6 +57,11 @@
       },
       {
         "kind": "tool",
+        "id": "fixed",
+        "name": "workspace-gui"
+      },
+      {
+        "kind": "tool",
         "id": "mcp-server-entity",
         "name": "github"
       }

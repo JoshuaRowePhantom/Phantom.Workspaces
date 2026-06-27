@@ -13,6 +13,9 @@ public static class FixedToolResources
     /// <summary>The workspace entity toolset name.</summary>
     public const string WorkspaceEntity = "workspace-entity";
 
+    /// <summary>The workspace GUI toolset name (open/close panes and tabs, invoke entity shortcuts).</summary>
+    public const string WorkspaceGui = "workspace-gui";
+
     /// <summary>The filesystem toolset name.</summary>
     public const string Filesystem = "filesystem";
 
@@ -28,9 +31,11 @@ public static class FixedToolResources
     /// <summary>
     /// The default set of built-in toolset names exposed as fixed tool resources.
     /// </summary>
+    // NOTE: Update docs/JsonEntities/documentation/agent-configuration.md when built-in tool names change.
     public static IReadOnlyList<string> DefaultNames { get; } =
     [
         WorkspaceEntity,
+        WorkspaceGui,
         Filesystem,
         WebSearch,
         WebRequest,

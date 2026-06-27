@@ -77,6 +77,11 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable
 
     public bool HasVisibleContent => this.IsThinking || this.HasModel || this.HasProvider || this.HasTokens;
 
+    public bool IsReasoningVisible => this.agent.IsReasoningVisible;
+
+    public string ReasoningIndicatorText =>
+        this.agent.IsReasoningVisible ? "🧠 Showing Reasoning" : "🚫🧠 Not Showing Reasoning";
+
     public void Dispose()
     {
         this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
@@ -124,6 +129,11 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable
             this.TokensDisplay = CreateTokensDisplay(
                 this.agent.TotalInputTokenCount,
                 this.agent.TotalOutputTokenCount);
+        }
+        else if (string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.IsReasoningVisible), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.IsReasoningVisible));
+            this.RaisePropertyChanged(nameof(this.ReasoningIndicatorText));
         }
     }
 }

@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AgentSchema;
+using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -34,25 +37,127 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        if (entityViewModel.Data is not JsonElement agentSessionEntityData
+        // Open a loading tab immediately so the user sees feedback right away.
+        // OpenTabAsync dedupes by Id, so if the session is already open it just activates it.
+        var loadingTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = entityViewModel.EntityId.ToString(),
+            Title = entityViewModel.DisplayName,
+            DockRegion = "full",
+            Entity = entityViewModel,
+            NotificationService = mainWindowViewModel.NotificationService,
+        };
+        await mainWindowViewModel.OpenTabAsync(loadingTab);
+
+        // Complete initialization in the background
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
+
+        return true;
+    }
+
+    private async Task InitializeTabInBackgroundAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AgentSessionWorkspaceTabViewModel tab,
+        TaskScheduler foregroundScheduler)
+    {
+        try
+        {
+            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, foregroundScheduler);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (result is var (agent, loggerFactory))
+                {
+                    tab.SetReady(agent, loggerFactory);
+                }
+                else
+                {
+                    tab.SetFailed("Could not load agent session: missing required entity data.");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => tab.SetFailed(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Creates an <see cref="AgentSessionWorkspaceTabViewModel"/> for the given
+    /// <paramref name="agentSessionEntity"/> without opening it as a tab.
+    /// Returns <see langword="null"/> if the entity data is missing required fields or the
+    /// referenced agent-definition entity cannot be found.
+    /// </summary>
+    public async Task<AgentSessionWorkspaceTabViewModel?> TryCreateAgentSessionTabForRestoreAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        string? tabId = null,
+        string? title = null,
+        string? dockRegion = null)
+    {
+        var loadingTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = tabId ?? agentSessionEntity.EntityId.ToString(),
+            Title = title ?? agentSessionEntity.DisplayName,
+            DockRegion = dockRegion ?? "full",
+            Entity = agentSessionEntity,
+            NotificationService = mainWindowViewModel.NotificationService,
+        };
+
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
+
+        return loadingTab;
+    }
+
+    public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AgentChat agentChat)
+    {
+        var loggerFactory = new ObservableLoggerFactory();
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = agentSessionEntity.EntityId.ToString(),
+            Title = agentSessionEntity.DisplayName,
+            DockRegion = "full",
+            Entity = agentSessionEntity,
+            NotificationService = mainWindowViewModel.NotificationService,
+        };
+        tab.SetReady(agent, loggerFactory);
+        return tab;
+    }
+
+    private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory)?> TryBuildAgentAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        TaskScheduler foregroundScheduler)
+    {
+        if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
             || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
             || agentSessionIdElement.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(agentSessionIdElement.GetString())
-            || !agentSessionEntityData.TryGetProperty("agent-definition-entity-id", out var agentDefinitionEntityIdElement)
+            || (!agentSessionEntityData.TryGetProperty("agent-source-entity-id", out var agentDefinitionEntityIdElement)
+                && !agentSessionEntityData.TryGetProperty("agent-definition-entity-id", out agentDefinitionEntityIdElement))
             || agentDefinitionEntityIdElement.ValueKind != JsonValueKind.String
             || string.IsNullOrWhiteSpace(agentDefinitionEntityIdElement.GetString())
             || !Guid.TryParse(agentDefinitionEntityIdElement.GetString(), out var agentDefinitionEntityIdValue))
         {
-            return false;
+            return null;
         }
 
         var agentSessionId = agentSessionIdElement.GetString();
         var agentDefinitionEntityId = new EntityId(agentDefinitionEntityIdValue);
+        var parameterValues = agentSessionEntityData.TryGetProperty("parameter-values", out var pvElement)
+            ? ReadStringDictionary(pvElement)
+            : null;
         var agentDefinitionEntity = (await mainWindowViewModel.EntityBroker.GetEntitiesAsync([agentDefinitionEntityId]))
             .FirstOrDefault();
         if (agentDefinitionEntity?.Data is not JsonElement agentSourceEntityData)
         {
-            return false;
+            return null;
         }
 
         var loggerFactory = new ObservableLoggerFactory();
@@ -66,6 +171,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 AgentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText()),
                 AgentSessionId = agentSessionId,
                 AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
             };
         }
         else if (agentSourceEntityData.TryGetProperty("manifest", out var manifestElement))
@@ -73,45 +179,63 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             createAgentChatRequest = new CreateAgentChatRequest
             {
                 AgentManifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText()),
+                Parameters = parameterValues,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
                 AgentSessionId = agentSessionId,
                 AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
             };
         }
         else
         {
-            return false;
+            return null;
         }
 
         var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
-
-        var workspaceTab = CreateAgentSessionTab(entityViewModel, loggerFactory, agentChat);
-        await mainWindowViewModel.OpenTabAsync(workspaceTab);
-        return true;
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+        return (agent, loggerFactory);
     }
 
-    public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
+    public AgentViewModel BuildAgentViewModelPublic(
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel agentSessionEntity,
-        AgentChat agentChat)
+        ObservableLoggerFactory loggerFactory,
+        AgentChat agentChat,
+        string title)
     {
-        var loggerFactory = new ObservableLoggerFactory();
-        return CreateAgentSessionTab(agentSessionEntity, loggerFactory, agentChat);
+        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title);
     }
 
-    private static AgentSessionWorkspaceTabViewModel CreateAgentSessionTab(
-        SubscribedEntityViewModel agentSessionEntity,
+    private static AgentViewModel BuildAgentViewModel(
+        MainWindowViewModel mainWindowViewModel,
         ObservableLoggerFactory loggerFactory,
-        AgentChat agentChat)
+        AgentChat agentChat,
+        string title)
     {
-        return new AgentSessionWorkspaceTabViewModel
+        return new AgentViewModel(agentChat, title, loggerFactory)
         {
-            Id = agentSessionEntity.EntityId.ToString(),
-            Title = agentSessionEntity.DisplayName,
-            Entity = agentSessionEntity,
-            LoggerFactory = loggerFactory,
-            Agent = new Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel(agentChat, agentSessionEntity.DisplayName, loggerFactory),
+            OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
+                new WebViewModel(url, mainWindowViewModel)
+                {
+                    Id = $"web-{url}",
+                    Title = url,
+                }),
         };
     }
-}
 
+    private static IReadOnlyDictionary<string, string>? ReadStringDictionary(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == JsonValueKind.String)
+            {
+                dict[prop.Name] = prop.Value.GetString()!;
+            }
+        }
+        return dict.Count > 0 ? dict : null;
+    }
+}

@@ -33,6 +33,11 @@
         "type": "string"
       },
       "description": "Entity-name reference to the agent-definition this session runs, used to reconstruct the definition when the session is resumed."
+    },
+    "parameter-values": {
+      "type": "object",
+      "description": "Parameter values supplied when this session was created. Keyed by parameter name; all values are strings.",
+      "additionalProperties": { "type": "string" }
     }
   },
   "required": [

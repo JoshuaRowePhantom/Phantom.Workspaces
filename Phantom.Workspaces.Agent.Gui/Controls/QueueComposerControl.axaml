@@ -19,7 +19,32 @@
                     Content="{Binding SubmitButtonGlyph}"
                     Classes="queue-glyph-button queue-submit-button"
                     MinHeight="36"
-                    VerticalAlignment="Bottom"/>
+                    VerticalAlignment="Bottom"
+                    IsVisible="{Binding !CanCreateQueues}"/>
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal"
+                        IsVisible="{Binding CanCreateQueues}">
+                <Button Command="{Binding SubmitCommand}"
+                        Content="{Binding SubmitButtonGlyph}"
+                        Classes="queue-glyph-button queue-submit-button"
+                        MinHeight="36"
+                        VerticalAlignment="Bottom" />
+                <Button Content="▾"
+                        Classes="queue-glyph-button queue-submit-dropdown-button"
+                        MinHeight="36"
+                        VerticalAlignment="Bottom">
+                    <Button.Flyout>
+                        <MenuFlyout Placement="TopEdgeAlignedRight">
+                            <MenuItem Command="{Binding SubmitCommand}"
+                                      Header="↵  Send" />
+                            <MenuItem Command="{Binding SubmitToNewQueueCommand}"
+                                      Header="⊕  Send to new queue" />
+                            <MenuItem Command="{Binding CreateNewQueueCommand}"
+                                      Header="＋  New queue" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+            </StackPanel>
             <Border Grid.Column="2"
                     Classes="queue-status-pill dynamic">
                 <Button Classes="queue-action-button queue-status-picker-button">

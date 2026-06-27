@@ -44,7 +44,6 @@ public sealed class ConfigurationPersistenceServiceTests
                 AccessMode = DevTunnelAccessMode.Token,
                 AccessTokenSource = "DEVTUNNEL_TOKEN",
             },
-            Visual = new VisualSettings { Theme = "FluentDark" },
         };
 
         try

@@ -13,6 +13,7 @@
     <PackageReference Include="Avalonia.Controls.Documents" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Markdig.Signed" />
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
@@ -23,5 +24,8 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Styles\Phantom.Workspaces.Gui.Styles.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\chat-output-shell.html" />
   </ItemGroup>
 </Project>

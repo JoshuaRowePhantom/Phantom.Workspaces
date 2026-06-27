@@ -36,14 +36,22 @@ public sealed class AgentSessionShortcutContext
     {
         var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
         var dataAccessLayer = mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
-        var workspaceEntityToolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
+        var workspaceGuiContextProvider = new WorkspaceGuiContextProvider(
+            new WorkspaceGuiContext
+            {
+                MainWindowViewModel = mainWindowViewModel,
+                ShortcutManager = mainWindowViewModel.ShortcutManager,
+            });
+        var toolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
             dataAccessLayer,
-            ToolsetFactory.CreateDefaultToolsetFactory());
+            ToolsetFactory.CreateWorkspaceGuiToolsetFactory(
+                workspaceGuiContextProvider,
+                ToolsetFactory.CreateDefaultToolsetFactory()));
         return new AgentServices
         {
             AgentPersistenceStoreOverride = agentPersistenceStore,
             LoggerFactory = loggerFactory,
-            ToolsetFactory = workspaceEntityToolsetFactory,
+            ToolsetFactory = toolsetFactory,
             ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
         };
     }
@@ -82,7 +90,8 @@ public sealed class AgentSessionShortcutContext
     public async Task<SubscribedEntityViewModel?> CreateAgentSessionEntityAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentDefinitionEntity,
-        string agentSessionId)
+        string agentSessionId,
+        IReadOnlyDictionary<string, string>? parameterValues = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var sessionObjectSimpleName = CreateSessionObjectSimpleName(
@@ -97,7 +106,8 @@ public sealed class AgentSessionShortcutContext
             agentDefinitionEntity.EntityId,
             agentDefinitionEntity.DisplayName,
             agentSessionId,
-            agentSessionNames);
+            agentSessionNames,
+            parameterValues);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {
@@ -169,13 +179,17 @@ public sealed class AgentSessionShortcutContext
         EntityId agentDefinitionEntityId,
         string agentDisplayName,
         string agentSessionId,
-        IReadOnlyCollection<EntityName> agentSessionNames)
+        IReadOnlyCollection<EntityName> agentSessionNames,
+        IReadOnlyDictionary<string, string>? parameterValues = null)
     {
         var entityId = new EntityId();
         var namesJson = string.Join(
             ", ",
             agentSessionNames.Select(
                 static entityName => $"[{string.Join(", ", entityName.Components.Select(static component => JsonSerializer.Serialize(component)))}]"));
+        var parameterValuesPart = parameterValues is { Count: > 0 }
+            ? $",\n  \"parameter-values\": {System.Text.Json.JsonSerializer.Serialize(parameterValues)}"
+            : string.Empty;
         using var agentSessionDocument = JsonDocument.Parse(
             $$"""
             {
@@ -183,8 +197,8 @@ public sealed class AgentSessionShortcutContext
               "entity-types": ["entity", "agent-session"],
               "names": [{{namesJson}}],
               "display-name": { "default": "{{agentDisplayName}} session" },
-              "agent-definition-entity-id": "{{agentDefinitionEntityId}}",
-              "agent-session-id": "{{agentSessionId}}"
+              "agent-source-entity-id": "{{agentDefinitionEntityId}}",
+              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}
             }
             """);
         return agentSessionDocument.RootElement.Clone();

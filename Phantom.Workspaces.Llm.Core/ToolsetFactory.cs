@@ -86,6 +86,26 @@ public sealed class ToolsetFactory : IToolsetFactory
             underlyingToolsetFactory);
     }
 
+    /// <summary>
+    /// Creates a toolset factory that handles the <c>workspace-gui</c> tool kind by delegating to
+    /// the supplied <paramref name="workspaceGuiContextProvider"/>. The provider is host-supplied
+    /// because it depends on GUI-layer types that are not available in this assembly.
+    /// </summary>
+    public static IToolsetFactory CreateWorkspaceGuiToolsetFactory(
+        AIContextProvider workspaceGuiContextProvider,
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        return CreateNamedToolsetFactory(
+            "workspace-gui",
+            (tool, agentServices) =>
+            {
+                _ = tool;
+                _ = agentServices;
+                return Task.FromResult<AIContextProvider?>(workspaceGuiContextProvider);
+            },
+            underlyingToolsetFactory);
+    }
+
     public static IToolsetFactory CreateCurrentSessionToolsetFactory(
         IDataAccessLayer dataAccessLayer,
         CurrentSessionContext currentSessionContext,

@@ -20,17 +20,19 @@ public sealed class AgentChatToolsDetailViewModel : ViewModelBase
         {
             foreach (var tool in this.toolNavigationItems)
             {
-                this.DisplayedRootItems.Add(CloneNavigationItem(tool));
+                this.DisplayedRootItems.Add(CloneNavigationItem(tool, isTopLevel: true));
             }
         }
         else
         {
             var sourceItem = FindById(this.toolNavigationItems, item.Id) ?? item;
-            this.DisplayedRootItems.Add(CloneNavigationItem(sourceItem));
+            this.DisplayedRootItems.Add(CloneNavigationItem(sourceItem, isTopLevel: true));
         }
     }
 
-    private static AgentEditorNavigationItemViewModel CloneNavigationItem(AgentEditorNavigationItemViewModel source)
+    private static AgentEditorNavigationItemViewModel CloneNavigationItem(
+        AgentEditorNavigationItemViewModel source,
+        bool isTopLevel = false)
         => new(
             source.Id,
             source.Name,
@@ -38,8 +40,8 @@ public sealed class AgentChatToolsDetailViewModel : ViewModelBase
             source.Summary,
             source.Tool,
             source.DetailContent,
-            source.Children.Select(CloneNavigationItem).ToArray(),
-            source.IsExpanded);
+            source.Children.Select(c => CloneNavigationItem(c, isTopLevel: false)).ToArray(),
+            isExpanded: !isTopLevel);
 
     private static AgentEditorNavigationItemViewModel? FindById(IEnumerable<AgentEditorNavigationItemViewModel> roots, string id)
     {

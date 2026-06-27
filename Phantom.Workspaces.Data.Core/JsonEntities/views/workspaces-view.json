@@ -26,7 +26,12 @@
             }
           }
         ]
-      }
+      },
+      "relationships-to-return": [
+        {
+          "relationship-type-names": ["related"]
+        }
+      ]
     }
   ]
 }

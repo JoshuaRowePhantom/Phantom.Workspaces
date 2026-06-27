@@ -25,6 +25,13 @@ public readonly record struct PersistedAgent
     public BsonDocument? AgentSessionJson { get; init; }
 
     public BsonDocument? AgentDefinitionJson { get; init; }
+
+    /// <summary>
+    /// The GitHub Copilot SDK session identifier, when the agent uses the <c>github-copilot</c>
+    /// provider. Persisting it lets the Copilot CLI session be resumed (with its conversation
+    /// history) after a restart instead of starting fresh (issue #3).
+    /// </summary>
+    public string? CopilotSdkSessionId { get; init; }
 }
 
 public readonly record struct StoreRequestAgent
