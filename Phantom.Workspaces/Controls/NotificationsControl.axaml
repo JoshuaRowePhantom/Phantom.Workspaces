@@ -43,10 +43,14 @@
                                                        FontWeight="SemiBold"
                                                        TextWrapping="NoWrap"
                                                        TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding Reason}"
+                                            <TextBlock Text="{Binding Heading}"
+                                                       Classes="muted"
+                                                       TextWrapping="NoWrap"
+                                                       IsVisible="{Binding IsRunning}" />
+                                            <TextBlock Text="{Binding Description}"
                                                        Classes="muted"
                                                        TextWrapping="Wrap"
-                                                       IsVisible="{Binding HasReason}" />
+                                                       IsVisible="{Binding HasDescription}" />
                                             <TextBlock Text="{Binding RelativeTime}" 
                                                        Classes="caption" />
                                         </StackPanel>
