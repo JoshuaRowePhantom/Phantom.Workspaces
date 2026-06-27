@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
@@ -58,5 +59,85 @@ public sealed class NotificationsViewModelTests
 
         Assert.True(hasRowsChanged);
         Assert.True(viewModel.HasRows);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenNotificationArrives_SetsIsOpenTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(Tab("tab-1"), "Test notification");
+
+        Assert.True(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_WhenNotificationArrives_SetsIsAutoClosingTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(Tab("tab-1"), "Test notification");
+
+        Assert.True(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OnNotificationsChanged_RaisesPropertyChangedForIsAutoClosing()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        service.Notify(Tab("tab-1"), "Test notification");
+
+        Assert.Contains(nameof(viewModel.IsAutoClosing), changedProperties);
+    }
+
+    [Fact]
+    public void ToggleOpen_WhenCalledWhileOpen_ClosesPopup()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(Tab("tab-1"), "notification");  // opens it
+
+        viewModel.ToggleOpen();
+
+        Assert.False(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void ToggleOpen_SetsIsAutoClosingFalse()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(Tab("tab-1"), "notification");  // sets IsAutoClosing = true
+
+        viewModel.ToggleOpen();
+
+        Assert.False(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void ToggleOpen_RaisesPropertyChangedForIsAutoClosing()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        var changedProperties = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
+
+        viewModel.ToggleOpen();
+
+        Assert.Contains(nameof(viewModel.IsAutoClosing), changedProperties);
     }
 }
