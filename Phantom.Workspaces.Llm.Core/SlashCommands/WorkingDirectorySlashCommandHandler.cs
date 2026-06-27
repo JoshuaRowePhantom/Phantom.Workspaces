@@ -3,13 +3,15 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
+namespace Phantom.Workspaces.Llm.SlashCommands;
 
 /// <summary>
 /// Handles <c>/working-directory [path]</c>.
 /// With no argument: reports the current working directory.
-/// With a path argument: validates and updates the agent session's working directory,
-/// then signals that the agent must be recreated to apply the change.
+/// With a path argument: validates and updates the agent session's working directory.
+/// The change takes effect on the next turn via <c>CopilotSdkChatClient.EnsureSessionAsync</c>
+/// which detects the signature change and calls <c>ResumeSessionAsync</c> with the new
+/// working directory — no agent recreation is required.
 /// </summary>
 public sealed class WorkingDirectorySlashCommandHandler : ISlashCommandHandler
 {
@@ -21,11 +23,11 @@ public sealed class WorkingDirectorySlashCommandHandler : ISlashCommandHandler
 
     public string? LongDescription => """
         /working-directory           — prints the current working directory
-        /working-directory <path>    — sets the working directory (requires agent recreation)
+        /working-directory <path>    — sets the working directory
 
-        The working directory is forwarded to both the Copilot CLI process
-        (CopilotClientOptions.Cwd) and the Copilot session (SessionConfig.WorkingDirectory).
-        Changing it disposes the current agent and starts a fresh one.
+        The working directory is forwarded to the Copilot session via ResumeSessionAsync
+        on the next turn. The process-level cwd (CopilotClientOptions.Cwd) is fixed at
+        client creation time and is unaffected; only the session-level cwd changes.
         """;
 
     public Task<SlashCommandResult> ExecuteAsync(
@@ -85,7 +87,6 @@ public sealed class WorkingDirectorySlashCommandHandler : ISlashCommandHandler
         return new SlashCommandResult
         {
             StatusMessage = $"Working directory updated to: {path}",
-            RequiresAgentRecreation = true,
         };
     }
 }

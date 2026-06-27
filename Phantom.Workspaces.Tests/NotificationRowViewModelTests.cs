@@ -16,12 +16,12 @@ public sealed class NotificationRowViewModelTests
         public void Execute(object? parameter) { }
     }
 
-    private static NotificationRowViewModel MakeRow(string? reason) =>
+    private static NotificationRowViewModel MakeRow(string? reason, string? tabTitle = null) =>
         new NotificationRowViewModel(
             new NotificationEntry
             {
                 TabKey = "tab-1",
-                TabDescriptor = new TabDescriptor { TabId = "Tab 1" },
+                TabDescriptor = new TabDescriptor { TabId = "Tab 1", TabTitle = tabTitle },
                 Reason = reason,
                 Timestamp = DateTimeOffset.UtcNow,
                 IsRead = false,
@@ -49,5 +49,19 @@ public sealed class NotificationRowViewModelTests
     {
         var row = MakeRow(string.Empty);
         Assert.False(row.HasReason);
+    }
+
+    [Fact]
+    public void TabTitle_UsesTabTitleFromDescriptor_WhenTabTitleIsSet()
+    {
+        var row = MakeRow("reason", tabTitle: "My Full Agent Title");
+        Assert.Equal("My Full Agent Title", row.TabTitle);
+    }
+
+    [Fact]
+    public void TabTitle_FallsBackToTabId_WhenTabTitleIsNull()
+    {
+        var row = MakeRow("reason", tabTitle: null);
+        Assert.Equal("Tab 1", row.TabTitle);
     }
 }

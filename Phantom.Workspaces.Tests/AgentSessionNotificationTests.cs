@@ -239,4 +239,43 @@ public sealed class AgentSessionNotificationTests
 
         await WaitForRunningItemsEmptyAsync(agentChat);
     }
+
+    [Fact]
+    public async Task AgentSessionNotification_WhenAgentGoesIdle_TabDescriptorHasTabTitleFromViewModelTitle()
+    {
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += (tab, reason) =>
+        {
+            if (reason is not null)
+            {
+                notifyTcs.TrySetResult();
+            }
+        };
+
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab-title-test",
+            Title = "My Full Agent Title",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        timeoutCts.Token.Register(() => notifyTcs.TrySetCanceled());
+        await notifyTcs.Task;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls,
+                call => call.Reason is not null && call.Tab.TabTitle == "My Full Agent Title");
+        }
+    }
 }

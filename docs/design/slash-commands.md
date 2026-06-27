@@ -110,13 +110,6 @@ public sealed record SlashCommandResult
 {
     /// <summary>Status message shown inline to the user (not added to history).</summary>
     public required string StatusMessage { get; init; }
-
-    /// <summary>
-    /// When true, the chat UI must recreate the <see cref="AgentChat"/> after this
-    /// command completes, using the updated session entity as the new configuration
-    /// source.
-    /// </summary>
-    public bool RequiresAgentRecreation { get; init; }
 }
 ```
 
@@ -125,17 +118,21 @@ public sealed record SlashCommandResult
 ```csharp
 public interface ISlashCommandRegistry
 {
-    IReadOnlyList<ISlashCommandHandler> GetCommands(AgentDefinition agentDefinition);
+    IReadOnlyList<ISlashCommandHandler> Commands { get; }
 }
 ```
 
-Returns the set of commands applicable to a given agent definition. Agent-type-specific
-commands (e.g., Copilot-only `/cwd`) are included only when the definition's provider
-matches.
+Exposes the commands registered for the owning `AgentChat` instance. Provider-specific
+commands (e.g., Copilot-only `/working-directory`) are registered during `AgentChat`
+initialisation when the corresponding chat client is detected in the pipeline.
+
+`AgentChat` exposes a `SlashCommands` property of type `ISlashCommandRegistry`. The GUI
+reads from this property; `Phantom.Workspaces.Llm.Core` writes to the underlying
+`SlashCommandRegistry` at initialisation time.
 
 ## `/working-directory` command
 
-`/working-directory` sets the working directory for the agent session.
+`/working-directory` gets or sets the working directory for the agent session.
 
 ```
 /working-directory <path>
@@ -145,28 +142,27 @@ matches.
 ### Behavior
 
 1. If no argument is provided, respond with the current working directory from the
-   `agent-session` entity's `working-directory` field (or the process default if unset).
+   `agent-session` entity's `working-directory` parameter value (or a "not set" message).
 2. If a path is provided:
-   a. Resolve and normalize the path.
-   b. Validate that the path exists and is a directory. Return an error status if not.
-   c. Update the `agent-session` entity's `working-directory` field to the new path.
-   d. Return `SlashCommandResult { RequiresAgentRecreation = true }`.
-3. The chat UI tears down the current `AgentChat` (which disposes the `CopilotClient`
-   process) and constructs a new one, picking up the updated `working-directory` from
-   the session entity.
+   a. Validate that the path exists and is a directory. Return an error status if not.
+   b. Update the `agent-session` entity's `working-directory` parameter value.
+   c. Return a success `SlashCommandResult`.
+3. The change takes effect on the **next turn**: `CopilotSdkChatClient.ComputeSessionSignature`
+   includes `working-directory`; when the signature changes, `EnsureSessionAsync` calls
+   `ResumeSessionAsync` with the updated `WorkingDirectory`, which recreates the Copilot
+   session context while preserving conversation history. No `AgentChat` recreation is needed.
 
-### Why recreation is required
+### Why recreation is NOT required
 
-The Copilot CLI working directory is fixed at process startup via
-`CopilotClientOptions.CurrentWorkingDirectory`. The `CopilotSdkChatClient` reuses one
-`CopilotClient` per instance and only creates a new `CopilotSession` when the session
-signature changes. Since `CurrentWorkingDirectory` is on `CopilotClientOptions` (not
-`SessionConfig`), changing it requires a new `CopilotClient` instance, which means a new
-`CopilotSdkChatClient` and a new `AgentChat`.
+`CopilotClientOptions.CurrentWorkingDirectory` (process-level cwd) is fixed at `CopilotClient`
+creation time and is NOT updated by `/working-directory`. The process cwd affects Copilot CLI
+binary behaviour (config file discovery) and does not need to match the session working
+directory.
 
-`SessionConfig.WorkingDirectory` is also forwarded and is part of the session signature,
-so it changes with every session recreation anyway. Neither field can be mutated on a live
-session.
+`ResumeSessionConfig.WorkingDirectory` (session-level cwd) IS updated on the next turn via
+the signature mechanism in `CopilotSdkChatClient.EnsureSessionAsync`. This is what the model
+sees, and it is sufficient to change the effective working directory without recreating the
+`CopilotClient` or the `AgentChat`.
 
 ### Applicable agent types
 
@@ -366,26 +362,26 @@ propagates automatically. Optionally, the manifest `parameters` block can declar
 
 ## Source layout
 
+In `Phantom.Workspaces.Llm.Core` (namespace `Phantom.Workspaces.Llm.SlashCommands`):
+
+- `SlashCommands/ISlashCommandHandler.cs` — includes `Usage` and `LongDescription`
+- `SlashCommands/SlashCommandContext.cs`
+- `SlashCommands/SlashCommandResult.cs`
+- `SlashCommands/ISlashCommandRegistry.cs` — read-only view: `Commands` property
+- `SlashCommands/SlashCommandRegistry.cs` — mutable: `Register(handler)` method
+- `SlashCommands/HelpSlashCommandHandler.cs`
+- `SlashCommands/WorkingDirectorySlashCommandHandler.cs` — Copilot-only; registered by `AgentChat`
+- `AgentChat.cs` — exposes `ISlashCommandRegistry SlashCommands { get; }`; populates it in `InitializeAsync`
+
 In `Phantom.Workspaces.Agent.Gui`:
 
-- `ViewModels/SlashCommands/ISlashCommandHandler.cs` (new) — includes `Usage` and `LongDescription`
-- `ViewModels/SlashCommands/SlashCommandContext.cs` (new)
-- `ViewModels/SlashCommands/SlashCommandResult.cs` (new)
-- `ViewModels/SlashCommands/ISlashCommandRegistry.cs` (new)
-- `ViewModels/SlashCommands/CompositeSlashCommandRegistry.cs` (new)
-- `ViewModels/SlashCommands/WorkingDirectorySlashCommandHandler.cs` (new)
-- `ViewModels/SlashCommands/HelpSlashCommandHandler.cs` (new)
-- `ViewModels/SlashCommands/SlashCommandSuggestionsViewModel.cs` (new) — filtered list for popup binding
-- `Controls/AgentChatEditorControl.axaml` (modify) — add `Popup` for command picker
-- `Controls/AgentChatEditorControl.axaml.cs` (modify) — integrate popup open/close + interception
+- `ViewModels/AgentViewModel.cs` — `ConfigureSlashCommands(Func<SlashCommandContext>)` reads from `AgentChat.SlashCommands`
+- `ViewModels/QueueComposerViewModel.cs` — `SlashCommandInterceptorAsync` hook (unchanged)
 
-In `Phantom.Workspaces.Llm.Core`:
+In `Phantom.Workspaces` (workspace host):
 
-- `AgentDefinition.json` — add `parameters` block
+- `ViewModels/OpenAgentSessionShortcutHandler.cs` — provides the `SlashCommandContext` factory
 
-In `Phantom.Workspaces.Data.Core`:
-
-- `JsonSchemas/agent-session.json` — add `working-directory` field
 
 ## Non-goals
 

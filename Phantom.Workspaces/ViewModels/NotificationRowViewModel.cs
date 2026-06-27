@@ -15,7 +15,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
         ICommand snoozeCommand)
     {
         this.TabKey = entry.TabKey;
-        this.TabTitle = entry.TabDescriptor.TabId;
+        this.TabTitle = entry.TabDescriptor.TabTitle ?? entry.TabDescriptor.TabId;
         this.Reason = entry.Reason ?? string.Empty;
         this.Timestamp = entry.Timestamp;
         this.isRead = entry.IsRead;
