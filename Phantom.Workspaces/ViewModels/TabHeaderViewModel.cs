@@ -50,7 +50,7 @@ public sealed class NotificationIndicatorTabHeaderItemViewModel : TabHeaderItemV
 /// <summary>
 /// Header model for workspace tabs. When set on <see cref="WorkspaceTabViewModel.TabHeader"/>,
 /// overrides the plain-string title rendering in the tab strip.
-/// <see cref="Items"/> holds icon/indicator elements rendered before <see cref="Title"/>.
+/// <see cref="Items"/> holds icon/indicator elements rendered after <see cref="Title"/>.
 /// </summary>
 public class TabHeaderViewModel : ViewModelBase
 {
