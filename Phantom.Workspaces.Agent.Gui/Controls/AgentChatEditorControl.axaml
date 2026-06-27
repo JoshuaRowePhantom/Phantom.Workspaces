@@ -66,13 +66,12 @@
                         <TextBlock Classes="agent-chat-status-line-separator"
                                    Text="•"
                                    VerticalAlignment="Center"
-                                   Opacity="{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"/>
+                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
-                                  IsHitTestVisible="{Binding Agent.AutoScrollDisabled}"
-                                  Opacity="{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"/>
+                                  Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <TextBlock Classes="agent-chat-status-line-separator"
                                    Text="•"
                                    VerticalAlignment="Center" />
