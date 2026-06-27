@@ -152,7 +152,19 @@ Pull any upstream changes from `features` before merging back:
 git merge features --no-edit
 ```
 
-Resolve any conflicts, then run tests again to confirm correctness.
+Resolve any conflicts, then **build and run the full fast test suite**:
+
+```powershell
+.\scripts\run-tests.ps1 -Mode fast
+```
+
+Read `scripts\test-results.log`. If any tests fail:
+1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
+2. Fix the failing test or code.
+3. Run tests again.
+4. Repeat until `Failed: 0` across all suites.
+
+**Do not proceed to Step 13 until all tests pass.**
 
 ## Step 13 — Fast-forward `features` to the feature branch
 
@@ -174,7 +186,8 @@ This succeeds only if `features` is a direct ancestor of the feature branch. If 
 3. Never create a worktree that is already checked out to a branch held by another worktree.
 4. All build and test commands run from inside the worktree directory.
 5. Tests must pass before committing (step 9 before step 10).
-6. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
+6. After merging `features` into the branch (step 12), always build and run tests; fix any failures before fast-forwarding.
+7. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
 7. Do not push any branch unless explicitly instructed.
 8. Never commit without passing tests.
 9. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
