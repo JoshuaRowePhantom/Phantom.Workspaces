@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces;
 
 namespace Phantom.Workspaces.Data.Tests;
@@ -217,5 +218,96 @@ public sealed class ProcessRunnerTests
     {
         IsProcessInJob(processHandle, IntPtr.Zero, out var result);
         return result;
+    }
+
+    // -----------------------------------------------------------------------
+    // RunAndLogAsync
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task RunAndLogAsync_NoLogCall_WhenExitCodeIsZero()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "exit", "0"]),
+            logger);
+
+        Assert.Empty(logger.Logs);
+    }
+
+    [Fact]
+    public async Task RunAndLogAsync_LogsWarning_WhenExitCodeIsNonZero()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "echo failed-output && exit 1"]),
+            logger);
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("failed-output", entry.Message);
+    }
+
+    [Fact]
+    public async Task RunAndLogAsync_IncludesOperationDescription_InLogMessage()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "exit", "1"]),
+            logger,
+            operationDescription: "my test operation");
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Contains("my test operation", entry.Message);
+    }
+
+    [Fact]
+    public async Task RunAndLogAsync_ReturnsResult_WhenExitCodeIsNonZero()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        var result = await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "exit", "42"]),
+            logger);
+
+        Assert.Equal(42, result.ExitCode);
+    }
+
+    private sealed class FakeLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Logs { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Logs.Add((logLevel, formatter(state, exception)));
+        }
     }
 }

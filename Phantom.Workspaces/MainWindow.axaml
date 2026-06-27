@@ -86,9 +86,11 @@
                 <Panel Grid.Column="4">
                     <Button x:Name="NotificationBellButton"
                             Classes="settings-gear"
-                            Content="🔔"
                             ToolTip.Tip="Notifications"
-                            Command="{Binding NotificationsViewModel.ToggleOpenCommand}" />
+                            Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
+                        <TextBlock Text="🔔"
+                                   Classes.notification-bell-ringing="{Binding NotificationsViewModel.HasActiveRun}" />
+                    </Button>
                     <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
                                IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
                                Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
