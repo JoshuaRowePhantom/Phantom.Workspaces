@@ -47,14 +47,16 @@ Choose a short, descriptive branch name (e.g. `fix/tab-icons`, `feat/default-wor
 
 ## Step 4 — Create or reuse a worktree in `worktrees/`
 
-Worktrees are named with plain numbers: `1`, `2`, `3`, etc. Pick the lowest-numbered worktree that is **not** already checked out to a branch.
+Worktrees are named with plain numbers: `1`, `2`, `3`, etc. Pick the lowest-numbered worktree that has **no associated branch** (i.e. is checked out to `features` or detached HEAD — meaning it is free to use).
 
 List existing worktrees:
 ```powershell
 git worktree list
 ```
 
-If a free worktree exists (path `worktrees/<N>` with no active branch), reuse it:
+A worktree is **free** when its line shows `(detached HEAD)` or `[features]`. A worktree is **occupied** when it shows a feature branch like `[fix/something]`.
+
+If a free worktree exists (path `worktrees/<N>`), reuse it by checking out the new branch inside it:
 ```powershell
 Push-Location worktrees\<N>; git checkout <branch-name>; Pop-Location
 ```
@@ -169,6 +171,9 @@ Read `scripts\test-results.log`. If any tests fail:
 ## Step 13 — Fast-forward `features` to the feature branch
 
 ```powershell
+# Free the worktree by checking out features inside it (so it can be reused next time)
+git checkout features
+
 Pop-Location
 cd C:\dev\phantom.workspaces-design
 git checkout features
@@ -183,14 +188,15 @@ This succeeds only if `features` is a direct ancestor of the feature branch. If 
 
 1. Always branch from `features`, never from `main` directly.
 2. Worktree names are plain integers (`1`, `2`, …) — never descriptive names.
-3. Never create a worktree that is already checked out to a branch held by another worktree.
+3. Never create a worktree that is already checked out to a feature branch held by another worktree.
 4. All build and test commands run from inside the worktree directory.
 5. Tests must pass before committing (step 9 before step 10).
 6. After merging `features` into the branch (step 12), always build and run tests; fix any failures before fast-forwarding.
 7. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
-7. Do not push any branch unless explicitly instructed.
-8. Never commit without passing tests.
-9. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
-10. Each issue gets its own commit. Do not batch multiple issues into one commit.
-11. If there are open questions, assign back to the reporter and stop — do not guess.
-12. Always include the `Co-authored-by: Copilot` trailer in every commit message.
+8. At the end of step 13, always `git checkout features` inside the worktree to free it for reuse.
+9. Do not push any branch unless explicitly instructed.
+10. Never commit without passing tests.
+11. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
+12. Each issue gets its own commit. Do not batch multiple issues into one commit.
+13. If there are open questions, assign back to the reporter and stop — do not guess.
+14. Always include the `Co-authored-by: Copilot` trailer in every commit message.
