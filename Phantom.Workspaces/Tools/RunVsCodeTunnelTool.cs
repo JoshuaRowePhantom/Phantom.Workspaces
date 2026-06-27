@@ -38,19 +38,36 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         var cliPath = this.ResolveCliPath(context.Tool.Data);
         var tunnelName = this.ResolveTunnelName(context.Tool.Data);
 
-        var status = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+        var (status, statusError) = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+
+        if (status == VsCodeTunnelServiceStatus.CliNotFound)
+            return WorkspaceToolExecutionResult.Failure($"Failed to start VS Code CLI: {statusError}");
 
         if (status == VsCodeTunnelServiceStatus.NotInstalled)
         {
-            await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
+            var installExitCode = await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
+            if (installExitCode != 0)
+                return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
         }
         else if (status == VsCodeTunnelServiceStatus.Invalid)
         {
-            await this.UninstallServiceAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
-            await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
+            var uninstallExitCode = await this.UninstallServiceAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+            if (uninstallExitCode != 0)
+                return WorkspaceToolExecutionResult.Failure($"Failed to uninstall VS Code tunnel service: exit code {uninstallExitCode}");
+
+            var installExitCode = await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
+            if (installExitCode != 0)
+                return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
         }
 
-        return new WorkspaceToolExecutionResult();
+        if (status != VsCodeTunnelServiceStatus.Running)
+        {
+            var (postInstallStatus, _) = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+            if (postInstallStatus != VsCodeTunnelServiceStatus.Running)
+                return WorkspaceToolExecutionResult.Failure("VS Code tunnel service did not start after installation");
+        }
+
+        return WorkspaceToolExecutionResult.Success();
     }
 
     private string ResolveTunnelName(JsonElement? toolData)
@@ -81,37 +98,42 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         return this.defaultCliPathResolver();
     }
 
-    private async Task<VsCodeTunnelServiceStatus> GetServiceStatusAsync(
+    private async Task<(VsCodeTunnelServiceStatus Status, string? ErrorMessage)> GetServiceStatusAsync(
         string cliPath, CancellationToken cancellationToken)
     {
         var runner = this.cliRunner ?? DefaultRunCliAsync;
-        var (output, exitCode) = await runner(cliPath, "tunnel service log", cancellationToken).ConfigureAwait(false);
-
-        if (exitCode == 0 && output.Contains("running", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            return VsCodeTunnelServiceStatus.Running;
-        }
+            var (output, exitCode) = await runner(cliPath, "tunnel service log", cancellationToken).ConfigureAwait(false);
 
-        if (exitCode != 0)
+            if (exitCode == 0 && output.Contains("running", StringComparison.OrdinalIgnoreCase))
+                return (VsCodeTunnelServiceStatus.Running, null);
+
+            if (exitCode != 0)
+                return (VsCodeTunnelServiceStatus.NotInstalled, null);
+
+            return (VsCodeTunnelServiceStatus.Invalid, null);
+        }
+        catch (Exception ex)
         {
-            return VsCodeTunnelServiceStatus.NotInstalled;
+            return (VsCodeTunnelServiceStatus.CliNotFound, ex.Message);
         }
-
-        return VsCodeTunnelServiceStatus.Invalid;
     }
 
-    private Task UninstallServiceAsync(string cliPath, CancellationToken cancellationToken)
-        => this.RunCliAsync(cliPath, "tunnel service uninstall", cancellationToken);
-
-    private Task InstallServiceAsync(string cliPath, string tunnelName, CancellationToken cancellationToken)
-        => this.RunCliAsync(cliPath,
-            $"tunnel service install --accept-server-license-terms --name {tunnelName}",
-            cancellationToken);
-
-    private async Task RunCliAsync(string cliPath, string arguments, CancellationToken cancellationToken)
+    private async Task<int> UninstallServiceAsync(string cliPath, CancellationToken cancellationToken)
     {
         var runner = this.cliRunner ?? DefaultRunCliAsync;
-        await runner(cliPath, arguments, cancellationToken).ConfigureAwait(false);
+        var (_, exitCode) = await runner(cliPath, "tunnel service uninstall", cancellationToken).ConfigureAwait(false);
+        return exitCode;
+    }
+
+    private async Task<int> InstallServiceAsync(string cliPath, string tunnelName, CancellationToken cancellationToken)
+    {
+        var runner = this.cliRunner ?? DefaultRunCliAsync;
+        var (_, exitCode) = await runner(cliPath,
+            $"tunnel service install --accept-server-license-terms --name {tunnelName}",
+            cancellationToken).ConfigureAwait(false);
+        return exitCode;
     }
 
     private static async Task<(string Output, int ExitCode)> DefaultRunCliAsync(
@@ -128,4 +150,4 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     }
 }
 
-internal enum VsCodeTunnelServiceStatus { NotInstalled, Invalid, Running }
+internal enum VsCodeTunnelServiceStatus { NotInstalled, Invalid, Running, CliNotFound }

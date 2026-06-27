@@ -100,10 +100,11 @@ public sealed class RunVsCodeTunnelToolTests
 
         await tool.ExecuteAsync(this.Context());
 
-        Assert.Equal(3, calls.Count);
+        Assert.Equal(4, calls.Count);
         Assert.Equal("tunnel service log", calls[0].Arguments);
         Assert.Equal("tunnel service uninstall", calls[1].Arguments);
         Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[2].Arguments);
+        Assert.Equal("tunnel service log", calls[3].Arguments);
     }
 
     [Fact]
@@ -158,5 +159,104 @@ public sealed class RunVsCodeTunnelToolTests
         await tool.ExecuteAsync(this.Context());
 
         Assert.All(calls, c => Assert.Equal(@"C:\fake\code.cmd", c.CliPath));
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_CliNotFound_ReturnsFailure()
+    {
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) => throw new InvalidOperationException($"Failed to start process: {cli}"));
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("Failed to start process", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_InstallFails_ReturnsFailure()
+    {
+        var callCount = 0;
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                callCount++;
+                // First call: status check exits 1 (not installed); second call: install exits 2 (failure)
+                return Task.FromResult(("", callCount == 1 ? 1 : 2));
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("exit code 2", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_UninstallFails_ReturnsFailure()
+    {
+        var callCount = 0;
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                callCount++;
+                // First call: status check exits 0/degraded (invalid); second call: uninstall exits 1 (failure)
+                return Task.FromResult(callCount == 1 ? ("service is degraded", 0) : ("", 1));
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("exit code 1", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_AfterInstall_ServiceNotRunning_ReturnsFailure()
+    {
+        var callCount = 0;
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                callCount++;
+                return Task.FromResult(callCount switch
+                {
+                    1 => ("", 1),                      // status: not installed
+                    2 => ("", 0),                      // install: success
+                    _ => ("service is degraded", 0),   // follow-up status: still not running
+                });
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_AfterInstall_ServiceRunning_ReturnsSuccess()
+    {
+        var callCount = 0;
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                callCount++;
+                return Task.FromResult(callCount switch
+                {
+                    1 => ("", 1),                    // status: not installed
+                    2 => ("", 0),                    // install: success
+                    _ => ("service is running", 0),  // follow-up status: running
+                });
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
     }
 }
