@@ -18,6 +18,8 @@
       --chat-uri: #569cd6;
       --chat-tool-summary: #c586c0;
       --chat-tool-body-background: #252526;
+      --copy-btn-color: #808080;
+      --copy-btn-hover-color: #d4d4d4;
     }
 
     html, body {
@@ -31,7 +33,7 @@
     }
 
     body {
-      padding: 8px;
+      padding: 8px 8px 8px 2.5em;
       box-sizing: border-box;
       overflow-y: auto;
       white-space: normal;
@@ -158,11 +160,117 @@
       word-break: break-word;
       overflow-x: auto;
     }
+
+    /* copy-gutter component ------------------------------------------------- */
+
+    .copy-gutter-host {
+      position: relative;
+    }
+
+    .copy-gutter-btn {
+      position: absolute;
+      left: -2.2em;
+      top: 0.1em;
+      width: 1.6em;
+      height: 1.6em;
+      padding: 0;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 120ms ease;
+      font-size: inherit;
+      color: var(--copy-btn-color);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 3px;
+    }
+
+    .copy-gutter-host:hover .copy-gutter-btn,
+    .copy-gutter-btn:focus-visible {
+      opacity: 1;
+    }
+
+    .copy-gutter-btn:hover {
+      color: var(--copy-btn-hover-color);
+    }
+
+    .copy-gutter-btn.confirmed {
+      color: #4ec9b0;
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
   <div id="chat-history"></div>
   <div id="chat-running"></div>
+  <script>
+    /* copy-gutter.js — reusable copy-to-clipboard component.
+     * Call CopyGutter.init(root) to wire up all [data-copy-target] elements inside root.
+     * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
+     */
+    var CopyGutter = (function () {
+      "use strict";
+
+      var CONFIRMATION_MS = 1200;
+
+      function init(root) {
+        root.querySelectorAll("[data-copy-target]").forEach(attach);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-copy-target")) { attach(node); }
+              node.querySelectorAll("[data-copy-target]").forEach(attach);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      function attach(el) {
+        if (el._copyGutterAttached) { return; }
+        el._copyGutterAttached = true;
+        el.classList.add("copy-gutter-host");
+
+        var btn = document.createElement("button");
+        btn.className = "copy-gutter-btn";
+        btn.setAttribute("aria-label", "Copy to clipboard");
+        btn.setAttribute("aria-hidden", "true");
+        btn.textContent = "\u2398"; /* ⎘ copy symbol */
+
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var text = extractText(el);
+          navigator.clipboard.writeText(text).then(function () {
+            btn.textContent = "\u2713"; /* ✓ */
+            btn.classList.add("confirmed");
+            setTimeout(function () {
+              btn.textContent = "\u2398";
+              btn.classList.remove("confirmed");
+            }, CONFIRMATION_MS);
+          });
+        });
+
+        el.insertBefore(btn, el.firstChild);
+      }
+
+      function extractText(el) {
+        var selector = el.getAttribute("data-copy-target");
+        if (selector) {
+          var target = el.querySelector(selector);
+          if (target) { return target.innerText; }
+        }
+        /* Clone and strip copy buttons so their symbol text is excluded. */
+        var clone = el.cloneNode(true);
+        clone.querySelectorAll(".copy-gutter-btn").forEach(function (b) { b.remove(); });
+        return clone.innerText;
+      }
+
+      return { init: init };
+    })();
+  </script>
   <script>
     (function () {
       "use strict";
@@ -252,6 +360,9 @@
       }, true);
 
       postToHost({ type: "ready" });
+
+      // Initialise the copy-gutter component once the host bridge is wired up.
+      CopyGutter.init(document);
     })();
   </script>
 </body>
