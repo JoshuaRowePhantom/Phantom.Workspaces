@@ -172,35 +172,57 @@ The system separates UI, agent execution, data access, and external integrations
    - each explicit type contributes its schema to a composed validator,
    - `entity-type` implicitly composes the `json-schema` entity type,
    - the final composed schema enforces `unevaluatedProperties: false`.
-10. Shared vs user-specific visibility:
+10. Schema validation error reporting model:
+    - schema validation failures must not set `ConcurrencyMatchState.NotMatched`; that state
+      is reserved for actual optimistic-concurrency conflicts where a stored tag differs from
+      the caller's tag. Schema validation runs before any concurrency check and is independent
+      of it. Reporting `NotMatched` for a schema error is misleading and causes callers
+      (including LLM agents) to diagnose a concurrency conflict when none exists. The correct
+      value for a schema failure result is `ConcurrencyMatchState.Matched` (concurrency was
+      not the cause of the failure) or a new enum member such as `NotChecked` to express that
+      concurrency was not evaluated. See also: `ConcurrencyMatchState` in `IDataAccessLayer`.
+    - `unevaluatedProperties: false` at the composed-schema level creates a known error-noise
+      problem: when any inner `allOf` sub-schema fails (e.g., a `contains` constraint on
+      `entity-types`), none of the properties are marked "evaluated", so
+      `unevaluatedProperties: false` fires for every property in the document. This floods
+      the error output with low-signal "All values fail against the false schema" messages for
+      each known property and buries the actual violated constraint. Error collection must
+      prioritise specific constraint errors (leaf nodes with a concrete keyword failure such
+      as `contains`, `required`, `type`, `const`) over generic composite failures from
+      `unevaluatedProperties`. Concretely: suppress `unevaluatedProperties` errors from the
+      output whenever any more-specific error is present elsewhere in the evaluation tree;
+      otherwise surface them as a fallback. The json-everything library's
+      `OutputFormat.List` flattens to leaf errors only and may be preferable to the current
+      `OutputFormat.Hierarchical` walk for this reason.
+11. Shared vs user-specific visibility:
    - each entity has a shared representation and per-user representation,
    - effective user-visible data comes from user-specific data,
    - users can always inspect shared and user data as separate underlying objects.
-11. Relationships are modeled as entities:
+12. Relationships are modeled as entities:
    - a **relationship type** is an entity,
    - a relationship type defines the relationship schema and metadata needed to display/manage relationships of that type,
    - a relationship instance is itself an entity.
-12. Relationship participation model:
+13. Relationship participation model:
    - a relationship generally references a set of participating entities,
    - participants are assigned into roles defined by the relationship type.
-13. Referential integrity:
+14. Referential integrity:
    - the data access layer includes special logic to enforce referential integrity for relationships and their participants.
    - relationship entities are automatically removed when any participant is removed.
    - object-property entity-id references are validated so referenced entities exist.
    - schema-driven entity-id references may constrain allowed target types via `x-entity-types`.
    - synthetic `reference` relationships are managed by the data access layer and duplicate relationships are coalesced.
-14. Interest relationships:
+15. Interest relationships:
    - define a special class of relationships called **interests**,
    - include an **interest relationship type**,
    - interests associate user actions with creation/deletion of relationships.
-15. Interest applicability model:
+16. Interest applicability model:
    - each entity type can specify related interests and the role the entity type plays for each,
    - each interest can specify associated entity types per relationship role,
    - the union of those role-based associations defines the entities to which an interest applies.
-16. Relationship behavior scope:
+17. Relationship behavior scope:
    - interests are specifically about action-driven relationship create/delete behavior,
    - non-interest relationships can support additional behaviors beyond that automation.
-17. Entity type identifiers and labels:
+18. Entity type identifiers and labels:
    - every entity type includes the unique IDs described above,
    - every entity type also includes a friendly-name identifier,
    - every entity type includes a display name for user-facing UI.
