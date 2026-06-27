@@ -33,4 +33,13 @@ internal sealed record InternalCreateAgentChatRequest
     /// still supply the UI scheduler captured before leaving the UI thread.
     /// </summary>
     public TaskScheduler? ForegroundScheduler { get; init; }
+
+    /// <summary>
+    /// When set, overrides the <c>UseProvidedChatClientAsIs</c> value that would otherwise be
+    /// resolved from <see cref="ClientOverride"/> and the client's
+    /// <see cref="ISelfInvokingToolChatClient"/> status.  Used in tests to exercise the
+    /// non-Copilot pipeline (with <c>FunctionInvokingChatClient</c>) while still supplying a
+    /// deterministic <see cref="ClientOverride"/>.
+    /// </summary>
+    internal bool? OverrideUseProvidedChatClientAsIs { get; init; }
 }
