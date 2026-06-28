@@ -13,5 +13,25 @@
   "title": {
     "default": "Pull Requests"
   },
-  "sub-views": []
+  "sub-views": [
+    {
+      "disposition": "expanded",
+      "query": {
+        "clauses": [
+          {
+            "clause-identifier": { "value": "repositories" },
+            "clause": {
+              "clause-type": "entity-type",
+              "entity-type-names": { "values": ["repository"] }
+            }
+          }
+        ]
+      },
+      "relationships-to-return": [
+        {
+          "relationship-type-names": ["related"]
+        }
+      ]
+    }
+  ]
 }

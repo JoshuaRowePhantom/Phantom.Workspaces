@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -106,5 +107,126 @@ public sealed class ChatOutputHtmlRendererTests
 
         Assert.NotNull(html);
         Assert.Contains("data-copy-target", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_RendersAsAnchorElement()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("Visit https://example.com for details"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("<a href", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_AnchorHasCorrectHref()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("Visit https://example.com for details"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("href=\"https://example.com\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_AnchorHasTargetBlank()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("https://example.com"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("target=\"_blank\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_AnchorHasRelNoopenerNoreferrer()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("https://example.com"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("rel=\"noopener noreferrer\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithoutUrl_DoesNotRenderAnchorElement()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("Hello, no links here."), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("<a href", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkdownLinkSyntax_RendersAsAnchorWithTargetAndRel()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("[click here](https://example.com)"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("href=\"https://example.com\"", html, StringComparison.Ordinal);
+        Assert.Contains("target=\"_blank\"", html, StringComparison.Ordinal);
+        Assert.Contains("rel=\"noopener noreferrer\"", html, StringComparison.Ordinal);
+        Assert.Contains("click here", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_WithTimestamp_EmitsChatTimestampSpan()
+    {
+        var timestamp = new DateTimeOffset(2026, 6, 27, 15, 13, 0, TimeSpan.Zero);
+
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant", timestamp);
+
+        Assert.Contains("chat-timestamp", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_WithTimestamp_EmitsDataUtcAttribute()
+    {
+        var timestamp = new DateTimeOffset(2026, 6, 27, 15, 13, 0, TimeSpan.Zero);
+
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant", timestamp);
+
+        Assert.Contains("data-utc=\"", html, StringComparison.Ordinal);
+        Assert.Contains("2026-06-27T15:13:00", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_WithNullTimestamp_OmitsChatTimestampSpan()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant", timestamp: null);
+
+        Assert.DoesNotContain("chat-timestamp", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_WithNoTimestampArgument_OmitsChatTimestampSpan()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant");
+
+        Assert.DoesNotContain("chat-timestamp", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderMessage_WithTimestamp_EmitsDataUtcInHeader()
+    {
+        var timestamp = new DateTimeOffset(2026, 6, 27, 15, 13, 0, TimeSpan.Zero);
+
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "assistant",
+            [("msg-0-c0", "<div>hi</div>")],
+            timestamp);
+
+        Assert.Contains("data-utc=\"", html, StringComparison.Ordinal);
+        Assert.Contains("2026-06-27T15:13:00", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderMessage_WithNullTimestamp_OmitsDataUtcInHeader()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "assistant",
+            [("msg-0-c0", "<div>hi</div>")],
+            timestamp: null);
+
+        Assert.DoesNotContain("data-utc=", html, StringComparison.Ordinal);
     }
 }

@@ -526,7 +526,14 @@
             </Grid>
         </Grid>
     </DataTemplate>
-    <!-- Tab header templates -->
+    <!-- Tab header item templates (top-level so they are individually testable and visible to the full
+         template-resolution chain inside ItemsControl) -->
+    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+        <TextBlock Text="🧠"
+                   Classes="agent-tab-header-brain"
+                   Classes.thinking="{Binding IsRunning}" />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:TabHeaderViewModel">
         <Grid>
             <StackPanel Orientation="Horizontal" Spacing="4">
@@ -538,13 +545,12 @@
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.DataTemplates>
+                        <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
+                            <!-- Show the globe glyph; favicon image loading is a future enhancement -->
+                            <TextBlock Text="🌐" />
+                        </DataTemplate>
                         <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
                             <TextBlock Text="{Binding Icon}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-                            <TextBlock Text="🧠"
-                                       Classes="agent-chat-status-line-brain"
-                                       Classes.thinking="{Binding IsRunning}" />
                         </DataTemplate>
                         <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
                             <!-- Always occupies space; opacity hides it when there is no unread notification -->
@@ -568,5 +574,8 @@
                            HorizontalAlignment="Center" />
             </Border>
         </Grid>
+    </DataTemplate>
+    <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
+        <templates:GitWorktreeReviewView />
     </DataTemplate>
 </DataTemplates>

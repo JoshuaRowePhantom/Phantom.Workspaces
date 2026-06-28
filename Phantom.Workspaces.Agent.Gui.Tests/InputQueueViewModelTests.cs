@@ -118,11 +118,11 @@ public sealed class InputQueueViewModelTests
         viewModel.SubmitToNewQueue();
 
         var queueVm = viewModel.Queues[1];
-        Assert.Equal("queued", queueVm.Composer.SubmitStatusOption.Label);
+        Assert.Equal("queued", queueVm.Composer.SelectedImmediacyOption.Label);
 
         queueVm.SetImmediacy(QueueImmediacyOption.All.First(option => option.Value == AgentInputQueueImmediacy.Held));
 
-        Assert.Equal("held", queueVm.Composer.SubmitStatusOption.Label);
+        Assert.Equal("held", queueVm.Composer.SelectedImmediacyOption.Label);
     }
 
     [AvaloniaFact]

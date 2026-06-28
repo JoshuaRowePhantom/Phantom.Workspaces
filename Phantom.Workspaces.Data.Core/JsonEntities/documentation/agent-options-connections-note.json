@@ -1,0 +1,23 @@
+{
+  "entity-id": "afadf146-db10-415b-ab97-3a4ae946b739",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-options",
+      "connections"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Options — Connections"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-options-connections.md"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels">
+
+    <DataTemplate x:Key="QueueImmediacyPickerTemplate"
+                  DataType="vm:IQueueImmediacyViewModel">
+        <Border Classes="queue-status-pill dynamic">
+            <Button Classes="queue-action-button queue-status-picker-button">
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                  CommandParameter="{Binding ImmediateImmediacyOption}"
+                                  Header="{Binding ImmediateImmediacyOption}"
+                                  Classes="queue-immediacy-menu-item"/>
+                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                  CommandParameter="{Binding QueuedImmediacyOption}"
+                                  Header="{Binding QueuedImmediacyOption}"
+                                  Classes="queue-immediacy-menu-item"/>
+                        <MenuItem Command="{Binding SetImmediacyCommand}"
+                                  CommandParameter="{Binding HeldImmediacyOption}"
+                                  Header="{Binding HeldImmediacyOption}"
+                                  Classes="queue-immediacy-menu-item"/>
+                    </MenuFlyout>
+                </Button.Flyout>
+                <StackPanel Orientation="Horizontal"
+                            Spacing="6"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="{Binding SelectedImmediacyOption.Label}"
+                               Classes="queue-immediacy-label queue-status-label"/>
+                    <TextBlock Text="▾"
+                               Classes="queue-immediacy-caret queue-status-caret"/>
+                </StackPanel>
+            </Button>
+        </Border>
+    </DataTemplate>
+
+</ResourceDictionary>

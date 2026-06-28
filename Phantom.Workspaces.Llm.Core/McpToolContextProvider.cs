@@ -6,6 +6,11 @@ using AgentSchema;
 
 namespace Phantom.Workspaces.Llm;
 
+/// <summary>
+/// When adding or changing MCP tool connection kinds or options, update the workspace
+/// documentation entities: <c>["documentation", "agent-options", "tools"]</c> and
+/// <c>["documentation", "agent-options", "connections"]</c>.
+/// </summary>
 public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 {
     private readonly string stateKey = $"mcp-tool:{Guid.NewGuid():n}";

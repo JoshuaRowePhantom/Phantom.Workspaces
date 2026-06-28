@@ -615,6 +615,89 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("<details open", html, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── Cross-message tool-result injection tests (issue #154 bug fix) ────────
+
+    [Fact]
+    public void ToolResultMessage_CrossMessage_MatchedByCallId_InjectedIntoCallItem()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-1", "my_tool")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("call-1", "\"result data\"")],
+        });
+
+        var contentOps = sink.ContentOperations;
+
+        // The call message should be updated (Replace) to include the result sub-detail.
+        var updateOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Content.Contains("chat-tool-group-item"));
+        Assert.NotNull(updateOp);
+        Assert.Contains("chat-tool-result", updateOp.Content);
+
+        // No standalone "tool result:" element should appear as a separate DOM operation.
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("tool result:"));
+    }
+
+    [Fact]
+    public void ToolResultMessage_CrossMessage_Unmatched_RenderedStandalone()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Tool,
+                Contents = [new FunctionResultContent("orphan-id", "orphan result")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.DoesNotContain("chat-tool-group-item", op.Content);
+        Assert.DoesNotContain("chat-tool-group-wrapper", op.Content);
+    }
+
+    [Fact]
+    public void ToolResultMessage_CrossMessage_DoesNotTriggerMessageLevelGroup()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-1", "my_tool")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("call-1", "\"result data\"")],
+        });
+
+        var contentOps = sink.ContentOperations;
+
+        // No message-level chat-tool-group (ToolCallGroupHtmlModel) should be created.
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group-body"));
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group\""));
+    }
+
     [Fact]
     public void RenderContent_FunctionCallContent_EmitsDataDetailsTarget()
     {
@@ -656,5 +739,108 @@ public sealed class ChatOutputHtmlModelTests
 
         Assert.NotNull(html);
         Assert.Contains("data-details-target=\"my reasoning\"", html);
+    }
+
+    // ── Running-item insertion-point reliability tests (issue #222) ───────────
+
+    [Fact]
+    public void RunningItem_Activate_EmitsContainerInsertBeforeMessageAppend()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "hello"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+
+        var ops = sink.ContentOperations;
+        Assert.Equal(2, ops.Count);
+
+        // First op must be the outer running-item container appended into the running region.
+        Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, ops[0].Path);
+        Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), ops[0].Content);
+
+        // Second op must be the message appended into that container's contents div — which only
+        // exists because the first op already created it.
+        var contentsId = ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0));
+        Assert.Equal(contentsId, ops[1].Path);
+        Assert.Contains(">hello<", ops[1].Content);
+    }
+
+    [Fact]
+    public void RunningItem_StreamingChunksContinueAfterToolCallResultInsertion()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+
+        // Seed: partial text + tool call already streamed.
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "thinking..."));
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent("call-1", "my_tool")],
+        });
+        sink.Clear();
+
+        // Tool result arrives — injected into the call slot, no new top-level DOM element.
+        runningItem.Items.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("call-1", "\"ok\"")],
+        });
+        sink.Clear();
+
+        // Next streaming chunk after the tool result.
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "done"));
+
+        var ops = sink.ContentOperations;
+        Assert.Contains(ops, op => op.Content.Contains(">done<"));
+    }
+
+    [Fact]
+    public void RunningItem_WhenInsertionFailed_NotifyInsertionFailed_ReInsertsAndRestoresStreaming()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        sink.Clear();
+
+        // Simulate: JS reported that the running-item container element was not found
+        // (the anchor used to insert it was stale — e.g. after a page reset/reload).
+        var runningItemId = ChatOutputHtmlRenderer.RunningItemId(0);
+        model.NotifyInsertionFailed(runningItemId);
+
+        // The model must re-insert the container via Append into the running region.
+        var reInsertOps = sink.ContentOperations;
+        var containerReInsert = reInsertOps.FirstOrDefault(op =>
+            op.Content.Contains(runningItemId) &&
+            op.Location == ChatOutputUpdateLocation.Append);
+        Assert.NotNull(containerReInsert);
+        Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, containerReInsert.Path);
+
+        sink.Clear();
+
+        // Subsequent streaming chunks must now land correctly.
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "recovered stream"));
+
+        var streamOps = sink.ContentOperations;
+        Assert.Contains(streamOps, op => op.Content.Contains(">recovered stream<"));
     }
 }

@@ -22,6 +22,42 @@
       "contains": {
         "const": "git-worktree"
       }
+    },
+    "target-branch": {
+      "type": "string",
+      "description": "The branch this worktree's changes are compared against in the review view (e.g. 'main', 'develop')."
+    },
+    "git": {
+      "type": "object",
+      "description": "Git repository metadata populated by workspace discovery tooling.",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "description": "Current checked-out branch name, or HEAD if detached."
+        },
+        "head-commit": {
+          "type": "string",
+          "description": "SHA of the HEAD commit."
+        },
+        "remotes": {
+          "type": "array",
+          "description": "List of configured remotes for this repository.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Remote name (e.g. 'origin')."
+              },
+              "url": {
+                "type": "string",
+                "description": "Remote fetch URL."
+              }
+            },
+            "required": ["name"]
+          }
+        }
+      }
     }
   }
 }

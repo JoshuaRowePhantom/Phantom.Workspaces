@@ -29,6 +29,7 @@ internal sealed class ChatMessageHtmlModel
     private string? renderedRoleLabel;
     private bool hasRendered;
     private bool lastReasoningVisible;
+    private Dictionary<string, FunctionResultContent>? supplementalResults;
 
     public ChatMessageHtmlModel(
         string elementId,
@@ -54,6 +55,50 @@ internal sealed class ChatMessageHtmlModel
     /// <summary>Set once the message element has been inserted into the DOM by its transformer.</summary>
     public bool IsInserted { get; set; }
 
+    /// <summary>
+    /// Returns true if this message's source contains a <see cref="FunctionCallContent"/> with the
+    /// given <paramref name="callId"/>. Used by the transformer to locate the matching call slot when
+    /// a tool-result message arrives in a separate message.
+    /// </summary>
+    public bool HasCallWithId(string? callId)
+    {
+        if (callId is null)
+        {
+            return false;
+        }
+
+        foreach (var content in this.source.Contents)
+        {
+            if (content is FunctionCallContent call && call.CallId == callId)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Injects a <see cref="FunctionResultContent"/> from a separate tool-role message into this
+    /// message's rendering so the result appears nested under its matching call item. Triggers a
+    /// re-render if the message has already been inserted into the DOM.
+    /// </summary>
+    public void AddSupplementalResult(FunctionResultContent result)
+    {
+        if (result.CallId is null)
+        {
+            return;
+        }
+
+        this.supplementalResults ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
+        this.supplementalResults[result.CallId] = result;
+
+        if (this.IsInserted)
+        {
+            this.Render(emit: true);
+        }
+    }
+
     /// <summary>Builds the full message element for initial insertion from the current bindings.</summary>
     public string BuildHtml()
     {
@@ -62,7 +107,8 @@ internal sealed class ChatMessageHtmlModel
         return ChatOutputHtmlRenderer.RenderMessage(
             this.ElementId,
             roleLabel,
-            this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList());
+            this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
+            this.source.Timestamp);
     }
 
     public void Update(AgentChatHistoryItem newSource)
@@ -97,6 +143,16 @@ internal sealed class ChatMessageHtmlModel
             {
                 resultLookup ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
                 resultLookup.TryAdd(result.CallId, result);
+            }
+        }
+
+        // Merge supplemental results injected from a separate tool-role message (cross-message pairing).
+        if (this.supplementalResults is not null)
+        {
+            resultLookup ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
+            foreach (var (callId, supplemental) in this.supplementalResults)
+            {
+                resultLookup.TryAdd(callId, supplemental);
             }
         }
 
@@ -327,6 +383,35 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     {
         var sourceItem = this.Source[index];
 
+        // If the new item contains only FunctionResultContent items, try to inject each result into
+        // the preceding slot that owns the matching FunctionCallContent. When any result is injected
+        // the tool-result message produces no DOM element of its own (the result is shown nested
+        // inside the call item). Unmatched results fall through to normal standalone rendering.
+        if (IsToolResultOnlyItem(sourceItem))
+        {
+            var anyInjected = false;
+            foreach (var content in sourceItem.Contents)
+            {
+                if (content is FunctionResultContent result)
+                {
+                    var matchSlot = this.FindSlotWithCallId(result.CallId);
+                    if (matchSlot is not null)
+                    {
+                        matchSlot.Model.AddSupplementalResult(result);
+                        anyInjected = true;
+                    }
+                }
+            }
+
+            if (anyInjected)
+            {
+                // Results injected; no DOM element for this message.
+                return;
+            }
+
+            // No matching calls found; fall through to standalone rendering below.
+        }
+
         if (IsToolCallOnlyItem(sourceItem))
         {
             var toolName = GetLastToolName(sourceItem);
@@ -378,6 +463,28 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     protected override void OnRemoveAt(int index, RenderSlot slot)
         => this.sink.RemoveContent(slot.Model.ElementId);
 
+    /// <summary>
+    /// Returns true when the item contains only <see cref="FunctionResultContent"/> items.
+    /// Such messages are handled by cross-message result injection rather than message-level grouping.
+    /// </summary>
+    private static bool IsToolResultOnlyItem(AgentChatHistoryItem item)
+    {
+        if (item.Contents.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var content in item.Contents)
+        {
+            if (content is not FunctionResultContent)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool IsToolCallOnlyItem(AgentChatHistoryItem item)
     {
         if (item.Contents.Count == 0)
@@ -387,13 +494,36 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         foreach (var content in item.Contents)
         {
-            if (content is not (FunctionCallContent or FunctionResultContent))
+            if (content is not FunctionCallContent)
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Searches backwards through <see cref="CollectionTransformer{TSource,TTarget}.Target"/> for
+    /// the most recent slot whose source message contains a <see cref="FunctionCallContent"/> with
+    /// the given <paramref name="callId"/>. Returns <see langword="null"/> if not found.
+    /// </summary>
+    private RenderSlot? FindSlotWithCallId(string? callId)
+    {
+        if (callId is null)
+        {
+            return null;
+        }
+
+        for (var i = this.Target.Count - 1; i >= 0; i--)
+        {
+            if (this.Target[i].Model.HasCallWithId(callId))
+            {
+                return this.Target[i];
+            }
+        }
+
+        return null;
     }
 
     private static string GetLastToolName(AgentChatHistoryItem item)
@@ -523,6 +653,24 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         {
             slot.Model.Refresh();
         }
+    }
+
+    /// <summary>
+    /// Re-establishes the insertion point after a DOM failure by discarding the current transformer,
+    /// clearing message slots, and re-inserting the container via <c>Append</c> into
+    /// <paramref name="containerPath"/> — a location that is always reachable (e.g. the static
+    /// running-items region).  Activates a fresh inner transformer so subsequent streaming chunks
+    /// arrive into the newly-placed contents div.
+    /// </summary>
+    public void ReInsert(string containerPath)
+    {
+        this.IsInserted = false;
+        this.transformer?.Dispose();
+        this.transformer = null;
+        this.messageSlots.Clear();
+        this.sink.UpdateContent(containerPath, ChatOutputUpdateLocation.Append, this.BuildHtml());
+        this.IsInserted = true;
+        this.Activate();
     }
 
     public void Dispose() => this.transformer?.Dispose();
@@ -662,6 +810,26 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.sink.ScrollToBottom();
+    }
+
+    /// <summary>
+    /// Called when the browser reports that a DOM command targeting
+    /// <paramref name="failedPath"/> was silently dropped because the element did not exist.
+    /// Finds the affected running-item model (by its element id or its contents-div id) and
+    /// calls <see cref="RunningChatItemHtmlModel.ReInsert"/> to recover the insertion point
+    /// using a stable <c>Append</c> fallback.
+    /// </summary>
+    public void NotifyInsertionFailed(string failedPath)
+    {
+        foreach (var model in this.runningModels)
+        {
+            if (model.ElementId == failedPath ||
+                ChatOutputHtmlRenderer.RunningItemContentsId(model.ElementId) == failedPath)
+            {
+                model.ReInsert(ChatOutputHtmlRenderer.RunningContainerId);
+                return;
+            }
+        }
     }
 
     public void Dispose()

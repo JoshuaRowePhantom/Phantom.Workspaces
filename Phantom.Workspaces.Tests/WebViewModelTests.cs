@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -8,6 +9,44 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WebViewModelTests
 {
+    // --- TabHeader / FaviconTabHeaderItemViewModel ---
+
+    [AvaloniaFact]
+    public void WebViewModel_Constructor_TabHeader_ContainsFaviconItem()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "web-favicon-1", Title = "T" };
+        Assert.NotNull(vm.TabHeader);
+        var favicon = vm.TabHeader!.Items.OfType<FaviconTabHeaderItemViewModel>().FirstOrDefault();
+        Assert.NotNull(favicon);
+    }
+
+    [AvaloniaFact]
+    public void WebViewModel_Constructor_FaviconItem_UriIsNull()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "web-favicon-2", Title = "T" };
+        var favicon = vm.TabHeader!.Items.OfType<FaviconTabHeaderItemViewModel>().Single();
+        Assert.Null(favicon.FaviconUri);
+    }
+
+    [AvaloniaFact]
+    public void WebViewModel_SetFaviconUri_UpdatesFaviconItem()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "web-favicon-3", Title = "T" };
+        vm.SetFaviconUri("https://example.com/favicon.ico");
+        var favicon = vm.TabHeader!.Items.OfType<FaviconTabHeaderItemViewModel>().Single();
+        Assert.Equal("https://example.com/favicon.ico", favicon.FaviconUri);
+    }
+
+    [AvaloniaFact]
+    public void WebViewModel_SetFaviconUri_ToNull_ClearsFaviconItem()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "web-favicon-4", Title = "T" };
+        vm.SetFaviconUri("https://example.com/favicon.ico");
+        vm.SetFaviconUri(null);
+        var favicon = vm.TabHeader!.Items.OfType<FaviconTabHeaderItemViewModel>().Single();
+        Assert.Null(favicon.FaviconUri);
+    }
+
     // --- SetPageTitle / titleFixed ---
 
     [AvaloniaFact]

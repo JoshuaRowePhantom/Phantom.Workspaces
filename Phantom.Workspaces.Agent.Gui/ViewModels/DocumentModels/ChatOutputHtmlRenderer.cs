@@ -3,6 +3,10 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using Markdig;
+using Markdig.Renderers;
+using Markdig.Renderers.Html;
+using Markdig.Renderers.Html.Inlines;
+using Markdig.Syntax.Inlines;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
@@ -26,9 +30,11 @@ internal static class ChatOutputHtmlRenderer
     // angle brackets in the model output are escaped (the rendered HTML is injected into the chat
     // WebView, where un-escaped markup would be an injection risk).
     // UsePipeTables enables GitHub-Flavored Markdown pipe tables (| col | col |).
+    // UseAutoLinks makes bare https:// and http:// URLs in plain text clickable.
     private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
         .DisableHtml()
         .UsePipeTables()
+        .UseAutoLinks()
         .Build();
 
     public static string MessageId(int sequence) => $"msg-{sequence}";
@@ -200,12 +206,13 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderMessage(
         string messageId,
         string roleLabel,
-        IReadOnlyList<(string ElementId, string Html)> contents)
+        IReadOnlyList<(string ElementId, string Html)> contents,
+        DateTimeOffset? timestamp = null)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
-        builder.Append(RenderHeader(messageId, roleLabel));
+        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -224,14 +231,25 @@ internal static class ChatOutputHtmlRenderer
     /// Returns an empty string for the <c>tool</c> role — results are bundled into the assistant
     /// message's tool-group hierarchy and need no separate role header.
     /// </summary>
-    public static string RenderHeader(string messageId, string roleLabel)
+    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
     {
         if (string.Equals(roleLabel, "tool", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }
 
-        return $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
+        var builder = new StringBuilder();
+        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"0\">");
+        builder.Append("<span>[").Append(HtmlEscape(roleLabel)).Append("]</span>");
+        if (timestamp.HasValue)
+        {
+            builder.Append("<span class=\"chat-timestamp\" data-utc=\"")
+                .Append(timestamp.Value.ToString("O"))
+                .Append("\"></span>");
+        }
+
+        builder.Append("</div>");
+        return builder.ToString();
     }
 
     public static string RoleClass(string roleLabel)
@@ -378,7 +396,16 @@ internal static class ChatOutputHtmlRenderer
         => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
 
     private static string MarkdownToHtml(string text)
-        => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
+    {
+        using var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        MarkdownPipeline.Setup(renderer);
+        renderer.ObjectRenderers.ReplaceOrAdd<LinkInlineRenderer>(new ExternalLinkInlineRenderer());
+        var document = Markdown.Parse(text, MarkdownPipeline);
+        renderer.Render(document);
+        writer.Flush();
+        return writer.ToString().TrimEnd('\n', '\r');
+    }
 
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
@@ -472,6 +499,30 @@ internal static class ChatOutputHtmlRenderer
         {
             pretty = string.Empty;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Adds <c>target="_blank"</c> and <c>rel="noopener noreferrer"</c> to any link whose URL
+    /// starts with <c>http://</c> or <c>https://</c>. Used for both auto-linked bare URLs and
+    /// explicit Markdown link syntax.
+    /// </summary>
+    private sealed class ExternalLinkInlineRenderer : LinkInlineRenderer
+    {
+        protected override void Write(HtmlRenderer renderer, LinkInline link)
+        {
+            if (!link.IsImage)
+            {
+                var url = link.Url ?? string.Empty;
+                if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                    url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                {
+                    link.GetAttributes().AddPropertyIfNotExist("target", "_blank");
+                    this.Rel = "noopener noreferrer";
+                }
+            }
+
+            base.Write(renderer, link);
         }
     }
 }

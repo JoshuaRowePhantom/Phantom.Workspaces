@@ -240,6 +240,52 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Assert.Contains("2", result.ResultContent, StringComparison.Ordinal);
         Assert.Contains(this.scanRoot, result.ResultContent, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_BeforeEachScanRoot_LogsInformationWithPath()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var tool = new GitWorkspaceScanTool(logger: logger);
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains(this.scanRoot, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenRepositoryFound_LogsDebugWithRepoPath()
+    {
+        var repo = this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var tool = new GitWorkspaceScanTool(logger: logger);
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Debug
+            && e.Message.Contains(repo, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AfterEachScanRoot_LogsInformationSummaryWithCountAndPath()
+    {
+        this.MakeRepo("project-a");
+        this.MakeRepo("project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var tool = new GitWorkspaceScanTool(logger: logger);
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("2", StringComparison.Ordinal)
+            && e.Message.Contains(this.scanRoot, StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 internal sealed class TestLogger<T> : ILogger<T>

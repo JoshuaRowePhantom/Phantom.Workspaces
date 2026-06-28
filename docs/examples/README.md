@@ -171,6 +171,12 @@ These files follow the [Microsoft AgentSchema specification](https://microsoft.g
 | `tools` | Array of available tools (FunctionTool, CustomTool, McpTool, etc.) |
 | `metadata` | Optional metadata for versioning, tags, and custom fields |
 
+> **Authoritative options reference:** The full reference for all supported providers, connection kinds, `model.options` fields, tool kinds, and manifest parameters is available as workspace documentation entities. Retrieve the index with:
+> ```json
+> { "get-entity": [{ "entity-name": ["documentation", "agent-options", "overview"] }] }
+> ```
+> The overview lists sibling entity names for providers, model-options, tools, parameters, and connections.
+
 ## Creating Your Own
 
 To create a new agent definition:

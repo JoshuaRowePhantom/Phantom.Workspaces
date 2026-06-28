@@ -213,6 +213,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         if (this.subscribedViewModel is { } vm)
         {
+            this.browser.BeginBatch();
             this.outputModel = new ChatOutputHtmlModel(
                 vm.History,
                 vm.RunningItems,
@@ -220,6 +221,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 this,
                 DefaultToolFactory,
                 this);
+            this.browser.EndBatch();
         }
     }
 
@@ -269,6 +271,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                     if (!string.IsNullOrEmpty(contentId))
                     {
                         this.InspectorRequested?.Invoke(this, contentId);
+                    }
+                }
+                break;
+            }
+            case "commandFailed":
+            {
+                if (root.TryGetProperty("path", out var pathProp))
+                {
+                    var path = pathProp.GetString();
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        this.outputModel?.NotifyInsertionFailed(path);
                     }
                 }
                 break;

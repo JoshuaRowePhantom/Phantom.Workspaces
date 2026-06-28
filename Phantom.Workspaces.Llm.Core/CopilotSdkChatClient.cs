@@ -23,6 +23,10 @@ namespace Phantom.Workspaces.Llm;
 /// presentation and persistence. When a stored SDK session id is supplied via
 /// <see cref="SetResumeSessionId"/>, the first session is resumed rather than
 /// created, so history survives a process restart (issue #3).
+///
+/// When changing working-directory handling or the Copilot provider behaviour, update the workspace
+/// documentation entities: <c>["documentation", "agent-options", "providers"]</c> and
+/// <c>["documentation", "agent-options", "model-options"]</c>.
 /// </remarks>
 public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient
 {

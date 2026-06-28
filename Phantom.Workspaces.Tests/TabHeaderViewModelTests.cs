@@ -1,8 +1,12 @@
 using System.ComponentModel;
 using System.Linq;
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Headless.XUnit;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -10,6 +14,31 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class TabHeaderViewModelTests
 {
+    // ── FaviconTabHeaderItemViewModel ────────────────────────────────────────
+
+    [Fact]
+    public void FaviconTabHeaderItemViewModel_FaviconUri_DefaultIsNull()
+    {
+        var item = new FaviconTabHeaderItemViewModel();
+        Assert.Null(item.FaviconUri);
+    }
+
+    [Fact]
+    public void FaviconTabHeaderItemViewModel_SetFaviconUri_RaisesPropertyChanged()
+    {
+        var item = new FaviconTabHeaderItemViewModel();
+        var raised = false;
+        item.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(item.FaviconUri))
+                raised = true;
+        };
+
+        item.FaviconUri = "https://example.com/favicon.ico";
+
+        Assert.True(raised);
+    }
+
     // ── AgentRunningIndicatorTabHeaderItemViewModel ──────────────────────────
 
     [Fact]
@@ -268,5 +297,21 @@ public sealed class TabHeaderViewModelTests
 
         var label = ((WorkspaceDocument)dock.VisibleDockables![10]).EffectiveTabHeader.AltShortcutLabel;
         Assert.Null(label);
+    }
+
+    // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentRunningIndicatorDataTemplate_TextBlock_UsesAgentTabHeaderBrainClass()
+    {
+        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
+        var templates = new WorkspaceDataTemplates();
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        var control = matchingTemplate.Build(viewModel);
+
+        var textBlock = Assert.IsType<TextBlock>(control);
+        Assert.Contains("agent-tab-header-brain", textBlock.Classes);
+        Assert.DoesNotContain("agent-chat-status-line-brain", textBlock.Classes);
     }
 }

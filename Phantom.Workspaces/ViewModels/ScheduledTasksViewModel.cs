@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -11,19 +12,28 @@ using Phantom.Workspaces.ScheduledTools;
 namespace Phantom.Workspaces.ViewModels;
 
 /// <summary>A scheduled tool-relationship shown in the scheduled tasks view.</summary>
-public sealed class ScheduledTaskItemViewModel
+public sealed class ScheduledTaskItemViewModel : ViewModelBase
 {
+    private bool isRunning;
+    private bool hasFailure;
+    private bool lastRunSucceeded;
+
     public ScheduledTaskItemViewModel(
+        string toolType,
         string toolDisplayName,
         string scheduleDisplayName,
         string targetDisplayName,
         string? note)
     {
+        this.ToolType = toolType;
         this.ToolDisplayName = toolDisplayName;
         this.ScheduleDisplayName = scheduleDisplayName;
         this.TargetDisplayName = targetDisplayName;
         this.Note = note;
     }
+
+    /// <summary>The raw tool-type discriminator; matches <see cref="ToolRowViewModel.ToolType"/>.</summary>
+    public string ToolType { get; }
 
     public string ToolDisplayName { get; }
 
@@ -34,6 +44,27 @@ public sealed class ScheduledTaskItemViewModel
     public string? Note { get; }
 
     public bool HasNote => !string.IsNullOrWhiteSpace(this.Note);
+
+    /// <summary>Whether the tool is currently executing an in-flight run.</summary>
+    public bool IsRunning
+    {
+        get => this.isRunning;
+        set => this.SetProperty(ref this.isRunning, value);
+    }
+
+    /// <summary>True when the most-recent completed run failed.</summary>
+    public bool HasFailure
+    {
+        get => this.hasFailure;
+        set => this.SetProperty(ref this.hasFailure, value);
+    }
+
+    /// <summary>True when the most-recent completed run succeeded.</summary>
+    public bool LastRunSucceeded
+    {
+        get => this.lastRunSucceeded;
+        set => this.SetProperty(ref this.lastRunSucceeded, value);
+    }
 }
 
 /// <summary>
@@ -52,6 +83,7 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
     private readonly Action<Action> dispatch;
     private bool isLoading;
     private bool isToggleInProgress;
+    private ScheduledTaskItemViewModel? selectedTask;
 
     public ScheduledTasksViewModel(
         EntityBroker entityBroker,
@@ -76,6 +108,11 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
         {
             this.pauseStateService.PauseStateChanged += this.OnPauseStateChanged;
         }
+
+        if (this.ScheduledToolsRunning is not null)
+        {
+            this.ScheduledToolsRunning.PropertyChanged += this.OnRunningToolsPropertyChanged;
+        }
     }
 
     /// <summary>The scheduled tool-relationships.</summary>
@@ -83,6 +120,34 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
 
     /// <summary>The running and historical tool executions; null when no tool host is available.</summary>
     public ScheduledToolsRunningViewModel? ScheduledToolsRunning { get; }
+
+    /// <summary>The currently selected task in the top pane; drives <see cref="SelectedToolRow"/>.</summary>
+    public ScheduledTaskItemViewModel? SelectedTask
+    {
+        get => this.selectedTask;
+        set
+        {
+            if (this.SetProperty(ref this.selectedTask, value))
+            {
+                this.RaisePropertyChanged(nameof(this.SelectedToolRow));
+                if (this.SelectedToolRow is { } row)
+                {
+                    _ = row.LoadRecentRunsAsync();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The <see cref="ToolRowViewModel"/> in <see cref="ScheduledToolsRunning"/> whose
+    /// <see cref="ToolRowViewModel.ToolType"/> matches <see cref="SelectedTask"/>; null when no task
+    /// is selected or no runs have been recorded for that tool type.
+    /// </summary>
+    public ToolRowViewModel? SelectedToolRow =>
+        this.selectedTask is null || this.ScheduledToolsRunning is null
+            ? null
+            : this.ScheduledToolsRunning.Tools.FirstOrDefault(r =>
+                string.Equals(r.ToolType, this.selectedTask.ToolType, StringComparison.Ordinal));
 
     /// <summary>Whether the host-wide pause control should be shown at all.</summary>
     public bool HasPauseControl => this.pauseStateService is not null;
@@ -153,6 +218,8 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
             if (this.ScheduledToolsRunning is not null)
             {
                 await this.ScheduledToolsRunning.RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
+                this.SyncStatusIndicators();
+                this.RaisePropertyChanged(nameof(this.SelectedToolRow));
             }
         }
         finally
@@ -192,14 +259,16 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
                 continue;
             }
 
-            var toolName = await this.ResolveNameAsync(ReadReference(participants, "tool")).ConfigureAwait(true);
+            var toolEntityId = ReadReference(participants, "tool");
+            var toolType = await this.ResolveToolTypeAsync(toolEntityId, cancellationToken).ConfigureAwait(true);
+            var toolName = await this.ResolveNameAsync(toolEntityId).ConfigureAwait(true);
             var scheduleName = await this.ResolveNameAsync(ReadFirstReference(participants, "schedule")).ConfigureAwait(true);
             var targetName = await this.ResolveNameAsync(ReadFirstReference(participants, "target")).ConfigureAwait(true);
             var note = data.TryGetProperty("note", out var noteElement) && noteElement.ValueKind == JsonValueKind.String
                 ? noteElement.GetString()
                 : null;
 
-            items.Add(new ScheduledTaskItemViewModel(toolName, scheduleName, targetName, note));
+            items.Add(new ScheduledTaskItemViewModel(toolType, toolName, scheduleName, targetName, note));
         }
 
         return items
@@ -217,6 +286,77 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
 
         var candidate = await this.entityReferenceSearch.ResolveAsync(entityId).ConfigureAwait(true);
         return candidate?.DisplayName ?? entityId;
+    }
+
+    private async Task<string> ResolveToolTypeAsync(
+        string? entityId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(entityId))
+        {
+            return string.Empty;
+        }
+
+        EntityId id;
+        try
+        {
+            id = new EntityId(entityId);
+        }
+        catch (FormatException)
+        {
+            return string.Empty;
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
+
+        var getResult = await this.entityBroker.EntityRepository.DataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = id }],
+                Timestamps = [null],
+            },
+            cancellationToken).ConfigureAwait(true);
+
+        var snapshot = getResult.Batches
+            .SelectMany(batch => batch.Entities)
+            .FirstOrDefault(s => s.EntityId == id);
+
+        if (snapshot?.Data is not JsonElement data)
+        {
+            return string.Empty;
+        }
+
+        return data.TryGetProperty("tool-type", out var typeEl) && typeEl.ValueKind == JsonValueKind.String
+            ? typeEl.GetString() ?? string.Empty
+            : string.Empty;
+    }
+
+    private void SyncStatusIndicators()
+    {
+        if (this.ScheduledToolsRunning is null)
+        {
+            return;
+        }
+
+        foreach (var task in this.ScheduledTasks)
+        {
+            var row = this.ScheduledToolsRunning.Tools.FirstOrDefault(r =>
+                string.Equals(r.ToolType, task.ToolType, StringComparison.Ordinal));
+            task.IsRunning = row?.IsRunning ?? false;
+            task.HasFailure = row?.HasFailure ?? false;
+            task.LastRunSucceeded = row is not null && row.LastRunStatus == "succeeded";
+        }
+    }
+
+    private void OnRunningToolsPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ScheduledToolsRunningViewModel.HasRunningTools)
+                           or nameof(ScheduledToolsRunningViewModel.HasFailure))
+        {
+            this.SyncStatusIndicators();
+        }
     }
 
     private static string? ReadReference(
@@ -257,6 +397,11 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         this.ScheduledToolsRunning?.Dispose();
+        if (this.ScheduledToolsRunning is not null)
+        {
+            this.ScheduledToolsRunning.PropertyChanged -= this.OnRunningToolsPropertyChanged;
+        }
+
         if (this.pauseStateService is not null)
         {
             this.pauseStateService.PauseStateChanged -= this.OnPauseStateChanged;

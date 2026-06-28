@@ -291,4 +291,213 @@ public sealed class NotificationsViewModelTests
         Assert.True(viewModel.IsOpen);
         Assert.True(viewModel.IsAutoClosing);
     }
+
+    // ── OpenWithHighlight tests ────────────────────────────────────────────
+
+    [Fact]
+    public void OpenWithHighlight_SetsIsOpenTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        Assert.True(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_SetsIsAutoClosingTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        Assert.True(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_HighlightsTargetRow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        Assert.True(row.IsHighlighted);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_ClearsOtherRowHighlights()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "first"));
+        service.Notify(InterestingNotification(Tab("tab-2"), "second"));
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        var otherRow = viewModel.Rows.Single(r => r.TabKey == "tab-2");
+        Assert.False(otherRow.IsHighlighted);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_WhenCalledAgain_MovesHighlight()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "first"));
+        service.Notify(InterestingNotification(Tab("tab-2"), "second"));
+
+        viewModel.OpenWithHighlight("tab-1");
+        viewModel.OpenWithHighlight("tab-2");
+
+        var row1 = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        var row2 = viewModel.Rows.Single(r => r.TabKey == "tab-2");
+        Assert.False(row1.IsHighlighted);
+        Assert.True(row2.IsHighlighted);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_WhenTabKeyNotFound_PopupStillOpens()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        viewModel.OpenWithHighlight("tab-not-found");
+
+        Assert.True(viewModel.IsOpen);
+        Assert.True(viewModel.IsAutoClosing);
+        Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
+    }
+
+    [Fact]
+    public void OpenWithHighlight_WhenNoRows_DoesNotThrow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        var exception = Record.Exception(() => viewModel.OpenWithHighlight("tab-1"));
+
+        Assert.Null(exception);
+        Assert.True(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void OnDismissed_ClearsAllHighlights()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.OpenWithHighlight("tab-1");
+
+        viewModel.Dismiss();
+
+        Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
+    }
+
+    [Fact]
+    public void ToggleOpen_ManualOpen_NoRowIsHighlighted()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        viewModel.ToggleOpen();
+
+        Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
+    }
+
+    // ── Frozen-order tests ────────────────────────────────────────────────
+
+    private static Notification InterestingNotification(TabDescriptor tab, string description, DateTime when) =>
+        new Notification(tab, "Completed", description, when, RunningState.Idle, NotificationState.Interesting);
+
+    [Fact]
+    public void RefreshRows_WhenOpen_DoesNotReorderExistingRows()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        var baseTime = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        // tab-2 is older (added first); popup opens. tab-1 is newer; popup already open so tab-1 is prepended.
+        service.Notify(InterestingNotification(Tab("tab-2"), "older", baseTime));
+        service.Notify(InterestingNotification(Tab("tab-1"), "newer", baseTime.AddSeconds(1)));
+
+        // Both unread; tab-1 (newer) should be at index 0
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-2", viewModel.Rows[1].TabKey);
+
+        // Mark tab-1 as read while the popup is still open
+        service.MarkRead("tab-1");
+
+        // Order must not change — tab-1 stays at index 0
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-2", viewModel.Rows[1].TabKey);
+    }
+
+    [Fact]
+    public void RefreshRows_WhenOpen_AppendsNewNotificationAtTop()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(InterestingNotification(Tab("tab-1"), "first"));
+        // Popup is now open with tab-1 at index 0
+        Assert.True(viewModel.IsOpen);
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+
+        // Notify a second tab while popup is open
+        service.Notify(InterestingNotification(Tab("tab-2"), "second"));
+
+        // New notification should appear at index 0; existing row stays at index 1
+        Assert.Equal("tab-2", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-1", viewModel.Rows[1].TabKey);
+    }
+
+    [Fact]
+    public void RefreshRows_AfterClose_ResortsByReadThenTime()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        var baseTime = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        // tab-2 older, tab-1 newer; both unread; tab-1 ends up at index 0 after both are notified
+        service.Notify(InterestingNotification(Tab("tab-2"), "older", baseTime));
+        service.Notify(InterestingNotification(Tab("tab-1"), "newer", baseTime.AddSeconds(1)));
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+
+        // Mark tab-1 as read while the popup is open; order frozen — tab-1 stays at 0
+        service.MarkRead("tab-1");
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+
+        // Close the popup — rows should now be re-sorted (unread first)
+        viewModel.Dismiss();
+
+        Assert.Equal("tab-2", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-1", viewModel.Rows[1].TabKey);
+    }
 }

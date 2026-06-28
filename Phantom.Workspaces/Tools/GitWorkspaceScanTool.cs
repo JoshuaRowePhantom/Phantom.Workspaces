@@ -76,6 +76,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         var seenRepositoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var scanRoot in scanRoots)
         {
+            this.logger.LogInformation("Scanning top-level directory: {Path}", scanRoot);
+            var rootRepoCount = 0;
             foreach (var repositoryPath in this.EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
             {
                 if (!seenRepositoryPaths.Add(repositoryPath))
@@ -83,6 +85,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                     continue;
                 }
 
+                rootRepoCount++;
                 using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
                 changes.Add(new EntityChange
                 {
@@ -92,6 +95,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                     EntityChangeMode = EntityChangeMode.Replace,
                 });
             }
+
+            this.logger.LogInformation("Found {Count} git repositories in {Path}", rootRepoCount, scanRoot);
         }
 
         var repositoriesFound = seenRepositoryPaths.Count;
@@ -200,56 +205,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
     }
 
     private IEnumerable<string> EnumerateGitRepositories(string root, int maxDepth, CancellationToken cancellationToken)
-    {
-        var pending = new Stack<(string Path, int Depth)>();
-        pending.Push((Path.GetFullPath(root), 0));
-
-        while (pending.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var (path, depth) = pending.Pop();
-
-            if (IsGitRepository(path))
-            {
-                // A repository is a leaf for scanning purposes; do not descend into it.
-                yield return path;
-                continue;
-            }
-
-            if (depth >= maxDepth)
-            {
-                continue;
-            }
-
-            string[] subdirectories;
-            try
-            {
-                subdirectories = Directory.GetDirectories(path);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                this.logger.LogDebug(exception, "Skipping inaccessible directory during git scan: {Path}", path);
-                continue;
-            }
-
-            foreach (var subdirectory in subdirectories)
-            {
-                var name = Path.GetFileName(subdirectory);
-                if (string.Equals(name, ".git", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                pending.Push((subdirectory, depth + 1));
-            }
-        }
-    }
-
-    private static bool IsGitRepository(string path)
-    {
-        // A working tree has a .git directory; a bare repo / worktree may have a .git file.
-        return Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git"));
-    }
+        => GitRepositoryMetadataReader.EnumerateGitRepositories(root, maxDepth, cancellationToken, this.logger);
 
     private static string NormalizeRepositoryPath(string repositoryPath)
     {

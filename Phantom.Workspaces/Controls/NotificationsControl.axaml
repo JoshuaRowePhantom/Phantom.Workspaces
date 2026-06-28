@@ -1,8 +1,11 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             xmlns:controls="using:Phantom.Workspaces.Controls"
              x:Class="Phantom.Workspaces.Controls.NotificationsControl"
-             x:CompileBindings="False">
+             x:CompileBindings="False"
+             Focusable="False">
+    <controls:TransientPopupControl>
     <Border Classes="notifications-panel"
             Width="360"
             MaxHeight="480">
@@ -29,7 +32,9 @@
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:NotificationRowViewModel">
-                            <Border Classes="interactive-row" Padding="8,4" Margin="4,2">
+                            <Border Classes="interactive-row"
+                                    Classes.highlighted="{Binding IsHighlighted}"
+                                    Padding="8,4" Margin="4,2">
                                 <Grid ColumnDefinitions="*,Auto">
                                     <Button Grid.Column="0"
                                             Command="{Binding NavigateCommand}"
@@ -87,4 +92,5 @@
             </ScrollViewer>
         </Grid>
     </Border>
+    </controls:TransientPopupControl>
 </UserControl>

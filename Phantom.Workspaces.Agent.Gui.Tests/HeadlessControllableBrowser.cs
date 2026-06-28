@@ -14,6 +14,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrowser
 {
     private string? htmlShell;
+    private bool isBatchActive;
 
     /// <summary>
     /// Setting this to a non-empty value fires <see cref="Ready"/> synchronously, mirroring what
@@ -35,6 +36,9 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
     /// <summary>All messages posted via <see cref="PostMessageToJavaScript"/>, in order.</summary>
     public List<string> PostedMessages { get; } = [];
 
+    /// <summary>Number of batches that have been ended via <see cref="EndBatch"/>.</summary>
+    public int BatchCount { get; private set; }
+
     public event EventHandler? Ready;
 
     public event EventHandler<string>? JavaScriptMessageReceived;
@@ -49,4 +53,17 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
     }
 
     public void PostMessageToJavaScript(string message) => PostedMessages.Add(message);
+
+    /// <summary>Begins a batch; subsequent messages are still added to <see cref="PostedMessages"/>.</summary>
+    public void BeginBatch() => this.isBatchActive = true;
+
+    /// <summary>Ends the batch and increments <see cref="BatchCount"/>.</summary>
+    public void EndBatch()
+    {
+        if (this.isBatchActive)
+        {
+            this.isBatchActive = false;
+            this.BatchCount++;
+        }
+    }
 }

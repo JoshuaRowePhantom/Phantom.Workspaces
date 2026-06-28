@@ -69,6 +69,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
     private bool isAltHeld;
+    private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
 
     public MainWindowViewModel(
@@ -115,6 +116,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity
@@ -168,6 +170,53 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         get => this.notificationsViewModel;
         private set => this.SetProperty(ref this.notificationsViewModel, value);
+    }
+
+    public NavigationStackPopupViewModel NavStackPopup =>
+        this.navStackPopup ??= new NavigationStackPopupViewModel(
+            this.navigationHistoryService,
+            tabId => this.GetTabTitle(tabId));
+
+    /// <summary>
+    /// Navigate directly to the history entry at <paramref name="historyIndex"/> without
+    /// pushing a new entry onto the navigation stack.
+    /// </summary>
+    public void NavigateToHistoryEntry(int historyIndex)
+    {
+        if (!this.navigationHistoryService.GoToIndex(historyIndex, out var entry) || entry is null)
+        {
+            return;
+        }
+
+        this.navigatingViaHistory = true;
+        try
+        {
+            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+        }
+        finally
+        {
+            this.navigatingViaHistory = false;
+        }
+    }
+
+    private string? GetTabTitle(string tabId)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null) continue;
+            foreach (var dockable in documentDock.VisibleDockables)
+            {
+                if (dockable is WorkspaceDocument doc &&
+                    string.Equals(doc.Id, tabId, StringComparison.Ordinal))
+                {
+                    return doc.Title;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -374,6 +423,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 action => Dispatcher.UIThread.Post(action))
             : null;
 
+    /// <summary>
+    /// Creates the git workspaces view model, or returns null if the workspace has not finished initializing.
+    /// </summary>
+    internal GitWorkspacesViewModel? TryCreateGitWorkspacesViewModel()
+        => this.entityBroker is { } broker
+            ? new GitWorkspacesViewModel(broker)
+            : null;
+
     private EntityId HostProfileEntityId =>
         this.entityBroker?.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
         ?? default;
@@ -424,8 +481,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         [
             new Tools.VectorIndexerTool(),
             new Tools.GitWorkspaceScanTool(),
+            new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
+            new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
+            new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);
         this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(dataAccessLayer, registry);
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(
@@ -955,16 +1015,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             : NotInterestingQuery.ExcludingNotInteresting(queryRequest);
 
         // Also fetch each matched entity's interest relationships so its badge glyphs can be rendered.
-        if (this.interestCatalog is { InterestTypeNames.Count: > 0 } catalog)
-        {
-            effectiveQuery = effectiveQuery with
-            {
-                RelationshipsToReturn =
-                [
-                    new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. catalog.InterestTypeNames]) },
-                ],
-            };
-        }
+        effectiveQuery = WithInterestRelationships(effectiveQuery, this.interestCatalog);
 
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
         population.AddQuerySubscription(subscribedQuery);
@@ -975,6 +1026,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return subscribedQuery.Results.ToArray();
+    }
+
+    internal static QueryRequest WithInterestRelationships(QueryRequest query, InterestCatalog? catalog)
+    {
+        if (catalog is not { InterestTypeNames.Count: > 0 } validCatalog)
+        {
+            return query;
+        }
+
+        return query with
+        {
+            RelationshipsToReturn =
+            [
+                ..(query.RelationshipsToReturn ?? []),
+                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) },
+            ],
+        };
     }
 
     private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
@@ -1181,7 +1249,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewHierarchyNode node,
         int indentLevel)
     {
-        population.Entities.Add(this.CreateViewEntityViewModel(node.Entity, indentLevel));
+        if (!node.IsAncestorGroup)
+        {
+            population.Entities.Add(this.CreateViewEntityViewModel(node.Entity!, indentLevel));
+        }
+
         foreach (var child in node.Children)
         {
             this.AddHierarchyNode(population, child, indentLevel + 1);
@@ -2769,7 +2841,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return false;
         }
 
-        queryRequest = deserialized;
+        queryRequest = deserialized with
+        {
+            RelationshipsToReturn = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
+                ? relationshipsToReturn
+                : null,
+        };
         return true;
     }
 
@@ -3122,6 +3199,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var target = candidates[nextIndex];
         this.notificationService.MarkRead(target.TabKey);
         _ = this.NavigateToNotificationTabAsync(target.TabKey);
+        this.notificationsViewModel?.OpenWithHighlight(target.TabKey);
     }
 
     private async Task NavigateToNotificationTabAsync(string tabId)

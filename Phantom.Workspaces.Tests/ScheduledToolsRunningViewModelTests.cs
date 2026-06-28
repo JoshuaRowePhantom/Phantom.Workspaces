@@ -198,7 +198,7 @@ public sealed class ScheduledToolsRunningViewModelTests
     }
 
     [Fact]
-    public async Task RecentRuns_CappedAtTen()
+    public async Task RecentRuns_ShowsAllRuns_WhenMoreThanTen()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var timeProvider = new FixedTimeProvider();
@@ -214,7 +214,7 @@ public sealed class ScheduledToolsRunningViewModelTests
         var row = Assert.Single(viewModel.Tools);
         await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(10, row.RecentRuns.Count);
+        Assert.Equal(12, row.RecentRuns.Count);
     }
 
     [Fact]

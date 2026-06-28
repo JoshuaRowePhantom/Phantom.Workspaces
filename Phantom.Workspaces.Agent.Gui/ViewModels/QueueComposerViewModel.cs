@@ -11,13 +11,17 @@ using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class QueueComposerViewModel : ViewModelBase
+public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewModel
 {
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue targetQueue;
     private readonly List<AIContent> attachments = [];
     private readonly List<string> attachmentPlaceholders = [];
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
+    private readonly List<string> inputHistory = [];
+    private int historyIndex = -1;
+    private string savedDraft = string.Empty;
+    private int savedDraftCaretIndex;
     private string inputText = string.Empty;
     private bool isFormattedMode;
     private bool showChatInputHelpText = true;
@@ -52,7 +56,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.SubmitCommand = new RelayCommand(this.Submit);
         this.SubmitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
-        this.SetQueueImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
+        this.SetImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
 
     public bool IsDefaultComposer { get; }
@@ -93,7 +97,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public string SubmitButtonGlyph => "↵";
 
-    public QueueImmediacyOption SubmitStatusOption => QueueImmediacyOption.All.First(option => option.Value == this.targetQueue.Immediacy);
+    public QueueImmediacyOption SelectedImmediacyOption => QueueImmediacyOption.All.First(option => option.Value == this.targetQueue.Immediacy);
 
     public QueueImmediacyOption ImmediateImmediacyOption => QueueImmediacyOption.All[0];
 
@@ -141,7 +145,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public ICommand CreateNewQueueCommand { get; }
 
-    public ICommand SetQueueImmediacyCommand { get; }
+    public ICommand SetImmediacyCommand { get; }
 
     public void EnterFormattedMode() => this.IsFormattedMode = true;
 
@@ -226,6 +230,80 @@ public sealed class QueueComposerViewModel : ViewModelBase
         return false;
     }
 
+    public bool TryNavigateHistoryUp(int caretLine, out string text, out int caretIndex)
+    {
+        text = string.Empty;
+        caretIndex = 0;
+
+        if (caretLine != 0)
+        {
+            return false;
+        }
+
+        if (this.inputHistory.Count == 0)
+        {
+            return false;
+        }
+
+        if (this.historyIndex == -1)
+        {
+            this.savedDraft = this.InputText;
+            this.savedDraftCaretIndex = this.InputText.Length;
+            this.historyIndex = this.inputHistory.Count - 1;
+        }
+        else if (this.historyIndex > 0)
+        {
+            this.historyIndex--;
+        }
+
+        text = this.inputHistory[this.historyIndex];
+        caretIndex = 0;
+        return true;
+    }
+
+    public bool TryNavigateHistoryDown(out string text, out int caretIndex)
+    {
+        text = string.Empty;
+        caretIndex = 0;
+
+        if (this.historyIndex == -1)
+        {
+            return false;
+        }
+
+        if (this.historyIndex < this.inputHistory.Count - 1)
+        {
+            this.historyIndex++;
+            text = this.inputHistory[this.historyIndex];
+            caretIndex = 0;
+        }
+        else
+        {
+            this.historyIndex = -1;
+            text = this.savedDraft;
+            caretIndex = this.savedDraftCaretIndex;
+        }
+
+        return true;
+    }
+
+    public void CommitToHistory(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        if (this.inputHistory.Count > 0
+            && string.Equals(this.inputHistory[^1], text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        this.inputHistory.Add(text);
+        this.historyIndex = -1;
+    }
+
     public void Submit()
     {
         this.Submit(this.targetQueue);
@@ -258,6 +336,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         }
 
         contents.AddRange(this.attachments);
+        this.CommitToHistory(text);
         this.parent.AppendToQueue(targetQueue, contents);
         this.InputText = string.Empty;
         this.ClearAttachments();
@@ -327,11 +406,23 @@ public sealed class QueueComposerViewModel : ViewModelBase
             return;
         }
 
-        // Split "/commandName rest" → commandName + rest
         var withoutSlash = text.Substring(1);
-        var parts = withoutSlash.Split(' ', 2);
-        var commandName = parts[0];
-        var partialArgs = parts.Length > 1 ? parts[1] : string.Empty;
+        var spaceIndex = withoutSlash.IndexOf(' ');
+
+        // When there is no space yet the user is still typing the command name.
+        // Pass commandName="" as a sentinel so the provider can return root (command-list) completions.
+        // When a space is present the command name is resolved; pass it together with the partial args.
+        string commandName, partialArgs;
+        if (spaceIndex < 0)
+        {
+            commandName = string.Empty;
+            partialArgs = withoutSlash;
+        }
+        else
+        {
+            commandName = withoutSlash[..spaceIndex];
+            partialArgs = withoutSlash[(spaceIndex + 1)..];
+        }
 
         var cts = new CancellationTokenSource();
         this.completionsCts = cts;
@@ -440,7 +531,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     private void OnTargetQueueChanged(object? sender, EventArgs e)
     {
-        this.RaisePropertyChanged(nameof(this.SubmitStatusOption));
+        this.RaisePropertyChanged(nameof(this.SelectedImmediacyOption));
     }
 
     private void SetQueueImmediacy(QueueImmediacyOption option)

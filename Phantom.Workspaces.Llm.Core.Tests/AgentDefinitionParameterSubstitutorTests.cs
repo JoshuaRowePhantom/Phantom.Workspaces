@@ -124,6 +124,84 @@ public sealed class AgentDefinitionParameterSubstitutorTests
     }
 
     [Fact]
+    public void AgentDefinitionParameterSubstitutor_WorkingDirectory_SubstitutedIntoModelOptions()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": false }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(
+            manifest,
+            new Dictionary<string, string> { ["working-directory"] = "C:\\dev\\myrepo" });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.Equal("C:\\dev\\myrepo", promptAgent.Model?.Options?.AdditionalProperties?["working-directory"]?.ToString());
+    }
+
+    [Fact]
+    public void AgentDefinitionParameterSubstitutor_WorkingDirectory_OmittedWhenNotProvided()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": false }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, null);
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        var additionalProps = promptAgent.Model?.Options?.AdditionalProperties;
+        Assert.True(
+            additionalProps is null
+            || !additionalProps.ContainsKey("working-directory")
+            || additionalProps["working-directory"] is null
+            || string.IsNullOrEmpty(additionalProps["working-directory"]?.ToString()),
+            "working-directory should not be substituted when no value is provided");
+    }
+
+    [Fact]
     public void Substitute_DoesNotMutateManifestTemplate()
     {
         var manifest = AgentManifestLoader.LoadManifestFromJson("""
