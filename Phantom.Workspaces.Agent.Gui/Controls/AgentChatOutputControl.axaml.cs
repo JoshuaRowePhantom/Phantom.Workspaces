@@ -273,6 +273,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 }
                 break;
             }
+            case "commandFailed":
+            {
+                if (root.TryGetProperty("path", out var pathProp))
+                {
+                    var path = pathProp.GetString();
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        this.outputModel?.NotifyInsertionFailed(path);
+                    }
+                }
+                break;
+            }
         }
     }
 
