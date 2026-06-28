@@ -2188,6 +2188,7 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
+    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
