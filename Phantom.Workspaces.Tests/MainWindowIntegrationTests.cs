@@ -1267,6 +1267,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate

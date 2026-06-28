@@ -57,6 +57,8 @@ if ($Mode -eq 'fast')
 {
     $filterClauses += '(Category!=SlowGit)'
     $filterClauses += '(Category!=SlowDocker)'
+    # SlowLayout tests use ForceRenderTimerTick() which hangs in CI headless environments.
+    $filterClauses += '(Category!=SlowLayout)'
 }
 
 # WebView integration tests require a real desktop browser host (native WebView2) and are
