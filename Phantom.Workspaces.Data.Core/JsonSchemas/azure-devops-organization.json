@@ -3,10 +3,7 @@
   "description": "Schema for Azure DevOps organization entities and their connection metadata.",
   "allOf": [
     {
-      "$ref": "entity.json"
-    },
-    {
-      "$ref": "external.json"
+      "$ref": "organization.json"
     }
   ],
   "type": "object",
@@ -22,10 +19,6 @@
       "contains": {
         "const": "azure-devops-organization"
       }
-    },
-    "organization-name": {
-      "type": "string",
-      "description": "The Azure DevOps organization name"
     }
   }
 }

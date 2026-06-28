@@ -1,0 +1,33 @@
+{
+  "entity-id": "9a101fcd-81f2-434b-943f-b4e407c92a0f",
+  "entity-display-order": 365,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-pull-request.json"
+    ],
+    [
+      "entity-types",
+      "azure-devops-pull-request"
+    ]
+  ],
+  "display-name": {
+    "default": "Azure DevOps Pull Request Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/azure-devops-pull-request-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/azure-devops-pull-request.json"
+  },
+  "default-name-prefixes": []
+}
