@@ -23,12 +23,24 @@ public partial class MainWindow : Window
         InitializeComponent();
         this.DataContext = viewModel;
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
+        this.AddHandler(InputElement.KeyUpEvent, this.OnPreviewKeyUp, RoutingStrategies.Tunnel);
+        this.Deactivated += (_, _) =>
+        {
+            if (this.DataContext is MainWindowViewModel vm)
+                vm.IsAltHeld = false;
+        };
     }
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         if (this.DataContext is not MainWindowViewModel viewModel)
         {
+            return;
+        }
+
+        if (e.Key is Key.LeftAlt or Key.RightAlt)
+        {
+            viewModel.IsAltHeld = true;
             return;
         }
 
@@ -47,6 +59,24 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+        }
+
+        if (e.Key == Key.Scroll)
+        {
+            if (viewModel.ActiveAgentViewModel is { } agent)
+            {
+                agent.AutoScrollEnabled = !agent.AutoScrollEnabled;
+                e.Handled = true;
+            }
+            return;
+        }
+
+        // Ctrl+Shift+K: duplicate the active browser tab.
+        if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            viewModel.DuplicateBrowserTabCommand.Execute(null);
+            e.Handled = true;
+            return;
         }
 
         var index = GetDigitIndex(e.PhysicalKey);
@@ -140,5 +170,12 @@ public partial class MainWindow : Window
         var scheduledTasksWindow = new ScheduledTasksWindow(scheduledTasksViewModel);
         await scheduledTasksWindow.ShowDialog(this);
         scheduledTasksViewModel.Dispose();
+    }
+
+    private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel) return;
+        if (e.Key is Key.LeftAlt or Key.RightAlt)
+            viewModel.IsAltHeld = false;
     }
 }

@@ -55,11 +55,32 @@ public sealed class NotificationIndicatorTabHeaderItemViewModel : TabHeaderItemV
 public class TabHeaderViewModel : ViewModelBase
 {
     private string title = string.Empty;
+    private string? altShortcutLabel;
+    private bool isAltHeld;
 
     public required string Title
     {
         get => this.title;
         set => this.SetProperty(ref this.title, value);
+    }
+
+    /// <summary>
+    /// The Alt+N shortcut label for this tab ("1"–"9", "0" for the 10th tab; null for tabs beyond index 9).
+    /// Set by <see cref="MainWindowViewModel"/> whenever the visible tab list changes.
+    /// </summary>
+    public string? AltShortcutLabel
+    {
+        get => this.altShortcutLabel;
+        set => this.SetProperty(ref this.altShortcutLabel, value);
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="MainWindowViewModel.IsAltHeld"/>. Set by the VM whenever the Alt key state changes.
+    /// </summary>
+    public bool IsAltHeld
+    {
+        get => this.isAltHeld;
+        set => this.SetProperty(ref this.isAltHeld, value);
     }
 
     public ObservableCollection<TabHeaderItemViewModel> Items { get; } = [];

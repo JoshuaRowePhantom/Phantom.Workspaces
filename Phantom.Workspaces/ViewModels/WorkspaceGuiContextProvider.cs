@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +12,8 @@ using Dock.Model.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm.Shell;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -46,6 +50,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 new WorkspaceCloseTool(this.context),
                 new TabCloseTool(this.context),
                 new EntityInvokeShortcutTool(this.context),
+                new OpenTabTool(this.context),
             ],
         });
     }
@@ -417,6 +422,313 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             "StartShell" => Shortcut.StartShell,
             _ => null,
         };
+    }
+
+    private sealed class OpenTabTool : AIFunction
+    {
+        private static readonly JsonElement InputSchema = JsonDocument.Parse(
+            """
+            {
+              "type": "object",
+              "required": ["target"],
+              "additionalProperties": false,
+              "properties": {
+                "target": { "type": "string", "enum": ["entity", "url", "shell"], "description": "What to open." },
+                "entity_id": { "type": "string", "description": "UUID of the entity to open (required when target=entity)." },
+                "url": { "type": "string", "description": "URL to load (required when target=url)." },
+                "title": { "type": "string", "description": "Optional display title for the tab." },
+                "command": { "type": "string", "description": "Executable to run (required when target=shell)." },
+                "working_directory": { "type": "string", "description": "Working directory for the shell process." },
+                "arguments": { "type": "array", "items": { "type": "string" }, "description": "Arguments to pass to the command." },
+                "focus": { "type": "boolean", "description": "Whether to focus the new tab (default: true)." }
+              }
+            }
+            """).RootElement.Clone();
+
+        private readonly WorkspaceGuiContext context;
+
+        public OpenTabTool(WorkspaceGuiContext context)
+        {
+            this.context = context;
+        }
+
+        public override string Name => "open_tab";
+
+        public override string Description =>
+            "Open a new tab in the workspace. "
+            + "Supports three targets: 'entity' (open an entity by UUID), "
+            + "'url' (open an ephemeral browser tab), "
+            + "'shell' (open an ephemeral shell tab). "
+            + "Returns { tab_id } on success or an error string on failure.";
+
+        public override JsonElement JsonSchema => InputSchema;
+
+        protected override async ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments,
+            CancellationToken cancellationToken)
+        {
+            if (!arguments.TryGetValue("target", out var targetArg)
+                || targetArg is not JsonElement targetEl
+                || targetEl.ValueKind != JsonValueKind.String)
+            {
+                return Serialize(new { error = "target is required." });
+            }
+
+            var target = targetEl.GetString()!;
+            var focus = ParseFocus(arguments);
+
+            return target switch
+            {
+                "entity" => await this.OpenEntityTabAsync(arguments, focus, cancellationToken),
+                "url" => await this.OpenUrlTabAsync(arguments, focus, cancellationToken),
+                "shell" => await this.OpenShellTabAsync(arguments, focus, cancellationToken),
+                _ => Serialize(new { error = $"Unknown target '{target}'. Valid values: entity, url, shell." }),
+            };
+        }
+
+        private async ValueTask<object?> OpenEntityTabAsync(
+            AIFunctionArguments arguments,
+            bool focus,
+            CancellationToken cancellationToken)
+        {
+            if (!arguments.TryGetValue("entity_id", out var idArg)
+                || idArg is not JsonElement idEl
+                || idEl.ValueKind != JsonValueKind.String
+                || !Guid.TryParse(idEl.GetString(), out var guid))
+            {
+                return Serialize(new { error = "entity_id must be a valid UUID when target=entity." });
+            }
+
+            var tabId = guid.ToString();
+            var entityId = new EntityId(guid);
+
+            await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await this.context.MainWindowViewModel.OpenEntityTabAsync(
+                    new GetEntityRequest { EntityId = entityId },
+                    focus: focus);
+            });
+
+            return Serialize(new { tab_id = tabId });
+        }
+
+        private async ValueTask<object?> OpenUrlTabAsync(
+            AIFunctionArguments arguments,
+            bool focus,
+            CancellationToken cancellationToken)
+        {
+            if (!arguments.TryGetValue("url", out var urlArg)
+                || urlArg is not JsonElement urlEl
+                || urlEl.ValueKind != JsonValueKind.String
+                || string.IsNullOrEmpty(urlEl.GetString()))
+            {
+                return Serialize(new { error = "url is required when target=url." });
+            }
+
+            var url = urlEl.GetString()!;
+            var title = GetOptionalString(arguments, "title") ?? url;
+            var tabId = $"web-{Guid.NewGuid():N}";
+
+            var tab = new WebViewModel(url, this.context.MainWindowViewModel)
+            {
+                Id = tabId,
+                Title = title,
+            };
+
+            await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await this.context.MainWindowViewModel.OpenTabAsync(tab, focus: focus);
+            });
+
+            return Serialize(new { tab_id = tabId });
+        }
+
+        private async ValueTask<object?> OpenShellTabAsync(
+            AIFunctionArguments arguments,
+            bool focus,
+            CancellationToken cancellationToken)
+        {
+            if (!arguments.TryGetValue("command", out var commandArg)
+                || commandArg is not JsonElement commandEl
+                || commandEl.ValueKind != JsonValueKind.String
+                || string.IsNullOrEmpty(commandEl.GetString()))
+            {
+                return Serialize(new { error = "command is required when target=shell." });
+            }
+
+            var command = commandEl.GetString()!;
+            var workingDirectory = GetOptionalString(arguments, "working_directory");
+            var shellArguments = ParseStringArray(arguments, "arguments");
+            var title = GetOptionalString(arguments, "title") ?? command;
+            var tabId = $"shell-{Guid.NewGuid():N}";
+
+            ITerminalSession session;
+            try
+            {
+                session = await OpenShellSessionAsync(command, shellArguments, workingDirectory, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                return Serialize(new { error = $"Failed to open shell session: {ex.Message}" });
+            }
+
+            var tab = new ShellTabViewModel(session)
+            {
+                Id = tabId,
+                Title = title,
+            };
+
+            await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                await this.context.MainWindowViewModel.OpenTabAsync(tab, focus: focus);
+            });
+
+            return Serialize(new { tab_id = tabId });
+        }
+
+        private Task<ITerminalSession> OpenShellSessionAsync(
+            string command,
+            IReadOnlyList<string> shellArguments,
+            string? workingDirectory,
+            CancellationToken cancellationToken)
+        {
+            if (this.context.EphemeralShellSessionOpener is not null)
+            {
+                return this.context.EphemeralShellSessionOpener(command, shellArguments, workingDirectory, cancellationToken);
+            }
+
+            var payloadJson = BuildShellPayloadJson(command, shellArguments, workingDirectory);
+            using var payloadDocument = JsonDocument.Parse(payloadJson);
+            var request = new TrustedStreamRequest
+            {
+                TargetClientInstance = TrustProfile.LocalClientInstance,
+                StreamKind = "shell",
+                OpenPayload = payloadDocument.RootElement.Clone(),
+            };
+
+            return OpenLocalSessionAsync(request, cancellationToken);
+        }
+
+        private static string BuildShellPayloadJson(
+            string command,
+            IReadOnlyList<string> shellArguments,
+            string? workingDirectory)
+        {
+            var argsJson = shellArguments.Count == 0
+                ? "[]"
+                : "[" + string.Join(",", shellArguments.Select(a => JsonSerializer.Serialize(a))) + "]";
+
+            var wdJson = workingDirectory is null
+                ? "null"
+                : JsonSerializer.Serialize(workingDirectory);
+
+            return $$"""
+                {
+                  "mode": "pty",
+                  "command": {{JsonSerializer.Serialize(command)}},
+                  "command-arguments": {{argsJson}},
+                  "working-directory": {{wdJson}}
+                }
+                """;
+        }
+
+        private static async Task<ITerminalSession> OpenLocalSessionAsync(
+            TrustedStreamRequest request,
+            CancellationToken ct)
+        {
+            var executor = new LocalTrustedExecutor();
+            var stream = await executor.OpenStreamAsync(request, ct);
+            return new StreamTerminalSession(stream);
+        }
+
+        private static bool ParseFocus(AIFunctionArguments arguments)
+        {
+            if (arguments.TryGetValue("focus", out var focusArg)
+                && focusArg is JsonElement focusEl
+                && focusEl.ValueKind == JsonValueKind.False)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string? GetOptionalString(AIFunctionArguments arguments, string key)
+        {
+            if (arguments.TryGetValue(key, out var arg)
+                && arg is JsonElement el
+                && el.ValueKind == JsonValueKind.String)
+            {
+                return el.GetString();
+            }
+
+            return null;
+        }
+
+        private static IReadOnlyList<string> ParseStringArray(AIFunctionArguments arguments, string key)
+        {
+            if (!arguments.TryGetValue(key, out var arg)
+                || arg is not JsonElement el
+                || el.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            var result = new List<string>();
+            foreach (var item in el.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String && item.GetString() is { } s)
+                {
+                    result.Add(s);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// A thin <see cref="ITerminalSession"/> over a <see cref="StreamMessageChannelStream"/>
+        /// returned by <see cref="LocalTrustedExecutor.OpenStreamAsync"/>.
+        /// </summary>
+        private sealed class StreamTerminalSession : ITerminalSession
+        {
+            private readonly StreamMessageChannelStream channelStream;
+
+            public StreamTerminalSession(Stream stream)
+            {
+                this.channelStream = (StreamMessageChannelStream)stream;
+            }
+
+            public Stream Stream => this.channelStream;
+
+            public ValueTask ResizeAsync(int columns, int rows, CancellationToken ct)
+                => this.channelStream.SendControlAsync(
+                    new StreamControlMessage
+                    {
+                        Type = StreamControlMessage.Types.Resize,
+                        Columns = columns,
+                        Rows = rows,
+                    },
+                    ct);
+
+            public ValueTask SignalAsync(string signal, CancellationToken ct)
+                => this.channelStream.SendControlAsync(
+                    new StreamControlMessage
+                    {
+                        Type = StreamControlMessage.Types.Signal,
+                        Signal = signal,
+                    },
+                    ct);
+
+            public Task<int> WaitForExitAsync()
+                => this.channelStream.Completion.ContinueWith(
+                    static _ => 0,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+
+            public ValueTask DisposeAsync() => this.channelStream.DisposeAsync();
+        }
     }
 
     private static JsonElement Serialize(object value)

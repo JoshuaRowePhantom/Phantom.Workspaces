@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Linq;
+using Dock.Model.Controls;
 using Dock.Model.Core;
+using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -197,5 +199,74 @@ public sealed class TabHeaderViewModelTests
         tab.Title = "Updated";
 
         Assert.Equal("Updated", doc.EffectiveTabHeader.Title);
+    }
+
+    // ── AltShortcutLabel ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void TabHeaderViewModel_AltShortcutLabel_DefaultIsNull()
+    {
+        var vm = new TabHeaderViewModel { Title = "T" };
+        Assert.Null(vm.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void TabHeaderViewModel_AltShortcutLabel_SetValue_RaisesPropertyChanged()
+    {
+        var vm = new TabHeaderViewModel { Title = "T" };
+        var raised = false;
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(vm.AltShortcutLabel))
+                raised = true;
+        };
+
+        vm.AltShortcutLabel = "1";
+
+        Assert.True(raised);
+    }
+
+    // ── RefreshTabAltShortcutLabels ──────────────────────────────────────────
+
+    private static IDocumentDock CreateDockWithDocs(int count)
+    {
+        var dock = new Dock.Model.Mvvm.Controls.DocumentDock();
+        dock.VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable>();
+        for (var i = 0; i < count; i++)
+        {
+            var tab = new EntityWorkspaceTabViewModel { Id = $"tab-{i}", Title = $"Tab {i}" };
+            dock.VisibleDockables.Add(new WorkspaceDocument(tab));
+        }
+        return dock;
+    }
+
+    [Fact]
+    public void RefreshTabAltShortcutLabels_FirstDoc_GetsLabel1()
+    {
+        var dock = CreateDockWithDocs(3);
+        MainWindowViewModel.RefreshTabAltShortcutLabels(dock);
+
+        var label = ((WorkspaceDocument)dock.VisibleDockables![0]).EffectiveTabHeader.AltShortcutLabel;
+        Assert.Equal("1", label);
+    }
+
+    [Fact]
+    public void RefreshTabAltShortcutLabels_TenthDoc_GetsLabel0()
+    {
+        var dock = CreateDockWithDocs(10);
+        MainWindowViewModel.RefreshTabAltShortcutLabels(dock);
+
+        var label = ((WorkspaceDocument)dock.VisibleDockables![9]).EffectiveTabHeader.AltShortcutLabel;
+        Assert.Equal("0", label);
+    }
+
+    [Fact]
+    public void RefreshTabAltShortcutLabels_EleventhDoc_GetsNullLabel()
+    {
+        var dock = CreateDockWithDocs(11);
+        MainWindowViewModel.RefreshTabAltShortcutLabels(dock);
+
+        var label = ((WorkspaceDocument)dock.VisibleDockables![10]).EffectiveTabHeader.AltShortcutLabel;
+        Assert.Null(label);
     }
 }

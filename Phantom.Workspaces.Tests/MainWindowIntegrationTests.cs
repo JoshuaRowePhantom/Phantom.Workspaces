@@ -11,9 +11,12 @@ using System.Text.Json;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
+using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -2143,6 +2146,230 @@ public sealed class MainWindowIntegrationTests
         // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
         // and interprets animation keyframes. The bug caused a throw here.
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+    }
+
+    // ── IsAltHeld / Alt-badge tests ──────────────────────────────────────────
+
+    [Fact]
+    public void IsAltHeld_DefaultIsFalse()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        Assert.False(viewModel.IsAltHeld);
+    }
+
+    [Fact]
+    public void IsAltHeld_SetToTrue_RaisesPropertyChanged()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var raised = false;
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(viewModel.IsAltHeld))
+                raised = true;
+        };
+
+        viewModel.IsAltHeld = true;
+
+        Assert.True(raised);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
+
+        Assert.True(viewModel.IsAltHeld);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        viewModel.IsAltHeld = true;
+        window.KeyReleaseQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
+
+        Assert.False(viewModel.IsAltHeld);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToTabAtIndexCommand_Execute_ClearsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "alt-clear-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = true;
+        viewModel.GoToTabAtIndexCommand.Execute("0");
+
+        Assert.False(viewModel.IsAltHeld);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "alt-label-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "alt-label-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "alt-label-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTab_ByIndex_RefreshesAltShortcutLabels()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "alt-close-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "alt-close-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "alt-close-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        // Close the first tab — B should move to index 0 → label "1", C to index 1 → label "2"
+        viewModel.CloseTabById("alt-close-a");
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-toggle", Title = "Agent" };
+        agentTab.SetReady(agentViewModel, loggerFactory);
+        await viewModel.OpenTabAsync(agentTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.True(agentViewModel.AutoScrollEnabled);
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.False(agentViewModel.AutoScrollEnabled);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-twice", Title = "Agent" };
+        agentTab.SetReady(agentViewModel, loggerFactory);
+        await viewModel.OpenTabAsync(agentTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.True(agentViewModel.AutoScrollEnabled);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var plainTab = new WebViewModel("https://example.com") { Id = "scroll-lock-noop", Title = "Web" };
+        await viewModel.OpenTabAsync(plainTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        bool handled = false;
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.Key == Key.Scroll)
+                    handled = e.Handled;
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.False(handled);
+
+        window.Close();
+    }
+
+    private static async Task<AgentChat> CreateEchoAgentChatAsync()
+    {
+        const string echoAgentJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """;
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(echoAgentJson);
+        return await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ForegroundScheduler = TaskScheduler.Default,
+        });
     }
 
 }
