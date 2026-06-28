@@ -188,4 +188,57 @@ public sealed class TransientPopupViewModelTests
         vm.NotifyLightDismissed();
         Assert.Equal(1, vm.DismissedCallCount);
     }
+
+    [Fact]
+    public void TriggerFadeClose_SetsIsAutoClosingTrue()
+    {
+        var vm = new ConcretePopupViewModel();
+        vm.TriggerFadeClose();
+        Assert.True(vm.IsAutoClosing);
+    }
+
+    [Fact]
+    public void TriggerFadeClose_FiresPropertyChangedForIsAutoClosing()
+    {
+        var vm = new ConcretePopupViewModel();
+        var firedNames = new List<string?>();
+        vm.PropertyChanged += (_, args) => firedNames.Add(args.PropertyName);
+
+        vm.TriggerFadeClose();
+
+        Assert.Contains(nameof(vm.IsAutoClosing), firedNames);
+    }
+
+    [Fact]
+    public void TriggerFadeClose_WhenAlreadyAutoClosing_StillFiresPropertyChanged()
+    {
+        var vm = new ConcretePopupViewModel();
+        vm.Show();
+
+        var firedNames = new List<string?>();
+        vm.PropertyChanged += (_, args) => firedNames.Add(args.PropertyName);
+
+        vm.TriggerFadeClose();
+
+        Assert.Contains(nameof(vm.IsAutoClosing), firedNames);
+    }
+
+    [Fact]
+    public void TriggerFadeClose_DoesNotChangeIsOpen()
+    {
+        var vm = new ConcretePopupViewModel();
+        vm.TriggerFadeClose();
+        Assert.False(vm.IsOpen);
+    }
+
+    [Fact]
+    public void Dismiss_AfterTriggerFadeClose_SetsIsOpenFalse()
+    {
+        var vm = new ConcretePopupViewModel();
+        vm.Show();
+        vm.TriggerFadeClose();
+        vm.Dismiss();
+        Assert.False(vm.IsOpen);
+        Assert.False(vm.IsAutoClosing);
+    }
 }

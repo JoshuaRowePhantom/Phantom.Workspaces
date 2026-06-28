@@ -90,9 +90,9 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
             var tabKey = entry.TabKey;
             var navigateCmd = new RelayCommand(_ =>
             {
-                this.IsOpen = false;
                 this.notificationService.MarkRead(tabKey);
                 this.navigateToTab(tabKey);
+                this.TriggerFadeClose();
             });
             var snoozeCmd = new RelayCommand(_ =>
             {
