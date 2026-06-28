@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Text.Json;
 using AgentSchema;
 using Avalonia.Headless.XUnit;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -309,6 +310,125 @@ public sealed class AgentChatOutputControlTests
         Assert.DoesNotContain(".confirmed {\r\n      color: #4ec9b0;", html, StringComparison.Ordinal);
         Assert.DoesNotContain(".confirmed {\n      color: #4ec9b0;", html, StringComparison.Ordinal);
         Assert.Contains("var(--copy-btn-confirmed-color)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_BeginEndBatch_RecordsBatch()
+    {
+        // BeginBatch / EndBatch increments BatchCount and messages still appear in PostedMessages.
+        var browser = new HeadlessControllableBrowser();
+
+        browser.BeginBatch();
+        browser.PostMessageToJavaScript("msg1");
+        browser.PostMessageToJavaScript("msg2");
+        browser.EndBatch();
+
+        Assert.Equal(1, browser.BatchCount);
+        Assert.Equal(2, browser.PostedMessages.Count);
+        Assert.Contains("msg1", browser.PostedMessages);
+        Assert.Contains("msg2", browser.PostedMessages);
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_EndBatchWithoutBeginBatch_IsNoOp()
+    {
+        var browser = new HeadlessControllableBrowser();
+
+        browser.EndBatch();
+
+        Assert.Equal(0, browser.BatchCount);
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_NestedBeginBatch_IsNoOp()
+    {
+        // A second BeginBatch while one is active is a no-op; EndBatch still closes the first.
+        var browser = new HeadlessControllableBrowser();
+
+        browser.BeginBatch();
+        browser.BeginBatch();
+        browser.EndBatch();
+
+        Assert.Equal(1, browser.BatchCount);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_InitialHistoryWithMessages_UsesOneBatch()
+    {
+        // Verify that when OnBrowserReady fires with existing history, the entire initial
+        // population is dispatched through a single BeginBatch/EndBatch pair, reducing
+        // N IPC calls to 1.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("how are you?")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        // Setting DataContext triggers AttachOutputModel → HtmlShell → Ready → OnBrowserReady.
+        control.DataContext = viewModel;
+
+        // The initial population must have been wrapped in exactly one batch.
+        Assert.Equal(1, browser.BatchCount);
+
+        // Messages must still have been delivered (the batch was not empty).
+        Assert.True(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "update";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected at least one 'update' command for the initial history items.");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_IncrementalMessageAfterInitial_DoesNotStartNewBatch()
+    {
+        // Verify that messages appended after the initial load are not batched —
+        // they go through the normal single-message path. The batch count must remain at 1
+        // (the initial load batch).
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        Assert.Equal(1, browser.BatchCount);
+
+        // Add a message incrementally — this must not open a new batch.
+        browser.PostedMessages.Clear();
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("reply")] });
+
+        Assert.Equal(1, browser.BatchCount); // Still 1; no extra batch for incremental adds.
+        Assert.True(browser.PostedMessages.Count > 0, "Expected incremental update messages.");
     }
 
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()

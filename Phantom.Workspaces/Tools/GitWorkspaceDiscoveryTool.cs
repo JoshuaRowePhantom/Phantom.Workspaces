@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
@@ -38,12 +37,10 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         {
             this.logger.LogInformation("Scanning top-level directory: {Path}", scanRoot);
             var countBefore = discoveredWorktreePaths.Count;
-            foreach (var discoveredWorktreePath in DiscoverGitWorktreePaths(scanRoot))
+            foreach (var discoveredWorktreePath in GitRepositoryMetadataReader.EnumerateGitRepositories(
+                         scanRoot, int.MaxValue, context.CancellationToken, this.logger))
             {
-                if (discoveredWorktreePaths.Add(discoveredWorktreePath))
-                {
-                    this.logger.LogDebug("Found git repository: {RepoPath}", discoveredWorktreePath);
-                }
+                discoveredWorktreePaths.Add(discoveredWorktreePath);
             }
 
             this.logger.LogInformation("Found {Count} git repositories in {Path}", discoveredWorktreePaths.Count - countBefore, scanRoot);
@@ -52,7 +49,7 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         foreach (var discoveredWorktreePath in discoveredWorktreePaths)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
-            var gitMetadata = this.GetGitMetadata(discoveredWorktreePath);
+            var gitMetadata = GitRepositoryMetadataReader.TryReadMetadata(discoveredWorktreePath, this.logger);
             var gitWorktreeEntityName = new EntityName("git-worktrees", discoveredWorktreePath);
             var names = new JsonArray(new JsonArray("git-worktrees", discoveredWorktreePath));
             if (currentProfileNames.Length > 0)
@@ -61,17 +58,17 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
             }
 
             var gitObject = new JsonObject();
-            if (!string.IsNullOrWhiteSpace(gitMetadata.BranchName))
+            if (!string.IsNullOrWhiteSpace(gitMetadata?.BranchName))
             {
                 gitObject["branch"] = gitMetadata.BranchName;
             }
 
-            if (!string.IsNullOrWhiteSpace(gitMetadata.HeadCommitHash))
+            if (!string.IsNullOrWhiteSpace(gitMetadata?.HeadCommitHash))
             {
                 gitObject["head-commit"] = gitMetadata.HeadCommitHash;
             }
 
-            if (!string.IsNullOrWhiteSpace(gitMetadata.OriginRemoteUrl))
+            if (!string.IsNullOrWhiteSpace(gitMetadata?.OriginRemoteUrl))
             {
                 gitObject["remotes"] = new JsonArray(
                     new JsonObject
@@ -161,85 +158,6 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
     {
         var participantNames = WorkspaceEntitySnapshotReader.GetEntityNames(participant);
         return participantNames.Any(participantName => currentProfileNames.Contains(participantName));
-    }
-
-    private static IEnumerable<string> DiscoverGitWorktreePaths(
-        string scanRoot)
-    {
-        var normalizedRoot = Path.GetFullPath(scanRoot);
-        var visitedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var pendingDirectories = new Stack<string>();
-        pendingDirectories.Push(normalizedRoot);
-
-        while (pendingDirectories.TryPop(out var currentDirectory))
-        {
-            if (!visitedDirectories.Add(currentDirectory))
-            {
-                continue;
-            }
-
-            if (ContainsGitMetadata(currentDirectory))
-            {
-                yield return currentDirectory;
-                continue;
-            }
-
-            string[] childDirectories;
-            try
-            {
-                childDirectories = Directory.GetDirectories(currentDirectory);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or DirectoryNotFoundException or IOException)
-            {
-                continue;
-            }
-
-            foreach (var childDirectory in childDirectories)
-            {
-                pendingDirectories.Push(childDirectory);
-            }
-        }
-    }
-
-    private static bool ContainsGitMetadata(
-        string directoryPath)
-    {
-        return Directory.Exists(Path.Combine(directoryPath, ".git"))
-            || File.Exists(Path.Combine(directoryPath, ".git"));
-    }
-
-    private GitMetadata GetGitMetadata(
-        string repositoryPath)
-    {
-        try
-        {
-            using var repository = new Repository(repositoryPath);
-            return new GitMetadata
-            {
-                BranchName = repository.Head.FriendlyName,
-                HeadCommitHash = repository.Head.Tip?.Sha,
-                OriginRemoteUrl = repository.Network.Remotes["origin"]?.Url,
-            };
-        }
-        catch (RepositoryNotFoundException ex)
-        {
-            this.logger.LogDebug(ex, "Path '{RepositoryPath}' looks like a repository but could not be opened.", repositoryPath);
-            return new GitMetadata();
-        }
-        catch (LibGit2SharpException ex)
-        {
-            this.logger.LogDebug(ex, "Path '{RepositoryPath}' looks like a repository but could not be opened.", repositoryPath);
-            return new GitMetadata();
-        }
-    }
-
-    private sealed record GitMetadata
-    {
-        public string? BranchName { get; init; }
-
-        public string? HeadCommitHash { get; init; }
-
-        public string? OriginRemoteUrl { get; init; }
     }
 }
 
