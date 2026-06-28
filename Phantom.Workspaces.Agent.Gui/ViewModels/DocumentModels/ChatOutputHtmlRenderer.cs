@@ -3,6 +3,10 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using Markdig;
+using Markdig.Renderers;
+using Markdig.Renderers.Html;
+using Markdig.Renderers.Html.Inlines;
+using Markdig.Syntax.Inlines;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
@@ -26,9 +30,11 @@ internal static class ChatOutputHtmlRenderer
     // angle brackets in the model output are escaped (the rendered HTML is injected into the chat
     // WebView, where un-escaped markup would be an injection risk).
     // UsePipeTables enables GitHub-Flavored Markdown pipe tables (| col | col |).
+    // UseAutoLinks makes bare https:// and http:// URLs in plain text clickable.
     private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
         .DisableHtml()
         .UsePipeTables()
+        .UseAutoLinks()
         .Build();
 
     public static string MessageId(int sequence) => $"msg-{sequence}";
@@ -378,7 +384,16 @@ internal static class ChatOutputHtmlRenderer
         => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
 
     private static string MarkdownToHtml(string text)
-        => Markdown.ToHtml(text, MarkdownPipeline).TrimEnd('\n', '\r');
+    {
+        using var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        MarkdownPipeline.Setup(renderer);
+        renderer.ObjectRenderers.ReplaceOrAdd<LinkInlineRenderer>(new ExternalLinkInlineRenderer());
+        var document = Markdown.Parse(text, MarkdownPipeline);
+        renderer.Render(document);
+        writer.Flush();
+        return writer.ToString().TrimEnd('\n', '\r');
+    }
 
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
     {
@@ -472,6 +487,30 @@ internal static class ChatOutputHtmlRenderer
         {
             pretty = string.Empty;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Adds <c>target="_blank"</c> and <c>rel="noopener noreferrer"</c> to any link whose URL
+    /// starts with <c>http://</c> or <c>https://</c>. Used for both auto-linked bare URLs and
+    /// explicit Markdown link syntax.
+    /// </summary>
+    private sealed class ExternalLinkInlineRenderer : LinkInlineRenderer
+    {
+        protected override void Write(HtmlRenderer renderer, LinkInline link)
+        {
+            if (!link.IsImage)
+            {
+                var url = link.Url ?? string.Empty;
+                if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                    url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                {
+                    link.GetAttributes().AddPropertyIfNotExist("target", "_blank");
+                    this.Rel = "noopener noreferrer";
+                }
+            }
+
+            base.Write(renderer, link);
         }
     }
 }
