@@ -4,7 +4,7 @@ param(
     [Parameter()]
     [string[]] $TestNames,
     [Parameter()]
-    [string] $PerTestHangTimeout = '15s',
+    [string] $PerTestHangTimeout = '90s',
     [Parameter()]
     [ValidateSet('full', 'fast')]
     [string] $Mode = 'full',
@@ -61,6 +61,7 @@ if ($Mode -eq 'fast')
 {
     $filterClauses += '(Category!=SlowGit)'
     $filterClauses += '(Category!=SlowDocker)'
+    # SlowLayout tests use window.Show() or ForceRenderTimerTick() which can hang in headless environments.
     $filterClauses += '(Category!=SlowLayout)'
 }
 

@@ -7,6 +7,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class AgentGuiMainWindowIntegrationTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -25,6 +26,7 @@ public sealed class AgentGuiMainWindowIntegrationTests
             """);
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task AgentGuiMainWindow_Constructs_WithExpectedChildDataContexts()
     {
         var parseResult = new AgentDefinitionParseResult(
