@@ -52,6 +52,7 @@ public sealed class NotificationService : INotificationService
             Description = notification.Description,
             When = notification.When,
             IsRunning = notification.RunningState == RunningState.Running,
+            IsInteresting = notification.NotificationState == NotificationState.Interesting,
             IsRead = isRead,
             IsSnoozed = isSnoozed,
         };
