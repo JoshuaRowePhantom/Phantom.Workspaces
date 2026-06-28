@@ -20,6 +20,12 @@
         <Setter Property="BoxShadow" Value="{DynamicResource Theme.Notifications.Panel.BoxShadow}" />
     </Style>
 
+    <Style Selector="TextBlock.notification-unread-indicator">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Notifications.Badge.Foreground}" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
     <Style Selector="TextBlock.notification-bell-ringing">
         <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
         <Setter Property="RenderTransform">
