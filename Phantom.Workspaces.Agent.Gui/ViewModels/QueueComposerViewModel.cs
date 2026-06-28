@@ -67,6 +67,13 @@ public sealed class QueueComposerViewModel : ViewModelBase
             ? "Ctrl+Enter · send   Enter · new line   Esc · exit multi-line"
             : null;
 
+    public string? NormalModeHint =>
+        !this.isFormattedMode && this.IsDefaultComposer
+            ? "Enter · send  ·  Shift+Enter · multi-line  ·  Ctrl+Q · enqueue  ·  Ctrl+Shift+Q · new queue"
+            : null;
+
+    public string? ActiveHint => this.FormattedModeHint ?? this.NormalModeHint;
+
     public string SubmitButtonText => this.IsDefaultComposer ? "Send" : "Add";
 
     public string SubmitButtonGlyph => "↵";
@@ -106,6 +113,8 @@ public sealed class QueueComposerViewModel : ViewModelBase
             {
                 this.RaisePropertyChanged(nameof(this.PlaceholderText));
                 this.RaisePropertyChanged(nameof(this.FormattedModeHint));
+                this.RaisePropertyChanged(nameof(this.NormalModeHint));
+                this.RaisePropertyChanged(nameof(this.ActiveHint));
             }
         }
     }
