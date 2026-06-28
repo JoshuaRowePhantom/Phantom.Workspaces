@@ -1,0 +1,35 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/repository.json",
+  "description": "Platform-agnostic schema for repository entities shared by all source-control hosting integrations.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    },
+    {
+      "$ref": "external.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "repository"
+      }
+    },
+    "default-branch": {
+      "type": "string",
+      "description": "The default branch of the repository (e.g. 'main' or 'master')"
+    },
+    "description": {
+      "type": "string",
+      "description": "Short description of the repository"
+    }
+  }
+}

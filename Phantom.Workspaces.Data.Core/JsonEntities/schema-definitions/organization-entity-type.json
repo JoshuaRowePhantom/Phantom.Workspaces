@@ -1,0 +1,33 @@
+{
+  "entity-id": "9d8e04c7-d87f-4525-8dbc-bcf8d55015f8",
+  "entity-display-order": 352,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/organization.json"
+    ],
+    [
+      "entity-types",
+      "organization"
+    ]
+  ],
+  "display-name": {
+    "default": "Organization Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/organization-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/organization.json"
+  },
+  "default-name-prefixes": []
+}

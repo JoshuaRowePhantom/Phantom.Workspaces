@@ -1,0 +1,40 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/github-work-item.json",
+  "description": "Schema for GitHub issue entities extending the git-layer work item with GitHub-specific number and identity fields.",
+  "allOf": [
+    {
+      "$ref": "git-work-item.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "github-work-item"
+      }
+    },
+    "number": {
+      "type": "integer",
+      "description": "GitHub issue number within the repository"
+    },
+    "github-node-id": {
+      "type": "string",
+      "description": "GitHub global node ID"
+    },
+    "author": {
+      "type": "string",
+      "description": "GitHub login of the issue author"
+    },
+    "milestone": {
+      "type": "string",
+      "description": "Milestone title if set"
+    }
+  }
+}

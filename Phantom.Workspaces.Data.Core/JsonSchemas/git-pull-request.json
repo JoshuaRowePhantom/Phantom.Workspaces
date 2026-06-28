@@ -1,0 +1,47 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git-pull-request.json",
+  "description": "Schema for git-layer pull request entities with branch and commit fields.",
+  "allOf": [
+    {
+      "$ref": "pull-request.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "git-pull-request"
+      }
+    },
+    "source-branch": {
+      "type": "string",
+      "description": "The branch being merged (head)"
+    },
+    "target-branch": {
+      "type": "string",
+      "description": "The branch being merged into (base)"
+    },
+    "source-commit": {
+      "type": "string",
+      "description": "Head commit SHA of the source branch"
+    },
+    "merge-commit": {
+      "type": "string",
+      "description": "Merge commit SHA if merged"
+    },
+    "repository": {
+      "$ref": "core.json#/$defs/entity-id",
+      "x-entity-types": [
+        "git-repository"
+      ],
+      "description": "Entity ID of the git-repository this pull request belongs to"
+    }
+  }
+}

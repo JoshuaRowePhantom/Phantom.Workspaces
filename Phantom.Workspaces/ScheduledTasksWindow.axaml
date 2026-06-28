@@ -22,14 +22,29 @@
                            IsVisible="{Binding !HasScheduledTasks}"
                            Opacity="0.7" />
                 <ScrollViewer IsVisible="{Binding HasScheduledTasks}">
-                    <ItemsControl ItemsSource="{Binding ScheduledTasks}">
-                        <ItemsControl.ItemTemplate>
+                    <ListBox ItemsSource="{Binding ScheduledTasks}"
+                             SelectedItem="{Binding SelectedTask}"
+                             Background="Transparent"
+                             BorderThickness="0">
+                        <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Border Padding="6" Margin="0,0,0,6"
                                         BorderThickness="0,0,0,1"
                                         BorderBrush="{DynamicResource Theme.Class.muted.Foreground}">
                                     <StackPanel Spacing="2">
-                                        <TextBlock Text="{Binding ToolDisplayName}" FontWeight="SemiBold" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <TextBlock Text="🔔"
+                                                       IsVisible="{Binding IsRunning}"
+                                                       ToolTip.Tip="Running" />
+                                            <TextBlock Text="❗"
+                                                       Foreground="{DynamicResource Theme.Status.Bad}"
+                                                       IsVisible="{Binding HasFailure}"
+                                                       ToolTip.Tip="Last run failed" />
+                                            <TextBlock Text="✅"
+                                                       IsVisible="{Binding LastRunSucceeded}"
+                                                       ToolTip.Tip="Last run succeeded" />
+                                            <TextBlock Text="{Binding ToolDisplayName}" FontWeight="SemiBold" />
+                                        </StackPanel>
                                         <StackPanel Orientation="Horizontal" Spacing="12">
                                             <TextBlock Text="{Binding ScheduleDisplayName, StringFormat='Schedule: {0}'}" Opacity="0.8" />
                                             <TextBlock Text="{Binding TargetDisplayName, StringFormat='Target: {0}'}" Opacity="0.8" />
@@ -38,8 +53,8 @@
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                 </ScrollViewer>
             </Grid>
         </Border>
@@ -54,61 +69,27 @@
                 <TextBlock Text="No tool runs recorded."
                            IsVisible="{Binding ScheduledToolsRunning, Converter={x:Static ObjectConverters.IsNull}}"
                            Opacity="0.7" />
-                <ScrollViewer IsVisible="{Binding ScheduledToolsRunning, Converter={x:Static ObjectConverters.IsNotNull}}">
-                    <ItemsControl ItemsSource="{Binding ScheduledToolsRunning.Tools}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="0,0,0,4">
-                                    <Button Command="{Binding ExpandCommand}"
-                                            HorizontalAlignment="Stretch"
-                                            HorizontalContentAlignment="Left"
-                                            Background="Transparent"
-                                            BorderThickness="0"
-                                            Padding="4,4">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <TextBlock Text="❗"
-                                                       Foreground="{DynamicResource Theme.Status.Bad}"
-                                                       IsVisible="{Binding HasFailure}"
-                                                       ToolTip.Tip="Last run failed" />
-                                            <TextBlock Text="⏳"
-                                                       IsVisible="{Binding IsRunning}"
-                                                       ToolTip.Tip="Running" />
-                                            <TextBlock Text="{Binding ToolType}" FontWeight="SemiBold" />
-                                            <TextBlock Text="{Binding Host}" Opacity="0.7" />
-                                            <TextBlock Text="{Binding LastRunStatus, StringFormat='({0})'}"
-                                                       Opacity="0.6"
-                                                       IsVisible="{Binding LastRunStatus, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Border IsVisible="{Binding IsExpanded}"
-                                            Margin="8,0,0,4"
-                                            Padding="8"
-                                            CornerRadius="4"
-                                            BorderThickness="1"
-                                            BorderBrush="{DynamicResource Theme.Class.muted.Foreground}">
-                                        <ItemsControl ItemsSource="{Binding RecentRuns}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
-                                                        <TextBlock Text="{Binding StatusGlyph}" Opacity="0.9" />
-                                                        <TextBlock Text="{Binding StartedAt, StringFormat='{}{0:HH:mm:ss}'}" Opacity="0.7" />
-                                                        <TextBlock Text="{Binding Duration, StringFormat='{}{0:g}'}"
-                                                                   Opacity="0.7"
-                                                                   IsVisible="{Binding Duration, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                                                        <TextBlock Text="{Binding Message}"
-                                                                   IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                                                   Opacity="0.8"
-                                                                   TextWrapping="Wrap" />
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </Border>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                <TextBlock Text="Select a task above to see its run history."
+                           IsVisible="{Binding SelectedTask, Converter={x:Static ObjectConverters.IsNull}}"
+                           Opacity="0.7" />
+                <TreeView ItemsSource="{Binding SelectedToolRow.RecentRuns}"
+                          IsVisible="{Binding SelectedTask, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TreeView.ItemTemplate>
+                        <TreeDataTemplate ItemsSource="{Binding SubRuns}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{Binding StatusGlyph}" Opacity="0.9" />
+                                <TextBlock Text="{Binding StartedAt, StringFormat='{}{0:HH:mm:ss}'}" Opacity="0.7" />
+                                <TextBlock Text="{Binding Duration, StringFormat='{}{0:g}'}"
+                                           Opacity="0.7"
+                                           IsVisible="{Binding Duration, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                <TextBlock Text="{Binding Message}"
+                                           IsVisible="{Binding Message, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                           Opacity="0.8"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
             </Grid>
         </Border>
 

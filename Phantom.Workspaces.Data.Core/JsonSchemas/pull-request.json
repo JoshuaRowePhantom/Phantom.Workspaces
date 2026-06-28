@@ -1,0 +1,59 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/pull-request.json",
+  "description": "Platform-agnostic schema for pull request entities shared by all source-control hosting integrations.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    },
+    {
+      "$ref": "task.json"
+    },
+    {
+      "$ref": "external.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "pull-request"
+      }
+    },
+    "title": {
+      "type": "string",
+      "description": "Title of the pull request"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "draft",
+        "closed",
+        "merged"
+      ],
+      "description": "Current status of the pull request",
+      "x-field-status": {
+        "good-status-values": [
+          "merged"
+        ],
+        "bad-status-values": [
+          "closed"
+        ]
+      }
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Platform-native label/tag strings"
+    }
+  }
+}

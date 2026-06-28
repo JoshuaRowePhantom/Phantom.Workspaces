@@ -1,0 +1,41 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git-work-item.json",
+  "description": "Schema for git-layer work item entities linking issues to repositories and pull requests.",
+  "allOf": [
+    {
+      "$ref": "work-item.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "git-work-item"
+      }
+    },
+    "repository": {
+      "$ref": "core.json#/$defs/entity-id",
+      "x-entity-types": [
+        "git-repository"
+      ],
+      "description": "Entity ID of the git-repository this work item is filed against"
+    },
+    "related-pull-requests": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-id",
+        "x-entity-types": [
+          "git-pull-request"
+        ]
+      },
+      "description": "Entity IDs of pull requests explicitly linked to this work item"
+    }
+  }
+}
