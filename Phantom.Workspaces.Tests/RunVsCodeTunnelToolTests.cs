@@ -262,6 +262,7 @@ public sealed class RunVsCodeTunnelToolTests
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
     public async Task RunVsCodeTunnelTool_DefaultCli_ServiceLogNonZeroExit_LogsWarning()
     {
         var testLogger = new TestLogger<RunVsCodeTunnelTool>();

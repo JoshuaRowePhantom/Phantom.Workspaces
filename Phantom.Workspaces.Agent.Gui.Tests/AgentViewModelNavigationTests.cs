@@ -20,6 +20,7 @@ public sealed class AgentViewModelNavigationTests
     }
 
     [AvaloniaFact]
+    [Trait("Category", "Integration")]
     public async Task BuildToolNavigationItem_TopLevelItems_StartCollapsed()
     {
         await using var server = await TestMcpServerProcess.StartAsync();
@@ -35,6 +36,7 @@ public sealed class AgentViewModelNavigationTests
     }
 
     [AvaloniaFact]
+    [Trait("Category", "Integration")]
     public async Task BuildToolNavigationItem_ChildItems_StartExpanded()
     {
         await using var server = await TestMcpServerProcess.StartAsync();
