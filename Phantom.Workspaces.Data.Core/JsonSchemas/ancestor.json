@@ -1,0 +1,32 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/ancestor.json",
+  "description": "Abstract schema for synthesized ancestor-grouping relationship objects derived from entity naming conventions. Ancestor relationships are never stored as real entities; they are synthesized at query time by the data access layer when a traverse-relationships entry of type 'ancestor' is requested. An ancestor relationship object will never have 'entity' in its entity-types array.",
+  "allOf": [{ "$ref": "relationship.json" }],
+  "x-abstract": true,
+  "required": ["entity-types", "participants"],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "contains": { "const": "ancestor" },
+      "not": { "contains": { "const": "entity" } }
+    },
+    "participants": {
+      "type": "object",
+      "properties": {
+        "child": {
+          "$ref": "core.json#/$defs/entity-id",
+          "x-entity-types": ["entity"],
+          "description": "The entity whose name contains this ancestor as a prefix"
+        }
+      },
+      "required": ["child"],
+      "additionalProperties": false
+    },
+    "names": {
+      "type": "array",
+      "items": { "$ref": "core.json#/$defs/entity-name" },
+      "description": "The name prefix segments that identify this ancestor grouping key"
+    },
+    "display-name": { "$ref": "core.json#/$defs/local-string" }
+  }
+}

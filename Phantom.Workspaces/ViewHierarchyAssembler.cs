@@ -9,17 +9,112 @@ using Phantom.Workspaces.ViewModels;
 namespace Phantom.Workspaces;
 
 /// <summary>
-/// A node in an assembled view hierarchy: an entity plus its nested child nodes. The structure is
-/// rendering-agnostic — it can be flattened to an indented list or bound directly to a tree control.
+/// A synthesized, non-stored relationship object that represents one child→ancestor edge derived
+/// from an entity's naming hierarchy. Ancestor relationship objects are produced by
+/// <see cref="AncestorSynthesizer"/> and are never written to the data store.
+/// </summary>
+public sealed class AncestorRelationshipObject
+{
+    public AncestorRelationshipObject(EntityId childEntityId, string[] namePrefix)
+    {
+        this.ChildEntityId = childEntityId;
+        this.NamePrefix = namePrefix;
+    }
+
+    /// <summary>The fixed entity-types carried by every ancestor relationship object.</summary>
+    public static readonly IReadOnlyList<string> EntityTypes = ["relationship", "ancestor"];
+
+    public EntityId ChildEntityId { get; }
+
+    /// <summary>The first N segments of the child entity's primary name.</summary>
+    public string[] NamePrefix { get; }
+
+    /// <summary>Display label for the group header: the last segment of <see cref="NamePrefix"/>.</summary>
+    public string DisplayName => this.NamePrefix.Length > 0 ? this.NamePrefix[^1] : string.Empty;
+}
+
+/// <summary>
+/// Synthesizes <see cref="AncestorRelationshipObject"/>s from a set of entities by extracting the
+/// leading N segments of each entity's primary name. Entities whose primary name is not longer than
+/// <c>namePrefixLength</c> produce no ancestor relationship object.
+/// </summary>
+public static class AncestorSynthesizer
+{
+    public static IReadOnlyList<AncestorRelationshipObject> Synthesize(
+        IEnumerable<SubscribedEntityViewModel> entities,
+        int namePrefixLength)
+    {
+        var results = new List<AncestorRelationshipObject>();
+        foreach (var entity in entities)
+        {
+            var primaryName = ReadPrimaryName(entity);
+            if (primaryName is null || primaryName.Length <= namePrefixLength)
+            {
+                continue;
+            }
+
+            results.Add(new AncestorRelationshipObject(entity.EntityId, primaryName[..namePrefixLength]));
+        }
+
+        return results;
+    }
+
+    private static string[]? ReadPrimaryName(SubscribedEntityViewModel entity)
+    {
+        if (entity.Snapshot.Data is not { } data || data.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!data.TryGetProperty("names", out var names) || names.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var first = names.EnumerateArray().FirstOrDefault();
+        if (first.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        return first.EnumerateArray()
+            .Where(static e => e.ValueKind == JsonValueKind.String)
+            .Select(static e => e.GetString()!)
+            .ToArray();
+    }
+}
+
+/// <summary>
+/// A node in an assembled view hierarchy: either a real entity node or a synthesized ancestor group
+/// node. The structure is rendering-agnostic — it can be flattened to an indented list or bound
+/// directly to a tree control.
 /// </summary>
 public sealed class ViewHierarchyNode
 {
+    /// <summary>Creates a node for a real entity.</summary>
     public ViewHierarchyNode(SubscribedEntityViewModel entity)
     {
         this.Entity = entity;
     }
 
-    public SubscribedEntityViewModel Entity { get; }
+    /// <summary>Creates a synthesized ancestor group node (no real entity).</summary>
+    internal ViewHierarchyNode(string[] namePrefix, string displayName)
+    {
+        this.NamePrefix = namePrefix;
+        this.DisplayName = displayName;
+    }
+
+    /// <summary>The real entity, or <see langword="null"/> for ancestor group nodes.</summary>
+    public SubscribedEntityViewModel? Entity { get; }
+
+    /// <summary>The name prefix segments that key this ancestor group, or <see langword="null"/> for real-entity nodes.</summary>
+    public string[]? NamePrefix { get; }
+
+    /// <summary>The display label for ancestor group nodes, or <see langword="null"/> for real-entity nodes.</summary>
+    public string? DisplayName { get; }
+
+    /// <summary><see langword="true"/> when this node is a synthesized ancestor group rather than a real entity.</summary>
+    public bool IsAncestorGroup => this.NamePrefix is not null;
 
     public List<ViewHierarchyNode> Children { get; } = [];
 }
@@ -51,24 +146,41 @@ public sealed class ViewHierarchyAssembler
         foreach (var root in roots)
         {
             var rootNode = new ViewHierarchyNode(root);
+            var traversals = await this.GetTraversalsAsync(root, "traverse-relationships", cancellationToken).ConfigureAwait(false);
             var parentNodesById = new Dictionary<EntityId, ViewHierarchyNode>();
+            var seenIds = new HashSet<EntityId> { root.EntityId };
 
-            foreach (var member in await this.GetRelatedMembersAsync(root, cancellationToken).ConfigureAwait(false))
+            foreach (var traversal in traversals)
             {
-                var parent = await this.GetContextualParentAsync(member, cancellationToken).ConfigureAwait(false);
-                if (parent is null || parent.EntityId == root.EntityId)
+                if (IsAncestorTraversal(traversal))
                 {
-                    rootNode.Children.Add(new ViewHierarchyNode(member));
-                    continue;
+                    await this.AddAncestorGroupNodesAsync(rootNode, traversal, cancellationToken).ConfigureAwait(false);
                 }
-
-                if (!parentNodesById.TryGetValue(parent.EntityId, out var parentNode))
+                else
                 {
-                    parentNodesById[parent.EntityId] = parentNode = new ViewHierarchyNode(parent);
-                    rootNode.Children.Add(parentNode);
-                }
+                    foreach (var member in await this.QueryParticipantsAsync(traversal, root.EntityId, cancellationToken).ConfigureAwait(false))
+                    {
+                        if (!seenIds.Add(member.EntityId))
+                        {
+                            continue;
+                        }
 
-                parentNode.Children.Add(new ViewHierarchyNode(member));
+                        var parent = await this.GetContextualParentAsync(member, cancellationToken).ConfigureAwait(false);
+                        if (parent is null || parent.EntityId == root.EntityId)
+                        {
+                            rootNode.Children.Add(new ViewHierarchyNode(member));
+                            continue;
+                        }
+
+                        if (!parentNodesById.TryGetValue(parent.EntityId, out var parentNode))
+                        {
+                            parentNodesById[parent.EntityId] = parentNode = new ViewHierarchyNode(parent);
+                            rootNode.Children.Add(parentNode);
+                        }
+
+                        parentNode.Children.Add(new ViewHierarchyNode(member));
+                    }
+                }
             }
 
             rootNodes.Add(rootNode);
@@ -77,25 +189,98 @@ public sealed class ViewHierarchyAssembler
         return rootNodes;
     }
 
-    private async Task<IReadOnlyList<SubscribedEntityViewModel>> GetRelatedMembersAsync(
-        SubscribedEntityViewModel root,
+    /// <summary>
+    /// Synthesizes ancestor group nodes from the given ancestor traversal configuration and appends
+    /// them (and their ungrouped siblings) to the root node's children.
+    /// </summary>
+    private async Task AddAncestorGroupNodesAsync(
+        ViewHierarchyNode rootNode,
+        JsonElement traversal,
         CancellationToken cancellationToken)
     {
-        var members = new List<SubscribedEntityViewModel>();
-        var seenIds = new HashSet<EntityId> { root.EntityId };
-
-        foreach (var traversal in await this.GetTraversalsAsync(root, "traverse-relationships", cancellationToken).ConfigureAwait(false))
+        var entityTypeNames = ReadStringArray(traversal, "entity-type-names");
+        if (entityTypeNames.Length == 0)
         {
-            foreach (var participant in await this.QueryParticipantsAsync(traversal, root.EntityId, cancellationToken).ConfigureAwait(false))
+            return;
+        }
+
+        if (!traversal.TryGetProperty("name-prefix-length", out var prefixLengthEl)
+            || prefixLengthEl.ValueKind != JsonValueKind.Number)
+        {
+            return;
+        }
+
+        var prefixLength = prefixLengthEl.GetInt32();
+        var entities = await this.QueryEntitiesByTypeAsync(entityTypeNames, cancellationToken).ConfigureAwait(false);
+        var ancestorRels = AncestorSynthesizer.Synthesize(entities, prefixLength);
+
+        var entitiesById = entities.ToDictionary(static e => e.EntityId);
+        var grouped = new Dictionary<string, (string[] Prefix, List<EntityId> ChildIds)>(StringComparer.Ordinal);
+
+        foreach (var rel in ancestorRels)
+        {
+            var key = string.Join("\0", rel.NamePrefix);
+            if (!grouped.TryGetValue(key, out var group))
             {
-                if (seenIds.Add(participant.EntityId))
-                {
-                    members.Add(participant);
-                }
+                group = (rel.NamePrefix, []);
+                grouped[key] = group;
+            }
+
+            group.ChildIds.Add(rel.ChildEntityId);
+        }
+
+        var groupedChildIds = grouped.Values.SelectMany(static g => g.ChildIds).ToHashSet();
+
+        foreach (var entity in entities)
+        {
+            if (!groupedChildIds.Contains(entity.EntityId))
+            {
+                rootNode.Children.Add(new ViewHierarchyNode(entity));
             }
         }
 
-        return members;
+        foreach (var (_, (prefix, childIds)) in grouped)
+        {
+            var groupNode = new ViewHierarchyNode(prefix, prefix[^1]);
+            rootNode.Children.Add(groupNode);
+            foreach (var childId in childIds)
+            {
+                if (entitiesById.TryGetValue(childId, out var childEntity))
+                {
+                    groupNode.Children.Add(new ViewHierarchyNode(childEntity));
+                }
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<SubscribedEntityViewModel>> QueryEntitiesByTypeAsync(
+        string[] entityTypeNames,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("ancestor-type"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(entityTypeNames),
+                    },
+                },
+            ],
+        };
+
+        var results = await this.entityBroker.GetEntitiesAsync(query, cancellationToken).ConfigureAwait(false);
+        return results.ToList();
+    }
+
+    private static bool IsAncestorTraversal(JsonElement traversal)
+    {
+        return traversal.TryGetProperty("relationship-type", out var rt)
+            && rt.ValueKind == JsonValueKind.String
+            && rt.GetString() == "ancestor";
     }
 
     private async Task<SubscribedEntityViewModel?> GetContextualParentAsync(
