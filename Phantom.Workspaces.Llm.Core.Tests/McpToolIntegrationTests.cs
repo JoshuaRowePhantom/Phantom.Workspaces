@@ -3,6 +3,7 @@ using ModelContextProtocol.Protocol;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class McpToolIntegrationTests
 {
     [Fact]

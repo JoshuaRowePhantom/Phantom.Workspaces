@@ -2,6 +2,7 @@ using AgentSchema;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class McpAgentIntegrationTests
 {
     [Fact]
