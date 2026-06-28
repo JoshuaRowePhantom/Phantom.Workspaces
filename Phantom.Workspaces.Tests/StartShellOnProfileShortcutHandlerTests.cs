@@ -13,6 +13,7 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class StartShellOnProfileShortcutHandlerTests
 {
     [AvaloniaFact(Timeout = 15_000)]

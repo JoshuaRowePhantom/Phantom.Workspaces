@@ -7,6 +7,7 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class WebViewModelTests
 {
     // --- TabHeader / FaviconTabHeaderItemViewModel ---
@@ -377,11 +378,14 @@ public sealed class WebViewModelTests
         var entityTab = new EntityWorkspaceTabViewModel { Id = "entity-1", Title = "Entity" };
         await viewModel.OpenTabAsync(entityTab);
 
+        var tabCountBeforeDuplicate = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).Tabs.Count;
+
         await viewModel.DuplicateBrowserTabAsync();
 
         var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
         var tabs = selectedRegion.Tabs!.ToList();
-        Assert.Single(tabs);
+        // DuplicateBrowserTabAsync is a no-op for non-browser tabs; no new tab should have been inserted.
+        Assert.Equal(tabCountBeforeDuplicate, tabs.Count);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

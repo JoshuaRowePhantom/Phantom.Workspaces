@@ -3,6 +3,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class CollectionTransformerTests
 {
     [AvaloniaFact]
