@@ -36,25 +36,48 @@ public partial class QueueComposerControl : UserControl
             return;
         }
 
-        if (sender is TextBox textBox)
+        var caretLine = 0;
+        TextBox? textBox = null;
+        if (sender is TextBox tb)
         {
-            vm.InputText = textBox.Text ?? string.Empty;
+            textBox = tb;
+            vm.InputText = tb.Text ?? string.Empty;
 
             if (e.Key == Key.Back
                 && vm.TryRemoveImageAttachmentBeforeCaret(
-                    textBox.Text ?? string.Empty,
-                    textBox.CaretIndex,
+                    tb.Text ?? string.Empty,
+                    tb.CaretIndex,
                     out var updatedText,
                     out var updatedCaretIndex))
             {
-                textBox.Text = updatedText;
-                textBox.CaretIndex = updatedCaretIndex;
+                tb.Text = updatedText;
+                tb.CaretIndex = updatedCaretIndex;
                 e.Handled = true;
                 return;
             }
+
+            var text = tb.Text ?? string.Empty;
+            var clampedCaret = Math.Min(tb.CaretIndex, text.Length);
+            foreach (var c in text.AsSpan(0, clampedCaret))
+            {
+                if (c == '\n')
+                {
+                    caretLine++;
+                }
+            }
         }
 
-        e.Handled = HandleInputKey(vm, e.Key, e.KeyModifiers);
+        if (HandleInputKey(vm, e.Key, e.KeyModifiers, caretLine, out var newText, out var newCaretIndex))
+        {
+            if (newText is not null && textBox is not null)
+            {
+                textBox.Text = newText;
+                textBox.CaretIndex = newCaretIndex;
+                vm.InputText = newText;
+            }
+
+            e.Handled = true;
+        }
     }
 
     private async void InputBox_PastingFromClipboard(object? sender, RoutedEventArgs e)
@@ -93,7 +116,19 @@ public partial class QueueComposerControl : UserControl
     }
 
     internal static bool HandleInputKey(QueueComposerViewModel vm, Key key, KeyModifiers keyModifiers)
+        => HandleInputKey(vm, key, keyModifiers, caretLine: 0, out _, out _);
+
+    internal static bool HandleInputKey(
+        QueueComposerViewModel vm,
+        Key key,
+        KeyModifiers keyModifiers,
+        int caretLine,
+        out string? newText,
+        out int newCaretIndex)
     {
+        newText = null;
+        newCaretIndex = 0;
+
         // Completions popup intercepts Tab, Esc, and arrow keys.
         if (vm.Completions.IsVisible)
         {
@@ -136,6 +171,26 @@ public partial class QueueComposerControl : UserControl
             // Block Enter from submitting while the popup is open.
             if (key == Key.Enter || key == Key.Return)
             {
+                return true;
+            }
+        }
+
+        if (key == Key.Up)
+        {
+            if (vm.TryNavigateHistoryUp(caretLine, out var histText, out var histCaret))
+            {
+                newText = histText;
+                newCaretIndex = histCaret;
+                return true;
+            }
+        }
+
+        if (key == Key.Down)
+        {
+            if (vm.TryNavigateHistoryDown(out var histText, out var histCaret))
+            {
+                newText = histText;
+                newCaretIndex = histCaret;
                 return true;
             }
         }

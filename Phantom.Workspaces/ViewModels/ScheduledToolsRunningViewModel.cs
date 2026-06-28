@@ -43,6 +43,9 @@ public sealed class RunSummaryViewModel
         "running" => "⏳",
         _ => "?",
     };
+
+    /// <summary>Sub-task results nested under this run; empty if the run has no sub-tasks.</summary>
+    public IReadOnlyList<RunSummaryViewModel> SubRuns { get; init; } = [];
 }
 
 /// <summary>
@@ -137,8 +140,6 @@ public sealed class ToolRowViewModel : ViewModelBase
 /// </summary>
 public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
 {
-    private const int MaxRecentRunsPerTool = 10;
-
     private readonly ScheduledToolHost host;
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Action<Action> dispatch;
@@ -329,7 +330,6 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
             .Where(r => string.Equals(r.HostLabel, hostLabel, StringComparison.Ordinal)
                      && string.Equals(r.ToolName, toolType, StringComparison.Ordinal))
             .OrderByDescending(r => r.StartTime)
-            .Take(MaxRecentRunsPerTool)
             .Select(r => new RunSummaryViewModel(
                 r.StartTime,
                 r.EndTime.HasValue ? r.EndTime.Value - r.StartTime : null,
