@@ -1,5 +1,7 @@
 using System;
 using System.ComponentModel;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces;
 
 namespace Phantom.Workspaces.Llm;
@@ -18,11 +20,16 @@ public static class GitHubAuthTokenResolver
 
     private static readonly TimeSpan GitHubCliTimeout = TimeSpan.FromMilliseconds(10_000);
 
+    private static readonly RunProcessParameters GitHubCliParameters = new(
+        Command: "gh",
+        Arguments: ["auth", "token"],
+        Timeout: GitHubCliTimeout);
+
     /// <summary>
     /// Resolves the GitHub token from <c>GITHUB_TOKEN</c>, falling back to <c>gh auth token</c>.
     /// Returns <see langword="null"/> when neither source yields a token.
     /// </summary>
-    public static string? Resolve()
+    public static string? Resolve(ILogger? logger = null)
     {
         var environmentValue = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(environmentValue))
@@ -30,22 +37,28 @@ public static class GitHubAuthTokenResolver
             return environmentValue;
         }
 
-        return ResolveFromCli();
+        return ResolveFromCli(logger);
     }
 
     /// <summary>
     /// Resolves the GitHub token from the GitHub CLI (<c>gh auth token</c>). Returns
     /// <see langword="null"/> when the CLI is unavailable or returns no token.
+    /// When <paramref name="logger"/> is supplied, a Warning-level entry is emitted if
+    /// <c>gh auth token</c> exits with a non-zero code.
     /// </summary>
-    public static string? ResolveFromCli()
+    public static string? ResolveFromCli(ILogger? logger = null)
+    {
+        return ResolveFromCliCore(logger ?? NullLogger.Instance, GitHubCliParameters);
+    }
+
+    internal static string? ResolveFromCliCore(ILogger logger, RunProcessParameters parameters)
     {
         try
         {
-            var result = ProcessRunner.RunProcessAsync(
-                new RunProcessParameters(
-                    Command: "gh",
-                    Arguments: ["auth", "token"],
-                    Timeout: GitHubCliTimeout))
+            var result = ProcessRunner.RunAndLogAsync(
+                parameters,
+                logger,
+                operationDescription: "resolve GitHub auth token via CLI")
                 .GetAwaiter().GetResult();
 
             if (result.ExitCode != 0)
