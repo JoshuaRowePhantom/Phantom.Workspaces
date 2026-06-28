@@ -2341,12 +2341,11 @@ public sealed class MainWindowIntegrationTests
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var plainTab = new WebViewModel("https://example.com") { Id = "scroll-lock-noop", Title = "Web" };
+        var plainTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-noop", Title = "NoAgent" };
         await viewModel.OpenTabAsync(plainTab);
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         bool handled = false;
         window.AddHandler(
