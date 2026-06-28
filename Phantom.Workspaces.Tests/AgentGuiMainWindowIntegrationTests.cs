@@ -26,6 +26,7 @@ public sealed class AgentGuiMainWindowIntegrationTests
             """);
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task AgentGuiMainWindow_Constructs_WithExpectedChildDataContexts()
     {
         var parseResult = new AgentDefinitionParseResult(

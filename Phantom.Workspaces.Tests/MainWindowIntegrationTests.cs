@@ -1268,6 +1268,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
@@ -1631,6 +1632,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1656,6 +1658,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1680,6 +1683,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1706,6 +1710,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Ctrl1_ActivatesFirstWorkspacePane()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1758,6 +1763,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Ctrl2_ActivatesSecondWorkspacePane()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1807,6 +1813,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlDigit_WithIndexOutOfRange_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2017,6 +2024,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2044,6 +2052,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2071,6 +2080,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF7_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
@@ -2103,6 +2113,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF8_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
@@ -2132,6 +2143,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
     {
         // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
@@ -2175,6 +2187,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2189,7 +2202,9 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
+    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2267,6 +2282,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2293,6 +2309,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2318,6 +2335,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2346,6 +2364,114 @@ public sealed class MainWindowIntegrationTests
         Assert.False(handled);
 
         window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_WorkspacesView_ShowsRelatedEntityNestedUnderWorkspace()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+
+        var workspaceId = new EntityId("a2b3c4d5-0001-4000-8000-000000000001");
+        var noteId = new EntityId("a2b3c4d5-0001-4000-8000-000000000002");
+        var relatedId = new EntityId("a2b3c4d5-0001-4000-8000-000000000003");
+
+        await SeedEntityAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "view-related-ws"]],
+              "display-name": { "default": "Related Workspace" },
+              "regions": []
+            }
+            """);
+        await SeedEntityAsync(entityBroker, noteId, $$"""
+            {
+              "entity-id": "{{noteId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "related-note"]],
+              "display-name": { "default": "Related Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "Related Note" } }
+            }
+            """);
+        await SeedEntityAsync(entityBroker, relatedId, $$"""
+            {
+              "entity-id": "{{relatedId}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "ws-note-related"]],
+              "participants": { "entities": ["{{workspaceId}}", "{{noteId}}"] }
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+        viewModel.SelectedTopLevelView = workspacesView;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+
+        var workspaceEntity = Assert.Single(
+            entities,
+            e => string.Equals(e.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, workspaceEntity.IndentLevel);
+
+        var noteEntity = Assert.Single(
+            entities,
+            e => string.Equals(e.EntityId, noteId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, noteEntity.IndentLevel);
+
+        var workspaceIndex = entities.ToList().FindIndex(e => string.Equals(e.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        var noteIndex = entities.ToList().FindIndex(e => string.Equals(e.EntityId, noteId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(workspaceIndex + 1, noteIndex);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_WorkspacesView_WorkspaceWithNoRelatedEntities_ShowsWorkspaceFlatOnly()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+
+        var workspaceId = new EntityId("a2b3c4d5-0002-4000-8000-000000000001");
+
+        await SeedEntityAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "view-flat-ws"]],
+              "display-name": { "default": "Flat Workspace" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+        viewModel.SelectedTopLevelView = workspacesView;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+
+        var workspaceEntity = Assert.Single(
+            entities,
+            e => string.Equals(e.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, workspaceEntity.IndentLevel);
+
+        Assert.DoesNotContain(entities, e => e.IndentLevel > 0);
     }
 
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
