@@ -87,6 +87,22 @@
             "type": "string"
           }
         },
+        "relationship-type": {
+          "type": "string",
+          "description": "Set to 'ancestor' to request synthesized ancestor grouping instead of a stored relationship traversal."
+        },
+        "entity-type-names": {
+          "type": "array",
+          "items": {
+            "$ref": "core.json#/$defs/entity-type-id"
+          },
+          "description": "Entity types to query when relationship-type is 'ancestor'."
+        },
+        "name-prefix-length": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of leading name segments that form the ancestor grouping key (used with relationship-type 'ancestor')."
+        },
         "max-depth": {
           "type": "integer",
           "minimum": 1

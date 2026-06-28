@@ -9,9 +9,10 @@ The `azure-devops-work-item` schema represents work items from Azure DevOps. It 
 ## Composition
 
 `azure-devops-work-item` composes:
-- `entity.json` — base entity fields
-- `task.json` — `status` and `assigned-to` fields
-- `external.json` — canonical web URL via `urls`
+- `work-item.json` — `title`, `status`, `labels`, `related-commits` fields
+  - `entity.json` — base entity fields
+  - `task.json` — `status` and `assigned-to` fields
+  - `external.json` — canonical web URL via `urls`
 
 It is the Azure DevOps implementation of the `work-item` concept. Discovery tools should create `azure-devops-work-item` entities rather than plain `work-item` entities when synchronising Azure DevOps work items.
 

@@ -1246,7 +1246,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewHierarchyNode node,
         int indentLevel)
     {
-        population.Entities.Add(this.CreateViewEntityViewModel(node.Entity, indentLevel));
+        if (!node.IsAncestorGroup)
+        {
+            population.Entities.Add(this.CreateViewEntityViewModel(node.Entity!, indentLevel));
+        }
+
         foreach (var child in node.Children)
         {
             this.AddHierarchyNode(population, child, indentLevel + 1);
