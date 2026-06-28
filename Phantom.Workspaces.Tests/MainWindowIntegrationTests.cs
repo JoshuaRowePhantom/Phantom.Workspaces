@@ -2145,5 +2145,122 @@ public sealed class MainWindowIntegrationTests
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
     }
 
+    // ── IsAltHeld / Alt-badge tests ──────────────────────────────────────────
+
+    [Fact]
+    public void IsAltHeld_DefaultIsFalse()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        Assert.False(viewModel.IsAltHeld);
+    }
+
+    [Fact]
+    public void IsAltHeld_SetToTrue_RaisesPropertyChanged()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var raised = false;
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(viewModel.IsAltHeld))
+                raised = true;
+        };
+
+        viewModel.IsAltHeld = true;
+
+        Assert.True(raised);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
+
+        Assert.True(viewModel.IsAltHeld);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        viewModel.IsAltHeld = true;
+        window.KeyReleaseQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
+
+        Assert.False(viewModel.IsAltHeld);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToTabAtIndexCommand_Execute_ClearsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "alt-clear-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = true;
+        viewModel.GoToTabAtIndexCommand.Execute("0");
+
+        Assert.False(viewModel.IsAltHeld);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "alt-label-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "alt-label-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "alt-label-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTab_ByIndex_RefreshesAltShortcutLabels()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "alt-close-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "alt-close-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "alt-close-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        // Close the first tab — B should move to index 0 → label "1", C to index 1 → label "2"
+        viewModel.CloseTabById("alt-close-a");
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
 }
 

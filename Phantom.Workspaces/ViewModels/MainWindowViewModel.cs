@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
@@ -66,6 +67,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
+    private bool isAltHeld;
+    private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -164,6 +167,22 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         get => this.notificationsViewModel;
         private set => this.SetProperty(ref this.notificationsViewModel, value);
+    }
+
+    /// <summary>
+    /// True while the Alt key is physically held down. Drives the Alt+N shortcut badge overlay on tab headers.
+    /// Set by <see cref="MainWindow"/> keyboard handlers; cleared here when a tab switch command fires.
+    /// </summary>
+    public bool IsAltHeld
+    {
+        get => this.isAltHeld;
+        set
+        {
+            if (this.SetProperty(ref this.isAltHeld, value))
+            {
+                this.PropagateIsAltHeldToTabHeaders(value);
+            }
+        }
     }
 
     // IActiveTabProvider implementation
@@ -1243,6 +1262,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Phase 1: create skeleton workspace pane and show it immediately
         var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
+        this.SubscribeToInnerDockChanges(workspacePane);
 
         var loadingPaneIndex = this.WorkspacePanes.IndexOf(loadingWorkspacePane);
         if (loadingPaneIndex >= 0)
@@ -1367,6 +1387,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        this.IsAltHeld = false;
         var target = tabs[index];
         this.dockFactory.SetActiveDockable(target);
         this.dockFactory.SetFocusedDockable(documentDock, target);
@@ -1489,6 +1510,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
            return;
        }
 
+       this.UnsubscribeFromInnerDockChanges(pane);
        this.WorkspacePanes.RemoveAt(paneIndex);
 
        // If we just closed the selected workspace, select another one
@@ -1792,6 +1814,65 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return false;
+    }
+
+    private void SubscribeToInnerDockChanges(WorkspacePaneViewModel workspacePane)
+    {
+        if (workspacePane.ContentLayout is null) return;
+        var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
+        if (documentDock?.VisibleDockables is not INotifyCollectionChanged collection) return;
+
+        NotifyCollectionChangedEventHandler handler = (_, _) =>
+            RefreshTabAltShortcutLabels(documentDock);
+        collection.CollectionChanged += handler;
+        this.innerDockSubscriptions[workspacePane.Id] = handler;
+
+        RefreshTabAltShortcutLabels(documentDock);
+    }
+
+    private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
+    {
+        if (!this.innerDockSubscriptions.TryGetValue(workspacePane.Id, out var handler)) return;
+        this.innerDockSubscriptions.Remove(workspacePane.Id);
+
+        if (workspacePane.ContentLayout is null) return;
+        var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
+        if (documentDock?.VisibleDockables is INotifyCollectionChanged collection)
+            collection.CollectionChanged -= handler;
+    }
+
+    internal static void RefreshTabAltShortcutLabels(IDocumentDock documentDock)
+    {
+        var dockables = documentDock.VisibleDockables;
+        if (dockables is null) return;
+
+        for (var i = 0; i < dockables.Count; i++)
+        {
+            if (dockables[i] is WorkspaceDocument doc)
+            {
+                doc.EffectiveTabHeader.AltShortcutLabel = i switch
+                {
+                    < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
+                    9 => "0",
+                    _ => null,
+                };
+            }
+        }
+    }
+
+    private void PropagateIsAltHeldToTabHeaders(bool value)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null) continue;
+            foreach (var dockable in documentDock.VisibleDockables)
+            {
+                if (dockable is WorkspaceDocument doc)
+                    doc.EffectiveTabHeader.IsAltHeld = value;
+            }
+        }
     }
 
     private IDocumentDock? FindDocumentDock(IDockable dockable)
@@ -2203,6 +2284,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         
         // Create this workspace's own dock layout for its content tabs
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
+        this.SubscribeToInnerDockChanges(workspacePane);
         
         var tabs = new List<WorkspaceTabViewModel>();
 
