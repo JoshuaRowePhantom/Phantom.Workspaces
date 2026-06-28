@@ -20,10 +20,17 @@ public static class GitHubAuthTokenResolver
 
     private static readonly TimeSpan GitHubCliTimeout = TimeSpan.FromMilliseconds(10_000);
 
-    private static readonly RunProcessParameters GitHubCliParameters = new(
-        Command: "gh",
-        Arguments: ["auth", "token"],
-        Timeout: GitHubCliTimeout);
+    private static readonly RunProcessParameters GitHubCliParameters = OperatingSystem.IsWindows()
+        // On Windows, UseShellExecute=false cannot execute .cmd scripts from PATH directly.
+        // Route through cmd.exe so both gh.exe and gh.cmd variants are resolved correctly.
+        ? new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "gh", "auth", "token"],
+            Timeout: GitHubCliTimeout)
+        : new RunProcessParameters(
+            Command: "gh",
+            Arguments: ["auth", "token"],
+            Timeout: GitHubCliTimeout);
 
     /// <summary>
     /// Resolves the GitHub token from <c>GITHUB_TOKEN</c>, falling back to <c>gh auth token</c>.

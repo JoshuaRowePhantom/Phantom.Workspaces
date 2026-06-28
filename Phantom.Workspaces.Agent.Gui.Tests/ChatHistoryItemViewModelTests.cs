@@ -8,6 +8,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class ChatHistoryItemViewModelTests
 {
     private static AgentDefinition CreateTestProviderAgentDefinition()

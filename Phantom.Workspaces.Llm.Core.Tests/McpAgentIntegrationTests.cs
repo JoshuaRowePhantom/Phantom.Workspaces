@@ -23,6 +23,7 @@ public sealed class McpAgentIntegrationTests
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
     public async Task CreateAgentChat_WithTwoHttpMcpServers_InitializesInParallel()
     {
         var barrier = new AsyncBarrier(2);

@@ -1,0 +1,9 @@
+Test run for C:\dev\Phantom.Workspaces-Design\worktrees\5\Phantom.Workspaces.Tests\bin\Debug\net10.0\Phantom.Workspaces.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+Data collector 'Blame' message: The specified inactivity time of 90 seconds has elapsed. Collecting hang dumps from testhost and its child processes.
+
+Passed!  - Failed:     0, Passed:   410, Skipped:     0, Total:   410, Duration: 39 s - Phantom.Workspaces.Tests.dll (net10.0)
+
+
+Attachments:
+  C:\dev\Phantom.Workspaces-Design\worktrees\5\Phantom.Workspaces.Tests\TestResults\e844000a-a9e0-42de-b656-2d4297f96e0a\Sequence_04239d40d58d4571b0e1aa4f0e1dcb01.xml

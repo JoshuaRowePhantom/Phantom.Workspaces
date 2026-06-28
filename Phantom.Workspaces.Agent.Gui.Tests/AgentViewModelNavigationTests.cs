@@ -5,6 +5,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class AgentViewModelNavigationTests
 {
     [AvaloniaFact]

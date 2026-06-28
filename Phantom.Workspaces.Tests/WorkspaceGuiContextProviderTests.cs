@@ -18,6 +18,7 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class WorkspaceGuiContextProviderTests
 {
     [AvaloniaFact(Timeout = 15_000)]
