@@ -154,4 +154,91 @@ public sealed class QueueComposerSlashCommandTests
 
         inputQueue.Dispose();
     }
+
+    [AvaloniaFact]
+    public async Task InputText_WithJustSlash_PassesSentinelEmptyCommandNameToProvider()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = inputQueue.DefaultComposer;
+
+        string? capturedCommandName = "not-set";
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        composer.SlashCompletionsProviderAsync = (commandName, partialArgs, ct) =>
+        {
+            capturedCommandName = commandName;
+            tcs.TrySetResult();
+            return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
+        };
+
+        composer.InputText = "/";
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(string.Empty, capturedCommandName);
+
+        inputQueue.Dispose();
+    }
+
+    [AvaloniaFact]
+    public async Task InputText_WithPartialCommandName_PassesSentinelEmptyCommandNameToProvider()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = inputQueue.DefaultComposer;
+
+        string? capturedCommandName = "not-set";
+        string? capturedPartialArgs = "not-set";
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        composer.SlashCompletionsProviderAsync = (commandName, partialArgs, ct) =>
+        {
+            capturedCommandName = commandName;
+            capturedPartialArgs = partialArgs;
+            tcs.TrySetResult();
+            return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
+        };
+
+        composer.InputText = "/wor";
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(string.Empty, capturedCommandName);
+        Assert.Equal("wor", capturedPartialArgs);
+
+        inputQueue.Dispose();
+    }
+
+    [AvaloniaFact]
+    public async Task InputText_WithCommandNameAndSpace_PassesCommandNameAndPartialArgsToProvider()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = inputQueue.DefaultComposer;
+
+        string? capturedCommandName = "not-set";
+        string? capturedPartialArgs = "not-set";
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        composer.SlashCompletionsProviderAsync = (commandName, partialArgs, ct) =>
+        {
+            capturedCommandName = commandName;
+            capturedPartialArgs = partialArgs;
+            tcs.TrySetResult();
+            return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
+        };
+
+        composer.InputText = "/working-directory /some/path";
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("working-directory", capturedCommandName);
+        Assert.Equal("/some/path", capturedPartialArgs);
+
+        inputQueue.Dispose();
+    }
 }
