@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -134,6 +136,121 @@ public sealed class ScheduledTasksViewModelTests
         using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
 
         Assert.NotNull(viewModel.ScheduledToolsRunning);
+    }
+
+    [AvaloniaFact]
+    public async Task SelectedTask_WhenSet_SelectedToolRowReturnsMatchingToolRow()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var toolId = new EntityId("c7a8b9c0-d1e2-4f5a-6b7c-8d9e0f1a2b3c");
+        var scheduleId = new EntityId("1b784370-6ba2-4e43-812f-b1ef2bef239c");
+        var targetId = new EntityId("b1b2c3d4-1111-2222-3333-444455556666");
+        var relationshipId = new EntityId("b638fe05-9dd5-49f8-a0b8-c767de434b6f");
+
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "display-name": { "default": "Stub Tool" }, "tool-type": "stub" }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "folder"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" } }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","test-host"]], "display-name": { "default": "Test Host" } }
+            """);
+        await SeedAsync(broker, $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "tool-relationship", "relationship"],
+              "names": [["tool-relationships","{{relationshipId}}"]],
+              "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{targetId}}"] }
+            }
+            """);
+
+        var writer = new ToolExecutionResultWriter(broker.EntityRepository.DataAccessLayer);
+        var handle = await writer.StartAsync(["host", "machine"], "stub", TestContext.Current.CancellationToken);
+        await writer.CompleteAsync(handle, success: true, cancellationToken: TestContext.Current.CancellationToken);
+
+        var host = new ScheduledToolHost(
+            broker.EntityRepository.DataAccessLayer,
+            new ScheduledToolRegistry([]));
+
+        using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(viewModel.SelectedTask);
+        Assert.Null(viewModel.SelectedToolRow);
+
+        var task = Assert.Single(viewModel.ScheduledTasks);
+        Assert.Equal("stub", task.ToolType);
+
+        viewModel.SelectedTask = task;
+
+        Assert.NotNull(viewModel.SelectedToolRow);
+        Assert.Equal("stub", viewModel.SelectedToolRow.ToolType);
+    }
+
+    [AvaloniaFact]
+    public async Task SelectedTask_WhenClearedToNull_SelectedToolRowIsNull()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var host = new ScheduledToolHost(
+            broker.EntityRepository.DataAccessLayer,
+            new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
+
+        Assert.Null(viewModel.SelectedTask);
+        Assert.Null(viewModel.SelectedToolRow);
+    }
+
+    [AvaloniaFact]
+    public async Task ScheduledTaskItemViewModel_HasFailure_SyncedFromRunningViewModelOnRefresh()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var toolId = new EntityId("d7a8b9c0-d1e2-4f5a-6b7c-8d9e0f1a2b3c");
+        var scheduleId = new EntityId("2b784370-6ba2-4e43-812f-b1ef2bef239c");
+        var targetId = new EntityId("c1b2c3d4-1111-2222-3333-444455556666");
+        var relationshipId = new EntityId("c638fe05-9dd5-49f8-a0b8-c767de434b6f");
+
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "display-name": { "default": "Stub Tool" }, "tool-type": "stub" }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "folder"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" } }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","test-host"]], "display-name": { "default": "Test Host" } }
+            """);
+        await SeedAsync(broker, $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "tool-relationship", "relationship"],
+              "names": [["tool-relationships","{{relationshipId}}"]],
+              "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{targetId}}"] }
+            }
+            """);
+
+        var writer = new ToolExecutionResultWriter(broker.EntityRepository.DataAccessLayer);
+        var handle = await writer.StartAsync(["host", "machine"], "stub", TestContext.Current.CancellationToken);
+        await writer.CompleteAsync(handle, success: false, cancellationToken: TestContext.Current.CancellationToken);
+
+        var host = new ScheduledToolHost(
+            broker.EntityRepository.DataAccessLayer,
+            new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+
+        var task = Assert.Single(viewModel.ScheduledTasks);
+        Assert.True(task.HasFailure);
+        Assert.False(task.LastRunSucceeded);
+        Assert.False(task.IsRunning);
     }
 
     private static async Task SeedAsync(
