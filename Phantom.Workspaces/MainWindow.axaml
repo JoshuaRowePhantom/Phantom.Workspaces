@@ -28,7 +28,7 @@
     </Window.KeyBindings>
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
-            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,*,Auto">
                 <StackPanel Grid.Column="0"
                             VerticalAlignment="Center"
                             Spacing="2">
@@ -44,7 +44,7 @@
                          SelectedItem="{Binding SelectedTopLevelView}">
                     <ListBox.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="8" />
+                            <WrapPanel Orientation="Horizontal" />
                         </ItemsPanelTemplate>
                     </ListBox.ItemsPanel>
                     <ListBox.ItemTemplate>
@@ -59,59 +59,58 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <Panel Grid.Column="2"
-                       IsVisible="{Binding ConnectionStatus, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <WrapPanel Grid.Column="2" Orientation="Horizontal">
+                    <Panel IsVisible="{Binding ConnectionStatus, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <Button Classes="settings-gear"
+                                Content="🌐"
+                                ToolTip.Tip="Network connections"
+                                Click="OnOpenConnectionStatusClicked" />
+                        <TextBlock Text="❗"
+                                   Foreground="Red"
+                                   Opacity="0.6"
+                                   FontWeight="Bold"
+                                   IsHitTestVisible="False"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Top"
+                                   Margin="0,-2,-2,0"
+                                   IsVisible="{Binding ConnectionStatus.HasProblem, FallbackValue=False}"
+                                   ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
+                    </Panel>
+
                     <Button Classes="settings-gear"
-                            Content="🌐"
-                            ToolTip.Tip="Network connections"
-                            Click="OnOpenConnectionStatusClicked" />
-                    <TextBlock Text="❗"
-                               Foreground="Red"
-                               Opacity="0.6"
-                               FontWeight="Bold"
-                               IsHitTestVisible="False"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Top"
-                               Margin="0,-2,-2,0"
-                               IsVisible="{Binding ConnectionStatus.HasProblem, FallbackValue=False}"
-                               ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
-                </Panel>
+                            Content="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
+                            ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
+                            Click="OnOpenScheduledTasksClicked" />
 
-                <Button Grid.Column="3"
-                        Classes="settings-gear"
-                        Content="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
-                        ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
-                        Click="OnOpenScheduledTasksClicked" />
+                    <Panel>
+                        <Button x:Name="NotificationBellButton"
+                                Classes="settings-gear"
+                                ToolTip.Tip="Notifications"
+                                Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
+                            <TextBlock Text="🔔"
+                                       Classes.notification-bell-ringing="{Binding NotificationsViewModel.HasActiveRun}" />
+                        </Button>
+                        <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
+                                   IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
+                                   Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
+                                   FontSize="9"
+                                   FontWeight="Bold"
+                                   IsHitTestVisible="False"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Top"
+                                   Margin="0,-2,-2,0" />
+                        <Popup IsOpen="{Binding NotificationsViewModel.IsOpen, Mode=TwoWay}"
+                               PlacementTarget="{Binding #NotificationBellButton}"
+                               IsLightDismissEnabled="True">
+                            <controls:NotificationsControl DataContext="{Binding NotificationsViewModel}" />
+                        </Popup>
+                    </Panel>
 
-                <Panel Grid.Column="4">
-                    <Button x:Name="NotificationBellButton"
-                            Classes="settings-gear"
-                            ToolTip.Tip="Notifications"
-                            Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
-                        <TextBlock Text="🔔"
-                                   Classes.notification-bell-ringing="{Binding NotificationsViewModel.HasActiveRun}" />
-                    </Button>
-                    <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
-                               IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
-                               Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
-                               FontSize="9"
-                               FontWeight="Bold"
-                               IsHitTestVisible="False"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Top"
-                               Margin="0,-2,-2,0" />
-                    <Popup IsOpen="{Binding NotificationsViewModel.IsOpen, Mode=TwoWay}"
-                           PlacementTarget="{Binding #NotificationBellButton}"
-                           IsLightDismissEnabled="True">
-                        <controls:NotificationsControl DataContext="{Binding NotificationsViewModel}" />
-                    </Popup>
-                </Panel>
-
-                <Button Grid.Column="5"
-                        Classes="settings-gear"
-                        Content="⚙"
-                        ToolTip.Tip="Settings"
-                        Click="OnOpenSettingsClicked" />
+                    <Button Classes="settings-gear"
+                            Content="⚙"
+                            ToolTip.Tip="Settings"
+                            Click="OnOpenSettingsClicked" />
+                </WrapPanel>
             </Grid>
         </Border>
 
