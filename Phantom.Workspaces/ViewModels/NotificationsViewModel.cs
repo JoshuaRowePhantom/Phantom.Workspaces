@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows.Input;
@@ -63,6 +64,8 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
         {
             row.IsHighlighted = false;
         }
+
+        this.RefreshRows();
     }
 
     private void OnNotificationsChanged(object? sender, EventArgs e)
@@ -79,39 +82,87 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
 
     private void RefreshRows()
     {
-        this.Rows.Clear();
-        // Newest first, unread at top
-        var sorted = this.notificationService.Notifications
-            .OrderBy(e => e.IsRead)
-            .ThenByDescending(e => e.When);
-
-        foreach (var entry in sorted)
+        if (this.IsOpen)
         {
-            var tabKey = entry.TabKey;
-            var navigateCmd = new RelayCommand(_ =>
-            {
-                this.IsOpen = false;
-                this.notificationService.MarkRead(tabKey);
-                this.navigateToTab(tabKey);
-            });
-            var snoozeCmd = new RelayCommand(_ =>
-            {
-                if (this.notificationService.IsTabSnoozed(tabKey))
-                {
-                    this.notificationService.UnsnoozeTab(tabKey);
-                }
-                else
-                {
-                    this.notificationService.SnoozeTab(tabKey);
-                }
-            });
-            this.Rows.Add(new NotificationRowViewModel(entry, navigateCmd, snoozeCmd));
+            this.RefreshRowsInPlace();
+        }
+        else
+        {
+            this.RefreshRowsFull();
         }
 
         this.RaisePropertyChanged(nameof(this.UnreadCount));
         this.RaisePropertyChanged(nameof(this.HasUnread));
         this.RaisePropertyChanged(nameof(this.HasRows));
         this.RaisePropertyChanged(nameof(this.HasActiveRun));
+    }
+
+    private void RefreshRowsFull()
+    {
+        this.Rows.Clear();
+        var sorted = this.notificationService.Notifications
+            .OrderBy(e => e.IsRead)
+            .ThenByDescending(e => e.When);
+
+        foreach (var entry in sorted)
+        {
+            this.Rows.Add(this.CreateRow(entry));
+        }
+    }
+
+    private void RefreshRowsInPlace()
+    {
+        var notificationsMap = this.notificationService.Notifications.ToDictionary(e => e.TabKey);
+
+        // Update existing rows in-place without reordering
+        foreach (var row in this.Rows)
+        {
+            if (notificationsMap.TryGetValue(row.TabKey, out var entry))
+            {
+                row.Heading = entry.Heading;
+                row.Description = entry.Description;
+                row.When = entry.When;
+                row.IsRunning = entry.IsRunning;
+                row.IsInteresting = entry.IsInteresting;
+                row.IsRead = entry.IsRead;
+                row.IsSnoozed = entry.IsSnoozed;
+            }
+        }
+
+        // Prepend new notifications (not yet in Rows) at the top
+        var existingTabKeys = this.Rows.Select(r => r.TabKey).ToHashSet();
+        var newEntries = this.notificationService.Notifications
+            .Where(e => !existingTabKeys.Contains(e.TabKey))
+            .OrderByDescending(e => e.When);
+
+        int insertIndex = 0;
+        foreach (var entry in newEntries)
+        {
+            this.Rows.Insert(insertIndex++, this.CreateRow(entry));
+        }
+    }
+
+    private NotificationRowViewModel CreateRow(NotificationEntry entry)
+    {
+        var tabKey = entry.TabKey;
+        var navigateCmd = new RelayCommand(_ =>
+        {
+            this.IsOpen = false;
+            this.notificationService.MarkRead(tabKey);
+            this.navigateToTab(tabKey);
+        });
+        var snoozeCmd = new RelayCommand(_ =>
+        {
+            if (this.notificationService.IsTabSnoozed(tabKey))
+            {
+                this.notificationService.UnsnoozeTab(tabKey);
+            }
+            else
+            {
+                this.notificationService.SnoozeTab(tabKey);
+            }
+        });
+        return new NotificationRowViewModel(entry, navigateCmd, snoozeCmd);
     }
 
     public void Dispose()
