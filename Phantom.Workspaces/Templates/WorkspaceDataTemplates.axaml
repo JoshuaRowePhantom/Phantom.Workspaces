@@ -545,6 +545,10 @@
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.DataTemplates>
+                        <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
+                            <!-- Show the globe glyph; favicon image loading is a future enhancement -->
+                            <TextBlock Text="🌐" />
+                        </DataTemplate>
                         <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
                             <TextBlock Text="{Binding Icon}" />
                         </DataTemplate>

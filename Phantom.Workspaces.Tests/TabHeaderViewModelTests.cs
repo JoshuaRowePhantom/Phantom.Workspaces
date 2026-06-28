@@ -14,6 +14,31 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class TabHeaderViewModelTests
 {
+    // ── FaviconTabHeaderItemViewModel ────────────────────────────────────────
+
+    [Fact]
+    public void FaviconTabHeaderItemViewModel_FaviconUri_DefaultIsNull()
+    {
+        var item = new FaviconTabHeaderItemViewModel();
+        Assert.Null(item.FaviconUri);
+    }
+
+    [Fact]
+    public void FaviconTabHeaderItemViewModel_SetFaviconUri_RaisesPropertyChanged()
+    {
+        var item = new FaviconTabHeaderItemViewModel();
+        var raised = false;
+        item.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(item.FaviconUri))
+                raised = true;
+        };
+
+        item.FaviconUri = "https://example.com/favicon.ico";
+
+        Assert.True(raised);
+    }
+
     // ── AgentRunningIndicatorTabHeaderItemViewModel ──────────────────────────
 
     [Fact]
