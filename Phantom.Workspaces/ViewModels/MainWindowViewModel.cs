@@ -1003,16 +1003,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             : NotInterestingQuery.ExcludingNotInteresting(queryRequest);
 
         // Also fetch each matched entity's interest relationships so its badge glyphs can be rendered.
-        if (this.interestCatalog is { InterestTypeNames.Count: > 0 } catalog)
-        {
-            effectiveQuery = effectiveQuery with
-            {
-                RelationshipsToReturn =
-                [
-                    new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. catalog.InterestTypeNames]) },
-                ],
-            };
-        }
+        effectiveQuery = WithInterestRelationships(effectiveQuery, this.interestCatalog);
 
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
         population.AddQuerySubscription(subscribedQuery);
@@ -1023,6 +1014,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return subscribedQuery.Results.ToArray();
+    }
+
+    internal static QueryRequest WithInterestRelationships(QueryRequest query, InterestCatalog? catalog)
+    {
+        if (catalog is not { InterestTypeNames.Count: > 0 } validCatalog)
+        {
+            return query;
+        }
+
+        return query with
+        {
+            RelationshipsToReturn =
+            [
+                ..(query.RelationshipsToReturn ?? []),
+                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) },
+            ],
+        };
     }
 
     private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
