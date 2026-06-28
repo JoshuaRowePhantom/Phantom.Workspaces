@@ -23,6 +23,7 @@ public class ControllableWebViewControl : NativeWebView, IControllableBrowser
 
     private readonly List<string> startupScripts = [];
     private readonly Queue<string> pendingMessages = new();
+    private List<string>? batchMessages;
     private bool isShellLoaded;
 
     public ControllableWebViewControl()
@@ -65,6 +66,8 @@ public class ControllableWebViewControl : NativeWebView, IControllableBrowser
     /// <summary>
     /// Delivers a message to the page by invoking <c>window.hostBridge.receiveMessage(message)</c>.
     /// Messages sent before the shell is ready are queued and flushed once it loads, preserving order.
+    /// During a batch (between <see cref="BeginBatch"/> and <see cref="EndBatch"/>), messages are
+    /// accumulated and flushed as a single <c>InvokeScript</c> call by <see cref="EndBatch"/>.
     /// </summary>
     public void PostMessageToJavaScript(string message)
     {
@@ -75,7 +78,45 @@ public class ControllableWebViewControl : NativeWebView, IControllableBrowser
             return;
         }
 
+        if (this.batchMessages is not null)
+        {
+            this.batchMessages.Add(message);
+            return;
+        }
+
         this.DeliverMessage(message);
+    }
+
+    /// <inheritdoc/>
+    public void BeginBatch()
+    {
+        this.batchMessages ??= [];
+    }
+
+    /// <inheritdoc/>
+    public void EndBatch()
+    {
+        if (this.batchMessages is not { Count: > 0 } messages)
+        {
+            this.batchMessages = null;
+            return;
+        }
+
+        this.batchMessages = null;
+
+        var sb = new StringBuilder("([");
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append(EncodeJavaScriptString(messages[i]));
+        }
+
+        sb.Append($"]).forEach(function(m){{window.{HostBridgeObjectName} && window.{HostBridgeObjectName}.receiveMessage(m);}});");
+        _ = this.InvokeScript(sb.ToString());
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)

@@ -26,4 +26,12 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
     public void PostMessageToJavaScript(string message)
     {
     }
+
+    public void BeginBatch()
+    {
+    }
+
+    public void EndBatch()
+    {
+    }
 }
