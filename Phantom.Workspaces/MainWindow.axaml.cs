@@ -49,6 +49,16 @@ public partial class MainWindow : Window
             }
         }
 
+        if (e.Key == Key.Scroll)
+        {
+            if (viewModel.ActiveAgentViewModel is { } agent)
+            {
+                agent.AutoScrollEnabled = !agent.AutoScrollEnabled;
+                e.Handled = true;
+            }
+            return;
+        }
+
         var index = GetDigitIndex(e.PhysicalKey);
         if (index < 0)
         {

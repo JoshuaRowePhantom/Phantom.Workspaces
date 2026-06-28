@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
@@ -173,6 +174,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (layout is null) return null;
             var documentDock = this.FindDocumentDock(layout);
             return documentDock?.ActiveDockable?.Id;
+        }
+    }
+
+    public AgentViewModel? ActiveAgentViewModel
+    {
+        get
+        {
+            var layout = this.selectedWorkspacePane?.ContentLayout;
+            if (layout is null) return null;
+            var documentDock = this.FindDocumentDock(layout);
+            if (documentDock?.ActiveDockable is not WorkspaceDocument { TabViewModel: AgentSessionWorkspaceTabViewModel agentTab })
+                return null;
+            return agentTab.Agent;
         }
     }
 
