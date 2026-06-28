@@ -5,6 +5,10 @@ using AgentSchema;
 
 namespace Phantom.Workspaces.Llm;
 
+/// <summary>
+/// When changing substitution rules or well-known parameter names, update the workspace
+/// documentation entity: <c>["documentation", "agent-options", "parameters"]</c>.
+/// </summary>
 public static class AgentDefinitionParameterSubstitutor
 {
     public static AgentDefinition Substitute(

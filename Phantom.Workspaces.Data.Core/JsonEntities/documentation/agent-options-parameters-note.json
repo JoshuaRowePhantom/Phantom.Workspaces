@@ -1,0 +1,23 @@
+{
+  "entity-id": "8e051e6c-3540-4c54-b06c-8ce54ed599ec",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-options",
+      "parameters"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Options — Parameters"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-options-parameters.md"
+    }
+  }
+}
