@@ -2202,6 +2202,7 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
+    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
@@ -2297,7 +2298,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         Assert.True(agentViewModel.AutoScrollEnabled);
 
@@ -2325,7 +2325,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
