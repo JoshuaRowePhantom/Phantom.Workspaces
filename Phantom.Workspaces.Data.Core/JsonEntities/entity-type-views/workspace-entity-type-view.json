@@ -4,5 +4,8 @@
   "names": [["entity-type-views", "workspace"]],
   "display-name": { "default": "Workspace View" },
   "fields": [],
-  "traversed-entity-display-disposition": "collapsed"
+  "traversed-entity-display-disposition": "collapsed",
+  "traverse-relationships": [
+    { "relationship-type-ids": ["related"] }
+  ]
 }
