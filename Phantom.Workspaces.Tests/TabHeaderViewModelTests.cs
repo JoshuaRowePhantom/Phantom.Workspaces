@@ -1,8 +1,12 @@
 using System.ComponentModel;
 using System.Linq;
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Headless.XUnit;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -268,5 +272,21 @@ public sealed class TabHeaderViewModelTests
 
         var label = ((WorkspaceDocument)dock.VisibleDockables![10]).EffectiveTabHeader.AltShortcutLabel;
         Assert.Null(label);
+    }
+
+    // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentRunningIndicatorDataTemplate_TextBlock_UsesAgentTabHeaderBrainClass()
+    {
+        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
+        var templates = new WorkspaceDataTemplates();
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        var control = matchingTemplate.Build(viewModel);
+
+        var textBlock = Assert.IsType<TextBlock>(control);
+        Assert.Contains("agent-tab-header-brain", textBlock.Classes);
+        Assert.DoesNotContain("agent-chat-status-line-brain", textBlock.Classes);
     }
 }
