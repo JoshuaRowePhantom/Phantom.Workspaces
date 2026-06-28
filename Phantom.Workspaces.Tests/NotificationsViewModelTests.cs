@@ -428,44 +428,76 @@ public sealed class NotificationsViewModelTests
         Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
     }
 
+    // ── Frozen-order tests ────────────────────────────────────────────────
+
+    private static Notification InterestingNotification(TabDescriptor tab, string description, DateTime when) =>
+        new Notification(tab, "Completed", description, when, RunningState.Idle, NotificationState.Interesting);
+
     [Fact]
-    public void NavigateCommand_WhenAutoClosing_DoesNotCloseImmediately()
+    public void RefreshRows_WhenOpen_DoesNotReorderExistingRows()
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
         var viewModel = new NotificationsViewModel(service, _ => { });
-        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
-        // IsOpen=true, IsAutoClosing=true at this point
 
-        viewModel.Rows.Single(r => r.TabKey == "tab-1").NavigateCommand.Execute(null);
+        var baseTime = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        // tab-2 is older (added first); popup opens. tab-1 is newer; popup already open so tab-1 is prepended.
+        service.Notify(InterestingNotification(Tab("tab-2"), "older", baseTime));
+        service.Notify(InterestingNotification(Tab("tab-1"), "newer", baseTime.AddSeconds(1)));
 
+        // Both unread; tab-1 (newer) should be at index 0
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-2", viewModel.Rows[1].TabKey);
+
+        // Mark tab-1 as read while the popup is still open
+        service.MarkRead("tab-1");
+
+        // Order must not change — tab-1 stays at index 0
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-2", viewModel.Rows[1].TabKey);
+    }
+
+    [Fact]
+    public void RefreshRows_WhenOpen_AppendsNewNotificationAtTop()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        service.Notify(InterestingNotification(Tab("tab-1"), "first"));
+        // Popup is now open with tab-1 at index 0
         Assert.True(viewModel.IsOpen);
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
+
+        // Notify a second tab while popup is open
+        service.Notify(InterestingNotification(Tab("tab-2"), "second"));
+
+        // New notification should appear at index 0; existing row stays at index 1
+        Assert.Equal("tab-2", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-1", viewModel.Rows[1].TabKey);
     }
 
     [Fact]
-    public void NavigateCommand_WhenAutoClosing_IsAutoClosingRemainsTrue()
+    public void RefreshRows_AfterClose_ResortsByReadThenTime()
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
         var viewModel = new NotificationsViewModel(service, _ => { });
-        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
 
-        viewModel.Rows.Single(r => r.TabKey == "tab-1").NavigateCommand.Execute(null);
+        var baseTime = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        // tab-2 older, tab-1 newer; both unread; tab-1 ends up at index 0 after both are notified
+        service.Notify(InterestingNotification(Tab("tab-2"), "older", baseTime));
+        service.Notify(InterestingNotification(Tab("tab-1"), "newer", baseTime.AddSeconds(1)));
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
 
-        Assert.True(viewModel.IsAutoClosing);
-    }
+        // Mark tab-1 as read while the popup is open; order frozen — tab-1 stays at 0
+        service.MarkRead("tab-1");
+        Assert.Equal("tab-1", viewModel.Rows[0].TabKey);
 
-    [Fact]
-    public void NavigateCommand_InvokesNavigateCallback()
-    {
-        var provider = new FakeActiveTabProvider();
-        var service = new NotificationService(provider);
-        string? navigatedTo = null;
-        var viewModel = new NotificationsViewModel(service, tabKey => navigatedTo = tabKey);
-        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        // Close the popup — rows should now be re-sorted (unread first)
+        viewModel.Dismiss();
 
-        viewModel.Rows.Single(r => r.TabKey == "tab-1").NavigateCommand.Execute(null);
-
-        Assert.Equal("tab-1", navigatedTo);
+        Assert.Equal("tab-2", viewModel.Rows[0].TabKey);
+        Assert.Equal("tab-1", viewModel.Rows[1].TabKey);
     }
 }

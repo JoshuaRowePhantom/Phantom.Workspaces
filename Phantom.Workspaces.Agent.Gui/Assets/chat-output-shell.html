@@ -529,6 +529,7 @@
           case "update": {
             var target = document.getElementById(command.path);
             if (!target) {
+              postToHost({ type: "commandFailed", path: command.path });
               return;
             }
             switch (command.location) {
