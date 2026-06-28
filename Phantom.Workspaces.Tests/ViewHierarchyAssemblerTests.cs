@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
@@ -80,6 +81,118 @@ public sealed class ViewHierarchyAssemblerTests
         var node = Assert.Single(hierarchy);
         Assert.Equal(taskId, node.Entity.EntityId);
         Assert.Empty(node.Children);
+    }
+
+    [Fact]
+    public void WorkspaceEntityTypeViewJson_HasTraverseRelationships()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        const string resourceName = "Phantom.Workspaces.Data.JsonEntities.entity_type_views.workspace-entity-type-view.json";
+
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+
+        using var document = JsonDocument.Parse(stream);
+        var root = document.RootElement;
+
+        Assert.True(
+            root.TryGetProperty("traverse-relationships", out var traversals),
+            "workspace-entity-type-view.json must contain a 'traverse-relationships' property");
+
+        Assert.Equal(JsonValueKind.Array, traversals.ValueKind);
+        Assert.NotEmpty(traversals.EnumerateArray());
+
+        var relatedEntry = traversals.EnumerateArray().FirstOrDefault(
+            static t => t.TryGetProperty("relationship-type-ids", out var ids)
+                && ids.EnumerateArray().Any(static id => id.GetString() == "related"));
+
+        Assert.True(
+            relatedEntry.ValueKind != JsonValueKind.Undefined,
+            "traverse-relationships must include an entry with relationship-type-ids containing 'related'");
+    }
+
+    [AvaloniaFact]
+    public async Task ViewHierarchyAssembler_WorkspaceWithRelatedEntity_RendersEntityAsChild()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","workspace"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var workspaceId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces","ws1"]],
+              "display-name": { "default": "My Workspace" },
+              "regions": [{ "region-id": "center", "title": "Center", "dock": "center", "tabs": [], "size": 1 }]
+            }
+            """);
+        var noteId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "note"],
+              "names": [["notes","n1"]],
+              "display-name": { "default": "My Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "My Note" } }
+            }
+            """);
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships","ws-note-rel"]],
+              "participants": { "entities": ["{{workspaceId.Value}}", "{{noteId.Value}}"] }
+            }
+            """);
+
+        var roots = (await broker.GetEntitiesAsync([workspaceId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var workspaceNode = Assert.Single(hierarchy);
+        Assert.Equal(workspaceId, workspaceNode.Entity.EntityId);
+        var childNode = Assert.Single(workspaceNode.Children);
+        Assert.Equal(noteId, childNode.Entity.EntityId);
+    }
+
+    [AvaloniaFact]
+    public async Task ViewHierarchyAssembler_WorkspaceWithNoRelatedEntities_RendersFlat()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","workspace"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var workspaceId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces","ws-flat"]],
+              "display-name": { "default": "Empty Workspace" },
+              "regions": [{ "region-id": "center", "title": "Center", "dock": "center", "tabs": [], "size": 1 }]
+            }
+            """);
+
+        var roots = (await broker.GetEntitiesAsync([workspaceId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var workspaceNode = Assert.Single(hierarchy);
+        Assert.Equal(workspaceId, workspaceNode.Entity.EntityId);
+        Assert.Empty(workspaceNode.Children);
     }
 
     private static Task<EntityId> SeedNoteAsync(IDataAccessLayer dataAccessLayer, string name, string displayName)

@@ -327,11 +327,23 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             return;
         }
 
-        // Split "/commandName rest" → commandName + rest
         var withoutSlash = text.Substring(1);
-        var parts = withoutSlash.Split(' ', 2);
-        var commandName = parts[0];
-        var partialArgs = parts.Length > 1 ? parts[1] : string.Empty;
+        var spaceIndex = withoutSlash.IndexOf(' ');
+
+        // When there is no space yet the user is still typing the command name.
+        // Pass commandName="" as a sentinel so the provider can return root (command-list) completions.
+        // When a space is present the command name is resolved; pass it together with the partial args.
+        string commandName, partialArgs;
+        if (spaceIndex < 0)
+        {
+            commandName = string.Empty;
+            partialArgs = withoutSlash;
+        }
+        else
+        {
+            commandName = withoutSlash[..spaceIndex];
+            partialArgs = withoutSlash[(spaceIndex + 1)..];
+        }
 
         var cts = new CancellationTokenSource();
         this.completionsCts = cts;
