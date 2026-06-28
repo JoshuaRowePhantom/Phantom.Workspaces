@@ -7,6 +7,7 @@ using System.Collections.Generic;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class QueueComposerSlashCommandTests
 {
     private static AgentDefinition CreateAgentDefinition()
