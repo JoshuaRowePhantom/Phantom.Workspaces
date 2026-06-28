@@ -472,6 +472,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         [
             new Tools.VectorIndexerTool(),
             new Tools.GitWorkspaceScanTool(),
+            new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
         ]);
@@ -2825,7 +2826,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return false;
         }
 
-        queryRequest = deserialized;
+        queryRequest = deserialized with
+        {
+            RelationshipsToReturn = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
+                ? relationshipsToReturn
+                : null,
+        };
         return true;
     }
 
