@@ -61,6 +61,16 @@ public partial class MainWindow : Window
             }
         }
 
+        if (e.Key == Key.Scroll)
+        {
+            if (viewModel.ActiveAgentViewModel is { } agent)
+            {
+                agent.AutoScrollEnabled = !agent.AutoScrollEnabled;
+                e.Handled = true;
+            }
+            return;
+        }
+
         // Ctrl+Shift+K: duplicate the active browser tab.
         if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
         {

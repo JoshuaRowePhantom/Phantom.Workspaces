@@ -13,6 +13,7 @@ using Avalonia.Threading;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
@@ -194,6 +195,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (layout is null) return null;
             var documentDock = this.FindDocumentDock(layout);
             return documentDock?.ActiveDockable?.Id;
+        }
+    }
+
+    public AgentViewModel? ActiveAgentViewModel
+    {
+        get
+        {
+            var layout = this.selectedWorkspacePane?.ContentLayout;
+            if (layout is null) return null;
+            var documentDock = this.FindDocumentDock(layout);
+            if (documentDock?.ActiveDockable is not WorkspaceDocument { TabViewModel: AgentSessionWorkspaceTabViewModel agentTab })
+                return null;
+            return agentTab.Agent;
         }
     }
 
@@ -1558,7 +1572,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     internal async Task OpenEntityTabAsync(
-        GetEntityRequest entityRequest)
+        GetEntityRequest entityRequest,
+        bool focus = true)
     {
         var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest]);
         var subscribedEntity = entities.FirstOrDefault();
@@ -1573,10 +1588,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 Id = subscribedEntity.EntityId.ToString(),
                 Title = subscribedEntity.DisplayName,
                 Entity = subscribedEntity,
-            });
+            },
+            focus: focus);
     }
 
-    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null)
+    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
@@ -1605,13 +1621,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 DisposeWorkspaceTab(tab);
             }
-            this.dockFactory.SetActiveDockable(existingDocument);
-            this.notificationService.MarkRead(tab.Id);
-            this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
-            this.SyncSelectedWorkspacePaneFromDock();
-            if (!this.navigatingViaHistory)
+            if (focus)
             {
-                this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                this.dockFactory.SetActiveDockable(existingDocument);
+                this.notificationService.MarkRead(tab.Id);
+                this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
+                this.SyncSelectedWorkspacePaneFromDock();
+                if (!this.navigatingViaHistory)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                }
             }
             return;
         }
@@ -1634,21 +1653,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 var newDocument = new WorkspaceDocument(tab);
                 this.dockFactory.InsertDockable(documentDock, newDocument, sourceIndex + 1);
-                this.dockFactory.SetActiveDockable(newDocument);
-                this.dockFactory.SetFocusedDockable(documentDock, newDocument);
-                this.SyncSelectedWorkspacePaneFromDock();
-                if (!this.navigatingViaHistory)
+                if (focus)
                 {
-                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                    this.dockFactory.SetActiveDockable(newDocument);
+                    this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+                    this.SyncSelectedWorkspacePaneFromDock();
+                    if (!this.navigatingViaHistory)
+                    {
+                        this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                    }
                 }
                 return;
             }
         }
 
         // Default: append the new tab at the end.
-        this.dockFactory.AddWorkspaceTab(documentDock, tab);
+        this.dockFactory.AddWorkspaceTab(documentDock, tab, focus);
         this.SyncSelectedWorkspacePaneFromDock();
-        if (!this.navigatingViaHistory)
+        if (focus && !this.navigatingViaHistory)
         {
             this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
         }

@@ -11,9 +11,12 @@ using System.Text.Json;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
+using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -2260,6 +2263,113 @@ public sealed class MainWindowIntegrationTests
         var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
         Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
         Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-toggle", Title = "Agent" };
+        agentTab.SetReady(agentViewModel, loggerFactory);
+        await viewModel.OpenTabAsync(agentTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.True(agentViewModel.AutoScrollEnabled);
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.False(agentViewModel.AutoScrollEnabled);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-twice", Title = "Agent" };
+        agentTab.SetReady(agentViewModel, loggerFactory);
+        await viewModel.OpenTabAsync(agentTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.True(agentViewModel.AutoScrollEnabled);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var plainTab = new WebViewModel("https://example.com") { Id = "scroll-lock-noop", Title = "Web" };
+        await viewModel.OpenTabAsync(plainTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        bool handled = false;
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.Key == Key.Scroll)
+                    handled = e.Handled;
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.False(handled);
+
+        window.Close();
+    }
+
+    private static async Task<AgentChat> CreateEchoAgentChatAsync()
+    {
+        const string echoAgentJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """;
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(echoAgentJson);
+        return await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ForegroundScheduler = TaskScheduler.Default,
+        });
     }
 
 }
