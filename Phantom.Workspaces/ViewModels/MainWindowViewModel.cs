@@ -475,6 +475,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
+            new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
+            new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);
         this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(dataAccessLayer, registry);
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(

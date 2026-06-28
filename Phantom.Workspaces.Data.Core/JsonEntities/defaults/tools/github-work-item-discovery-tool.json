@@ -1,0 +1,9 @@
+{
+  "entity-id": "b3c4d5e6-f7a8-4b5c-9d0e-1f2a3b4c5d6e",
+  "entity-types": ["entity", "tool"],
+  "names": [
+    ["tools", "github-work-item-discovery"]
+  ],
+  "display-name": "GitHub Work Item Discovery",
+  "tool-type": "github-work-item-discovery"
+}
