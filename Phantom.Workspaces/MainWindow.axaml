@@ -197,5 +197,21 @@
                 </dock:DockControl.DataTemplates>
             </dock:DockControl>
         </Grid>
+
+        <!-- Anchor for the navigation-stack popup in the lower-left corner -->
+        <Border x:Name="NavStackPopupAnchor"
+                Grid.Row="1"
+                VerticalAlignment="Bottom"
+                HorizontalAlignment="Left"
+                IsHitTestVisible="False" />
+        <Popup Grid.Row="1"
+               IsOpen="{Binding NavStackPopup.IsOpen, Mode=TwoWay}"
+               PlacementTarget="{Binding #NavStackPopupAnchor}"
+               Placement="Top"
+               HorizontalOffset="8"
+               VerticalOffset="-8"
+               IsLightDismissEnabled="False">
+            <controls:NavigationStackPopupControl DataContext="{Binding NavStackPopup}" />
+        </Popup>
     </Grid>
 </Window>

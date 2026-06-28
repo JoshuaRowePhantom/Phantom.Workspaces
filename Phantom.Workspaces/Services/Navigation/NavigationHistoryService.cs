@@ -14,6 +14,10 @@ public sealed class NavigationHistoryService : INavigationHistoryService
 
     public bool CanGoForward => this.currentIndex < this.entries.Count - 1;
 
+    public IReadOnlyList<NavigationEntry> Entries => this.entries;
+
+    public int CurrentIndex => this.currentIndex;
+
     public event EventHandler? CanNavigateChanged;
 
     public void Push(NavigationEntry entry)
@@ -67,6 +71,20 @@ public sealed class NavigationHistoryService : INavigationHistoryService
         }
 
         this.currentIndex++;
+        entry = this.entries[this.currentIndex];
+        this.CanNavigateChanged?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
+
+    public bool GoToIndex(int index, out NavigationEntry? entry)
+    {
+        if (index < 0 || index >= this.entries.Count)
+        {
+            entry = null;
+            return false;
+        }
+
+        this.currentIndex = index;
         entry = this.entries[this.currentIndex];
         this.CanNavigateChanged?.Invoke(this, EventArgs.Empty);
         return true;
