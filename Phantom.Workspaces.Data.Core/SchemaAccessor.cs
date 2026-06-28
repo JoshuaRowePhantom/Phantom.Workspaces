@@ -36,6 +36,21 @@ public sealed class SchemaAccessor : ISchemaAccessor
             StringComparer.Ordinal);
     }
 
+    public SchemaAccessor(
+        IDataAccessLayer dataAccessLayer,
+        UpdateRequest? request,
+        IReadOnlyDictionary<string, JsonElement> preloadedSchemaEntitiesById)
+    {
+        this.dataAccessLayer = dataAccessLayer;
+        this.requestSchemasByName = this.GetSchemasFromRequest(request);
+        this.schemaEntitiesById = preloadedSchemaEntitiesById.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value,
+            StringComparer.Ordinal);
+    }
+
+    public IReadOnlyDictionary<string, JsonElement>? SchemaEntitiesById => this.schemaEntitiesById;
+
     public async Task<JsonElement?> ResolveSchemaByReferenceAsync(
         string schemaReference,
         CancellationToken cancellationToken = default)

@@ -20,6 +20,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
 
     private SchemaRegistry? _cachedSchemaRegistry;
+    private IReadOnlyDictionary<string, JsonElement>? _cachedSchemaEntitiesById;
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -33,8 +34,33 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     {
         var validationResults = new List<EntityUpdateResult>();
         var requestHasSchemas = request.Changes.Any(change => change.Data is { ValueKind: JsonValueKind.Object } data && this.IsSchemaEntity(data));
-        var schemaAccessor = this.CreateSchemaAccessor(request);
-        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, requestHasSchemas, cancellationToken).ConfigureAwait(false);
+
+        SchemaRegistry schemaRegistry;
+        ISchemaAccessor schemaAccessor;
+
+        if (!requestHasSchemas && _cachedSchemaRegistry is { } cachedRegistry)
+        {
+            schemaRegistry = cachedRegistry;
+            schemaAccessor = this.CreateSchemaAccessor(request);
+        }
+        else
+        {
+            var accessor = _cachedSchemaEntitiesById is { } preloaded
+                ? new SchemaAccessor(this.UnderlyingDataAccessLayer, request, preloaded)
+                : new SchemaAccessor(this.UnderlyingDataAccessLayer, request);
+            schemaRegistry = await accessor.BuildSchemaRegistryAsync(cancellationToken).ConfigureAwait(false);
+            if (!requestHasSchemas)
+            {
+                _cachedSchemaRegistry = schemaRegistry;
+            }
+
+            if (_cachedSchemaEntitiesById is null)
+            {
+                _cachedSchemaEntitiesById = accessor.SchemaEntitiesById;
+            }
+
+            schemaAccessor = accessor;
+        }
 
         foreach (var change in request.Changes)
         {
@@ -65,9 +91,10 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         var result = await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
-        if (request.Changes.Any(change => change.Data is { ValueKind: JsonValueKind.Object } data && this.IsSchemaEntity(data)))
+        if (requestHasSchemas)
         {
             _cachedSchemaRegistry = null;
+            _cachedSchemaEntitiesById = null;
         }
 
         return result;
@@ -88,7 +115,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Validate entity." } },
                 Changes = Array.Empty<EntityChange>(),
             });
-        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, requestHasSchemas: false, cancellationToken).ConfigureAwait(false);
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
         var change = new EntityChange
         {
             Data = entityData,
@@ -210,10 +237,9 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
     protected virtual Task<SchemaRegistry> BuildSchemaRegistryAsync(
         ISchemaAccessor schemaAccessor,
-        bool requestHasSchemas,
         CancellationToken cancellationToken)
     {
-        if (_cachedSchemaRegistry is { } cached && !requestHasSchemas)
+        if (_cachedSchemaRegistry is { } cached)
         {
             return Task.FromResult(cached);
         }
