@@ -9,6 +9,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     private bool isRead;
     private bool isSnoozed;
     private bool isRunning;
+    private bool isInteresting;
     private string heading;
     private string description;
     private DateTime when;
@@ -24,6 +25,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
         this.description = entry.Description;
         this.when = entry.When;
         this.isRunning = entry.IsRunning;
+        this.isInteresting = entry.IsInteresting;
         this.isRead = entry.IsRead;
         this.isSnoozed = entry.IsSnoozed;
         this.NavigateCommand = navigateCommand;
@@ -57,6 +59,12 @@ public sealed class NotificationRowViewModel : ViewModelBase
     {
         get => this.isRunning;
         set => this.SetProperty(ref this.isRunning, value);
+    }
+
+    public bool IsInteresting
+    {
+        get => this.isInteresting;
+        set => this.SetProperty(ref this.isInteresting, value);
     }
 
     public DateTime When
