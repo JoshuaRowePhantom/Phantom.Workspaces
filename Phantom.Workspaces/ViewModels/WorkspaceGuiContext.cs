@@ -1,3 +1,8 @@
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Phantom.Workspaces.Llm.Shell;
+
 namespace Phantom.Workspaces.ViewModels;
 
 /// <summary>
@@ -12,4 +17,10 @@ public sealed record WorkspaceGuiContext
 
     /// <summary>The shortcut manager used to resolve and invoke shortcuts.</summary>
     public required ShortcutManager ShortcutManager { get; init; }
+
+    /// <summary>
+    /// Optional factory for ephemeral shell sessions; injected in tests to avoid spawning a real PTY.
+    /// When null, the <c>open_tab</c> tool uses <see cref="Phantom.Workspaces.Llm.Trust.LocalTrustedExecutor"/>.
+    /// </summary>
+    internal Func<string, IReadOnlyList<string>, string?, CancellationToken, Task<ITerminalSession>>? EphemeralShellSessionOpener { get; init; }
 }

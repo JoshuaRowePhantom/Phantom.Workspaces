@@ -59,6 +59,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Ctrl+Shift+K: duplicate the active browser tab.
+        if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            viewModel.DuplicateBrowserTabCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
         var index = GetDigitIndex(e.PhysicalKey);
         if (index < 0)
         {

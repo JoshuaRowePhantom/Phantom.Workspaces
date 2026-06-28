@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
@@ -209,6 +210,31 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     UpdateParameterValuesInEntityAsync(mainWindowViewModel, agentSessionEntity, newValues),
             });
 
+        var profileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        if (profileEntityId != default)
+        {
+            var profileEntities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([profileEntityId]);
+            var profileEntity = profileEntities.FirstOrDefault();
+            if (profileEntity?.Data is JsonElement profileData)
+            {
+                if (profileData.TryGetProperty("chat-input", out var chatInputEl)
+                    && chatInputEl.TryGetProperty("show-help-text", out var showHelpEl)
+                    && showHelpEl.ValueKind == JsonValueKind.False)
+                {
+                    agent.ShowChatInputHelpText = false;
+                }
+            }
+
+            agent.PropertyChanged += (sender, e) =>
+            {
+                if (e.PropertyName == nameof(AgentViewModel.ShowChatInputHelpText)
+                    && sender is AgentViewModel vm)
+                {
+                    _ = SaveChatInputHelpTextAsync(mainWindowViewModel, profileEntityId, vm.ShowChatInputHelpText);
+                }
+            };
+        }
+
         return (agent, loggerFactory);
     }
 
@@ -324,5 +350,45 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             }
         }
         return dict.Count > 0 ? dict : null;
+    }
+
+    private static async Task SaveChatInputHelpTextAsync(
+        MainWindowViewModel mainWindowViewModel,
+        EntityId profileEntityId,
+        bool showHelpText)
+    {
+        var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([profileEntityId]);
+        var entity = entities.FirstOrDefault();
+        if (entity?.Data is not JsonElement currentData)
+        {
+            return;
+        }
+
+        var node = JsonNode.Parse(currentData.GetRawText())!.AsObject();
+        var chatInput = node["chat-input"]?.AsObject() ?? new JsonObject();
+        chatInput["show-help-text"] = showHelpText;
+        node["chat-input"] = chatInput;
+        var updated = JsonSerializer.SerializeToElement(node);
+
+        await mainWindowViewModel.EntityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = "chat-input: set show-help-text",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = profileEntityId,
+                        Data = updated,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            });
     }
 }

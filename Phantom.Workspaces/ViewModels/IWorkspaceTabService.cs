@@ -15,7 +15,8 @@ public interface IWorkspaceTabService
     /// When set, the new tab is inserted immediately to the right of the tab with this id.
     /// If the id is not found the tab is appended at the end.
     /// </param>
-    Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null);
+    /// <param name="focus">Whether to activate and focus the tab. Defaults to <see langword="true"/>.</param>
+    Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true);
 
     /// <summary>
     /// Replaces an existing workspace tab with a new one.

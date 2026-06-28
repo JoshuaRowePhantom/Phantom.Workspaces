@@ -98,6 +98,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
+        this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
@@ -158,6 +159,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand NavigatePreviousNotificationCommand { get; }
     public RelayCommand NavigateBackCommand { get; }
     public RelayCommand NavigateForwardCommand { get; }
+    public RelayCommand DuplicateBrowserTabCommand { get; }
 
     public NotificationsViewModel? NotificationsViewModel
     {
@@ -1548,7 +1550,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     internal async Task OpenEntityTabAsync(
-        GetEntityRequest entityRequest)
+        GetEntityRequest entityRequest,
+        bool focus = true)
     {
         var entities = await this.EntityBroker!.GetEntitiesAsync([entityRequest]);
         var subscribedEntity = entities.FirstOrDefault();
@@ -1563,10 +1566,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 Id = subscribedEntity.EntityId.ToString(),
                 Title = subscribedEntity.DisplayName,
                 Entity = subscribedEntity,
-            });
+            },
+            focus: focus);
     }
 
-    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null)
+    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
@@ -1595,13 +1599,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 DisposeWorkspaceTab(tab);
             }
-            this.dockFactory.SetActiveDockable(existingDocument);
-            this.notificationService.MarkRead(tab.Id);
-            this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
-            this.SyncSelectedWorkspacePaneFromDock();
-            if (!this.navigatingViaHistory)
+            if (focus)
             {
-                this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                this.dockFactory.SetActiveDockable(existingDocument);
+                this.notificationService.MarkRead(tab.Id);
+                this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
+                this.SyncSelectedWorkspacePaneFromDock();
+                if (!this.navigatingViaHistory)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                }
             }
             return;
         }
@@ -1624,21 +1631,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 var newDocument = new WorkspaceDocument(tab);
                 this.dockFactory.InsertDockable(documentDock, newDocument, sourceIndex + 1);
-                this.dockFactory.SetActiveDockable(newDocument);
-                this.dockFactory.SetFocusedDockable(documentDock, newDocument);
-                this.SyncSelectedWorkspacePaneFromDock();
-                if (!this.navigatingViaHistory)
+                if (focus)
                 {
-                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                    this.dockFactory.SetActiveDockable(newDocument);
+                    this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+                    this.SyncSelectedWorkspacePaneFromDock();
+                    if (!this.navigatingViaHistory)
+                    {
+                        this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                    }
                 }
                 return;
             }
         }
 
         // Default: append the new tab at the end.
-        this.dockFactory.AddWorkspaceTab(documentDock, tab);
+        this.dockFactory.AddWorkspaceTab(documentDock, tab, focus);
         this.SyncSelectedWorkspacePaneFromDock();
-        if (!this.navigatingViaHistory)
+        if (focus && !this.navigatingViaHistory)
         {
             this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
         }
@@ -1740,6 +1750,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             DisposeWorkspaceTab(document.TabViewModel);
             return;
         }
+    }
+
+    public async Task DuplicateBrowserTabAsync()
+    {
+        var layout = this.selectedWorkspacePane?.ContentLayout;
+        if (layout is null)
+        {
+            return;
+        }
+
+        var documentDock = this.FindDocumentDock(layout);
+        var activeTab = (documentDock?.ActiveDockable as WorkspaceDocument)?.TabViewModel;
+
+        if (activeTab is not WebViewModel webVm)
+        {
+            return;
+        }
+
+        var url = webVm.AddressBarUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+
+        var newTab = new WebViewModel(url, this)
+        {
+            Id = $"web-{Guid.NewGuid()}",
+            Title = url,
+            DockRegion = webVm.DockRegion,
+        };
+
+        await this.OpenTabAsync(newTab, insertAfterTabId: webVm.Id);
     }
 
     internal bool CloseTabById(string tabId)
