@@ -116,6 +116,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity

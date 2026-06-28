@@ -19,6 +19,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public static Shortcut StartShell { get; } = new("StartShell", "💻");
     public static Shortcut Edit { get; } = new("Edit", "✏️");
     public static Shortcut Clone { get; } = new("Clone", "⧉");
+    public static Shortcut Review { get; } = new("Review", "±");
 
     public string Name { get; }
 
@@ -33,6 +34,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
         "StartShell" => "Start shell",
         "Edit" => "Edit entity",
         "Clone" => "Clone entity",
+        "Review" => "Review changes",
         _ => this.Name,
     };
 
