@@ -32,8 +32,9 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         CancellationToken cancellationToken = default)
     {
         var validationResults = new List<EntityUpdateResult>();
+        var requestHasSchemas = request.Changes.Any(change => change.Data is { ValueKind: JsonValueKind.Object } data && this.IsSchemaEntity(data));
         var schemaAccessor = this.CreateSchemaAccessor(request);
-        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, requestHasSchemas, cancellationToken).ConfigureAwait(false);
 
         foreach (var change in request.Changes)
         {
@@ -87,7 +88,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Validate entity." } },
                 Changes = Array.Empty<EntityChange>(),
             });
-        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
+        var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, requestHasSchemas: false, cancellationToken).ConfigureAwait(false);
         var change = new EntityChange
         {
             Data = entityData,
@@ -209,9 +210,10 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
 
     protected virtual Task<SchemaRegistry> BuildSchemaRegistryAsync(
         ISchemaAccessor schemaAccessor,
+        bool requestHasSchemas,
         CancellationToken cancellationToken)
     {
-        if (_cachedSchemaRegistry is { } cached)
+        if (_cachedSchemaRegistry is { } cached && !requestHasSchemas)
         {
             return Task.FromResult(cached);
         }
