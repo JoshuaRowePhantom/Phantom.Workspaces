@@ -2,6 +2,8 @@ using System.Diagnostics;
 
 namespace Phantom.Workspaces.Tools;
 
+
+
 internal static class VsCodeCliLocator
 {
     public static string ResolveDefaultCliPath()
@@ -81,5 +83,16 @@ internal static class VsCodeCliLocator
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+    }
+
+    internal static RunProcessParameters BuildRunProcessParameters(string cliPath, string arguments)
+    {
+        var argTokens = arguments.Split(' ');
+        if (OperatingSystem.IsWindows() && cliPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RunProcessParameters("cmd.exe", ["/c", cliPath, ..argTokens]);
+        }
+
+        return new RunProcessParameters(cliPath, argTokens);
     }
 }
