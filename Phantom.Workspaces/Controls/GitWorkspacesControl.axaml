@@ -1,0 +1,49 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Controls.GitWorkspacesControl"
+             x:DataType="vm:GitWorkspacesViewModel"
+             x:CompileBindings="False">
+    <Grid RowDefinitions="*">
+        <TextBlock Text="No git worktrees found across any profile."
+                   IsVisible="{Binding !HasGroups}"
+                   Opacity="0.7"
+                   Margin="8" />
+        <ScrollViewer IsVisible="{Binding HasGroups}">
+            <ItemsControl ItemsSource="{Binding Groups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="0,0,0,16">
+                            <TextBlock Text="{Binding ProfileDisplayName}"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4" />
+                            <ItemsControl ItemsSource="{Binding Worktrees}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="8,6"
+                                                Margin="0,0,0,4"
+                                                CornerRadius="4"
+                                                BorderThickness="1"
+                                                BorderBrush="{DynamicResource Theme.Class.muted.Foreground}">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding DisplayName}" FontWeight="Medium" />
+                                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                                    <TextBlock Text="{Binding Branch, StringFormat='Branch: {0}'}"
+                                                               IsVisible="{Binding HasBranch}"
+                                                               Opacity="0.8" />
+                                                    <TextBlock Text="{Binding HeadCommit, StringFormat='HEAD: {0}'}"
+                                                               IsVisible="{Binding HeadCommit, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                               Opacity="0.7" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

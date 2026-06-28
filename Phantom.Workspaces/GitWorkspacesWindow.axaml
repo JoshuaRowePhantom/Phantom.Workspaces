@@ -1,0 +1,37 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        xmlns:controls="using:Phantom.Workspaces.Controls"
+        x:Class="Phantom.Workspaces.GitWorkspacesWindow"
+        x:DataType="vm:GitWorkspacesViewModel"
+        x:CompileBindings="False"
+        Width="720"
+        Height="560"
+        MinWidth="480"
+        MinHeight="360"
+        WindowStartupLocation="CenterScreen"
+        Title="Git Workspaces">
+    <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+        <TextBlock Grid.Row="0"
+                   Text="Git workspaces"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,8" />
+
+        <Border Grid.Row="1"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8"
+                BorderBrush="{DynamicResource Theme.Class.muted.Foreground}">
+            <controls:GitWorkspacesControl />
+        </Border>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,12,0,0">
+            <Button Content="Refresh" Click="OnRefreshClick" />
+            <Button Content="Close" Click="OnCloseClick" IsDefault="True" />
+        </StackPanel>
+    </Grid>
+</Window>
