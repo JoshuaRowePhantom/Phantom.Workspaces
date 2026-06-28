@@ -10,6 +10,11 @@ param(
     [string] $Mode = 'full',
     [Parameter()]
     [switch] $IncludeWebView,
+    # Integration tests exercise real network paths, require a GitHub token with tunnel scope
+    # (PHANTOM_INTEGRATION_GITHUB_TOKEN), and may incur dev-tunnel relay costs.  They are excluded
+    # by default; pass -IncludeIntegration to opt in.
+    [Parameter()]
+    [switch] $IncludeIntegration,
     [Parameter()]
     [switch] $NoBuild
 )
@@ -60,6 +65,24 @@ if ($Mode -eq 'fast')
 if (-not $IncludeWebView -and (-not $TestNames -or $TestNames.Count -eq 0))
 {
     $filterClauses += '(Category!=WebView)'
+}
+
+# Integration tests require network access, a valid GitHub token with tunnel scope
+# (PHANTOM_INTEGRATION_GITHUB_TOKEN), and may incur dev-tunnel relay costs.  Excluded by default.
+if (-not $IncludeIntegration -and (-not $TestNames -or $TestNames.Count -eq 0))
+{
+    $filterClauses += '(Category!=Integration)'
+}
+
+if ($IncludeIntegration)
+{
+    Write-Warning @'
+Integration tests are enabled.
+
+WARNING: Integration tests require network access, a valid GitHub token with tunnel scope
+(PHANTOM_INTEGRATION_GITHUB_TOKEN), and may incur dev-tunnel relay costs. Press Ctrl+C to abort.
+'@
+    Start-Sleep -Seconds 5
 }
 
 if ($filterClauses.Count -gt 0)

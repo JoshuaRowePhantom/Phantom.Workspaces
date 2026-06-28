@@ -38,4 +38,5 @@
   <Project Path="Phantom.Workspaces.Web.Server.Tests/Phantom.Workspaces.Web.Server.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server/Phantom.Workspaces.Web.Server.csproj" />
   <Project Path="Phantom.Workspaces/Phantom.Workspaces.csproj" />
+  <Project Path="Phantom.Workspaces.IntegrationTests/Phantom.Workspaces.IntegrationTests.csproj" />
 </Solution>
