@@ -2298,7 +2298,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         Assert.True(agentViewModel.AutoScrollEnabled);
 
@@ -2326,7 +2325,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");

@@ -8,6 +8,7 @@ using System.Collections.Generic;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class AgentChatInputQueueControlKeyTests
 {
     private static AgentDefinition CreateAgentDefinition()

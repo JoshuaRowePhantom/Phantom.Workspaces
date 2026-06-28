@@ -11,6 +11,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class MainWindowViewModelTests
 {
     private static AgentDefinition CreateAgentDefinition()
