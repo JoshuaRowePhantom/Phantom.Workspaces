@@ -2,6 +2,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class AgentChatToolsDetailViewModelTests
 {
     [AvaloniaFact]

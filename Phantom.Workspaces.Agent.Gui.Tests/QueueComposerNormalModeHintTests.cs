@@ -4,6 +4,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class QueueComposerNormalModeHintTests
 {
     private static AgentDefinition CreateAgentDefinition()

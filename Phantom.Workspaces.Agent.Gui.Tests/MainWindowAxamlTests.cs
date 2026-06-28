@@ -10,6 +10,7 @@ using Phantom.Workspaces.Agent.Gui.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class MainWindowAxamlTests
 {
     [AvaloniaFact(Timeout = 15_000)]

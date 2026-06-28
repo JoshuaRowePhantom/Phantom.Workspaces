@@ -7,6 +7,7 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class WebViewModelTests
 {
     // --- TabHeader / FaviconTabHeaderItemViewModel ---
