@@ -1,0 +1,33 @@
+{
+  "entity-id": "58a47daa-3982-4440-835a-b1035b7349b4",
+  "entity-display-order": 395,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/github-pull-request.json"
+    ],
+    [
+      "entity-types",
+      "github-pull-request"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Pull Request Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/github-pull-request-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/github-pull-request.json"
+  },
+  "default-name-prefixes": []
+}

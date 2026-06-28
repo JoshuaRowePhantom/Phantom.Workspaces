@@ -1,0 +1,33 @@
+{
+  "entity-id": "63019022-4496-4cc6-8657-58d03eea62cd",
+  "entity-display-order": 390,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/github-repository.json"
+    ],
+    [
+      "entity-types",
+      "github-repository"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Repository Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/github-repository-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/github-repository.json"
+  },
+  "default-name-prefixes": []
+}

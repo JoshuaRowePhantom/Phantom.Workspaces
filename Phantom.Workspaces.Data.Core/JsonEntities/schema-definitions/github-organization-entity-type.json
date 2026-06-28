@@ -1,0 +1,33 @@
+{
+  "entity-id": "63f38e03-9f25-4e53-91d6-619acc350af7",
+  "entity-display-order": 385,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/github-organization.json"
+    ],
+    [
+      "entity-types",
+      "github-organization"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Organization Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/github-organization-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/github-organization.json"
+  },
+  "default-name-prefixes": []
+}

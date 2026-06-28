@@ -1,0 +1,40 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/github-pull-request.json",
+  "description": "Schema for GitHub pull request entities extending the git-layer pull request with GitHub-specific number and identity fields.",
+  "allOf": [
+    {
+      "$ref": "git-pull-request.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "github-pull-request"
+      }
+    },
+    "number": {
+      "type": "integer",
+      "description": "GitHub PR number within the repository"
+    },
+    "github-node-id": {
+      "type": "string",
+      "description": "GitHub global node ID"
+    },
+    "is-draft": {
+      "type": "boolean",
+      "description": "Whether this pull request is in draft state"
+    },
+    "author": {
+      "type": "string",
+      "description": "GitHub login of the PR author"
+    }
+  }
+}
