@@ -76,6 +76,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         var seenRepositoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var scanRoot in scanRoots)
         {
+            this.logger.LogInformation("Scanning top-level directory: {Path}", scanRoot);
+            var rootRepoCount = 0;
             foreach (var repositoryPath in this.EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
             {
                 if (!seenRepositoryPaths.Add(repositoryPath))
@@ -83,6 +85,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                     continue;
                 }
 
+                rootRepoCount++;
                 using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
                 changes.Add(new EntityChange
                 {
@@ -92,6 +95,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                     EntityChangeMode = EntityChangeMode.Replace,
                 });
             }
+
+            this.logger.LogInformation("Found {Count} git repositories in {Path}", rootRepoCount, scanRoot);
         }
 
         var repositoriesFound = seenRepositoryPaths.Count;
@@ -212,6 +217,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             if (IsGitRepository(path))
             {
                 // A repository is a leaf for scanning purposes; do not descend into it.
+                this.logger.LogDebug("Found git repository: {RepoPath}", path);
                 yield return path;
                 continue;
             }
