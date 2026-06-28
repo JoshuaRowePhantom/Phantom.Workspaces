@@ -1,0 +1,33 @@
+{
+  "entity-id": "a2bfb3d6-05bd-4a70-84ff-11825e2f806e",
+  "entity-display-order": 400,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/github-work-item.json"
+    ],
+    [
+      "entity-types",
+      "github-work-item"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Work Item Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/github-work-item-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/github-work-item.json"
+  },
+  "default-name-prefixes": []
+}
