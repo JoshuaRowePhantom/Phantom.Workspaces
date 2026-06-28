@@ -103,6 +103,26 @@ Always run the fast suite:
 
 Read `scripts\test-results.log`. All suites must show `Failed: 0`. Fix any failures before committing.
 
+If a test failure appears unrelated to the current changes (e.g. a pre-existing race condition,
+timing sensitivity, or infrastructure dependency), treat it as a flaky test:
+
+1. Re-run the test suite once to confirm the failure is non-deterministic:
+   ```powershell
+   .\scripts\run-tests.ps1 -Mode fast
+   ```
+2. If it passes on re-run, proceed — the failure was transient.
+3. If it fails consistently, investigate whether the current changes are the cause before proceeding.
+4. File a next-up GitHub issue for the flaky test regardless of whether you proceed:
+   ```powershell
+   gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces \
+     --title "Bug: flaky test — <TestName>" \
+     --label "bug,next-up" \
+     --body "## Flaky test report\n\n**Test:** <FullyQualifiedTestName>\n**Failure message:**\n\`\`\`\n<paste error output here>\n\`\`\`\n**Observed during:** fix for issue #<ORIGINAL_NUMBER>\n**Why it appears unrelated:** <explain>"
+   ```
+5. Add a note to the commit message or the original issue referencing the filed bug.
+
+Do not attempt to fix flaky tests that are outside the scope of the current issue.
+
 Run the full suite only when the change touches the filesystem or Git repository layers:
 ```powershell
 .\scripts\run-tests.ps1 -Mode full
