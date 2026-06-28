@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Containers;
 
@@ -7,7 +9,12 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
     private readonly IDockerCommandRunner _commandRunner;
 
     public WindowsDockerDesktopEngine()
-        : this(new DockerCommandRunner())
+        : this(new DockerCommandRunner(NullLogger<DockerCommandRunner>.Instance))
+    {
+    }
+
+    public WindowsDockerDesktopEngine(ILogger<DockerCommandRunner> logger)
+        : this(new DockerCommandRunner(logger))
     {
     }
 

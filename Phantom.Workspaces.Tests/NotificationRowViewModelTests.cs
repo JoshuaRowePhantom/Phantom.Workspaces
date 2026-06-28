@@ -20,7 +20,8 @@ public sealed class NotificationRowViewModelTests
         string description,
         string heading = "Completed",
         string? tabTitle = null,
-        bool isRunning = false) =>
+        bool isRunning = false,
+        bool isInteresting = false) =>
         new NotificationRowViewModel(
             new NotificationEntry
             {
@@ -30,6 +31,7 @@ public sealed class NotificationRowViewModelTests
                 Description = description,
                 When = DateTime.UtcNow,
                 IsRunning = isRunning,
+                IsInteresting = isInteresting,
                 IsRead = false,
                 IsSnoozed = false,
             },
@@ -90,6 +92,28 @@ public sealed class NotificationRowViewModelTests
     {
         var row = MakeRow("reason", tabTitle: null);
         Assert.Equal("Tab 1", row.TabTitle);
+    }
+
+    [Fact]
+    public void IsInteresting_WhenNotificationStateIsInteresting_ReturnsTrue()
+    {
+        var row = MakeRow("done", isInteresting: true);
+        Assert.True(row.IsInteresting);
+    }
+
+    [Fact]
+    public void IsInteresting_WhenNotificationStateIsNotInteresting_ReturnsFalse()
+    {
+        var row = MakeRow("live summary", isInteresting: false);
+        Assert.False(row.IsInteresting);
+    }
+
+    [Fact]
+    public void IsRunningAndIsInteresting_BothTrueSimultaneously_BothPropertiesTrue()
+    {
+        var row = MakeRow("live summary", isRunning: true, isInteresting: true);
+        Assert.True(row.IsRunning);
+        Assert.True(row.IsInteresting);
     }
 }
 
