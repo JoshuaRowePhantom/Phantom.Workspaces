@@ -291,4 +291,140 @@ public sealed class NotificationsViewModelTests
         Assert.True(viewModel.IsOpen);
         Assert.True(viewModel.IsAutoClosing);
     }
+
+    // ── OpenWithHighlight tests ────────────────────────────────────────────
+
+    [Fact]
+    public void OpenWithHighlight_SetsIsOpenTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        Assert.True(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_SetsIsAutoClosingTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        Assert.True(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_HighlightsTargetRow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        Assert.True(row.IsHighlighted);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_ClearsOtherRowHighlights()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "first"));
+        service.Notify(InterestingNotification(Tab("tab-2"), "second"));
+
+        viewModel.OpenWithHighlight("tab-1");
+
+        var otherRow = viewModel.Rows.Single(r => r.TabKey == "tab-2");
+        Assert.False(otherRow.IsHighlighted);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_WhenCalledAgain_MovesHighlight()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "first"));
+        service.Notify(InterestingNotification(Tab("tab-2"), "second"));
+
+        viewModel.OpenWithHighlight("tab-1");
+        viewModel.OpenWithHighlight("tab-2");
+
+        var row1 = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        var row2 = viewModel.Rows.Single(r => r.TabKey == "tab-2");
+        Assert.False(row1.IsHighlighted);
+        Assert.True(row2.IsHighlighted);
+    }
+
+    [Fact]
+    public void OpenWithHighlight_WhenTabKeyNotFound_PopupStillOpens()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.IsOpen = false;
+        viewModel.IsAutoClosing = false;
+
+        viewModel.OpenWithHighlight("tab-not-found");
+
+        Assert.True(viewModel.IsOpen);
+        Assert.True(viewModel.IsAutoClosing);
+        Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
+    }
+
+    [Fact]
+    public void OpenWithHighlight_WhenNoRows_DoesNotThrow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+
+        var exception = Record.Exception(() => viewModel.OpenWithHighlight("tab-1"));
+
+        Assert.Null(exception);
+        Assert.True(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void OnDismissed_ClearsAllHighlights()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        viewModel.OpenWithHighlight("tab-1");
+
+        viewModel.Dismiss();
+
+        Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
+    }
+
+    [Fact]
+    public void ToggleOpen_ManualOpen_NoRowIsHighlighted()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        viewModel.ToggleOpen();
+
+        Assert.True(viewModel.Rows.All(r => !r.IsHighlighted));
+    }
 }

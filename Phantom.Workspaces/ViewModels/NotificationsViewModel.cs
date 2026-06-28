@@ -41,6 +41,30 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
         this.IsAutoClosing = false;
     }
 
+    public void OpenWithHighlight(string tabKey)
+    {
+        foreach (var row in this.Rows)
+        {
+            row.IsHighlighted = false;
+        }
+
+        var target = this.Rows.FirstOrDefault(r => r.TabKey == tabKey);
+        if (target is not null)
+        {
+            target.IsHighlighted = true;
+        }
+
+        this.Show();
+    }
+
+    protected override void OnDismissed()
+    {
+        foreach (var row in this.Rows)
+        {
+            row.IsHighlighted = false;
+        }
+    }
+
     private void OnNotificationsChanged(object? sender, EventArgs e)
     {
         var previousUnreadCount = this.lastKnownUnreadCount;
