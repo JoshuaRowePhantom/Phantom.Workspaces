@@ -11,7 +11,7 @@ using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class QueueComposerViewModel : ViewModelBase
+public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewModel
 {
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue targetQueue;
@@ -52,7 +52,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.SubmitCommand = new RelayCommand(this.Submit);
         this.SubmitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
-        this.SetQueueImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
+        this.SetImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
 
     public bool IsDefaultComposer { get; }
@@ -93,7 +93,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public string SubmitButtonGlyph => "↵";
 
-    public QueueImmediacyOption SubmitStatusOption => QueueImmediacyOption.All.First(option => option.Value == this.targetQueue.Immediacy);
+    public QueueImmediacyOption SelectedImmediacyOption => QueueImmediacyOption.All.First(option => option.Value == this.targetQueue.Immediacy);
 
     public QueueImmediacyOption ImmediateImmediacyOption => QueueImmediacyOption.All[0];
 
@@ -141,7 +141,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public ICommand CreateNewQueueCommand { get; }
 
-    public ICommand SetQueueImmediacyCommand { get; }
+    public ICommand SetImmediacyCommand { get; }
 
     public void EnterFormattedMode() => this.IsFormattedMode = true;
 
@@ -440,7 +440,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     private void OnTargetQueueChanged(object? sender, EventArgs e)
     {
-        this.RaisePropertyChanged(nameof(this.SubmitStatusOption));
+        this.RaisePropertyChanged(nameof(this.SelectedImmediacyOption));
     }
 
     private void SetQueueImmediacy(QueueImmediacyOption option)

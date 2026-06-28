@@ -5,7 +5,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable
+public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueueImmediacyViewModel
 {
     private readonly InputQueueViewModel parent;
     private readonly AgentChatQueue queue;
