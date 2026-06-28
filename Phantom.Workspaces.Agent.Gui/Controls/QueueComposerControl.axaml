@@ -98,7 +98,7 @@
             </Border>
         </Grid>
         <TextBlock Text="{Binding ActiveHint}"
-                   IsVisible="{Binding ActiveHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   IsVisible="{Binding ShowHintText}"
                    Classes="caption muted"
                    Margin="4,0,0,0" />
         <ItemsControl ItemsSource="{Binding AttachmentPreviews}"
