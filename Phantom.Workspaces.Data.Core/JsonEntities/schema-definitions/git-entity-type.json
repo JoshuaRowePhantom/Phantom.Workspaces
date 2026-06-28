@@ -1,7 +1,9 @@
 {
   "entity-id": "f5a6b7c8-d9e0-f1a2-b3c4-d5e6f7a8b9c0",
+  "entity-display-order": 215,
   "entity-types": [
     "entity",
+    "entity-type",
     "json-schema",
     "note"
   ],
@@ -9,6 +11,10 @@
     [
       "json-schemas",
       "https://schemas.workspaces.phantom.to/workspaces/data/core/git.json"
+    ],
+    [
+      "entity-types",
+      "git"
     ]
   ],
   "display-name": {
@@ -22,5 +28,6 @@
   },
   "schema": {
     "$ref": "/JsonSchemas/git.json"
-  }
+  },
+  "default-name-prefixes": []
 }

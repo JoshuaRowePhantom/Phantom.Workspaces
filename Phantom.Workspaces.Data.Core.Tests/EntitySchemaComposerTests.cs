@@ -53,4 +53,58 @@ public sealed class EntitySchemaComposerTests
 
         Assert.NotEmpty(errors);
     }
+
+    [Fact]
+    public async Task GetValidationErrorsAsync_GitWorktreeEntityWithGitMetadata_ReturnsNoErrors()
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "33333333-3333-3333-3333-333333333333",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["git-worktrees", "C:/dev/my-repo"]],
+              "display-name": { "default": "my-repo" },
+              "path": "C:/dev/my-repo",
+              "git": {
+                "branch": "main",
+                "head-commit": "abc1234def5678901234567890123456789012345",
+                "remotes": [
+                  { "name": "origin", "url": "https://github.com/example/my-repo.git" }
+                ]
+              }
+            }
+            """);
+
+        var errors = await composer.GetValidationErrorsAsync(document.RootElement);
+
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task GetValidationErrorsAsync_GitEntityWithGitMetadata_ReturnsNoErrors()
+    {
+        IEntitySchemaComposer composer = await CreatePopulatedComposerAsync();
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "44444444-4444-4444-4444-444444444444",
+              "entity-types": ["entity", "git"],
+              "names": [["git", "C:/dev/my-repo"]],
+              "display-name": { "default": "my-repo" },
+              "path": "C:/dev/my-repo",
+              "git": {
+                "branch": "main",
+                "head-commit": "abc1234def5678901234567890123456789012345",
+                "remotes": [
+                  { "name": "origin", "url": "https://github.com/example/my-repo.git" }
+                ]
+              }
+            }
+            """);
+
+        var errors = await composer.GetValidationErrorsAsync(document.RootElement);
+
+        Assert.Empty(errors);
+    }
 }
