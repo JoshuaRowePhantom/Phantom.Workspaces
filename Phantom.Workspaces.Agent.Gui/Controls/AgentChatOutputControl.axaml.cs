@@ -213,6 +213,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         if (this.subscribedViewModel is { } vm)
         {
+            this.browser.BeginBatch();
             this.outputModel = new ChatOutputHtmlModel(
                 vm.History,
                 vm.RunningItems,
@@ -220,6 +221,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 this,
                 DefaultToolFactory,
                 this);
+            this.browser.EndBatch();
         }
     }
 

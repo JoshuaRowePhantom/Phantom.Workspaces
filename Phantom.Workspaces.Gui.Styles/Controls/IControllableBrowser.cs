@@ -25,4 +25,18 @@ public interface IControllableBrowser
 
     /// <summary>Delivers a message into the page, queueing until the shell is ready.</summary>
     void PostMessageToJavaScript(string message);
+
+    /// <summary>
+    /// Begins a batch: subsequent <see cref="PostMessageToJavaScript"/> calls are accumulated
+    /// instead of being dispatched immediately. Call <see cref="EndBatch"/> to flush the batch as
+    /// a single <c>InvokeScript</c> call. Batches are not nestable; calling <see cref="BeginBatch"/>
+    /// while one is already active is a no-op.
+    /// </summary>
+    void BeginBatch();
+
+    /// <summary>
+    /// Ends the current batch and delivers all accumulated messages in a single script invocation.
+    /// If no batch is active this method is a no-op.
+    /// </summary>
+    void EndBatch();
 }
