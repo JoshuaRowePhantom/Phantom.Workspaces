@@ -63,6 +63,16 @@
     "scheduled-tools-paused": {
       "type": "boolean",
       "description": "When true, the scheduled tools host on this profile starts no new runs and stops in-flight runs (persisted Stop all / Pause state)."
+    },
+    "chat-input": {
+      "type": "object",
+      "properties": {
+        "show-help-text": {
+          "type": "boolean",
+          "description": "When false, the keyboard-shortcut help text below the chat input box is hidden.",
+          "default": true
+        }
+      }
     }
   },
   "required": [

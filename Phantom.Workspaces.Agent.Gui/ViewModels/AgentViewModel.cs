@@ -24,6 +24,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
     private bool isReasoningVisible;
     private bool autoScrollEnabled = true;
+    private bool showChatInputHelpText = true;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
@@ -156,6 +157,18 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public bool AutoScrollDisabled => !this.autoScrollEnabled;
 
+    public bool ShowChatInputHelpText
+    {
+        get => this.showChatInputHelpText;
+        set
+        {
+            if (this.SetProperty(ref this.showChatInputHelpText, value))
+            {
+                this.InputQueue.DefaultComposer.ShowChatInputHelpText = value;
+            }
+        }
+    }
+
     public IAgentStatusSink StatusSink => this.conversationDetail.StatusLine;
 
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
@@ -173,6 +186,10 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
         this.InputQueue.DefaultComposer.SlashCommandInterceptorAsync = text =>
             this.RunSlashCommandAsync(contextFactory, text);
+
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
+            getValue: () => this.ShowChatInputHelpText,
+            setValue: v => this.ShowChatInputHelpText = v));
     }
 
     private async Task RunSlashCommandAsync(

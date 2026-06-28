@@ -97,6 +97,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
+        this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
@@ -157,6 +158,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand NavigatePreviousNotificationCommand { get; }
     public RelayCommand NavigateBackCommand { get; }
     public RelayCommand NavigateForwardCommand { get; }
+    public RelayCommand DuplicateBrowserTabCommand { get; }
 
     public NotificationsViewModel? NotificationsViewModel
     {
@@ -1734,6 +1736,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             DisposeWorkspaceTab(document.TabViewModel);
             return;
         }
+    }
+
+    public async Task DuplicateBrowserTabAsync()
+    {
+        var layout = this.selectedWorkspacePane?.ContentLayout;
+        if (layout is null)
+        {
+            return;
+        }
+
+        var documentDock = this.FindDocumentDock(layout);
+        var activeTab = (documentDock?.ActiveDockable as WorkspaceDocument)?.TabViewModel;
+
+        if (activeTab is not WebViewModel webVm)
+        {
+            return;
+        }
+
+        var url = webVm.AddressBarUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return;
+        }
+
+        var newTab = new WebViewModel(url, this)
+        {
+            Id = $"web-{Guid.NewGuid()}",
+            Title = url,
+            DockRegion = webVm.DockRegion,
+        };
+
+        await this.OpenTabAsync(newTab, insertAfterTabId: webVm.Id);
     }
 
     internal bool CloseTabById(string tabId)

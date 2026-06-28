@@ -280,6 +280,102 @@ public sealed class WebViewModelTests
         Assert.Equal("Repos", webTab.Title);
     }
 
+    // --- DuplicateBrowserTabCommand ---
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DuplicateBrowserTab_WithWebViewModel_OpensNewTabAtSameUrl()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://example.com", viewModel) { Id = "web-dup-1", Title = "Tab" };
+        await viewModel.OpenTabAsync(tab);
+
+        await viewModel.DuplicateBrowserTabAsync();
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var tabs = selectedRegion.Tabs!.ToList();
+        var duplicate = tabs
+            .OfType<WebViewModel>()
+            .FirstOrDefault(t => t.Id != "web-dup-1" && t.AddressBarUrl == "https://example.com");
+
+        Assert.NotNull(duplicate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DuplicateBrowserTab_WithWebViewModel_InsertsNewTabAfterSource()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com", viewModel) { Id = "web-dup-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com", viewModel) { Id = "web-dup-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        // Activate tab A so it becomes the active tab.
+        await viewModel.OpenTabAsync(tabA);
+
+        await viewModel.DuplicateBrowserTabAsync();
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var tabs = selectedRegion.Tabs!.ToList();
+        var indexA = tabs.FindIndex(t => t.Id == "web-dup-a");
+        var indexDup = tabs.FindIndex(t => t is WebViewModel wv && wv.Id != "web-dup-a" && wv.Id != "web-dup-b" && wv.AddressBarUrl == "https://a.example.com");
+
+        Assert.True(indexA >= 0, "Source tab A should be present");
+        Assert.True(indexDup >= 0, "Duplicate tab should be present");
+        Assert.Equal(indexA + 1, indexDup);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DuplicateBrowserTab_WithNonBrowserTab_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Open an entity tab (non-browser tab).
+        var entityTab = new EntityWorkspaceTabViewModel { Id = "entity-1", Title = "Entity" };
+        await viewModel.OpenTabAsync(entityTab);
+
+        await viewModel.DuplicateBrowserTabAsync();
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var tabs = selectedRegion.Tabs!.ToList();
+        Assert.Single(tabs);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DuplicateBrowserTab_WithNoActiveTab_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Do not open any tabs.
+        await viewModel.DuplicateBrowserTabAsync();
+
+        // No exception; workspace pane has no tabs.
+        var selectedRegion = viewModel.SelectedWorkspacePane.SelectedRegion;
+        var tabs = selectedRegion?.Tabs?.ToList() ?? [];
+        Assert.Empty(tabs);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DuplicateBrowserTab_WithEmptyUrl_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("", viewModel) { Id = "web-empty-url", Title = "Tab" };
+        await viewModel.OpenTabAsync(tab);
+
+        await viewModel.DuplicateBrowserTabAsync();
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var tabs = selectedRegion.Tabs!.ToList();
+        Assert.Single(tabs);
+    }
+
     // --- RaiseOpenNewWindow: new tab insertion position ---
 
     [AvaloniaFact(Timeout = 15_000)]

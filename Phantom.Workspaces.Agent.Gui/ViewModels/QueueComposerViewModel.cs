@@ -20,6 +20,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
     private string inputText = string.Empty;
     private bool isFormattedMode;
+    private bool showChatInputHelpText = true;
     private CancellationTokenSource? completionsCts;
 
     /// <summary>
@@ -74,6 +75,20 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public string? ActiveHint => this.FormattedModeHint ?? this.NormalModeHint;
 
+    public bool ShowChatInputHelpText
+    {
+        get => this.showChatInputHelpText;
+        set
+        {
+            if (this.SetProperty(ref this.showChatInputHelpText, value))
+            {
+                this.RaisePropertyChanged(nameof(this.ShowHintText));
+            }
+        }
+    }
+
+    public bool ShowHintText => !string.IsNullOrEmpty(this.ActiveHint) && this.showChatInputHelpText;
+
     public string SubmitButtonText => this.IsDefaultComposer ? "Send" : "Add";
 
     public string SubmitButtonGlyph => "↵";
@@ -115,6 +130,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
                 this.RaisePropertyChanged(nameof(this.FormattedModeHint));
                 this.RaisePropertyChanged(nameof(this.NormalModeHint));
                 this.RaisePropertyChanged(nameof(this.ActiveHint));
+                this.RaisePropertyChanged(nameof(this.ShowHintText));
             }
         }
     }
