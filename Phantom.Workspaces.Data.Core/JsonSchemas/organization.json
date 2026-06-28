@@ -1,0 +1,31 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/organization.json",
+  "description": "Platform-agnostic schema for organization entities shared by all source-control and issue-tracking integrations.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    },
+    {
+      "$ref": "external.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "organization"
+      }
+    },
+    "organization-name": {
+      "type": "string",
+      "description": "The canonical organization/account name used by the hosting platform"
+    }
+  }
+}

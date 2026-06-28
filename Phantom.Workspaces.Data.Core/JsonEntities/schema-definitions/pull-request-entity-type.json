@@ -1,0 +1,38 @@
+{
+  "entity-id": "2217dfc3-19ca-4849-8da6-66f79bc858b5",
+  "entity-display-order": 365,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/pull-request.json"
+    ],
+    [
+      "entity-types",
+      "pull-request"
+    ]
+  ],
+  "display-name": {
+    "default": "Pull Request Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/pull-request-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/pull-request.json"
+  },
+  "default-name-prefixes": [],
+  "display-interest-types": [
+    "assigned-to",
+    "actionable",
+    "blocked"
+  ]
+}

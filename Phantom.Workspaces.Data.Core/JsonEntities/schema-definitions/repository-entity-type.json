@@ -1,0 +1,33 @@
+{
+  "entity-id": "789649d2-504f-435a-802f-53fdf0c53e04",
+  "entity-display-order": 355,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/repository.json"
+    ],
+    [
+      "entity-types",
+      "repository"
+    ]
+  ],
+  "display-name": {
+    "default": "Repository Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/repository-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/repository.json"
+  },
+  "default-name-prefixes": []
+}
