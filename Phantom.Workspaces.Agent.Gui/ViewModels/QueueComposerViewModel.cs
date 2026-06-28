@@ -18,6 +18,10 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
     private readonly List<AIContent> attachments = [];
     private readonly List<string> attachmentPlaceholders = [];
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
+    private readonly List<string> inputHistory = [];
+    private int historyIndex = -1;
+    private string savedDraft = string.Empty;
+    private int savedDraftCaretIndex;
     private string inputText = string.Empty;
     private bool isFormattedMode;
     private bool showChatInputHelpText = true;
@@ -226,6 +230,80 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         return false;
     }
 
+    public bool TryNavigateHistoryUp(int caretLine, out string text, out int caretIndex)
+    {
+        text = string.Empty;
+        caretIndex = 0;
+
+        if (caretLine != 0)
+        {
+            return false;
+        }
+
+        if (this.inputHistory.Count == 0)
+        {
+            return false;
+        }
+
+        if (this.historyIndex == -1)
+        {
+            this.savedDraft = this.InputText;
+            this.savedDraftCaretIndex = this.InputText.Length;
+            this.historyIndex = this.inputHistory.Count - 1;
+        }
+        else if (this.historyIndex > 0)
+        {
+            this.historyIndex--;
+        }
+
+        text = this.inputHistory[this.historyIndex];
+        caretIndex = 0;
+        return true;
+    }
+
+    public bool TryNavigateHistoryDown(out string text, out int caretIndex)
+    {
+        text = string.Empty;
+        caretIndex = 0;
+
+        if (this.historyIndex == -1)
+        {
+            return false;
+        }
+
+        if (this.historyIndex < this.inputHistory.Count - 1)
+        {
+            this.historyIndex++;
+            text = this.inputHistory[this.historyIndex];
+            caretIndex = 0;
+        }
+        else
+        {
+            this.historyIndex = -1;
+            text = this.savedDraft;
+            caretIndex = this.savedDraftCaretIndex;
+        }
+
+        return true;
+    }
+
+    public void CommitToHistory(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        if (this.inputHistory.Count > 0
+            && string.Equals(this.inputHistory[^1], text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        this.inputHistory.Add(text);
+        this.historyIndex = -1;
+    }
+
     public void Submit()
     {
         this.Submit(this.targetQueue);
@@ -258,6 +336,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         }
 
         contents.AddRange(this.attachments);
+        this.CommitToHistory(text);
         this.parent.AppendToQueue(targetQueue, contents);
         this.InputText = string.Empty;
         this.ClearAttachments();
