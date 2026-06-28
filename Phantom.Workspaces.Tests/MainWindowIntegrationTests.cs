@@ -20,6 +20,7 @@ using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class MainWindowIntegrationTests
 {
     [AvaloniaFact(Timeout = 15_000)]

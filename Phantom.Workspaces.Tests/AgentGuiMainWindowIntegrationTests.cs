@@ -7,6 +7,7 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class AgentGuiMainWindowIntegrationTests
 {
     private static AgentDefinition CreateAgentDefinition()
