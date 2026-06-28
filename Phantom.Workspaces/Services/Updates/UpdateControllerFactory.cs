@@ -2,6 +2,7 @@ using System;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Install;
 
@@ -56,7 +57,7 @@ public static class UpdateControllerFactory
             runningVersion,
             ResolveAssetMoniker());
 #pragma warning disable CA1416 // RealScheduledTasks is Windows-only; this path is only reached on Windows
-        var startupTaskService = new StartupTaskService(new RealScheduledTasks(), layout.CurrentExecutablePath);
+        var startupTaskService = new StartupTaskService(new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance), layout.CurrentExecutablePath);
 #pragma warning restore CA1416
         var processLauncher = new RealProcessLauncher();
 

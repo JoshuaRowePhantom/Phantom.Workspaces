@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces;
 
 namespace Phantom.Workspaces.Install;
@@ -10,6 +11,14 @@ namespace Phantom.Workspaces.Install;
 [SupportedOSPlatform("windows")]
 public sealed class RealScheduledTasks : IScheduledTasks
 {
+    private readonly ILogger<RealScheduledTasks> _logger;
+
+    public RealScheduledTasks(ILogger<RealScheduledTasks> logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+    }
+
     /// <inheritdoc />
     public bool Exists(string taskName)
     {
@@ -36,11 +45,8 @@ public sealed class RealScheduledTasks : IScheduledTasks
             commandLine);
         if (result.ExitCode != 0)
         {
-            var detail = string.IsNullOrWhiteSpace(result.StandardError)
-                ? string.Empty
-                : $"\n{result.StandardError}";
             throw new InvalidOperationException(
-                $"schtasks failed (exit {result.ExitCode}) registering '{definition.TaskName}'.{detail}");
+                $"schtasks failed (exit {result.ExitCode}) registering '{definition.TaskName}'.");
         }
     }
 
@@ -56,11 +62,8 @@ public sealed class RealScheduledTasks : IScheduledTasks
         var result = RunSchtasks("/Delete", "/F", "/TN", taskName);
         if (result.ExitCode != 0)
         {
-            var detail = string.IsNullOrWhiteSpace(result.StandardError)
-                ? string.Empty
-                : $"\n{result.StandardError}";
             throw new InvalidOperationException(
-                $"schtasks failed (exit {result.ExitCode}) deleting '{taskName}'.{detail}");
+                $"schtasks failed (exit {result.ExitCode}) deleting '{taskName}'.");
         }
     }
 
@@ -75,12 +78,14 @@ public sealed class RealScheduledTasks : IScheduledTasks
         return command;
     }
 
-    private static ProcessResult RunSchtasks(params string[] arguments)
+    private ProcessResult RunSchtasks(params string[] arguments)
     {
-        return ProcessRunner.RunProcessAsync(
+        return ProcessRunner.RunAndLogAsync(
             new RunProcessParameters(
                 Command: "schtasks.exe",
-                Arguments: arguments))
+                Arguments: arguments),
+            _logger,
+            operationDescription: "schtasks")
             .GetAwaiter().GetResult();
     }
 }
