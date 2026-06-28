@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces;
 using Phantom.Workspaces.Containers;
 
@@ -134,6 +135,18 @@ public sealed class WindowsDockerDesktopEngineTests
         Assert.Equal("create", runner.Commands[2][0]);
     }
 
+    [Fact]
+    public async Task DockerCommandRunner_RunAsync_WhenCommandExitsNonZero_LogsWarning()
+    {
+        var logger = new FakeLogger<DockerCommandRunner>();
+        var runner = new DockerCommandRunner(logger, "cmd.exe");
+
+        await runner.RunAsync(["/c", "exit", "1"]);
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+    }
+
     private sealed class RecordingDockerCommandRunner : IDockerCommandRunner
     {
         public List<IReadOnlyList<string>> Commands { get; } = [];
@@ -152,6 +165,25 @@ public sealed class WindowsDockerDesktopEngineTests
             }
 
             return ValueTask.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty));
+        }
+    }
+
+    private sealed class FakeLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Logs { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Logs.Add((logLevel, formatter(state, exception)));
         }
     }
 }
