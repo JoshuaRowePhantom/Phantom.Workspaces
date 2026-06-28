@@ -6,12 +6,10 @@ using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class NotificationsViewModel : ViewModelBase, IDisposable
+public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposable
 {
     private readonly NotificationService notificationService;
     private readonly Action<string> navigateToTab;
-    private bool isOpen;
-    private bool isAutoClosing;
     private int lastKnownUnreadCount;
 
     public NotificationsViewModel(NotificationService notificationService, Action<string> navigateToTab)
@@ -28,18 +26,6 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
     public ObservableCollection<NotificationRowViewModel> Rows { get; }
 
     public ICommand ToggleOpenCommand { get; }
-
-    public bool IsOpen
-    {
-        get => this.isOpen;
-        set => this.SetProperty(ref this.isOpen, value);
-    }
-
-    public bool IsAutoClosing
-    {
-        get => this.isAutoClosing;
-        set => this.SetProperty(ref this.isAutoClosing, value);
-    }
 
     public int UnreadCount => this.notificationService.Notifications.Count(e => !e.IsRead);
 
@@ -63,8 +49,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
 
         if (this.UnreadCount > previousUnreadCount)
         {
-            this.IsOpen = true;
-            this.IsAutoClosing = true;
+            this.Show();
         }
     }
 
