@@ -61,6 +61,7 @@ if ($Mode -eq 'fast')
 {
     $filterClauses += '(Category!=SlowGit)'
     $filterClauses += '(Category!=SlowDocker)'
+    $filterClauses += '(Category!=SlowLayout)'
 }
 
 # WebView integration tests require a real desktop browser host (native WebView2) and are
