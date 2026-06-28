@@ -1,0 +1,40 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-pull-request.json",
+  "description": "Schema for Azure DevOps pull request entities extending the git-layer pull request with ADO-specific identity and status fields.",
+  "allOf": [
+    {
+      "$ref": "git-pull-request.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "azure-devops-pull-request"
+      }
+    },
+    "pull-request-id": {
+      "type": "integer",
+      "description": "ADO pull request numeric ID"
+    },
+    "is-draft": {
+      "type": "boolean",
+      "description": "Whether this pull request is in draft state"
+    },
+    "author": {
+      "type": "string",
+      "description": "ADO unique name of the author"
+    },
+    "merge-status": {
+      "type": "string",
+      "description": "ADO merge status: notSet/queued/conflicts/succeeded/rejectedByPolicy/failure"
+    }
+  }
+}

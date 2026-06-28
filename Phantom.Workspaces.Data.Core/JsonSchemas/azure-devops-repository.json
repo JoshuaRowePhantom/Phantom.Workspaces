@@ -1,0 +1,35 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/azure-devops-repository.json",
+  "description": "Schema for Azure DevOps repository entities extending the git-layer repository with ADO-specific identity fields.",
+  "allOf": [
+    {
+      "$ref": "git-repository.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "azure-devops-repository"
+      }
+    },
+    "repository-id": {
+      "type": "string",
+      "description": "Azure DevOps repository GUID"
+    },
+    "project": {
+      "$ref": "core.json#/$defs/entity-id",
+      "x-entity-types": [
+        "azure-devops-project"
+      ],
+      "description": "Entity ID of the containing Azure DevOps project"
+    }
+  }
+}

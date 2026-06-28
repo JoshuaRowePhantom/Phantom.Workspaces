@@ -9,8 +9,9 @@ The `azure-devops-organization` schema represents an Azure DevOps organization, 
 ## Composition
 
 `azure-devops-organization` composes:
-- `entity.json` — base entity fields
-- `external.json` — canonical web URL via `urls`
+- `organization.json` — `organization-name` field
+  - `entity.json` — base entity fields
+  - `external.json` — canonical web URL via `urls`
 
 It is the Azure DevOps implementation of the `organization` concept. Discovery tools should create `azure-devops-organization` entities rather than plain `organization` entities when connecting to Azure DevOps.
 
