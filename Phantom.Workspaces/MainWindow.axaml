@@ -115,7 +115,8 @@
                                    Margin="0,-2,-2,0" />
                         <Popup IsOpen="{Binding NotificationsViewModel.IsOpen, Mode=TwoWay}"
                                PlacementTarget="{Binding #NotificationBellButton}"
-                               IsLightDismissEnabled="True">
+                               IsLightDismissEnabled="True"
+                               Focusable="False">
                             <controls:NotificationsControl DataContext="{Binding NotificationsViewModel}" />
                         </Popup>
                     </Panel>
