@@ -104,12 +104,15 @@ public class WorkspaceDockFactory : Factory
         };
     }
 
-    public void AddWorkspaceTab(IDocumentDock dock, WorkspaceTabViewModel tabViewModel)
+    public void AddWorkspaceTab(IDocumentDock dock, WorkspaceTabViewModel tabViewModel, bool focus = true)
     {
         var document = CreateWorkspaceTabDocument(tabViewModel);
         AddDockable(dock, document);
-        SetActiveDockable(document);
-        SetFocusedDockable(dock, document);
+        if (focus)
+        {
+            SetActiveDockable(document);
+            SetFocusedDockable(dock, document);
+        }
     }
 
     public override void InitLayout(IDockable layout)
