@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Phantom.Workspaces.Services.Notifications;
 
@@ -9,7 +10,6 @@ public sealed class NotificationService : INotificationService
     private readonly List<NotificationEntry> notifications = [];
     // Snooze state is intentionally ephemeral (in-memory only); it resets on restart.
     private readonly HashSet<string> snoozedTabIds = [];
-    private readonly HashSet<string> activeRunTabIds = [];
 
     public NotificationService(IActiveTabProvider activeTabProvider)
     {
@@ -20,49 +20,42 @@ public sealed class NotificationService : INotificationService
 
     public IReadOnlyList<NotificationEntry> Notifications => this.notifications;
 
-    public bool HasActiveRun => this.activeRunTabIds.Count > 0;
+    public bool HasActiveRun => this.notifications.Any(e => e.IsRunning);
 
-    public void NotifyRunning(string tabId, bool isRunning)
+    public void Notify(Notification notification)
     {
-        ArgumentNullException.ThrowIfNull(tabId);
-        var changed = isRunning
-            ? this.activeRunTabIds.Add(tabId)
-            : this.activeRunTabIds.Remove(tabId);
-        if (changed)
-        {
-            this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
-        }
-    }
-
-    public void Notify(TabDescriptor tab, string? reason)
-    {
-        ArgumentNullException.ThrowIfNull(tab);
-        var tabKey = tab.TabId;
-
-        if (reason is null)
-        {
-            var removed = this.notifications.RemoveAll(e => e.TabKey == tabKey) > 0;
-            if (removed)
-            {
-                this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
-            }
-            return;
-        }
-
+        ArgumentNullException.ThrowIfNull(notification);
+        var tabKey = notification.TabDescriptor.TabId;
         var isSnoozed = this.snoozedTabIds.Contains(tabKey);
-        var isRead = isSnoozed || string.Equals(this.activeTabProvider.ActiveTabId, tab.TabId, StringComparison.Ordinal);
+
+        var existingIndex = this.notifications.FindIndex(e => e.TabKey == tabKey);
+
+        bool isRead;
+        if (notification.NotificationState == NotificationState.NotInteresting)
+        {
+            // Silent update: preserve existing IsRead so popup does not reopen.
+            isRead = existingIndex >= 0 ? this.notifications[existingIndex].IsRead : true;
+        }
+        else
+        {
+            isRead = isSnoozed || string.Equals(
+                this.activeTabProvider.ActiveTabId,
+                notification.TabDescriptor.TabId,
+                StringComparison.Ordinal);
+        }
 
         var entry = new NotificationEntry
         {
             TabKey = tabKey,
-            TabDescriptor = tab,
-            Reason = reason,
-            Timestamp = DateTimeOffset.UtcNow,
+            TabDescriptor = notification.TabDescriptor,
+            Heading = notification.Heading,
+            Description = notification.Description,
+            When = notification.When,
+            IsRunning = notification.RunningState == RunningState.Running,
             IsRead = isRead,
             IsSnoozed = isSnoozed,
         };
 
-        var existingIndex = this.notifications.FindIndex(e => e.TabKey == tabKey);
         if (existingIndex >= 0)
         {
             this.notifications[existingIndex] = entry;
@@ -73,6 +66,16 @@ public sealed class NotificationService : INotificationService
         }
 
         this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void Remove(string tabId)
+    {
+        ArgumentNullException.ThrowIfNull(tabId);
+        var removed = this.notifications.RemoveAll(e => e.TabKey == tabId) > 0;
+        if (removed)
+        {
+            this.NotificationsChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public void MarkRead(string tabId)

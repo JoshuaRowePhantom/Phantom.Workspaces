@@ -16,14 +16,20 @@ public sealed class NotificationRowViewModelTests
         public void Execute(object? parameter) { }
     }
 
-    private static NotificationRowViewModel MakeRow(string? reason, string? tabTitle = null) =>
+    private static NotificationRowViewModel MakeRow(
+        string description,
+        string heading = "Completed",
+        string? tabTitle = null,
+        bool isRunning = false) =>
         new NotificationRowViewModel(
             new NotificationEntry
             {
                 TabKey = "tab-1",
                 TabDescriptor = new TabDescriptor { TabId = "Tab 1", TabTitle = tabTitle },
-                Reason = reason,
-                Timestamp = DateTimeOffset.UtcNow,
+                Heading = heading,
+                Description = description,
+                When = DateTime.UtcNow,
+                IsRunning = isRunning,
                 IsRead = false,
                 IsSnoozed = false,
             },
@@ -31,24 +37,45 @@ public sealed class NotificationRowViewModelTests
             NullCommand.Instance);
 
     [Fact]
-    public void HasReason_WhenReasonIsNonEmpty_ReturnsTrue()
+    public void HasDescription_WhenDescriptionIsNonEmpty_ReturnsTrue()
     {
         var row = MakeRow("Filed as #123");
-        Assert.True(row.HasReason);
+        Assert.True(row.HasDescription);
     }
 
     [Fact]
-    public void HasReason_WhenReasonIsNull_ReturnsFalse()
-    {
-        var row = MakeRow(null);
-        Assert.False(row.HasReason);
-    }
-
-    [Fact]
-    public void HasReason_WhenReasonIsEmpty_ReturnsFalse()
+    public void HasDescription_WhenDescriptionIsEmpty_ReturnsFalse()
     {
         var row = MakeRow(string.Empty);
-        Assert.False(row.HasReason);
+        Assert.False(row.HasDescription);
+    }
+
+    [Fact]
+    public void Description_WhenSet_IsReturned()
+    {
+        var row = MakeRow("initial");
+        Assert.Equal("initial", row.Description);
+    }
+
+    [Fact]
+    public void Heading_WhenSet_IsReturned()
+    {
+        var row = MakeRow("desc", heading: "Running");
+        Assert.Equal("Running", row.Heading);
+    }
+
+    [Fact]
+    public void IsRunning_WhenEntryIsRunning_ReturnsTrue()
+    {
+        var row = MakeRow("live summary", isRunning: true);
+        Assert.True(row.IsRunning);
+    }
+
+    [Fact]
+    public void IsRunning_WhenEntryIsNotRunning_ReturnsFalse()
+    {
+        var row = MakeRow("completed reason", isRunning: false);
+        Assert.False(row.IsRunning);
     }
 
     [Fact]
@@ -65,3 +92,4 @@ public sealed class NotificationRowViewModelTests
         Assert.Equal("Tab 1", row.TabTitle);
     }
 }
+
