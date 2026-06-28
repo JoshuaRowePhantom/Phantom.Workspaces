@@ -2,6 +2,7 @@ using Avalonia.Media;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using System.Collections.Specialized;
 using System.Linq;
@@ -11,6 +12,7 @@ using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -1966,6 +1968,163 @@ public sealed class MainWindowIntegrationTests
         Assert.True(
             failure is null,
             failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigatePreviousNotificationCommand_NavigatesToUnreadTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "nav-prev-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "nav-prev-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        // tabB is active; notify tabA so it becomes the unread candidate.
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "nav-prev-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        viewModel.NavigatePreviousNotificationCommand.Execute(null);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("nav-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigateNextNotificationCommand_NavigatesToUnreadTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "nav-next-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "nav-next-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        // tabB is active; notify tabA so it becomes the unread candidate.
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "nav-next-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        viewModel.NavigateNextNotificationCommand.Execute(null);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("nav-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f7-prev-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f7-prev-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        // tabB is active; notify tabA so it becomes the unread candidate.
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "ctrl-f7-prev-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("ctrl-f7-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f8-next-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f8-next-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        // tabB is active; notify tabA so it becomes the unread candidate.
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "ctrl-f8-next-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("ctrl-f8-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_CtrlF7_IsHandledInTunnelPhase()
+    {
+        // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
+        // preventing child controls such as WebView2 from seeing the keystroke.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        // Register a bubble-phase handler with handledEventsToo: true so it still fires
+        // even after the tunnel handler has already set e.Handled = true.
+        bool handledByTunnel = false;
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.Key == Key.F7 && e.KeyModifiers == KeyModifiers.Control)
+                    handledByTunnel = e.Handled;
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        // With no unread notifications the command is a no-op, but the key must still be handled.
+        window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
+
+        Assert.True(handledByTunnel);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_CtrlF8_IsHandledInTunnelPhase()
+    {
+        // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
+        // preventing child controls such as WebView2 from seeing the keystroke.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        bool handledByTunnel = false;
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.Key == Key.F8 && e.KeyModifiers == KeyModifiers.Control)
+                    handledByTunnel = e.Handled;
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
+
+        Assert.True(handledByTunnel);
+
+        window.Close();
     }
 
     [AvaloniaFact(Timeout = 15_000)]

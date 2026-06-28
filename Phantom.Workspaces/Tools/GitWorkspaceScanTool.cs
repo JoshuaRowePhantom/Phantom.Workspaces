@@ -52,6 +52,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         this.logger = logger ?? NullLogger<GitWorkspaceScanTool>.Instance;
     }
 
+    // Registered as "git-workspace-scan" — matches the seeded tool entity (git-workspace-scan-tool.json)
+    // and the tool-relationship schema. Do not confuse with the separate "git-workspace-discovery" tool.
     public string ToolType => "git-workspace-scan";
 
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
@@ -61,6 +63,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         var scanRoots = this.ResolveScanRoots(context.Tool.Data);
         if (scanRoots.Count == 0)
         {
+            this.logger.LogWarning("Git workspace scan: no scan roots resolved; no repositories will be scanned.");
             return new WorkspaceToolExecutionResult
             {
                 ResultContent = "No scan roots resolved; no repositories scanned.",
@@ -73,7 +76,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         var seenRepositoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var scanRoot in scanRoots)
         {
-            foreach (var repositoryPath in EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
+            foreach (var repositoryPath in this.EnumerateGitRepositories(scanRoot, maxDepth, context.CancellationToken))
             {
                 if (!seenRepositoryPaths.Add(repositoryPath))
                 {
@@ -103,6 +106,19 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                     Changes = changes,
                 },
                 context.CancellationToken).ConfigureAwait(false);
+            this.logger.LogInformation(
+                "Git workspace scan: wrote {Count} git {Entity} across {Roots} root(s) [{RootsDescription}].",
+                repositoriesFound,
+                repositoriesFound == 1 ? "entity" : "entities",
+                scanRoots.Count,
+                rootsDescription);
+        }
+        else
+        {
+            this.logger.LogInformation(
+                "Git workspace scan: no repositories found under {Roots} root(s) [{RootsDescription}].",
+                scanRoots.Count,
+                rootsDescription);
         }
 
         var summary = $"Scanned {scanRoots.Count} root(s) [{rootsDescription}]. Found {repositoriesFound} repositories.";
@@ -112,6 +128,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
     /// <summary>
     /// Resolves the directories to scan: explicit <c>scan-roots</c>/<c>scan-root</c> when configured,
     /// otherwise all local fixed drives. Only existing directories are returned.
+    /// When roots are explicitly configured, they are always respected — missing paths are logged as
+    /// warnings and skipped, but the tool never silently falls back to drive enumeration.
     /// </summary>
     private IReadOnlyList<string> ResolveScanRoots(JsonElement? toolEntity)
     {
@@ -121,15 +139,38 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             configuredRoots = [.. configuredRoots, singleRoot];
         }
 
-        var existingConfiguredRoots = configuredRoots
-            .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
-            .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (existingConfiguredRoots.Count > 0)
+        if (configuredRoots.Count > 0)
         {
-            return existingConfiguredRoots;
+            // Configured roots are always respected; never substitute drive enumeration when roots are explicit.
+            var existingRoots = new List<string>();
+            foreach (var root in configuredRoots)
+            {
+                if (string.IsNullOrWhiteSpace(root))
+                {
+                    continue;
+                }
+
+                if (!Directory.Exists(root))
+                {
+                    this.logger.LogWarning(
+                        "Configured scan root does not exist on disk and will be skipped: {Path}", root);
+                    continue;
+                }
+
+                existingRoots.Add(Path.GetFullPath(root));
+            }
+
+            var distinctRoots = existingRoots
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (distinctRoots.Count == 0)
+            {
+                this.logger.LogWarning(
+                    "All configured scan roots are absent on disk; no repositories will be scanned.");
+            }
+
+            return distinctRoots;
         }
 
         IEnumerable<string> driveRoots;
@@ -158,7 +199,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             .ToList();
     }
 
-    private static IEnumerable<string> EnumerateGitRepositories(string root, int maxDepth, CancellationToken cancellationToken)
+    private IEnumerable<string> EnumerateGitRepositories(string root, int maxDepth, CancellationToken cancellationToken)
     {
         var pending = new Stack<(string Path, int Depth)>();
         pending.Push((Path.GetFullPath(root), 0));
@@ -187,6 +228,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
+                this.logger.LogDebug(exception, "Skipping inaccessible directory during git scan: {Path}", path);
                 continue;
             }
 
