@@ -3,13 +3,7 @@
   "description": "Schema for Azure DevOps work item entities and synchronized work tracking fields.",
   "allOf": [
     {
-      "$ref": "entity.json"
-    },
-    {
-      "$ref": "task.json"
-    },
-    {
-      "$ref": "external.json"
+      "$ref": "work-item.json"
     }
   ],
   "type": "object",

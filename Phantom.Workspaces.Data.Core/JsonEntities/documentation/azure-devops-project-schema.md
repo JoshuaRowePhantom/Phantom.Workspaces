@@ -9,8 +9,9 @@ The `azure-devops-project` schema represents an Azure DevOps project, combining 
 ## Composition
 
 `azure-devops-project` composes:
-- `entity.json` — base entity fields
-- `external.json` — canonical web URL via `urls`
+- `repository.json` — `default-branch` and `description` fields
+  - `entity.json` — base entity fields
+  - `external.json` — canonical web URL via `urls`
 
 It is the Azure DevOps platform-specific counterpart to the platform-agnostic `repository` concept, sharing the `["repositories", <org>, <project>]` naming convention.
 
