@@ -1,0 +1,47 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/github-repository.json",
+  "description": "Schema for GitHub repository entities extending the git-layer repository with GitHub-specific identity and metadata fields.",
+  "allOf": [
+    {
+      "$ref": "git-repository.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "github-repository"
+      }
+    },
+    "github-repo-id": {
+      "type": "integer",
+      "description": "GitHub numeric repository ID"
+    },
+    "github-node-id": {
+      "type": "string",
+      "description": "GitHub global node ID"
+    },
+    "owner": {
+      "$ref": "core.json#/$defs/entity-id",
+      "x-entity-types": [
+        "github-organization"
+      ],
+      "description": "Entity ID of the owning GitHub organization or user"
+    },
+    "is-fork": {
+      "type": "boolean",
+      "description": "Whether this repository is a fork"
+    },
+    "is-archived": {
+      "type": "boolean",
+      "description": "Whether this repository has been archived"
+    }
+  }
+}

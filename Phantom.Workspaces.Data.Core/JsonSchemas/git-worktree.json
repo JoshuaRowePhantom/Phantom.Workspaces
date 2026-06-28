@@ -23,6 +23,10 @@
         "const": "git-worktree"
       }
     },
+    "target-branch": {
+      "type": "string",
+      "description": "The branch this worktree's changes are compared against in the review view (e.g. 'main', 'develop')."
+    },
     "git": {
       "type": "object",
       "description": "Git repository metadata populated by workspace discovery tooling.",

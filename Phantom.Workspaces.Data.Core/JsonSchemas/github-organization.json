@@ -1,0 +1,32 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/github-organization.json",
+  "description": "Schema for GitHub organization and user account entities with GitHub-specific identity fields.",
+  "allOf": [
+    {
+      "$ref": "organization.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "github-organization"
+      }
+    },
+    "github-login": {
+      "type": "string",
+      "description": "GitHub org/user login (slug)"
+    },
+    "github-node-id": {
+      "type": "string",
+      "description": "GitHub global node ID"
+    }
+  }
+}

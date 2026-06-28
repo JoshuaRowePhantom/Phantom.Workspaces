@@ -18,6 +18,16 @@
     "name": "workspaces",
     "displayName": "Workspaces Assistant",
     "description": "Default local Qwen agent for workspace entity operations.",
+    "parameters": {
+      "properties": [
+        {
+          "name": "working-directory",
+          "kind": "string",
+          "description": "The working directory for the Copilot agent process. If not specified, the agent uses its default.",
+          "required": false
+        }
+      ]
+    },
     "template": {
       "kind": "prompt",
       "name": "workspaces",
@@ -41,7 +51,8 @@
           "additionalProperties": {
             "thinking": false,
             "num_ctx": 32768,
-            "keep_alive": "15m"
+            "keep_alive": "15m",
+            "working-directory": "${working-directory}"
           }
         }
       },

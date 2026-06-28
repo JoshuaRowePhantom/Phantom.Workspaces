@@ -200,6 +200,37 @@ names and implementation type, call `workspaces_entity_get` with:
 }
 ```
 
+## How to understand entity schemas
+
+Each entity type has a documentation note attached. To read the documentation for a specific entity type (e.g. `git-repository`), call `workspaces_entity_get` with that entity type's name, then read the `content.default.content.text` property of the returned entity:
+
+```json
+{
+  "get-entity": [
+    {
+      "entity-name": ["entity-types", "git-repository"]
+    }
+  ]
+}
+```
+
+The returned entity's `content.default.content.text` contains the markdown documentation for that schema — including purpose, properties, naming convention, and a creation example.
+
+Entity types with schema documentation include (but are not limited to):
+
+| Entity type | What it represents |
+|---|---|
+| `organization` | Platform-agnostic organization (base type) |
+| `repository` | Platform-agnostic repository (base type) |
+| `work-item` | Platform-agnostic work item / issue (base type) |
+| `pull-request` | Platform-agnostic pull request (base type) |
+| `git-repository` | Git-specific repository (extends `repository`) |
+| `git-pull-request` | Git-specific pull request with branch and commit fields |
+| `git-work-item` | Git-specific work item with repository and PR linkage |
+| `azure-devops-organization` | Azure DevOps organization |
+| `azure-devops-project` | Azure DevOps project (repository equivalent) |
+| `azure-devops-work-item` | Azure DevOps work item |
+
 ## How tools are configured and enabled
 
 1. A tool's configuration lives as **top-level properties on the tool entity itself** (not nested

@@ -1,0 +1,23 @@
+{
+  "entity-id": "f0f69faf-7cab-4bd9-8644-ccf03316fad8",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-options",
+      "model-options"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Options — Model Options"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-options-model-options.md"
+    }
+  }
+}

@@ -8,6 +8,10 @@ namespace Phantom.Workspaces.Llm;
 /// hosted models, allowing the provider to be exercised against any compatible server (including
 /// a local test chat provider).
 /// </summary>
+/// <remarks>
+/// When adding BYOK fields, update the workspace documentation entity:
+/// <c>["documentation", "agent-options", "connections"]</c>.
+/// </remarks>
 public sealed record CopilotByokOptions
 {
     /// <summary>Absolute base URL of the OpenAI-compatible API endpoint.</summary>
