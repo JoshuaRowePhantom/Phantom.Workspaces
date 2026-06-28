@@ -116,6 +116,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity
@@ -483,6 +484,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
+            new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
+            new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);
         this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(dataAccessLayer, registry);
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(
@@ -1246,7 +1249,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewHierarchyNode node,
         int indentLevel)
     {
-        population.Entities.Add(this.CreateViewEntityViewModel(node.Entity, indentLevel));
+        if (!node.IsAncestorGroup)
+        {
+            population.Entities.Add(this.CreateViewEntityViewModel(node.Entity!, indentLevel));
+        }
+
         foreach (var child in node.Children)
         {
             this.AddHierarchyNode(population, child, indentLevel + 1);

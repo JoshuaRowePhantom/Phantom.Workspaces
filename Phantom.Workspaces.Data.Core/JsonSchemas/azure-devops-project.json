@@ -3,10 +3,7 @@
   "description": "Schema for Azure DevOps project entities and their project-level metadata.",
   "allOf": [
     {
-      "$ref": "entity.json"
-    },
-    {
-      "$ref": "external.json"
+      "$ref": "repository.json"
     }
   ],
   "type": "object",

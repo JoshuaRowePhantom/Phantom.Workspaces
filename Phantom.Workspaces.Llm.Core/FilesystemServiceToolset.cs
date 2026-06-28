@@ -6,6 +6,10 @@ using System.Text;
 
 namespace Phantom.Workspaces.Llm;
 
+/// <summary>
+/// When changing filesystem toolset options, update the workspace
+/// documentation entity: <c>["documentation", "agent-options", "tools"]</c>.
+/// </summary>
 public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsyncDisposable
 {
     private readonly string stateKey = $"filesystem-service:{Guid.NewGuid():n}";

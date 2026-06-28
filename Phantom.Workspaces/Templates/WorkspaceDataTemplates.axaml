@@ -575,4 +575,7 @@
             </Border>
         </Grid>
     </DataTemplate>
+    <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
+        <templates:GitWorktreeReviewView />
+    </DataTemplate>
 </DataTemplates>

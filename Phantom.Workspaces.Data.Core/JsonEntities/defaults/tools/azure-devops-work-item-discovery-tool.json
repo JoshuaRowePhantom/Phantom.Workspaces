@@ -1,0 +1,9 @@
+{
+  "entity-id": "c4d5e6f7-a8b9-4c5d-0e1f-2a3b4c5d6e7f",
+  "entity-types": ["entity", "tool"],
+  "names": [
+    ["tools", "azure-devops-work-item-discovery"]
+  ],
+  "display-name": "Azure DevOps Work Item Discovery",
+  "tool-type": "azure-devops-work-item-discovery"
+}

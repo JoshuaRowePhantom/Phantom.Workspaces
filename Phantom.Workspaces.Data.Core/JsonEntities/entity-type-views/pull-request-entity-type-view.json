@@ -1,0 +1,11 @@
+{
+  "entity-id": "c4d8f0a2-5b3e-4f9c-ad7b-2e6a8b4c9f3d",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "pull-request"]],
+  "display-name": { "default": "Pull Request" },
+  "fields": [
+    { "field-path": ["status"] },
+    { "field-path": ["labels"] }
+  ],
+  "traversed-entity-display-disposition": "collapsed"
+}
