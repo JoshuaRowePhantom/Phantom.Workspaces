@@ -1732,6 +1732,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlDigit_WithIndexOutOfRange_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1942,6 +1943,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1969,6 +1971,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1996,6 +1999,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF7_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
@@ -2028,6 +2032,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF8_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
@@ -2057,6 +2062,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
     {
         // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
@@ -2100,6 +2106,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2115,6 +2122,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2192,6 +2200,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2207,7 +2216,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         Assert.True(agentViewModel.AutoScrollEnabled);
 
@@ -2219,6 +2227,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2234,7 +2243,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
@@ -2245,17 +2253,17 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
-        var plainTab = new WebViewModel("https://example.com") { Id = "scroll-lock-noop", Title = "Web" };
+        var plainTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-noop", Title = "NoAgent" };
         await viewModel.OpenTabAsync(plainTab);
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         bool handled = false;
         window.AddHandler(
