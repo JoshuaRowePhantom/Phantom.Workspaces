@@ -9,8 +9,8 @@ namespace Phantom.Workspaces.Data;
 /// </summary>
 /// <remarks>
 /// This data access layer expects UpdateRequests to have had merge processing already performed.
-/// Schemas are loaded fresh for each update from the request payload and the underlying IDataAccessLayer.
-/// This class does not cache schema content between update calls.
+/// Schemas are loaded from the request payload and the underlying IDataAccessLayer, then cached
+/// across calls. The cache is invalidated whenever a json-schema entity is successfully written.
 /// </remarks>
 public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLayer, IEntitySchemaComposer
 {
@@ -18,6 +18,8 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private static readonly string[] EntitySchemaNameComponents = { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" };
     private static readonly string EntitySchemaName = JsonSerializer.Serialize(EntitySchemaNameComponents);
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
+
+    private SchemaRegistry? _cachedSchemaRegistry;
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -61,7 +63,13 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             };
         }
 
-        return await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
+        var result = await this.UnderlyingDataAccessLayer.UpdateAsync(request, cancellationToken).ConfigureAwait(false);
+        if (request.Changes.Any(change => change.Data is { ValueKind: JsonValueKind.Object } data && this.IsSchemaEntity(data)))
+        {
+            _cachedSchemaRegistry = null;
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -203,7 +211,21 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         ISchemaAccessor schemaAccessor,
         CancellationToken cancellationToken)
     {
-        return schemaAccessor.BuildSchemaRegistryAsync(cancellationToken);
+        if (_cachedSchemaRegistry is { } cached)
+        {
+            return Task.FromResult(cached);
+        }
+
+        return BuildAndCacheSchemaRegistryAsync(schemaAccessor, cancellationToken);
+    }
+
+    private async Task<SchemaRegistry> BuildAndCacheSchemaRegistryAsync(
+        ISchemaAccessor schemaAccessor,
+        CancellationToken cancellationToken)
+    {
+        var registry = await schemaAccessor.BuildSchemaRegistryAsync(cancellationToken).ConfigureAwait(false);
+        _cachedSchemaRegistry = registry;
+        return registry;
     }
 
     private void TryAddSchemaEntityById(

@@ -967,9 +967,120 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
     }
 
-    private static EntityChange CreateSchemaEntityChange(
-        EntityId entityId,
-        string schemaName)
+    [Fact]
+    public async Task UpdateAsync_BuildsSchemaRegistryOnce_AcrossMultipleNonSchemaUpdates()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(inner)).Populate();
+        Assert.Empty(populationErrors);
+
+        var counter = new QueryCountingDataAccessLayer(inner);
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(counter);
+
+        var taskEntityId1 = new EntityId("a1b2c3d4-e5f6-4a7b-8c9d-000000000001");
+        var taskEntityId2 = new EntityId("a1b2c3d4-e5f6-4a7b-8c9d-000000000002");
+        var taskEntityId3 = new EntityId("a1b2c3d4-e5f6-4a7b-8c9d-000000000003");
+
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 1"), new[] { CreateTaskEntityChange(taskEntityId1) }));
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 2"), new[] { CreateTaskEntityChange(taskEntityId2) }));
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 3"), new[] { CreateTaskEntityChange(taskEntityId3) }));
+
+        Assert.Equal(1, counter.JsonSchemaQueryCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_InvalidatesCache_WhenJsonSchemaEntityIsWritten()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(inner)).Populate();
+        Assert.Empty(populationErrors);
+
+        var counter = new QueryCountingDataAccessLayer(inner);
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(counter);
+
+        var taskEntityId = new EntityId("b2c3d4e5-f6a7-4b8c-9d0e-000000000001");
+        var schemaEntityId = new EntityId("b2c3d4e5-f6a7-4b8c-9d0e-000000000002");
+        var taskEntityId2 = new EntityId("b2c3d4e5-f6a7-4b8c-9d0e-000000000003");
+        const string cacheTestSchemaName = "https://schemas.workspaces.phantom.to/tests/cache-invalidation.json";
+
+        // First non-schema write: warms the cache (count = 1)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("non-schema write"), new[] { CreateTaskEntityChange(taskEntityId) }));
+        Assert.Equal(1, counter.JsonSchemaQueryCount);
+
+        // Schema write: uses the cache for validation, then invalidates it on success (count stays 1)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("schema write"), new[] { CreateSchemaEntityChange(schemaEntityId, cacheTestSchemaName) }));
+        Assert.Equal(1, counter.JsonSchemaQueryCount);
+
+        // Second non-schema write: cache was invalidated, rebuilds (count = 2)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("non-schema write 2"), new[] { CreateTaskEntityChange(taskEntityId2) }));
+        Assert.Equal(2, counter.JsonSchemaQueryCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_CachedRegistry_ValidatesEntityCorrectly()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(inner)).Populate();
+        Assert.Empty(populationErrors);
+
+        var counter = new QueryCountingDataAccessLayer(inner);
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(counter);
+
+        const string cacheTestSchemaName2 = "https://schemas.workspaces.phantom.to/tests/cache-correctness.json";
+        var schemaEntityId2 = new EntityId("c3d4e5f6-a7b8-4c9d-0e1f-000000000001");
+        var validEntityId1 = new EntityId("c3d4e5f6-a7b8-4c9d-0e1f-000000000002");
+        var validEntityId2 = new EntityId("c3d4e5f6-a7b8-4c9d-0e1f-000000000003");
+
+        // Write schema (cache gets built and then invalidated)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("add schema"), new[] { CreateSchemaEntityChange(schemaEntityId2, cacheTestSchemaName2) }));
+
+        // Write first valid entity: cache rebuilds
+        var result1 = await dataAccessLayer.UpdateAsync(CreateUpdateRequest(CreateUpdateMetadata("valid entity 1"), new[] { CreateValidatedEntityChange(validEntityId1, "hello", cacheTestSchemaName2) }));
+        Assert.DoesNotContain(result1.EntityResults, static r => r.UpdateState == UpdateState.Failed);
+
+        // Write second valid entity: uses cached registry
+        var queryCountBeforeSecondWrite = counter.JsonSchemaQueryCount;
+        var result2 = await dataAccessLayer.UpdateAsync(CreateUpdateRequest(CreateUpdateMetadata("valid entity 2"), new[] { CreateValidatedEntityChange(validEntityId2, "world", cacheTestSchemaName2) }));
+        Assert.DoesNotContain(result2.EntityResults, static r => r.UpdateState == UpdateState.Failed);
+        Assert.Equal(queryCountBeforeSecondWrite, counter.JsonSchemaQueryCount);
+    }
+
+    private static EntityChange CreateTaskEntityChange(EntityId entityId)
+    {
+        using var entityDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tasks", "task-{{entityId}}"]]
+            }
+            """);
+        return CreateEntityChange(entityId, null, entityDocument.RootElement.Clone(), EntityChangeMode.Replace);
+    }
+
+    private sealed class QueryCountingDataAccessLayer : BaseUpdateProcessingDataAccessLayer
+    {
+        private int _jsonSchemaQueryCount;
+
+        public int JsonSchemaQueryCount => _jsonSchemaQueryCount;
+
+        public QueryCountingDataAccessLayer(IDataAccessLayer inner)
+            : base(inner)
+        {
+        }
+
+        public override async Task<QueryResult> QueryAsync(
+            QueryRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request.Clauses.Any(static c => c.ClauseIdentifier.Value == "json-schema"))
+            {
+                Interlocked.Increment(ref _jsonSchemaQueryCount);
+            }
+
+            return await base.QueryAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+    }
     {
         return CreateSchemaEntityChange(entityId, schemaName, "string");
     }
