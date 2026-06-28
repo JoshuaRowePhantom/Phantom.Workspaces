@@ -107,4 +107,61 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.NotNull(html);
         Assert.Contains("data-copy-target", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_RendersAsAnchorElement()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("Visit https://example.com for details"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("<a href", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_AnchorHasCorrectHref()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("Visit https://example.com for details"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("href=\"https://example.com\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_AnchorHasTargetBlank()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("https://example.com"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("target=\"_blank\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithHttpsUrl_AnchorHasRelNoopenerNoreferrer()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("https://example.com"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("rel=\"noopener noreferrer\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlainTextWithoutUrl_DoesNotRenderAnchorElement()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("Hello, no links here."), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("<a href", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MarkdownLinkSyntax_RendersAsAnchorWithTargetAndRel()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("[click here](https://example.com)"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("href=\"https://example.com\"", html, StringComparison.Ordinal);
+        Assert.Contains("target=\"_blank\"", html, StringComparison.Ordinal);
+        Assert.Contains("rel=\"noopener noreferrer\"", html, StringComparison.Ordinal);
+        Assert.Contains("click here", html, StringComparison.Ordinal);
+    }
 }
