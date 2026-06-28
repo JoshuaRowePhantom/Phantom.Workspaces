@@ -187,6 +187,30 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.InputQueue.DefaultComposer.SlashCommandInterceptorAsync = text =>
             this.RunSlashCommandAsync(contextFactory, text);
 
+        var rootHandler = new RootSlashCommandCompletionsHandler(this.agentChat.SlashCommands);
+        this.InputQueue.DefaultComposer.SlashCompletionsProviderAsync = (commandName, partialInput, ct) =>
+        {
+            if (string.IsNullOrEmpty(commandName))
+            {
+                // Root case: user is still typing the command name (no space yet).
+                // partialInput is the partial command name (or empty string for just "/").
+                return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(
+                    rootHandler.GetCompletions(partialInput));
+            }
+
+            var handler = this.agentChat.SlashCommands.Commands.FirstOrDefault(
+                c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase));
+
+            if (handler is null)
+            {
+                return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(
+                    Array.Empty<SlashCommandCompletion>());
+            }
+
+            var context = contextFactory();
+            return handler.GetCompletionsAsync(context, partialInput, ct);
+        };
+
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
             getValue: () => this.ShowChatInputHelpText,
             setValue: v => this.ShowChatInputHelpText = v));
