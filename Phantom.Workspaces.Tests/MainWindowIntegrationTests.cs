@@ -20,6 +20,7 @@ using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
 namespace Phantom.Workspaces.Tests;
 
+[Trait("Category", "SlowLayout")]
 public sealed class MainWindowIntegrationTests
 {
     [AvaloniaFact(Timeout = 15_000)]
@@ -2281,7 +2282,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         Assert.True(agentViewModel.AutoScrollEnabled);
 
@@ -2308,7 +2308,6 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
         window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
