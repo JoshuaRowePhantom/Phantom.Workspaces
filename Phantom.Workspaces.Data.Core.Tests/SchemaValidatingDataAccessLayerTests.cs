@@ -1081,6 +1081,10 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
             return await base.QueryAsync(request, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    private static EntityChange CreateSchemaEntityChange(
+        EntityId entityId,
+        string schemaName)
     {
         return CreateSchemaEntityChange(entityId, schemaName, "string");
     }
