@@ -1,4 +1,5 @@
-using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
 
 namespace Phantom.Workspaces.Tools;
@@ -16,15 +17,18 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     public const string TunnelNameProperty = "tunnel-name";
 
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider;
+    private readonly ILogger<RunVsCodeTunnelTool> logger;
     private readonly Func<string, string, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner;
     private readonly Func<string> defaultCliPathResolver;
 
     public RunVsCodeTunnelTool(
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
         Func<string, string, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner = null,
-        Func<string>? defaultCliPathResolver = null)
+        Func<string>? defaultCliPathResolver = null,
+        ILogger<RunVsCodeTunnelTool>? logger = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
+        this.logger = logger ?? NullLogger<RunVsCodeTunnelTool>.Instance;
         this.cliRunner = cliRunner;
         this.defaultCliPathResolver = defaultCliPathResolver ?? VsCodeCliLocator.ResolveDefaultCliPath;
     }
@@ -136,17 +140,16 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         return exitCode;
     }
 
-    private static async Task<(string Output, int ExitCode)> DefaultRunCliAsync(
+    private async Task<(string Output, int ExitCode)> DefaultRunCliAsync(
         string cliPath, string arguments, CancellationToken cancellationToken)
     {
-        var psi = VsCodeCliLocator.BuildProcessStartInfo(cliPath, arguments);
-
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start process: {cliPath}");
-
-        var output = await process.StandardOutput.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        return (output, process.ExitCode);
+        var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, arguments);
+        var result = await ProcessRunner.RunAndLogAsync(
+            parameters,
+            this.logger,
+            operationDescription: "vscode tunnel service log",
+            cancellationToken).ConfigureAwait(false);
+        return (result.StandardOut, result.ExitCode);
     }
 }
 

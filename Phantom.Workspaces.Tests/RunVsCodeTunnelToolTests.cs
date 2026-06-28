@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Phantom.Workspaces.Tools;
 using Xunit;
@@ -258,5 +259,22 @@ public sealed class RunVsCodeTunnelToolTests
         var result = await tool.ExecuteAsync(this.Context());
 
         Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_DefaultCli_ServiceLogNonZeroExit_LogsWarning()
+    {
+        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
+        // nonexistent_cli.cmd ends with .cmd, so BuildRunProcessParameters wraps it with
+        // cmd.exe /c, which exits non-zero (file not found). cmd.exe writes error to the
+        // redirected stderr handle so it does not bleed onto the test-host console.
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            defaultCliPathResolver: () => "nonexistent_cli.cmd",
+            logger: testLogger);
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
     }
 }
