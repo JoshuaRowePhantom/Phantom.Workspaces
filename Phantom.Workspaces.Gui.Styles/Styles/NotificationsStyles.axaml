@@ -10,6 +10,9 @@
         
         <!-- Notifications badge (unread count) -->
         <SolidColorBrush x:Key="Theme.Notifications.Badge.Foreground">Gold</SolidColorBrush>
+
+        <!-- Navigation highlight (F7/F8 keyboard navigation) -->
+        <SolidColorBrush x:Key="Theme.Notifications.Row.HighlightBackground">#285EA0FF</SolidColorBrush>
     </Styles.Resources>
 
     <Style Selector="Border.notifications-panel">
@@ -18,6 +21,10 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource Theme.Notifications.Panel.CornerRadius}" />
         <Setter Property="BoxShadow" Value="{DynamicResource Theme.Notifications.Panel.BoxShadow}" />
+    </Style>
+
+    <Style Selector="Border.interactive-row.highlighted">
+        <Setter Property="Background" Value="{DynamicResource Theme.Notifications.Row.HighlightBackground}" />
     </Style>
 
     <Style Selector="TextBlock.notification-unread-indicator">

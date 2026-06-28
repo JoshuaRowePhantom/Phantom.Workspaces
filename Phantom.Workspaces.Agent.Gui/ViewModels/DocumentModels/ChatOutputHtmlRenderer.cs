@@ -206,12 +206,13 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderMessage(
         string messageId,
         string roleLabel,
-        IReadOnlyList<(string ElementId, string Html)> contents)
+        IReadOnlyList<(string ElementId, string Html)> contents,
+        DateTimeOffset? timestamp = null)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
-        builder.Append(RenderHeader(messageId, roleLabel));
+        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -230,14 +231,25 @@ internal static class ChatOutputHtmlRenderer
     /// Returns an empty string for the <c>tool</c> role — results are bundled into the assistant
     /// message's tool-group hierarchy and need no separate role header.
     /// </summary>
-    public static string RenderHeader(string messageId, string roleLabel)
+    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
     {
         if (string.Equals(roleLabel, "tool", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }
 
-        return $"<div class=\"chat-header\" id=\"{HeaderId(messageId)}\" data-sticky-level=\"0\">[{HtmlEscape(roleLabel)}]</div>";
+        var builder = new StringBuilder();
+        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"0\">");
+        builder.Append("<span>[").Append(HtmlEscape(roleLabel)).Append("]</span>");
+        if (timestamp.HasValue)
+        {
+            builder.Append("<span class=\"chat-timestamp\" data-utc=\"")
+                .Append(timestamp.Value.ToString("O"))
+                .Append("\"></span>");
+        }
+
+        builder.Append("</div>");
+        return builder.ToString();
     }
 
     public static string RoleClass(string roleLabel)

@@ -62,7 +62,8 @@ internal sealed class ChatMessageHtmlModel
         return ChatOutputHtmlRenderer.RenderMessage(
             this.ElementId,
             roleLabel,
-            this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList());
+            this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
+            this.source.Timestamp);
     }
 
     public void Update(AgentChatHistoryItem newSource)

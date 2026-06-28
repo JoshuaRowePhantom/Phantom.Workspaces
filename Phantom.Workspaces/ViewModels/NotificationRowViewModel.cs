@@ -10,6 +10,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     private bool isSnoozed;
     private bool isRunning;
     private bool isInteresting;
+    private bool isHighlighted;
     private string heading;
     private string description;
     private DateTime when;
@@ -83,6 +84,12 @@ public sealed class NotificationRowViewModel : ViewModelBase
     {
         get => this.isSnoozed;
         set => this.SetProperty(ref this.isSnoozed, value);
+    }
+
+    public bool IsHighlighted
+    {
+        get => this.isHighlighted;
+        set => this.SetProperty(ref this.isHighlighted, value);
     }
 
     public string RelativeTime

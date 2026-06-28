@@ -3122,6 +3122,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var target = candidates[nextIndex];
         this.notificationService.MarkRead(target.TabKey);
         _ = this.NavigateToNotificationTabAsync(target.TabKey);
+        this.notificationsViewModel?.OpenWithHighlight(target.TabKey);
     }
 
     private async Task NavigateToNotificationTabAsync(string tabId)
