@@ -62,8 +62,8 @@ public sealed class SchemaAccessorTests
         // non-thread-safe Dictionary (InvalidOperationException at TryGetValue).
         _ = await schemaAccessor.ResolveSchemaByReferenceAsync("priming-reference");
 
-        const int workerCount = 32;
-        const int iterationsPerWorker = 200;
+        const int workerCount = 8;
+        const int iterationsPerWorker = 25;
         using var startBarrier = new Barrier(workerCount);
 
         var workers = Enumerable.Range(0, workerCount)

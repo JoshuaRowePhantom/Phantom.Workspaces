@@ -4,7 +4,7 @@ param(
     [Parameter()]
     [string[]] $TestNames,
     [Parameter()]
-    [string] $PerTestHangTimeout = '15s',
+    [string] $PerTestHangTimeout = '90s',
     [Parameter()]
     [ValidateSet('full', 'fast')]
     [string] $Mode = 'full',

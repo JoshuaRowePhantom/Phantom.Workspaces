@@ -3013,6 +3013,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public async ValueTask DisposeAsync()
     {
+        this.refreshTimer.Stop();
         this.notificationService.NotificationsChanged -= this.OnNotificationsChanged;
         this.dockFactory.ActiveDockableChanged -= this.OnActiveDockableChanged;
         this.notificationsViewModel?.Dispose();
