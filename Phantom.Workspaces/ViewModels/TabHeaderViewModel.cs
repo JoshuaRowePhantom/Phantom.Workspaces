@@ -17,6 +17,22 @@ public sealed class IconTabHeaderItemViewModel : TabHeaderItemViewModel
 }
 
 /// <summary>
+/// A tab header item that shows a favicon image, falling back to a globe glyph (🌐) when
+/// <see cref="FaviconUri"/> is <see langword="null"/>.  Set <see cref="FaviconUri"/> to the
+/// page's favicon URL once it has loaded.
+/// </summary>
+public sealed class FaviconTabHeaderItemViewModel : TabHeaderItemViewModel
+{
+    private string? faviconUri;
+
+    public string? FaviconUri
+    {
+        get => this.faviconUri;
+        set => this.SetProperty(ref this.faviconUri, value);
+    }
+}
+
+/// <summary>
 /// A tab header item that shows a pulsating brain icon while an agent is running.
 /// Set <see cref="IsRunning"/> to true while the agent is actively processing.
 /// </summary>

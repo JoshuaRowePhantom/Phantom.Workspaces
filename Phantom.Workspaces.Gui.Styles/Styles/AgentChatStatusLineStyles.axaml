@@ -21,6 +21,10 @@
         <Setter Property="Opacity" Value="0" />
     </Style>
 
+    <Style Selector="TextBlock.agent-chat-status-line-brain.idle">
+        <Setter Property="Opacity" Value="0.35" />
+    </Style>
+
     <Style Selector="TextBlock.agent-chat-status-line-brain.thinking">
         <Setter Property="Opacity" Value="1" />
         <Style.Animations>
