@@ -77,10 +77,24 @@
                                    ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
                     </Panel>
 
-                    <Button Classes="settings-gear"
-                            Content="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
-                            ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
-                            Click="OnOpenScheduledTasksClicked" />
+                    <Panel>
+                        <Button Classes="settings-gear"
+                                ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
+                                Click="OnOpenScheduledTasksClicked">
+                            <TextBlock Text="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
+                                       Classes.scheduled-tool-running="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}" />
+                        </Button>
+                        <TextBlock Text="❗"
+                                   Foreground="{DynamicResource Theme.Status.Bad}"
+                                   FontSize="9"
+                                   FontWeight="Bold"
+                                   IsHitTestVisible="False"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Top"
+                                   Margin="0,-2,-2,0"
+                                   IsVisible="{Binding ScheduledToolsRunning.HasFailure, FallbackValue=False}"
+                                   ToolTip.Tip="A scheduled tool run has failed" />
+                    </Panel>
 
                     <Panel>
                         <Button x:Name="NotificationBellButton"
