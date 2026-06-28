@@ -108,6 +108,34 @@ public sealed class ScheduledTasksViewModelTests
         Assert.False(viewModel.IsPaused);
     }
 
+    [AvaloniaFact]
+    public async Task ScheduledToolsRunning_IsNull_WhenNoHostProvided()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        using var viewModel = new ScheduledTasksViewModel(broker);
+
+        Assert.Null(viewModel.ScheduledToolsRunning);
+    }
+
+    [AvaloniaFact]
+    public async Task ScheduledToolsRunning_IsNotNull_WhenHostProvided()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var host = new Phantom.Workspaces.ScheduledTools.ScheduledToolHost(
+            broker.EntityRepository.DataAccessLayer,
+            new Phantom.Workspaces.ScheduledTools.ScheduledToolRegistry([]));
+
+        using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
+
+        Assert.NotNull(viewModel.ScheduledToolsRunning);
+    }
+
     private static async Task SeedAsync(
         EntityBroker broker,
         string json)

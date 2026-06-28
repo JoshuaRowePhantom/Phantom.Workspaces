@@ -12,6 +12,13 @@ public sealed record AgentChatHistoryItem
 
     public ChatRole Role { get; init; }
 
+    /// <summary>
+    /// UTC time at which this item was originally created.
+    /// <see langword="null"/> means the timestamp is unknown (e.g. loaded from legacy history that
+    /// predates timestamp support).
+    /// </summary>
+    public DateTimeOffset? Timestamp { get; init; }
+
     /// <summary>Structured content blocks for this turn.</summary>
     public IReadOnlyList<AIContent> Contents { get; init; } = [];
 }

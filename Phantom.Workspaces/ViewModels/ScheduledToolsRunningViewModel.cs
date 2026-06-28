@@ -34,6 +34,15 @@ public sealed class RunSummaryViewModel
 
     /// <summary>An optional error or summary message from the run's content.</summary>
     public string? Message { get; }
+
+    /// <summary>A single-character glyph representing the run status (✓, ✗, or ⏳).</summary>
+    public string StatusGlyph => this.Status switch
+    {
+        "succeeded" => "✓",
+        "failed" => "✗",
+        "running" => "⏳",
+        _ => "?",
+    };
 }
 
 /// <summary>
@@ -55,6 +64,7 @@ public sealed class ToolRowViewModel : ViewModelBase
         this.ToolType = toolType ?? throw new ArgumentNullException(nameof(toolType));
         this.Host = host ?? throw new ArgumentNullException(nameof(host));
         this.loadRecentRuns = loadRecentRuns ?? throw new ArgumentNullException(nameof(loadRecentRuns));
+        this.ExpandCommand = new RelayCommand(_ => this.OnExpandCommandExecuted());
     }
 
     /// <summary>The tool type discriminator.</summary>
@@ -85,6 +95,18 @@ public sealed class ToolRowViewModel : ViewModelBase
 
     /// <summary>True when the most-recent run failed.</summary>
     public bool HasFailure => this.lastRunStatus == "failed";
+
+    /// <summary>Toggles <see cref="IsExpanded"/> and loads recent runs when expanding.</summary>
+    public RelayCommand ExpandCommand { get; }
+
+    private void OnExpandCommandExecuted()
+    {
+        this.IsExpanded = !this.IsExpanded;
+        if (this.IsExpanded)
+        {
+            _ = this.LoadRecentRunsAsync(CancellationToken.None);
+        }
+    }
 
     /// <summary>Whether the run-history panel is expanded for this row.</summary>
     public bool IsExpanded
@@ -145,6 +167,9 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
     /// <summary>Whether any scheduled tool is currently running.</summary>
     public bool HasRunningTools => this.Tools.Any(t => t.IsRunning);
 
+    /// <summary>Whether any tool's most-recent completed run has failed.</summary>
+    public bool HasFailure => this.Tools.Any(t => t.HasFailure);
+
     private void OnRunningExecutionsChanged(object? sender, EventArgs e) => this.dispatch(this.Refresh);
 
     /// <summary>
@@ -178,10 +203,11 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
         }
 
         this.RaisePropertyChanged(nameof(this.HasRunningTools));
+        this.RaisePropertyChanged(nameof(this.HasFailure));
     }
 
     /// <summary>
-    /// Queries all top-level <c>tool-execution-result</c> entities and merges them into
+    /// Queries all top-level <c>tool-execution-result</c> entitiesand merges them into
     /// <see cref="Tools"/>, setting <see cref="ToolRowViewModel.LastRunStatus"/> on each row.
     /// </summary>
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
@@ -258,6 +284,7 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
         }
 
         this.RaisePropertyChanged(nameof(this.HasRunningTools));
+        this.RaisePropertyChanged(nameof(this.HasFailure));
     }
 
     private ToolRowViewModel CreateRow(string toolType, string host)

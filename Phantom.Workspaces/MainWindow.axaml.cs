@@ -139,5 +139,6 @@ public partial class MainWindow : Window
         await scheduledTasksViewModel.RefreshAsync();
         var scheduledTasksWindow = new ScheduledTasksWindow(scheduledTasksViewModel);
         await scheduledTasksWindow.ShowDialog(this);
+        scheduledTasksViewModel.Dispose();
     }
 }

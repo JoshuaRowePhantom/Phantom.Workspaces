@@ -163,42 +163,43 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_WithScanRoot_WhenPathDoesNotExist_FallsBackToLocalDrives()
+    public async Task Run_WithScanRoot_WhenPathDoesNotExist_LogsWarningAndProducesNoEntities()
     {
-        var repo = this.MakeRepo("project-a");
         var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var nonExistentPath = Path.Combine(this.scanRoot, "does-not-exist");
-        // scan-root is configured but the path is absent; local-drive fallback must fire.
+        // scan-root is configured but the path is absent; configured roots must be respected,
+        // no fallback to local drives.
         var context = WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
             $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(nonExistentPath)}} }""");
-        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: () => [this.scanRoot]);
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: Array.Empty<string>, logger: logger);
 
-        await tool.ExecuteAsync(context);
+        var result = await tool.ExecuteAsync(context);
 
-        var entities = await GitEntitiesAsync(dataAccessLayer);
-        var single = Assert.Single(entities);
-        Assert.Equal(repo, single.GetProperty("path").GetString());
+        Assert.Empty(await GitEntitiesAsync(dataAccessLayer));
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning);
     }
 
     [Fact]
-    public async Task Run_WithScanRoots_WhenAllPathsDoNotExist_FallsBackToLocalDrives()
+    public async Task Run_WithScanRoots_WhenAllPathsDoNotExist_LogsWarningAndProducesNoEntities()
     {
-        var repo = this.MakeRepo("project-a");
         var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var nonExistentA = Path.Combine(this.scanRoot, "gone-a");
         var nonExistentB = Path.Combine(this.scanRoot, "gone-b");
-        // All scan-roots are absent; local-drive fallback must fire.
+        // All scan-roots are absent; configured roots must be respected, no fallback to local drives.
         var context = WorkspaceToolExecutionContextTestFactory.Create(
             dataAccessLayer,
             $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-roots": [{{JsonSerializer.Serialize(nonExistentA)}}, {{JsonSerializer.Serialize(nonExistentB)}}] }""");
-        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: () => [this.scanRoot]);
+        var tool = new GitWorkspaceScanTool(localFixedDriveRootsProvider: Array.Empty<string>, logger: logger);
 
-        await tool.ExecuteAsync(context);
+        var result = await tool.ExecuteAsync(context);
 
-        var entities = await GitEntitiesAsync(dataAccessLayer);
-        var single = Assert.Single(entities);
-        Assert.Equal(repo, single.GetProperty("path").GetString());
+        Assert.Empty(await GitEntitiesAsync(dataAccessLayer));
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning);
     }
 
     [Fact]

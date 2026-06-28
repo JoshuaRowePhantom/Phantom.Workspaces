@@ -54,6 +54,7 @@ internal sealed class AgentChatHistoryService
             {
                 Role = ChatRole.User,
                 Contents = contents,
+                Timestamp = DateTimeOffset.UtcNow,
             };
 
             this.history.Add(nextItem);

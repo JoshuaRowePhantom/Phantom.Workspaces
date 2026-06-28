@@ -61,6 +61,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledTools.ScheduledToolPauseStateService? scheduledToolPauseStateService;
     private ScheduledTools.ScheduledToolRunner? scheduledToolRunner;
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
+    private ScheduledToolsRunningViewModel? scheduledToolsRunning;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -317,13 +318,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         private set => this.SetProperty(ref this.scheduledToolsPause, value);
     }
 
+    /// <summary>The running and historical tool executions for the main-window indicators.</summary>
+    public ScheduledToolsRunningViewModel? ScheduledToolsRunning
+    {
+        get => this.scheduledToolsRunning;
+        private set => this.SetProperty(ref this.scheduledToolsRunning, value);
+    }
+
     /// <summary>
     /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
     /// results tree), or returns null if the workspace has not finished initializing.
     /// </summary>
     internal ScheduledTasksViewModel? TryCreateScheduledTasksViewModel()
         => this.entityBroker is { } broker
-            ? new ScheduledTasksViewModel(broker, this.scheduledToolPauseStateService, this.HostProfileEntityId)
+            ? new ScheduledTasksViewModel(
+                broker,
+                this.scheduledToolPauseStateService,
+                this.HostProfileEntityId,
+                this.scheduledToolHost,
+                action => Dispatcher.UIThread.Post(action))
             : null;
 
     private EntityId HostProfileEntityId =>
@@ -388,6 +401,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.scheduledToolPauseStateService,
             hostEntityId,
             action => Dispatcher.UIThread.Post(action));
+
+        this.ScheduledToolsRunning = new ScheduledToolsRunningViewModel(
+            this.scheduledToolHost,
+            dataAccessLayer,
+            action => Dispatcher.UIThread.Post(action));
+        _ = this.ScheduledToolsRunning.RefreshHistoryAsync();
 
         this.scheduledToolRunner = ScheduledTools.ScheduledToolRunner.Create(
             this.scheduledToolHost,
@@ -2940,12 +2959,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var notifications = this.notificationService.Notifications;
         var candidates = notifications
             .Where(n => !n.IsRead)
-            .OrderByDescending(n => n.Timestamp)
+            .OrderByDescending(n => n.When)
             .ToList();
         if (candidates.Count == 0)
         {
             candidates = notifications
-                .OrderByDescending(n => n.Timestamp)
+                .OrderByDescending(n => n.When)
                 .ToList();
         }
         if (candidates.Count == 0) return;
@@ -3006,6 +3025,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         this.scheduledToolsPause?.Dispose();
+        this.scheduledToolsRunning?.Dispose();
 
         if (this.devTunnelHostService is not null)
         {

@@ -422,6 +422,7 @@ public sealed class AgentChat : IAsyncDisposable
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
                     Contents = [new TextContent(text)],
+                    Timestamp = DateTimeOffset.UtcNow,
                 });
             },
             CancellationToken.None,
@@ -509,6 +510,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = ChatRole.User,
                 Contents = message.Contents.ToArray(),
+                Timestamp = DateTimeOffset.UtcNow,
             };
 
             this.History.Add(nextItem);
@@ -533,6 +535,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = ChatRole.User,
                 Contents = message.Contents.ToArray(),
+                Timestamp = DateTimeOffset.UtcNow,
             });
         }
 
@@ -605,6 +608,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = message.Role,
                 Contents = message.Contents.ToArray(),
+                Timestamp = message.CreatedAt,
             });
         }
     }
@@ -832,7 +836,7 @@ public sealed class AgentChat : IAsyncDisposable
                 && snapshot[^1].Contents.OfType<ToolResultContent>().Any();
             if (lastIsToolResult)
             {
-                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant }];
+                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = DateTimeOffset.UtcNow }];
             }
 
             // Re-use the cached reference for each item whose content is structurally unchanged.
@@ -860,6 +864,7 @@ public sealed class AgentChat : IAsyncDisposable
                 {
                     Role = message.Role,
                     Contents = message.Contents.ToArray(),
+                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? DateTimeOffset.UtcNow,
                 })
                 .ToArray();
         }
@@ -970,6 +975,7 @@ public sealed class AgentChat : IAsyncDisposable
                     new AgentChatHistoryItem
                     {
                         Role = ChatRole.Assistant,
+                        Timestamp = DateTimeOffset.UtcNow,
                     }]);
 
                 // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
@@ -1046,6 +1052,7 @@ public sealed class AgentChat : IAsyncDisposable
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                                 Contents = [new TextContent("Interrupted by user.")],
+                                Timestamp = DateTimeOffset.UtcNow,
                             },
                         ])
                         .ToArray();
@@ -1062,6 +1069,7 @@ public sealed class AgentChat : IAsyncDisposable
                             {
                                 Role = ChatRole.Assistant,
                                 Contents = [new ErrorContent($"Provider error: {ex.Message}")],
+                                Timestamp = DateTimeOffset.UtcNow,
                             },
                         ])
                         .ToArray();
@@ -1360,6 +1368,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(this.GetEnabledRuntimeTools())) },
+                Timestamp = DateTimeOffset.UtcNow,
             });
             this.CompleteRunningItem(summaryRunningItem, true);
             this.ToolsChanged?.Invoke(this, EventArgs.Empty);
@@ -1370,6 +1379,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
+                Timestamp = DateTimeOffset.UtcNow,
             });
             this.CompleteRunningItem(startupRunningItem, true);
         }
@@ -1441,6 +1451,7 @@ public sealed class AgentChat : IAsyncDisposable
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
             Contents = new AIContent[] { new TextContent($"Initializing toolset '{displayName}'...") },
+            Timestamp = DateTimeOffset.UtcNow,
         });
 
         try
@@ -1463,6 +1474,7 @@ public sealed class AgentChat : IAsyncDisposable
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
                     Contents = new AIContent[] { new ErrorContent(errorText) },
+                    Timestamp = DateTimeOffset.UtcNow,
                 }]);
                 return new ToolInitializationResult([failedNode], []);
             }
@@ -1516,6 +1528,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("toolset", displayName, runtimeTools)) },
+                Timestamp = DateTimeOffset.UtcNow,
             }]);
             return new ToolInitializationResult([root], runtimeTools.ToList());
         }
@@ -1536,6 +1549,7 @@ public sealed class AgentChat : IAsyncDisposable
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
             Contents = new AIContent[] { new TextContent($"Initializing MCP server '{displayName}'...") },
+            Timestamp = DateTimeOffset.UtcNow,
         });
 
         try
@@ -1587,6 +1601,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("MCP server", displayName, mcpTools)) },
+                Timestamp = DateTimeOffset.UtcNow,
             }]);
             return new ToolInitializationResult([serverNode], mcpTools.Cast<AITool>().ToList());
         }
@@ -1597,6 +1612,7 @@ public sealed class AgentChat : IAsyncDisposable
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent(errorMessage) },
+                Timestamp = DateTimeOffset.UtcNow,
             }]);
 
             var failedNode = new ToolStateNode(
