@@ -272,13 +272,13 @@ public sealed class ViewHierarchyAssemblerTests
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
 
-        // Declare an entity-type-view for "workspace" that traverses "pull-request" entities via ancestor grouping.
+        // Declare an entity-type-view for "workspace" that traverses "task" entities via ancestor grouping.
         await SeedAsync(dataAccessLayer, """
             {
               "entity-types": ["entity", "entity-type-view"],
               "names": [["entity-type-views","workspace"]],
               "traverse-relationships": [
-                { "relationship-type": "ancestor", "entity-type-names": ["pull-request"], "name-prefix-length": 3 }
+                { "relationship-type": "ancestor", "entity-type-names": ["task"], "name-prefix-length": 3 }
               ]
             }
             """);
@@ -292,26 +292,26 @@ public sealed class ViewHierarchyAssemblerTests
             }
             """);
 
-        // Two pull-request entities sharing the same 3-segment prefix.
+        // Two task entities sharing the same 3-segment prefix, using multi-segment names.
         await SeedAsync(dataAccessLayer, """
             {
-              "entity-types": ["entity", "pull-request"],
-              "names": [["github", "org", "repo", "pulls", "1"]],
-              "display-name": { "default": "PR #1" }
+              "entity-types": ["entity", "task"],
+              "names": [["github", "org", "repo", "issues", "1"]],
+              "display-name": { "default": "Issue #1" }
             }
             """);
         await SeedAsync(dataAccessLayer, """
             {
-              "entity-types": ["entity", "pull-request"],
-              "names": [["github", "org", "repo", "pulls", "2"]],
-              "display-name": { "default": "PR #2" }
+              "entity-types": ["entity", "task"],
+              "names": [["github", "org", "repo", "issues", "2"]],
+              "display-name": { "default": "Issue #2" }
             }
             """);
 
         var roots = (await broker.GetEntitiesAsync([workspaceId], ct)).ToArray();
         var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
 
-        // workspace (root) → one ancestor group node for ["github","org","repo"] → PR #1 + PR #2
+        // workspace (root) → one ancestor group node for ["github","org","repo"] → Issue #1 + Issue #2
         var workspaceNode = Assert.Single(hierarchy);
         Assert.Equal(workspaceId, workspaceNode.Entity!.EntityId);
 
