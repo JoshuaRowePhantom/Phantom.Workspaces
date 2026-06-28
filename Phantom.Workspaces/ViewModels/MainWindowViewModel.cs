@@ -69,6 +69,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
     private bool isAltHeld;
+    private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
 
     public MainWindowViewModel(
@@ -168,6 +169,53 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         get => this.notificationsViewModel;
         private set => this.SetProperty(ref this.notificationsViewModel, value);
+    }
+
+    public NavigationStackPopupViewModel NavStackPopup =>
+        this.navStackPopup ??= new NavigationStackPopupViewModel(
+            this.navigationHistoryService,
+            tabId => this.GetTabTitle(tabId));
+
+    /// <summary>
+    /// Navigate directly to the history entry at <paramref name="historyIndex"/> without
+    /// pushing a new entry onto the navigation stack.
+    /// </summary>
+    public void NavigateToHistoryEntry(int historyIndex)
+    {
+        if (!this.navigationHistoryService.GoToIndex(historyIndex, out var entry) || entry is null)
+        {
+            return;
+        }
+
+        this.navigatingViaHistory = true;
+        try
+        {
+            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+        }
+        finally
+        {
+            this.navigatingViaHistory = false;
+        }
+    }
+
+    private string? GetTabTitle(string tabId)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null) continue;
+            foreach (var dockable in documentDock.VisibleDockables)
+            {
+                if (dockable is WorkspaceDocument doc &&
+                    string.Equals(doc.Id, tabId, StringComparison.Ordinal))
+                {
+                    return doc.Title;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

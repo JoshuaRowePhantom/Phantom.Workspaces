@@ -19,6 +19,7 @@ public class WebViewModel : WorkspaceTabViewModel
 
     private readonly IWorkspaceTabService? tabService;
     private readonly bool titleFixed;
+    private readonly FaviconTabHeaderItemViewModel faviconItem;
 
     public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null, bool titleFixed = false)
     {
@@ -32,7 +33,11 @@ public class WebViewModel : WorkspaceTabViewModel
         this.GoBackCommand = new RelayCommand(_ => this.GoBack(), _ => this.CanGoBack);
         this.GoForwardCommand = new RelayCommand(_ => this.GoForward(), _ => this.CanGoForward);
         this.OpenInExternalBrowserCommand = new RelayCommand(_ => this.OpenInExternalBrowser());
-        
+
+        this.faviconItem = new FaviconTabHeaderItemViewModel();
+        this.TabHeader = new TabHeaderViewModel { Title = string.Empty };
+        this.TabHeader.Items.Add(this.faviconItem);
+
         UpdateTooltip();
     }
 
@@ -169,6 +174,11 @@ public class WebViewModel : WorkspaceTabViewModel
         UpdateTooltip();
     }
     
+    public void SetFaviconUri(string? uri)
+    {
+        this.faviconItem.FaviconUri = uri;
+    }
+
     public void SetPageTitle(string pageTitle)
     {
         this.fullTitle = pageTitle;

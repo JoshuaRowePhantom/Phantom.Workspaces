@@ -27,7 +27,10 @@ public partial class MainWindow : Window
         this.Deactivated += (_, _) =>
         {
             if (this.DataContext is MainWindowViewModel vm)
+            {
                 vm.IsAltHeld = false;
+                vm.NavStackPopup.Dismiss();
+            }
         };
     }
 
@@ -38,10 +41,33 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            viewModel.NavStackPopup.OpenAtCurrentPosition();
+            return;
+        }
+
         if (e.Key is Key.LeftAlt or Key.RightAlt)
         {
             viewModel.IsAltHeld = true;
             return;
+        }
+
+        // Ctrl+Up / Ctrl+Down: move the nav-stack popup selection without navigating.
+        if (viewModel.NavStackPopup.IsOpen && e.KeyModifiers == KeyModifiers.Control)
+        {
+            if (e.Key == Key.Up)
+            {
+                viewModel.NavStackPopup.MoveSelectionUp();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Down)
+            {
+                viewModel.NavStackPopup.MoveSelectionDown();
+                e.Handled = true;
+                return;
+            }
         }
 
         // Ctrl+F7 / Ctrl+F8: non-interceptable notification navigation aliases.
@@ -175,6 +201,17 @@ public partial class MainWindow : Window
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
     {
         if (this.DataContext is not MainWindowViewModel viewModel) return;
+
+        if (e.Key is Key.LeftCtrl or Key.RightCtrl)
+        {
+            var historyIndex = viewModel.NavStackPopup.CommitAndBeginFade();
+            if (historyIndex >= 0)
+            {
+                viewModel.NavigateToHistoryEntry(historyIndex);
+            }
+            return;
+        }
+
         if (e.Key is Key.LeftAlt or Key.RightAlt)
             viewModel.IsAltHeld = false;
     }
