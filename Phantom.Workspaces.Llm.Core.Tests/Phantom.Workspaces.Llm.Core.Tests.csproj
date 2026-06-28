@@ -34,5 +34,6 @@
     <EmbeddedResource Include="..\docs\examples\qwen-local-github-mcp.json" Link="qwen-local-github-mcp.json" />
     <EmbeddedResource Include="..\docs\examples\github-models-chat.json" Link="github-models-chat.json" />
     <EmbeddedResource Include="..\docs\examples\github-copilot-chat.json" Link="github-copilot-chat.json" />
+    <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\workspaces-agent-manifest.json" Link="workspaces-agent-manifest.json" />
   </ItemGroup>
 </Project>

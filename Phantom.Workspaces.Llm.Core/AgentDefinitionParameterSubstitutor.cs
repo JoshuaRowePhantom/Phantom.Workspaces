@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using AgentSchema;
 
@@ -12,6 +13,7 @@ public static class AgentDefinitionParameterSubstitutor
         IReadOnlyDictionary<string, string>? parameterValues)
     {
         var resolvedValues = ResolveParameterValues(manifest, parameterValues);
+        var declaredParameterNames = GetDeclaredParameterNames(manifest);
 
         var template = manifest.Template
             ?? throw new InvalidOperationException("Agent manifest does not specify a template agent definition.");
@@ -19,19 +21,61 @@ public static class AgentDefinitionParameterSubstitutor
             ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
 
         if (definition is PromptAgent promptAgent
-            && promptAgent.Model?.Options?.AdditionalProperties is { } additionalProps
-            && resolvedValues.Count > 0)
+            && promptAgent.Model?.Options?.AdditionalProperties is { } additionalProps)
         {
             foreach (var key in new List<string>(additionalProps.Keys))
             {
-                if (additionalProps[key] is string strValue)
+                if (additionalProps[key] is not string strValue)
                 {
-                    additionalProps[key] = SubstitutePlaceholders(strValue, resolvedValues);
+                    continue;
+                }
+
+                if (resolvedValues.Count > 0)
+                {
+                    strValue = SubstitutePlaceholders(strValue, resolvedValues);
+                    additionalProps[key] = strValue;
+                }
+
+                // Remove keys whose entire value is an unresolved placeholder for a declared
+                // optional parameter (one that has no resolved value).
+                if (IsUnresolvedDeclaredPlaceholder(strValue, declaredParameterNames, resolvedValues))
+                {
+                    additionalProps.Remove(key);
                 }
             }
         }
 
         return definition;
+    }
+
+    private static HashSet<string> GetDeclaredParameterNames(AgentManifest manifest)
+    {
+        var parameters = manifest.Parameters?.Properties;
+        if (parameters is null || parameters.Count == 0)
+        {
+            return [];
+        }
+
+        return parameters
+            .Where(static p => p.Name is not null)
+            .Select(static p => p.Name!)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static bool IsUnresolvedDeclaredPlaceholder(
+        string value,
+        HashSet<string> declaredParameterNames,
+        IReadOnlyDictionary<string, string> resolvedValues)
+    {
+        var match = Regex.Match(value, @"^\$\{([^}]+)\}$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var paramName = match.Groups[1].Value;
+        return declaredParameterNames.Contains(paramName)
+            && !resolvedValues.ContainsKey(paramName);
     }
 
     private static IReadOnlyDictionary<string, string> ResolveParameterValues(
