@@ -61,41 +61,10 @@
                     </Button.Flyout>
                 </Button>
             </StackPanel>
-            <Border Grid.Column="2"
-                    Classes="queue-status-pill dynamic"
-                    IsVisible="{Binding IsDefaultComposer}">
-                <Button Classes="queue-action-button queue-status-picker-button">
-                    <Button.Flyout>
-                        <MenuFlyout Placement="BottomEdgeAlignedLeft">
-                            <MenuItem Command="{Binding SetQueueImmediacyCommand}"
-                                      CommandParameter="{Binding ImmediateImmediacyOption}"
-                                      Header="{Binding ImmediateImmediacyOption}"
-                                      Classes="queue-immediacy-menu-item">
-                            </MenuItem>
-                            <MenuItem Command="{Binding SetQueueImmediacyCommand}"
-                                      CommandParameter="{Binding QueuedImmediacyOption}"
-                                      Header="{Binding QueuedImmediacyOption}"
-                                      Classes="queue-immediacy-menu-item">
-                            </MenuItem>
-                            <MenuItem Command="{Binding SetQueueImmediacyCommand}"
-                                      CommandParameter="{Binding HeldImmediacyOption}"
-                                      Header="{Binding HeldImmediacyOption}"
-                                      Classes="queue-immediacy-menu-item">
-                            </MenuItem>
-                        </MenuFlyout>
-                    </Button.Flyout>
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="6"
-                                VerticalAlignment="Center">
-                        <TextBlock Text="{Binding SubmitStatusOption.Label}"
-                                   Classes="queue-immediacy-label queue-status-label"
-                                   />
-                        <TextBlock Text="▾"
-                                   Classes="queue-immediacy-caret queue-status-caret"
-                                   />
-                    </StackPanel>
-                </Button>
-            </Border>
+            <ContentControl Grid.Column="2"
+                            Content="{Binding}"
+                            ContentTemplate="{StaticResource QueueImmediacyPickerTemplate}"
+                            IsVisible="{Binding IsDefaultComposer}"/>
         </Grid>
         <TextBlock Text="{Binding ActiveHint}"
                    IsVisible="{Binding ShowHintText}"

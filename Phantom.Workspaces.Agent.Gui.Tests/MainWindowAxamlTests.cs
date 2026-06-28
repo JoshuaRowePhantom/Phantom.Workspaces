@@ -414,9 +414,8 @@ public sealed class MainWindowAxamlTests
     [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatInputQueueControl_NonDefaultQueueHeader_ContainsStatusPillBoundToSetImmediacyCommand()
     {
-        // Issue #127: non-default queue cards must show a status pill in the group header
-        // even when the composer is collapsed, bound to SetImmediacyCommand and
-        // SelectedImmediacyOption.Label so the user can see and change immediacy at all times.
+        // Issue #127 (updated by #162): the status pill is now a ContentControl delegating to
+        // QueueImmediacyPickerTemplate; the pill markup and its bindings live in QueueStyles.axaml.
         var content = ReadAxaml("AgentChatInputQueueControl.axaml");
 
         Assert.Contains(
@@ -424,11 +423,65 @@ public sealed class MainWindowAxamlTests
             content,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Command=\"{Binding SetImmediacyCommand}\"",
+            "ContentTemplate=\"{StaticResource QueueImmediacyPickerTemplate}\"",
+            content,
+            StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void QueueStyles_ContainsQueueImmediacyPickerTemplateWithAllBindings()
+    {
+        // Issue #162: QueueStyles.axaml must define the shared DataTemplate with all
+        // immediacy bindings so both call sites can reference QueueImmediacyPickerTemplate.
+        var content = ReadAgentGuiFile(Path.Combine("Styles", "QueueStyles.axaml"));
+
+        Assert.Contains(
+            "x:Key=\"QueueImmediacyPickerTemplate\"",
             content,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Text=\"{Binding SelectedImmediacyOption.Label}\"",
+            "IQueueImmediacyViewModel",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SetImmediacyCommand",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SelectedImmediacyOption.Label",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ImmediateImmediacyOption",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "QueuedImmediacyOption",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HeldImmediacyOption",
+            content,
+            StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void QueueComposerControl_StatusPill_UsesContentControlWithQueueImmediacyPickerTemplate()
+    {
+        // Issue #162: QueueComposerControl must delegate the pill to QueueImmediacyPickerTemplate
+        // via a ContentControl rather than inlining the pill markup.
+        var content = ReadAxaml("QueueComposerControl.axaml");
+
+        Assert.Contains(
+            "ContentTemplate=\"{StaticResource QueueImmediacyPickerTemplate}\"",
+            content,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsVisible=\"{Binding IsDefaultComposer}\"",
+            content,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Classes=\"queue-status-pill dynamic\"",
             content,
             StringComparison.Ordinal);
     }
