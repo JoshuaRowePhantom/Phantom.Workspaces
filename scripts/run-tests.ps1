@@ -26,6 +26,10 @@ $solutionPath = Join-Path $repoRoot 'Phantom.Workspaces.slnx'
 
 Set-Content -Path $TestResultsPath -Value '' -Encoding utf8
 
+# Remove stale crash dumps from previous runs
+Get-ChildItem -Path $repoRoot -Filter '*.dmp' -Recurse -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
 $dotnetArgs = @(
     'test',
     $solutionPath,
