@@ -2349,6 +2349,114 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_WorkspacesView_ShowsRelatedEntityNestedUnderWorkspace()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+
+        var workspaceId = new EntityId("a2b3c4d5-0001-4000-8000-000000000001");
+        var noteId = new EntityId("a2b3c4d5-0001-4000-8000-000000000002");
+        var relatedId = new EntityId("a2b3c4d5-0001-4000-8000-000000000003");
+
+        await SeedEntityAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "view-related-ws"]],
+              "display-name": { "default": "Related Workspace" },
+              "regions": []
+            }
+            """);
+        await SeedEntityAsync(entityBroker, noteId, $$"""
+            {
+              "entity-id": "{{noteId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "related-note"]],
+              "display-name": { "default": "Related Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "Related Note" } }
+            }
+            """);
+        await SeedEntityAsync(entityBroker, relatedId, $$"""
+            {
+              "entity-id": "{{relatedId}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "ws-note-related"]],
+              "participants": { "entities": ["{{workspaceId}}", "{{noteId}}"] }
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+        viewModel.SelectedTopLevelView = workspacesView;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+
+        var workspaceEntity = Assert.Single(
+            entities,
+            e => string.Equals(e.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, workspaceEntity.IndentLevel);
+
+        var noteEntity = Assert.Single(
+            entities,
+            e => string.Equals(e.EntityId, noteId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, noteEntity.IndentLevel);
+
+        var workspaceIndex = entities.ToList().FindIndex(e => string.Equals(e.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        var noteIndex = entities.ToList().FindIndex(e => string.Equals(e.EntityId, noteId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(workspaceIndex + 1, noteIndex);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_WorkspacesView_WorkspaceWithNoRelatedEntities_ShowsWorkspaceFlatOnly()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+
+        var workspaceId = new EntityId("a2b3c4d5-0002-4000-8000-000000000001");
+
+        await SeedEntityAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "view-flat-ws"]],
+              "display-name": { "default": "Flat Workspace" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+        viewModel.SelectedTopLevelView = workspacesView;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+
+        var workspaceEntity = Assert.Single(
+            entities,
+            e => string.Equals(e.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(0, workspaceEntity.IndentLevel);
+
+        Assert.DoesNotContain(entities, e => e.IndentLevel > 0);
+    }
+
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
     {
         const string echoAgentJson =
