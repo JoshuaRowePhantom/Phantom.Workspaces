@@ -36,10 +36,17 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         var discoveredWorktreePaths = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var scanRoot in scanRoots)
         {
+            this.logger.LogInformation("Scanning top-level directory: {Path}", scanRoot);
+            var countBefore = discoveredWorktreePaths.Count;
             foreach (var discoveredWorktreePath in DiscoverGitWorktreePaths(scanRoot))
             {
-                discoveredWorktreePaths.Add(discoveredWorktreePath);
+                if (discoveredWorktreePaths.Add(discoveredWorktreePath))
+                {
+                    this.logger.LogDebug("Found git repository: {RepoPath}", discoveredWorktreePath);
+                }
             }
+
+            this.logger.LogInformation("Found {Count} git repositories in {Path}", discoveredWorktreePaths.Count - countBefore, scanRoot);
         }
 
         foreach (var discoveredWorktreePath in discoveredWorktreePaths)
