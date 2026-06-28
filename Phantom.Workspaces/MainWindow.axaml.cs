@@ -198,6 +198,21 @@ public partial class MainWindow : Window
         scheduledTasksViewModel.Dispose();
     }
 
+    private async void OnOpenGitWorkspacesClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel
+            || viewModel.TryCreateGitWorkspacesViewModel() is not { } gitWorkspacesViewModel)
+        {
+            return;
+        }
+
+        await gitWorkspacesViewModel.RefreshAsync();
+        var gitWorkspacesWindow = new GitWorkspacesWindow(gitWorkspacesViewModel);
+        await gitWorkspacesWindow.ShowDialog(this);
+    }
+
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
     {
         if (this.DataContext is not MainWindowViewModel viewModel) return;
