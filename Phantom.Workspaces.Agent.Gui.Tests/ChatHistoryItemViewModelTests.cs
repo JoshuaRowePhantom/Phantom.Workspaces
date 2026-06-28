@@ -168,6 +168,7 @@ public sealed class ChatHistoryItemViewModelTests
     }
 
     [AvaloniaFact]
+    [Trait("Category", "SlowLayout")]
     public void Constructor_WithImageContent_ExposesAttachmentPreview()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -204,6 +205,7 @@ public sealed class ChatHistoryItemViewModelTests
     }
 
     [AvaloniaFact]
+    [Trait("Category", "SlowLayout")]
     public void Constructor_RenderableContents_IncludesAllContents()
     {
         var imageBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");

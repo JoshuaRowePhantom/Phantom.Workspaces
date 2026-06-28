@@ -244,6 +244,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
     public async Task VsCodeTunnelDiscoveryTool_DefaultCli_TunnelStatusNonZeroExit_LogsWarning()
     {
         var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
