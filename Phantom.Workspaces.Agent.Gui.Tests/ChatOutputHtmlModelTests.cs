@@ -615,6 +615,89 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("<details open", html, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── Cross-message tool-result injection tests (issue #154 bug fix) ────────
+
+    [Fact]
+    public void ToolResultMessage_CrossMessage_MatchedByCallId_InjectedIntoCallItem()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-1", "my_tool")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("call-1", "\"result data\"")],
+        });
+
+        var contentOps = sink.ContentOperations;
+
+        // The call message should be updated (Replace) to include the result sub-detail.
+        var updateOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Content.Contains("chat-tool-group-item"));
+        Assert.NotNull(updateOp);
+        Assert.Contains("chat-tool-result", updateOp.Content);
+
+        // No standalone "tool result:" element should appear as a separate DOM operation.
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("tool result:"));
+    }
+
+    [Fact]
+    public void ToolResultMessage_CrossMessage_Unmatched_RenderedStandalone()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Tool,
+                Contents = [new FunctionResultContent("orphan-id", "orphan result")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.DoesNotContain("chat-tool-group-item", op.Content);
+        Assert.DoesNotContain("chat-tool-group-wrapper", op.Content);
+    }
+
+    [Fact]
+    public void ToolResultMessage_CrossMessage_DoesNotTriggerMessageLevelGroup()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-1", "my_tool")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("call-1", "\"result data\"")],
+        });
+
+        var contentOps = sink.ContentOperations;
+
+        // No message-level chat-tool-group (ToolCallGroupHtmlModel) should be created.
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group-body"));
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group\""));
+    }
+
     [Fact]
     public void RenderContent_FunctionCallContent_EmitsDataDetailsTarget()
     {
