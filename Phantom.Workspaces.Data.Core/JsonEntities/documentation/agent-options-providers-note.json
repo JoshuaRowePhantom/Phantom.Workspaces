@@ -1,0 +1,23 @@
+{
+  "entity-id": "aedc8225-b517-46d5-9a13-e005008447cc",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-options",
+      "providers"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Options — Providers"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-options-providers.md"
+    }
+  }
+}

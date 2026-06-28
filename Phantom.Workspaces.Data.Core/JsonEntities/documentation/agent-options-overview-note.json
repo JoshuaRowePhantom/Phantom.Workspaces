@@ -1,0 +1,23 @@
+{
+  "entity-id": "868a1fab-b969-448a-9fb4-74d74f3ae931",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-options",
+      "overview"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Options — Overview"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-options-overview.md"
+    }
+  }
+}

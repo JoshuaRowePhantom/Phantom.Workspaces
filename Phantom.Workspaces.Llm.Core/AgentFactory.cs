@@ -23,6 +23,11 @@ namespace Phantom.Workspaces.Llm;
 /// Philosophy: configure all fields represented by the supported schema; if we need to
 /// support more definition fields/shapes, expand schema+mapping together.
 /// </summary>
+/// <remarks>
+/// When adding or changing a provider, model options, or connection kinds, update the workspace
+/// documentation entities: <c>["documentation", "agent-options", "providers"]</c> and
+/// <c>["documentation", "agent-options", "model-options"]</c>.
+/// </remarks>
 public static class AgentFactory
 {
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
