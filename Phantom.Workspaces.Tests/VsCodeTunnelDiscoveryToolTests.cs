@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Tools;
@@ -240,5 +241,24 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
 
         Assert.Equal(@"C:\fake\code.cmd", capturedCliPath);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_DefaultCli_TunnelStatusNonZeroExit_LogsWarning()
+    {
+        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        var testLogger = new TestLogger<VsCodeTunnelDiscoveryTool>();
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        // nonexistent_cli.cmd ends with .cmd, so BuildRunProcessParameters wraps it with
+        // cmd.exe /c, which exits non-zero (file not found). cmd.exe writes error to the
+        // redirected stderr handle so it does not bleed onto the test-host console.
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            defaultCliPathResolver: () => "nonexistent_cli.cmd",
+            logger: testLogger);
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+
+        Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
     }
 }
