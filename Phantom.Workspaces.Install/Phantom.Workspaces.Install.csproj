@@ -7,4 +7,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Phantom.Workspaces.Install.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
+  </ItemGroup>
 </Project>

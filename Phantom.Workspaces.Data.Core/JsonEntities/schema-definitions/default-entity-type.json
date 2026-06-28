@@ -1,0 +1,33 @@
+{
+  "entity-id": "b1d4f3a2-8c5e-4b7d-9f6a-1e2d3c4b5a6f",
+  "entity-display-order": 95,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/default.json"
+    ],
+    [
+      "entity-types",
+      "default"
+    ]
+  ],
+  "display-name": {
+    "default": "Default Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/default-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/default.json"
+  },
+  "default-name-prefixes": []
+}

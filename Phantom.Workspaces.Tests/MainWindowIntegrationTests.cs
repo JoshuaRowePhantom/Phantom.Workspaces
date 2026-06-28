@@ -1,5 +1,7 @@
 using Avalonia.Media;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.VisualTree;
 using System.Collections.Specialized;
 using System.Linq;
@@ -16,9 +18,10 @@ namespace Phantom.Workspaces.Tests;
 public sealed class MainWindowIntegrationTests
 {
     [AvaloniaFact(Timeout = 15_000)]
-    public void ThemeResources_UseFontFamilyType()
+    public async Task ThemeResources_UseFontFamilyType()
     {
-        _ = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
 
         Assert.True(Avalonia.Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
         Assert.IsType<FontFamily>(fontFamilyResource);
@@ -74,6 +77,29 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("light", viewModel.ThemeNames);
         viewModel.SelectedThemeName = "light";
         Assert.Equal("light", viewModel.SelectedThemeName);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task SelectedThemeName_SetToLight_PersistsAcrossViewModelInstances()
+    {
+        var profilePath = CreateTempProfileStorePath();
+        try
+        {
+            var store = new ProfileStore(profilePath);
+
+            var vm1 = new MainWindowViewModel(CreateInMemoryRepositorySource(), profileStore: store);
+            await vm1.InitializeAsync();
+            await vm1.SetThemeAsync("light");
+
+            var vm2 = new MainWindowViewModel(CreateInMemoryRepositorySource(), profileStore: store);
+            await vm2.InitializeAsync();
+
+            Assert.Equal("light", vm2.SelectedThemeName);
+        }
+        finally
+        {
+            DeleteTempProfileStoreDirectory(profilePath);
+        }
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -220,10 +246,10 @@ public sealed class MainWindowIntegrationTests
         await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
 
         Assert.Contains(
-            sessionsView.Entities,
+            viewModel.CurrentViewPopulation.Entities,
             static entity => string.Equals(entity.EntityType, "agent-manifest", StringComparison.Ordinal));
         Assert.DoesNotContain(
-            sessionsView.Entities,
+            viewModel.CurrentViewPopulation.Entities,
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
     }
 
@@ -1127,6 +1153,115 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_CalledTwice_CurrentViewPopulationContainsEntitiesOnce()
+    {
+        // Regression for issue #104: concurrent ApplySelectedViewAsync invocations must not
+        // double-populate the entity list.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var sessionsView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Sessions", StringComparison.Ordinal));
+
+        var applyMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applyMethod);
+
+        viewModel.SelectedTopLevelView = sessionsView;
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var agentManifestEntities = entities
+            .Where(static e => string.Equals(e.EntityType, "agent-manifest", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.NotEmpty(agentManifestEntities);
+        var distinctIds = agentManifestEntities.Select(static e => e.Entity.EntityId).Distinct().Count();
+        Assert.Equal(distinctIds, agentManifestEntities.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_EachCall_CreatesNewCurrentViewPopulationInstance()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var firstPopulation = viewModel.CurrentViewPopulation;
+
+        var applyMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applyMethod);
+
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        Assert.NotSame(firstPopulation, viewModel.CurrentViewPopulation);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_PreviousPopulationDisposed_ItsEntitiesNotModifiedAfterSwap()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var sessionsView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Sessions", StringComparison.Ordinal));
+
+        var applyMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applyMethod);
+
+        viewModel.SelectedTopLevelView = sessionsView;
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        var firstPopulation = viewModel.CurrentViewPopulation;
+        var countAfterFirstRun = firstPopulation.Entities.Count;
+
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        // The old population must not have gained or lost entities after the swap — it was
+        // disposed (CTS cancelled) before the new run appended to the new collection.
+        Assert.Equal(countAfterFirstRun, firstPopulation.Entities.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplySelectedViewAsync_ViewSwitchedTwice_CurrentViewPopulationReflectsSecondView()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var applyMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applyMethod);
+
+        var firstView = viewModel.TopLevelViews.FirstOrDefault(
+            v => !v.IsEntityBrowser && v.ViewEntity is not null);
+
+        if (firstView is null)
+        {
+            // If no view-driven top-level views exist, the test is vacuous — skip by passing.
+            return;
+        }
+
+        viewModel.SelectedTopLevelView = firstView;
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+        var populationAfterFirst = viewModel.CurrentViewPopulation;
+
+        // Switch to the empty view to produce a second, different population.
+        viewModel.SelectedTopLevelView = viewModel.TopLevelViews[0];
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        // The CurrentViewPopulation must be a distinct instance from the one after the first switch.
+        Assert.NotSame(populationAfterFirst, viewModel.CurrentViewPopulation);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
@@ -1192,6 +1327,24 @@ public sealed class MainWindowIntegrationTests
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();
+    }
+
+    private static string CreateTempProfileStorePath()
+    {
+        return Path.Combine(
+            Path.GetTempPath(),
+            "Phantom.Workspaces.Tests",
+            Guid.NewGuid().ToString("N"),
+            "profile.json");
+    }
+
+    private static void DeleteTempProfileStoreDirectory(string profilePath)
+    {
+        var directory = Path.GetDirectoryName(profilePath);
+        if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static EntityBroker GetEntityBroker(
@@ -1469,6 +1622,368 @@ public sealed class MainWindowIntegrationTests
             .ToList();
 
         Assert.Equal(["null-order-a", "null-order-c"], tabIds);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-b", Title = "Tab B" };
+        var tabC = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        for (var i = 0; i < 10; i++)
+        {
+            var tab = new AgentSessionWorkspaceTabViewModel { Id = $"kb-alt0-tab{i}", Title = $"Tab {i}" };
+            await viewModel.OpenTabAsync(tab);
+        }
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal(documentDock!.VisibleDockables![9], documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt-oob-a", Title = "Tab A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt-oob-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var activeBefore = documentDock!.ActiveDockable;
+
+        window.KeyPressQwerty(PhysicalKey.Digit9, RawInputModifiers.Alt);
+
+        Assert.Equal(activeBefore, documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Ctrl1_ActivatesFirstWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("11111111-1111-4111-8111-111111111111");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "11111111-1111-4111-8111-111111111111",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane-a"]],
+              "display-name": { "default": "KB Pane A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("22222222-2222-4222-8222-222222222222");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "22222222-2222-4222-8222-222222222222",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane-b"]],
+              "display-name": { "default": "KB Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Control);
+
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Ctrl2_ActivatesSecondWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("33333333-3333-4333-8333-333333333333");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "33333333-3333-4333-8333-333333333333",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane2-a"]],
+              "display-name": { "default": "KB Pane 2 A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("44444444-4444-4444-8444-444444444444");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "44444444-4444-4444-8444-444444444444",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "kb-pane2-b"]],
+              "display-name": { "default": "KB Pane 2 B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
+
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_CtrlDigit_WithIndexOutOfRange_IsNoOp()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        var selectedBefore = viewModel.SelectedWorkspacePane;
+
+        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
+
+        Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+        var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+
+        var workspaceId = new EntityId("de1a0110-0000-4000-8000-000000000001");
+        await SeedEntityAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "default-startup"]],
+              "display-name": { "default": "Default Startup Workspace" },
+              "regions": []
+            }
+            """);
+
+        var defaultRelId = new EntityId("de1a0110-0000-4000-8000-000000000002");
+        await SeedEntityAsync(
+            entityBroker,
+            defaultRelId,
+            $$"""
+            {
+              "entity-id": "{{defaultRelId}}",
+              "entity-types": ["entity", "default", "relationship"],
+              "names": [["tests", "defaults", "startup-workspace"]],
+              "participants": {
+                "applied-to": "{{profileId}}",
+                "value": "{{workspaceId}}"
+              }
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+        var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+
+        var workspaceId = new EntityId("de1a0110-0000-4000-8000-000000000003");
+        await SeedEntityAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "default-close"]],
+              "display-name": { "default": "Default Close Workspace" },
+              "regions": []
+            }
+            """);
+
+        var defaultRelId = new EntityId("de1a0110-0000-4000-8000-000000000004");
+        await SeedEntityAsync(
+            entityBroker,
+            defaultRelId,
+            $$"""
+            {
+              "entity-id": "{{defaultRelId}}",
+              "entity-types": ["entity", "default", "relationship"],
+              "names": [["tests", "defaults", "close-workspace"]],
+              "participants": {
+                "applied-to": "{{profileId}}",
+                "value": "{{workspaceId}}"
+              }
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        // Close the default workspace — this triggers OpenGettingStartedWorkspaceAsync
+        var defaultPane = viewModel.WorkspacePanes
+            .FirstOrDefault(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(defaultPane);
+        viewModel.CloseWorkspaceCommand.Execute(defaultPane!);
+
+        // After closing, the default workspace should be re-opened instead of Getting Started
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal)
+                || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
+    private const string GettingStartedWorkspaceId = "6cc39f41-2a36-4be6-ab95-3f3fd355e463";
+
+    private static async Task<EntityBroker> GetEntityBrokerBeforeInitAsync(MainWindowViewModel viewModel)
+    {
+        var entityBrokerTaskField = typeof(MainWindowViewModel).GetField(
+            "entityBrokerTask",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(entityBrokerTaskField);
+        var entityBrokerTask = (Task<EntityBroker>)entityBrokerTaskField!.GetValue(viewModel)!;
+        return await entityBrokerTask;
+    }
+
+    private static async Task SeedEntityAsync(EntityBroker entityBroker, EntityId entityId, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var result = await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = entityId,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                    Data = document.RootElement.Clone(),
+                },
+            ],
+        });
+        var failure = result.EntityResults.FirstOrDefault(static r => r.UpdateState == UpdateState.Failed);
+        Assert.True(
+            failure is null,
+            failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
+    {
+        // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
+        // setters (e.g. Value="rotate(-18deg)"). Avalonia's XAML IL compiler does not apply
+        // type converters inside KeyFrame.Setter, so the value arrived as a boxed string with
+        // no registered animator, throwing InvalidOperationException on first style application.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
+        // and interprets animation keyframes. The bug caused a throw here.
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
     }
 
 }

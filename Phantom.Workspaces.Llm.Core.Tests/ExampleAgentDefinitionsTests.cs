@@ -125,7 +125,7 @@ public class ExampleAgentDefinitionsTests
         var promptAgent = Assert.IsType<PromptAgent>(agent);
         Assert.NotNull(promptAgent.Tools);
 
-        var webRequestTool = Assert.Single(promptAgent.Tools!.OfType<CustomTool>().Where(t => t.Kind == "web_request"));
+        var webRequestTool = Assert.Single(promptAgent.Tools!.OfType<CustomTool>(), t => t.Kind == "web_request");
         Assert.Equal("web_request", webRequestTool.Kind);
     }
 
@@ -176,7 +176,7 @@ public class ExampleAgentDefinitionsTests
         var mcpTool = Assert.Single(promptAgent.Tools!.OfType<McpTool>());
         Assert.Equal("github", mcpTool.Name);
 
-        var webRequestTool = Assert.Single(promptAgent.Tools.OfType<CustomTool>().Where(t => t.Kind == "web_request"));
+        var webRequestTool = Assert.Single(promptAgent.Tools!.OfType<CustomTool>(), t => t.Kind == "web_request");
         Assert.Equal("web_request", webRequestTool.Kind);
     }
 

@@ -62,6 +62,7 @@ public sealed class StartupTaskServiceTests
     }
 
     [Fact]
+#pragma warning disable CA1416 // RealScheduledTasks is Windows-only; this test is Windows-specific
     public void BuildTaskRunCommand_QuotesExecutableAndAppendsArguments()
     {
         var command = RealScheduledTasks.BuildTaskRunCommand(new ScheduledTaskDefinition
@@ -73,4 +74,5 @@ public sealed class StartupTaskServiceTests
 
         Assert.Equal($"\"{CurrentExecutable}\" --startup", command);
     }
+#pragma warning restore CA1416
 }

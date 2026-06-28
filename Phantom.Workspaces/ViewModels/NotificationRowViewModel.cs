@@ -8,6 +8,10 @@ public sealed class NotificationRowViewModel : ViewModelBase
 {
     private bool isRead;
     private bool isSnoozed;
+    private bool isRunning;
+    private string heading;
+    private string description;
+    private DateTime when;
 
     public NotificationRowViewModel(
         NotificationEntry entry,
@@ -15,9 +19,11 @@ public sealed class NotificationRowViewModel : ViewModelBase
         ICommand snoozeCommand)
     {
         this.TabKey = entry.TabKey;
-        this.TabTitle = entry.TabDescriptor.TabId;
-        this.Reason = entry.Reason ?? string.Empty;
-        this.Timestamp = entry.Timestamp;
+        this.TabTitle = entry.TabDescriptor.TabTitle ?? entry.TabDescriptor.TabId;
+        this.heading = entry.Heading;
+        this.description = entry.Description;
+        this.when = entry.When;
+        this.isRunning = entry.IsRunning;
         this.isRead = entry.IsRead;
         this.isSnoozed = entry.IsSnoozed;
         this.NavigateCommand = navigateCommand;
@@ -26,8 +32,38 @@ public sealed class NotificationRowViewModel : ViewModelBase
 
     public string TabKey { get; }
     public string TabTitle { get; }
-    public string Reason { get; }
-    public DateTimeOffset Timestamp { get; }
+
+    public string Heading
+    {
+        get => this.heading;
+        set => this.SetProperty(ref this.heading, value);
+    }
+
+    public string Description
+    {
+        get => this.description;
+        set
+        {
+            if (this.SetProperty(ref this.description, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasDescription));
+            }
+        }
+    }
+
+    public bool HasDescription => !string.IsNullOrEmpty(this.Description);
+
+    public bool IsRunning
+    {
+        get => this.isRunning;
+        set => this.SetProperty(ref this.isRunning, value);
+    }
+
+    public DateTime When
+    {
+        get => this.when;
+        set => this.SetProperty(ref this.when, value);
+    }
 
     public bool IsRead
     {
@@ -45,7 +81,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     {
         get
         {
-            var elapsed = DateTimeOffset.UtcNow - this.Timestamp;
+            var elapsed = DateTime.UtcNow - this.When;
             if (elapsed.TotalSeconds < 60) return "just now";
             if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes} min ago";
             if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";
@@ -56,3 +92,4 @@ public sealed class NotificationRowViewModel : ViewModelBase
     public ICommand NavigateCommand { get; }
     public ICommand SnoozeCommand { get; }
 }
+

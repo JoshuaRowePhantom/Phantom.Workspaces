@@ -104,18 +104,21 @@ public sealed class AgentChatInputQueueControlKeyTests
     }
 
     [AvaloniaFact]
-    public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToNewQueue()
+    public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToCurrentQueue()
     {
         await using var chat = await CreateChatAsync();
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager)
         {
-            InputText = "hello new queue",
+            InputText = "hello ctrl enter",
         };
 
         var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Enter, KeyModifiers.Control);
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "ctrl+enter normal-mode submission to complete");
 
         Assert.True(handled);
-        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.Single(chat.InputQueues);
+        Assert.Equal(2, chat.History.Count);
+        Assert.Equal("hello ctrl enter", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
     [AvaloniaFact]
@@ -135,6 +138,33 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(2, chat.History.Count);
     }
 
+    [AvaloniaFact]
+    public async Task HandleInputKey_CtrlQ_WithEmptyComposer_ReturnsFalse()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        // Composer is empty — no text, no attachments
+        viewModel.InputText = string.Empty;
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Q, KeyModifiers.Control);
+
+        Assert.False(handled);
+        Assert.Empty(chat.History);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_CtrlQ_WithText_ReturnsTrue()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "route to most recent";
+
+        var handled = QueueComposerControl.HandleInputKey(viewModel.DefaultComposer, Key.Q, KeyModifiers.Control);
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "Ctrl+Q submission to complete");
+
+        Assert.True(handled);
+    }
+
     [Fact]
     public async Task PlaceholderText_DefaultComposer_ShowsShortcuts()
     {
@@ -143,7 +173,8 @@ public sealed class AgentChatInputQueueControlKeyTests
 
         Assert.Contains("Enter", viewModel.DefaultComposer.PlaceholderText);
         Assert.Contains("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
-        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Ctrl+Q", viewModel.DefaultComposer.PlaceholderText);
+        Assert.DoesNotContain("send to new queue", viewModel.DefaultComposer.PlaceholderText);
     }
 
     [Fact]
@@ -153,9 +184,11 @@ public sealed class AgentChatInputQueueControlKeyTests
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         viewModel.DefaultComposer.EnterFormattedMode();
 
-        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.PlaceholderText);
-        Assert.Contains("Esc", viewModel.DefaultComposer.PlaceholderText);
-        Assert.DoesNotContain("Shift+Enter", viewModel.DefaultComposer.PlaceholderText);
+        // Placeholder is simplified in formatted mode; shortcuts are in FormattedModeHint.
+        Assert.Equal("Multi-line mode", viewModel.DefaultComposer.PlaceholderText);
+        Assert.Contains("Ctrl+Enter", viewModel.DefaultComposer.FormattedModeHint);
+        Assert.Contains("Esc", viewModel.DefaultComposer.FormattedModeHint);
+        Assert.DoesNotContain("Shift+Enter", viewModel.DefaultComposer.FormattedModeHint);
     }
 
     [Fact]
@@ -169,6 +202,113 @@ public sealed class AgentChatInputQueueControlKeyTests
         viewModel.DefaultComposer.EnterFormattedMode();
 
         Assert.Contains(nameof(viewModel.DefaultComposer.PlaceholderText), changedProperties);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Escape_WhenCompletionsVisible_DismissesCompletions()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc")]);
+        Assert.True(composer.Completions.IsVisible);
+
+        var handled = QueueComposerControl.HandleInputKey(composer, Key.Escape, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.False(composer.Completions.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Enter_WhenCompletionsVisible_DoesNotSubmit()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+        composer.InputText = "hello";
+
+        composer.Completions.SetItems([new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc")]);
+
+        var handled = QueueComposerControl.HandleInputKey(composer, Key.Enter, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.Empty(chat.DefaultInputQueue.Items);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_WhenCompletionsVisible_AndNothingSelected_SelectsFirst()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("alpha", "/alpha", "desc"),
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("beta", "/beta", "desc"),
+        ]);
+
+        var handled = QueueComposerControl.HandleInputKey(composer, Key.Tab, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.Equal(0, composer.Completions.SelectedIndex);
+        Assert.True(composer.Completions.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_WhenItemSelected_AcceptsCompletionAndDismisses()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        var handled = QueueComposerControl.HandleInputKey(composer, Key.Tab, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.False(composer.Completions.IsVisible);
+        Assert.Equal("/working-directory", composer.InputText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Down_WhenCompletionsVisible_SelectsNext()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("alpha", "/alpha", "desc"),
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("beta", "/beta", "desc"),
+        ]);
+
+        var handled = QueueComposerControl.HandleInputKey(composer, Key.Down, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.Equal(0, composer.Completions.SelectedIndex);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Up_WhenCompletionsVisible_SelectsPrevious()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("alpha", "/alpha", "desc"),
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("beta", "/beta", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 1;
+
+        var handled = QueueComposerControl.HandleInputKey(composer, Key.Up, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.Equal(0, composer.Completions.SelectedIndex);
     }
 
     private static async Task WaitForConditionAsync(

@@ -44,7 +44,7 @@ public sealed class ToolExecutionResultWriterTests
         var time = new FixedTimeProvider();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, time);
 
-        var handle = await writer.StartAsync(HostName, "vector-indexer");
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
 
         var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
         Assert.Equal("vector-indexer", entity.GetProperty("tool-name").GetString());
@@ -66,16 +66,16 @@ public sealed class ToolExecutionResultWriterTests
         var time = new FixedTimeProvider();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, time);
 
-        var handle = await writer.StartAsync(HostName, "vector-indexer");
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
         time.Now = time.Now.AddMinutes(2);
-        await writer.CompleteAsync(handle, success: true, content: "indexed 5 entities");
+        await writer.CompleteAsync(handle, success: true, content: "indexed 5 entities", TestContext.Current.CancellationToken);
 
         var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
         Assert.Equal("succeeded", entity.GetProperty("status").GetString());
         Assert.True(entity.TryGetProperty("end-time", out _));
         Assert.Equal(
             "indexed 5 entities",
-            entity.GetProperty("content").GetProperty("default").GetProperty("text").GetString());
+            entity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString());
     }
 
     [Fact]
@@ -84,11 +84,47 @@ public sealed class ToolExecutionResultWriterTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, new FixedTimeProvider());
 
-        var handle = await writer.StartAsync(HostName, "vector-indexer");
-        await writer.CompleteAsync(handle, success: false);
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
+        await writer.CompleteAsync(handle, success: false, cancellationToken: TestContext.Current.CancellationToken);
 
         var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
         Assert.Equal("failed", entity.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_WithContent_PassesSchemaValidation()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var time = new FixedTimeProvider();
+        var writer = new ToolExecutionResultWriter(dataAccessLayer, time);
+
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
+        time.Now = time.Now.AddMinutes(1);
+
+        // Must not throw (schema validation must pass)
+        await writer.CompleteAsync(handle, success: true, content: "done", TestContext.Current.CancellationToken);
+
+        var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
+
+        var entityTypes = entity.GetProperty("entity-types").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("note", entityTypes);
+
+        Assert.Equal(
+            "done",
+            entity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task StartAsync_RunningState_DoesNotIncludeNoteEntityType()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var writer = new ToolExecutionResultWriter(dataAccessLayer, new FixedTimeProvider());
+
+        var handle = await writer.StartAsync(HostName, "vector-indexer", TestContext.Current.CancellationToken);
+
+        var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
+        var entityTypes = entity.GetProperty("entity-types").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.DoesNotContain("note", entityTypes);
     }
 
     [Fact]
@@ -97,8 +133,8 @@ public sealed class ToolExecutionResultWriterTests
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, new FixedTimeProvider());
 
-        var parent = await writer.StartAsync(HostName, "entity-classifier");
-        var child = await writer.StartChildAsync(parent, "classify-entity-42");
+        var parent = await writer.StartAsync(HostName, "entity-classifier", TestContext.Current.CancellationToken);
+        var child = await writer.StartChildAsync(parent, "classify-entity-42", TestContext.Current.CancellationToken);
 
         var entity = await ReadEntityAsync(dataAccessLayer, child.EntityId);
         var name = FirstName(entity);

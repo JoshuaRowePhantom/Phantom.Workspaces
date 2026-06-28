@@ -29,29 +29,36 @@ public sealed class AgentSessionNotificationTests
 
     private sealed class FakeNotificationService : INotificationService
     {
-        private readonly List<(TabDescriptor Tab, string? Reason)> calls = [];
+        private readonly List<Notification> calls = [];
 
         public string? ActiveTabId { get; set; }
 
         public IReadOnlyList<NotificationEntry> Notifications => [];
 
+        public bool HasActiveRun { get; private set; }
+
+#pragma warning disable CS0067 // Required by INotificationService but never raised in this fake
         public event EventHandler? NotificationsChanged;
+#pragma warning restore CS0067
 
-        public IReadOnlyList<(TabDescriptor Tab, string? Reason)> Calls => this.calls;
+        public IReadOnlyList<Notification> Calls => this.calls;
 
-        public void Notify(TabDescriptor tab, string? reason)
+        public void Notify(Notification notification)
         {
             lock (this.calls)
             {
-                this.calls.Add((tab, reason));
+                this.calls.Add(notification);
             }
 
-            this.NotifyCallReceived?.Invoke(tab, reason);
+            this.HasActiveRun = notification.RunningState == RunningState.Running;
+            this.NotifyCallReceived?.Invoke(notification);
         }
+
+        public void Remove(string tabId) { }
 
         public void MarkRead(string tabId) { }
 
-        public event Action<TabDescriptor, string?>? NotifyCallReceived;
+        public event Action<Notification>? NotifyCallReceived;
     }
 
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
@@ -103,9 +110,9 @@ public sealed class AgentSessionNotificationTests
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        notificationService.NotifyCallReceived += (tab, reason) =>
+        notificationService.NotifyCallReceived += notification =>
         {
-            if (reason is not null)
+            if (notification.RunningState == RunningState.Idle)
             {
                 notifyTcs.TrySetResult();
             }
@@ -128,25 +135,26 @@ public sealed class AgentSessionNotificationTests
 
         lock (notificationService.Calls)
         {
-            Assert.Contains(notificationService.Calls, call => call.Reason is not null && call.Tab.TabId == "agent-tab-1");
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Idle && call.TabDescriptor.TabId == "agent-tab-1");
         }
     }
 
     [Fact]
-    public async Task AgentSessionNotification_WhenAgentIsActiveTab_NotificationReasonStillPassedToService()
+    public async Task AgentSessionNotification_WhenAgentIsActiveTab_NotificationStillPassedToService()
     {
         // INotificationService.Notify is always called — it is the service's responsibility
         // to mark the notification read when the tab is active.  This test verifies that
-        // AgentSessionWorkspaceTabViewModel passes the reason through unconditionally.
+        // AgentSessionWorkspaceTabViewModel passes the notification through unconditionally.
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
         await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "agent-tab-active" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        notificationService.NotifyCallReceived += (tab, reason) =>
+        notificationService.NotifyCallReceived += notification =>
         {
-            if (reason is not null)
+            if (notification.RunningState == RunningState.Idle)
             {
                 notifyTcs.TrySetResult();
             }
@@ -169,12 +177,13 @@ public sealed class AgentSessionNotificationTests
 
         lock (notificationService.Calls)
         {
-            Assert.Contains(notificationService.Calls, call => call.Reason is not null && call.Tab.TabId == "agent-tab-active");
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Idle && call.TabDescriptor.TabId == "agent-tab-active");
         }
     }
 
     [Fact]
-    public async Task AgentSessionNotification_WhenAgentStartsNewRun_ClearsNotification()
+    public async Task AgentSessionNotification_WhenAgentStartsNewRun_PostsRunningNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
@@ -190,11 +199,11 @@ public sealed class AgentSessionNotificationTests
         };
         tab.SetReady(agentViewModel, loggerFactory);
 
-        // First run — agent becomes idle → notification posted.
+        // First run — agent becomes idle → idle notification posted.
         var firstIdleTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        notificationService.NotifyCallReceived += (tab, reason) =>
+        notificationService.NotifyCallReceived += notification =>
         {
-            if (reason is not null)
+            if (notification.RunningState == RunningState.Idle)
             {
                 firstIdleTcs.TrySetResult();
             }
@@ -207,27 +216,71 @@ public sealed class AgentSessionNotificationTests
         cts1.Token.Register(() => firstIdleTcs.TrySetCanceled());
         await firstIdleTcs.Task;
 
-        // Second run — agent starts processing → clear (null reason) should be called.
-        var clearTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        notificationService.NotifyCallReceived += (tabDesc, reason) =>
+        // Second run — agent starts → running notification should be posted.
+        var runningTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
         {
-            if (reason is null && tabDesc.TabId == "agent-tab-2")
+            if (notification.RunningState == RunningState.Running
+                && notification.NotificationState == NotificationState.Interesting
+                && notification.TabDescriptor.TabId == "agent-tab-2")
             {
-                clearTcs.TrySetResult();
+                runningTcs.TrySetResult();
             }
         };
 
         agentChat.EnqueueUserMessage("hello again");
 
         using var cts2 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
-        cts2.Token.Register(() => clearTcs.TrySetCanceled());
-        await clearTcs.Task;
+        cts2.Token.Register(() => runningTcs.TrySetCanceled());
+        await runningTcs.Task;
 
         lock (notificationService.Calls)
         {
-            Assert.Contains(notificationService.Calls, call => call.Reason is null && call.Tab.TabId == "agent-tab-2");
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running
+                && call.NotificationState == NotificationState.Interesting
+                && call.TabDescriptor.TabId == "agent-tab-2");
         }
 
         await WaitForRunningItemsEmptyAsync(agentChat);
+    }
+
+    [Fact]
+    public async Task AgentSessionNotification_WhenAgentGoesIdle_TabDescriptorHasTabTitleFromViewModelTitle()
+    {
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Idle)
+            {
+                notifyTcs.TrySetResult();
+            }
+        };
+
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab-title-test",
+            Title = "My Full Agent Title",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        timeoutCts.Token.Register(() => notifyTcs.TrySetCanceled());
+        await notifyTcs.Task;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls,
+                call => call.RunningState == RunningState.Idle && call.TabDescriptor.TabTitle == "My Full Agent Title");
+        }
     }
 }

@@ -1,11 +1,11 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             x:Class="Phantom.Workspaces.Agent.Gui.App"
-             RequestedThemeVariant="Dark">
+             x:Class="Phantom.Workspaces.Agent.Gui.App">
     <Application.Styles>
         <FluentTheme />
-        <StyleInclude Source="avares://Avalonia.Controls.RichTextEditor/Themes/Default.axaml" />
+
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
         <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SlashCompletionsStyles.axaml" />
     </Application.Styles>
 </Application>

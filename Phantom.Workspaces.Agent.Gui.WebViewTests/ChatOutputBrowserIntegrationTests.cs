@@ -179,6 +179,111 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
         });
 
+    [Fact]
+    public Task CopyGutter_BlockWithDataCopyTarget_InjectsCopyButton()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithCopyTarget("cg-0", "copy me")));
+
+                var present = await EvalAsync(
+                    web,
+                    "document.querySelector('#cg-0 .copy-gutter-btn') !== null");
+                Assert.Contains("true", present, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task CopyGutter_CopyButton_DefaultOpacityIsZero()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithCopyTarget("cg-1", "hidden button")));
+
+                var opacity = await EvalAsync(
+                    web,
+                    "getComputedStyle(document.querySelector('#cg-1 .copy-gutter-btn')).opacity");
+                Assert.Contains("0", opacity, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task CopyGutter_NewBlockAddedDynamically_InjectsCopyButton()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                // Inject a block after initial load — MutationObserver must pick it up.
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithCopyTarget("cg-2", "dynamic block")));
+
+                var present = await EvalAsync(
+                    web,
+                    "document.querySelector('#cg-2 .copy-gutter-btn') !== null");
+                Assert.Contains("true", present, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task CopyGutter_ClickButton_CopiesBlockTextToClipboard()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                // Set up a synchronous clipboard mock so the captured text is readable immediately.
+                await EvalAsync(
+                    web,
+                    "window._clipboardCapture = '';"
+                    + "Object.defineProperty(navigator, 'clipboard', {"
+                    + "  value: { writeText: function(t) { window._clipboardCapture = t; return Promise.resolve(); } },"
+                    + "  configurable: true"
+                    + "});");
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithCopyTarget("cg-3", "clipboard text")));
+
+                // The InvokeScript queue guarantees the previous PostMessage delivery
+                // script has completed (and MutationObserver has fired) before this eval runs.
+                var captured = await EvalAsync(
+                    web,
+                    "document.querySelector('#cg-3 .copy-gutter-btn').click();"
+                    + "window._clipboardCapture");
+                Assert.Contains("clipboard text", captured, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static async Task<(ControllableWebViewControl Web, Window Window)> ShowReadyBrowserAsync()
     {
         var web = new ControllableWebViewControl();
@@ -209,6 +314,13 @@ public sealed class ChatOutputBrowserIntegrationTests
             + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
             + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
             + $"<div class=\"chat-content chat-text\" id=\"{id}-c0\">{text}</div>"
+            + "</div></div>";
+
+    private static string MessageWithCopyTarget(string id, string text)
+        => $"<div class=\"chat-message\" id=\"{id}\">"
+            + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
+            + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
+            + $"<div class=\"chat-content chat-text\" data-copy-target id=\"{id}-c0\">{text}</div>"
             + "</div></div>";
 
     private static string LoadShellHtml()

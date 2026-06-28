@@ -5,6 +5,22 @@
              x:DataType="vm:QueueComposerViewModel"
              Classes="queue-composer-root">
     <StackPanel Spacing="6">
+        <Border IsVisible="{Binding Completions.IsVisible}" Classes="slash-completions-popup">
+            <ItemsControl ItemsSource="{Binding Completions.Items}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SlashCompletionItemViewModel">
+                        <Border Classes="slash-completion-item"
+                                Classes.selected="{Binding IsSelected}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{Binding Label}" FontWeight="{Binding LabelWeight}" />
+                                <TextBlock Text="{Binding Description}" Classes="muted caption"
+                                           IsVisible="{Binding HasDescription}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
         <Grid ColumnDefinitions="*,Auto,Auto"
               ColumnSpacing="8">
             <TextBox x:Name="InputBox"
@@ -46,7 +62,8 @@
                 </Button>
             </StackPanel>
             <Border Grid.Column="2"
-                    Classes="queue-status-pill dynamic">
+                    Classes="queue-status-pill dynamic"
+                    IsVisible="{Binding IsDefaultComposer}">
                 <Button Classes="queue-action-button queue-status-picker-button">
                     <Button.Flyout>
                         <MenuFlyout Placement="BottomEdgeAlignedLeft">
@@ -80,6 +97,10 @@
                 </Button>
             </Border>
         </Grid>
+        <TextBlock Text="{Binding FormattedModeHint}"
+                   IsVisible="{Binding FormattedModeHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   Classes="caption muted"
+                   Margin="4,0,0,0" />
         <ItemsControl ItemsSource="{Binding AttachmentPreviews}"
                       IsVisible="{Binding HasAttachments}">
             <ItemsControl.ItemsPanel>

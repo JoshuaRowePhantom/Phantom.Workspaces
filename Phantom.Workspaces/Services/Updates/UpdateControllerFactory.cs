@@ -55,7 +55,9 @@ public static class UpdateControllerFactory
             layout,
             runningVersion,
             ResolveAssetMoniker());
+#pragma warning disable CA1416 // RealScheduledTasks is Windows-only; this path is only reached on Windows
         var startupTaskService = new StartupTaskService(new RealScheduledTasks(), layout.CurrentExecutablePath);
+#pragma warning restore CA1416
         var processLauncher = new RealProcessLauncher();
 
         return new UpdateController(

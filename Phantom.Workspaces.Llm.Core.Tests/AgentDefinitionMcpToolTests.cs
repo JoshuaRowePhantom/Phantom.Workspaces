@@ -82,7 +82,7 @@ public sealed class AgentDefinitionMcpToolTests
         """);
 
         var prompt = Assert.IsType<PromptAgent>(agent);
-        var tool = Assert.Single(prompt.Tools);
+        var tool = Assert.Single(prompt.Tools!);
         var mcpTool = Assert.IsType<McpTool>(tool);
 
         Assert.Equal("filesystem", mcpTool.Name);
@@ -161,7 +161,7 @@ public sealed class AgentDefinitionMcpToolTests
         """);
 
         var prompt = Assert.IsType<PromptAgent>(agent);
-        var tool = Assert.Single(prompt.Tools);
+        var tool = Assert.Single(prompt.Tools!);
         var mcpTool = Assert.IsType<McpTool>(tool);
 
         Assert.Equal("github", mcpTool.Name);

@@ -1,6 +1,6 @@
 using System;
 using System.ComponentModel;
-using System.Diagnostics;
+using Phantom.Workspaces;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -16,7 +16,7 @@ public static class GitHubAuthTokenResolver
     /// <summary>The predefined environment variable that holds a GitHub token when present.</summary>
     public const string GitHubTokenEnvironmentVariable = "GITHUB_TOKEN";
 
-    private const int GitHubCliTimeoutMilliseconds = 10000;
+    private static readonly TimeSpan GitHubCliTimeout = TimeSpan.FromMilliseconds(10_000);
 
     /// <summary>
     /// Resolves the GitHub token from <c>GITHUB_TOKEN</c>, falling back to <c>gh auth token</c>.
@@ -39,43 +39,25 @@ public static class GitHubAuthTokenResolver
     /// </summary>
     public static string? ResolveFromCli()
     {
-        Process? process;
         try
         {
-            process = Process.Start(new ProcessStartInfo
-            {
-                FileName = "gh",
-                Arguments = "auth token",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
-        }
-        catch (Win32Exception)
-        {
-            return null;
-        }
+            var result = ProcessRunner.RunProcessAsync(
+                new RunProcessParameters(
+                    Command: "gh",
+                    Arguments: ["auth", "token"],
+                    Timeout: GitHubCliTimeout))
+                .GetAwaiter().GetResult();
 
-        if (process is null)
-        {
-            return null;
-        }
-
-        using (process)
-        {
-            if (!process.WaitForExit(GitHubCliTimeoutMilliseconds))
-            {
-                process.Kill(entireProcessTree: true);
-                throw new InvalidOperationException("Timed out while resolving GITHUB_TOKEN via 'gh auth token'.");
-            }
-
-            if (process.ExitCode != 0)
+            if (result.ExitCode != 0)
             {
                 return null;
             }
 
-            return process.StandardOutput.ReadToEnd().Trim();
+            return result.StandardOut.Trim();
+        }
+        catch (Win32Exception)
+        {
+            return null;
         }
     }
 }

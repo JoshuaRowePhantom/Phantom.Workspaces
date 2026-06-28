@@ -44,8 +44,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private SubscribedEntityViewModel? mainNavigationView;
     private readonly ProfileStore profileStore;
     private readonly DispatcherTimer refreshTimer;
-    private readonly List<SubscribedGet> selectedViewSubViewSubscriptions = [];
-    private readonly List<SubscribedQuery> selectedViewSubViewQuerySubscriptions = [];
+    private ViewPopulationViewModel currentPopulation = new();
     private readonly ShortcutManager shortcutManager = new();
     private EntityClickShortcutHandler? entityClickShortcutHandler;
     private OpenAgentSessionShortcutHandler? openAgentSessionShortcutHandler;
@@ -62,6 +61,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledTools.ScheduledToolPauseStateService? scheduledToolPauseStateService;
     private ScheduledTools.ScheduledToolRunner? scheduledToolRunner;
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
+    private ScheduledToolsRunningViewModel? scheduledToolsRunning;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -69,14 +69,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
-        WorkspacesConfiguration? configuration = null)
+        WorkspacesConfiguration? configuration = null,
+        ProfileStore? profileStore = null)
     {
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
             repositorySource,
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
-        this.profileStore = ProfileStore.ForCurrentUser();
+        this.profileStore = profileStore ?? ProfileStore.ForCurrentUser();
 
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>();
@@ -96,8 +97,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
-        this.ApplyThemeResources(this.currentProfile.Theme);
-        this.ApplyThemeVariant(this.currentProfile.Theme.Name);
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
@@ -110,6 +109,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity
@@ -206,7 +206,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 return;
             }
 
-            _ = this.SetThemeAsync(normalizedThemeName);
+            _ = this.SetThemeAsync(normalizedThemeName).ContinueWith(
+                static t => Dispatcher.UIThread.Post(() =>
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(
+                        t.Exception!.InnerException ?? t.Exception!)),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
         }
     }
 
@@ -259,6 +265,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         _ => "In-memory repository source.",
     };
 
+    public ViewPopulationViewModel CurrentViewPopulation
+    {
+        get => this.currentPopulation;
+        private set
+        {
+            if (!this.SetProperty(ref this.currentPopulation, value))
+            {
+                return;
+            }
+
+            this.RaisePropertyChanged(nameof(this.HasStickyParentContext));
+        }
+    }
+
     public bool HasStickyParentContext => this.CurrentProfile.DebugOnlyIsVisible
         && !string.IsNullOrWhiteSpace(this.StickyParentContextText);
 
@@ -298,13 +318,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         private set => this.SetProperty(ref this.scheduledToolsPause, value);
     }
 
+    /// <summary>The running and historical tool executions for the main-window indicators.</summary>
+    public ScheduledToolsRunningViewModel? ScheduledToolsRunning
+    {
+        get => this.scheduledToolsRunning;
+        private set => this.SetProperty(ref this.scheduledToolsRunning, value);
+    }
+
     /// <summary>
     /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
     /// results tree), or returns null if the workspace has not finished initializing.
     /// </summary>
     internal ScheduledTasksViewModel? TryCreateScheduledTasksViewModel()
         => this.entityBroker is { } broker
-            ? new ScheduledTasksViewModel(broker, this.scheduledToolPauseStateService, this.HostProfileEntityId)
+            ? new ScheduledTasksViewModel(
+                broker,
+                this.scheduledToolPauseStateService,
+                this.HostProfileEntityId,
+                this.scheduledToolHost,
+                action => Dispatcher.UIThread.Post(action))
             : null;
 
     private EntityId HostProfileEntityId =>
@@ -369,6 +401,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.scheduledToolPauseStateService,
             hostEntityId,
             action => Dispatcher.UIThread.Post(action));
+
+        this.ScheduledToolsRunning = new ScheduledToolsRunningViewModel(
+            this.scheduledToolHost,
+            dataAccessLayer,
+            action => Dispatcher.UIThread.Post(action));
+        _ = this.ScheduledToolsRunning.RefreshHistoryAsync();
 
         this.scheduledToolRunner = ScheduledTools.ScheduledToolRunner.Create(
             this.scheduledToolHost,
@@ -510,7 +548,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ApplyProfile(profile);
     }
 
-    private async Task SetThemeAsync(
+    internal async Task SetThemeAsync(
         string themeName)
     {
         var updatedProfile = await this.profileStore.ChangeProfileAsync(
@@ -744,15 +782,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task ApplySelectedViewAsync()
     {
+        var next = new ViewPopulationViewModel();
+        var previous = this.currentPopulation;
+        this.CurrentViewPopulation = next;
+
+        await previous.DisposeAsync();
+
         var selectedView = this.selectedTopLevelView ?? EmptyView;
-        this.selectedViewSubViewSubscriptions.Clear();
-        this.selectedViewSubViewQuerySubscriptions.Clear();
-        selectedView.Entities.Clear();
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
             this.StickyParentContextText = string.Empty;
             return;
         }
+
+        if (next.CancellationToken.IsCancellationRequested) return;
 
         if (selectedView.IsEntityBrowser)
         {
@@ -760,6 +803,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.StickyParentContextText = string.Empty;
             return;
         }
+
+        if (next.CancellationToken.IsCancellationRequested) return;
 
         if (selectedView.ViewEntity is not SubscribedEntityViewModel selectedViewEntity)
         {
@@ -773,40 +818,52 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(selectedViewData);
+        var associatedNoteEntity = await this.LoadAssociatedViewNoteAsync(next, selectedViewData);
+        if (next.CancellationToken.IsCancellationRequested) return;
+
         if (associatedNoteEntity is not null)
         {
-            selectedView.Entities.Add(this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
+            next.Entities.Add(this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
         }
 
         await this.LoadSubViewEntitiesAsync(selectedViewData);
+
+        if (next.CancellationToken.IsCancellationRequested) return;
 
         if (selectedViewData.TryGetProperty("sub-views", out var subViews)
             && subViews.ValueKind == JsonValueKind.Array)
         {
             foreach (var subView in subViews.EnumerateArray())
             {
+                if (next.CancellationToken.IsCancellationRequested) return;
+
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    selectedView.Entities.Add(this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0));
+                    next.Entities.Add(this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0));
                     continue;
                 }
 
                 if (TryReadSubViewGetRequest(subView, out var getRequest))
                 {
-                    var getEntities = await this.LoadGetSubViewEntitiesAsync(getRequest);
-                    await this.AddSubViewEntitiesWithHierarchyAsync(selectedView, getEntities);
+                    var getEntities = await this.LoadGetSubViewEntitiesAsync(next, getRequest);
+                    if (next.CancellationToken.IsCancellationRequested) return;
+                    await this.AddSubViewEntitiesWithHierarchyAsync(next, getEntities);
+                    if (next.CancellationToken.IsCancellationRequested) return;
                     continue;
                 }
 
                 if (TryReadSubViewQueryRequest(subView, out var queryRequest))
                 {
-                    var queryEntities = await this.LoadQuerySubViewEntitiesAsync(queryRequest);
-                    await this.AddSubViewEntitiesWithHierarchyAsync(selectedView, queryEntities);
+                    var queryEntities = await this.LoadQuerySubViewEntitiesAsync(next, queryRequest);
+                    if (next.CancellationToken.IsCancellationRequested) return;
+                    await this.AddSubViewEntitiesWithHierarchyAsync(next, queryEntities);
+                    if (next.CancellationToken.IsCancellationRequested) return;
                 }
             }
         }
+
+        if (next.CancellationToken.IsCancellationRequested) return;
 
         this.StickyParentContextText = $"Parent Context: {selectedView.Title}";
     }
@@ -838,10 +895,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadGetSubViewEntitiesAsync(
+        ViewPopulationViewModel population,
         GetRequest getRequest)
     {
         var subscribedGet = await this.EntityBroker.SubscribeGetAsync(getRequest);
-        this.selectedViewSubViewSubscriptions.Add(subscribedGet);
+        population.AddGetSubscription(subscribedGet);
 
         if (subscribedGet.Results.Count == 0)
         {
@@ -852,6 +910,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> LoadQuerySubViewEntitiesAsync(
+        ViewPopulationViewModel population,
         QueryRequest queryRequest)
     {
         // Exclude not-interesting targets at the query level (via a join) unless the user opts to show
@@ -873,7 +932,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
-        this.selectedViewSubViewQuerySubscriptions.Add(subscribedQuery);
+        population.AddQuerySubscription(subscribedQuery);
 
         if (subscribedQuery.Results.Count == 0)
         {
@@ -884,6 +943,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     private async Task<SubscribedEntityViewModel?> LoadAssociatedViewNoteAsync(
+        ViewPopulationViewModel population,
         JsonElement selectedViewData)
     {
         if (!TryReadPrimaryEntityName(selectedViewData, out var selectedViewName))
@@ -904,7 +964,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 ],
                 Timestamps = [null],
             });
-        this.selectedViewSubViewSubscriptions.Add(noteSubscription);
+        population.AddGetSubscription(noteSubscription);
         return noteSubscription.Results.FirstOrDefault();
     }
 
@@ -1071,25 +1131,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// indented entity list. Entities whose types declare no traversals render flat (indent 0).
     /// </summary>
     private async Task AddSubViewEntitiesWithHierarchyAsync(
-        ViewDefinitionViewModel selectedView,
+        ViewPopulationViewModel population,
         IReadOnlyList<SubscribedEntityViewModel> rootEntities)
     {
         var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
         foreach (var node in hierarchy)
         {
-            this.AddHierarchyNode(selectedView, node, indentLevel: 0);
+            this.AddHierarchyNode(population, node, indentLevel: 0);
         }
     }
 
     private void AddHierarchyNode(
-        ViewDefinitionViewModel selectedView,
+        ViewPopulationViewModel population,
         ViewHierarchyNode node,
         int indentLevel)
     {
-        selectedView.Entities.Add(this.CreateViewEntityViewModel(node.Entity, indentLevel));
+        population.Entities.Add(this.CreateViewEntityViewModel(node.Entity, indentLevel));
         foreach (var child in node.Children)
         {
-            this.AddHierarchyNode(selectedView, child, indentLevel + 1);
+            this.AddHierarchyNode(population, child, indentLevel + 1);
         }
     }
 
@@ -1492,7 +1552,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             });
     }
 
-    public async Task OpenTabAsync(WorkspaceTabViewModel tab)
+    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
@@ -1532,7 +1592,36 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        // Create new document
+        // When a source tab is specified, insert the new tab immediately after it.
+        var visibleDockables = documentDock.VisibleDockables;
+        if (insertAfterTabId is not null && visibleDockables is not null)
+        {
+            var sourceIndex = -1;
+            for (var i = 0; i < visibleDockables.Count; i++)
+            {
+                if (string.Equals(visibleDockables[i].Id, insertAfterTabId, StringComparison.Ordinal))
+                {
+                    sourceIndex = i;
+                    break;
+                }
+            }
+
+            if (sourceIndex >= 0)
+            {
+                var newDocument = new WorkspaceDocument(tab);
+                this.dockFactory.InsertDockable(documentDock, newDocument, sourceIndex + 1);
+                this.dockFactory.SetActiveDockable(newDocument);
+                this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+                this.SyncSelectedWorkspacePaneFromDock();
+                if (!this.navigatingViaHistory)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                }
+                return;
+            }
+        }
+
+        // Default: append the new tab at the end.
         this.dockFactory.AddWorkspaceTab(documentDock, tab);
         this.SyncSelectedWorkspacePaneFromDock();
         if (!this.navigatingViaHistory)
@@ -2220,6 +2309,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task OpenStartupWorkspaceAsync()
     {
+        var defaultWorkspaceIds = await this.QueryDefaultWorkspaceIdsAsync();
+        if (defaultWorkspaceIds.Count > 0)
+        {
+            foreach (var workspaceId in defaultWorkspaceIds)
+            {
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+            }
+
+            return;
+        }
+
         await this.OpenWorkspaceAsync(
             new GetEntityRequest
             {
@@ -2298,11 +2398,80 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task OpenGettingStartedWorkspaceAsync()
     {
+        var defaultWorkspaceIds = await this.QueryDefaultWorkspaceIdsAsync();
+        if (defaultWorkspaceIds.Count > 0)
+        {
+            foreach (var workspaceId in defaultWorkspaceIds)
+            {
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+            }
+
+            return;
+        }
+
         await this.OpenWorkspaceAsync(
             new GetEntityRequest
             {
                 EntityName = new EntityName("workspaces", "getting-started-workspace"),
             });
+    }
+
+    private async Task<IReadOnlyList<EntityId>> QueryDefaultWorkspaceIdsAsync()
+    {
+        if (this.entityBroker is not { } broker)
+        {
+            return [];
+        }
+
+        var profileId = broker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        if (profileId == default)
+        {
+            return [];
+        }
+
+        var queryResult = await broker.EntityRepository.DataAccessLayer.QueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("default-workspaces"),
+                        Clause = new AndQueryClause
+                        {
+                            Clauses =
+                            [
+                                new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["default"]) },
+                                new EntityFieldQueryClause
+                                {
+                                    FieldPath = new FieldPath("participants", "applied-to"),
+                                    ComparisonOperator = FieldComparisonOperator.Equals,
+                                    Value = JsonSerializer.SerializeToElement(profileId.Value.ToString()),
+                                },
+                            ],
+                        },
+                    },
+                ],
+            });
+
+        var workspaceIds = new List<EntityId>();
+        foreach (var snapshot in queryResult.Batches.SelectMany(static batch => batch.Entities))
+        {
+            if (snapshot.Data is not { } data
+                || !data.TryGetProperty("participants", out var participants)
+                || !participants.TryGetProperty("value", out var valueElement))
+            {
+                continue;
+            }
+
+            var reference = valueElement.TryReadEntityReference();
+            if (reference?.EntityId is { } entityId)
+            {
+                workspaceIds.Add(entityId);
+            }
+        }
+
+        return workspaceIds;
     }
 
 
@@ -2790,12 +2959,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var notifications = this.notificationService.Notifications;
         var candidates = notifications
             .Where(n => !n.IsRead)
-            .OrderByDescending(n => n.Timestamp)
+            .OrderByDescending(n => n.When)
             .ToList();
         if (candidates.Count == 0)
         {
             candidates = notifications
-                .OrderByDescending(n => n.Timestamp)
+                .OrderByDescending(n => n.When)
                 .ToList();
         }
         if (candidates.Count == 0) return;
@@ -2848,12 +3017,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.dockFactory.ActiveDockableChanged -= this.OnActiveDockableChanged;
         this.notificationsViewModel?.Dispose();
 
+        await this.currentPopulation.DisposeAsync();
+
         if (this.scheduledToolRunner is not null)
         {
             await this.scheduledToolRunner.DisposeAsync();
         }
 
         this.scheduledToolsPause?.Dispose();
+        this.scheduledToolsRunning?.Dispose();
 
         if (this.devTunnelHostService is not null)
         {

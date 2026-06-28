@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -218,9 +217,7 @@ public sealed class CopilotSessionDiscoveryTool : IWorkspaceTool
 
     private static EntityId CreateDeterministicEntityId(EntityName entityName)
     {
-        var canonicalName = JsonSerializer.Serialize(entityName.Components);
-        var hash = MD5.HashData(Encoding.UTF8.GetBytes(canonicalName));
-        return new EntityId(new Guid(hash));
+        return DeterministicEntityId.Create(entityName.Components);
     }
 
     private static string BuildMcpServerJson(EntityName entityName, string serverName, JsonElement serverConfiguration)

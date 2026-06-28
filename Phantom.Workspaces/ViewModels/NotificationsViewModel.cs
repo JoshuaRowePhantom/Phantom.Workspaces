@@ -11,6 +11,8 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
     private readonly NotificationService notificationService;
     private readonly Action<string> navigateToTab;
     private bool isOpen;
+    private bool isAutoClosing;
+    private int lastKnownUnreadCount;
 
     public NotificationsViewModel(NotificationService notificationService, Action<string> navigateToTab)
     {
@@ -20,6 +22,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.Rows = new ObservableCollection<NotificationRowViewModel>();
         this.RefreshRows();
+        this.lastKnownUnreadCount = this.UnreadCount;
     }
 
     public ObservableCollection<NotificationRowViewModel> Rows { get; }
@@ -32,15 +35,38 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         set => this.SetProperty(ref this.isOpen, value);
     }
 
+    public bool IsAutoClosing
+    {
+        get => this.isAutoClosing;
+        set => this.SetProperty(ref this.isAutoClosing, value);
+    }
+
     public int UnreadCount => this.notificationService.Notifications.Count(e => !e.IsRead);
 
     public bool HasUnread => this.UnreadCount > 0;
 
     public bool HasRows => this.Rows.Count > 0;
 
-    public void ToggleOpen() => this.IsOpen = !this.IsOpen;
+    public bool HasActiveRun => this.notificationService.HasActiveRun;
 
-    private void OnNotificationsChanged(object? sender, EventArgs e) => this.RefreshRows();
+    public void ToggleOpen()
+    {
+        this.IsOpen = !this.IsOpen;
+        this.IsAutoClosing = false;
+    }
+
+    private void OnNotificationsChanged(object? sender, EventArgs e)
+    {
+        var previousUnreadCount = this.lastKnownUnreadCount;
+        this.RefreshRows();
+        this.lastKnownUnreadCount = this.UnreadCount;
+
+        if (this.UnreadCount > previousUnreadCount)
+        {
+            this.IsOpen = true;
+            this.IsAutoClosing = true;
+        }
+    }
 
     private void RefreshRows()
     {
@@ -48,7 +74,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         // Newest first, unread at top
         var sorted = this.notificationService.Notifications
             .OrderBy(e => e.IsRead)
-            .ThenByDescending(e => e.Timestamp);
+            .ThenByDescending(e => e.When);
 
         foreach (var entry in sorted)
         {
@@ -76,6 +102,7 @@ public sealed class NotificationsViewModel : ViewModelBase, IDisposable
         this.RaisePropertyChanged(nameof(this.UnreadCount));
         this.RaisePropertyChanged(nameof(this.HasUnread));
         this.RaisePropertyChanged(nameof(this.HasRows));
+        this.RaisePropertyChanged(nameof(this.HasActiveRun));
     }
 
     public void Dispose()

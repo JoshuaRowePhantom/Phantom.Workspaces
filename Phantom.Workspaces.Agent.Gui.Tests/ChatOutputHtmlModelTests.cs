@@ -291,7 +291,9 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("<table>", html);
         Assert.Contains("<th>", html);
         Assert.Contains("<td>", html);
-        Assert.DoesNotContain("|---|", html);
+        // The raw markdown source is stored in data-details-target; verify the rendered body
+        // contains the HTML table elements (above) rather than checking for absent pipe syntax,
+        // since the attribute now intentionally embeds the original markdown.
     }
 
     [Fact]
@@ -350,5 +352,309 @@ public sealed class ChatOutputHtmlModelTests
         Assert.NotNull(html);
         Assert.DoesNotContain("<img", html);
         Assert.Contains("&lt;img", html);
+    }
+
+    private static AgentChatHistoryItem ToolCallMessage(string toolName, string callId = "call-1")
+        => new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent(callId, toolName)] };
+
+    [Fact]
+    public void SingleToolCallMessage_IsInsertedStandalone_WithoutGroupWrapper()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file"),
+        };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal("update", op.Kind);
+        // Single standalone tool-call message: content-level item present, no message-level group body.
+        Assert.Contains("chat-tool-group-item", op.Content);
+        Assert.DoesNotContain("chat-tool-group-body", op.Content);
+        Assert.Contains("chat-message", op.Content);
+    }
+
+    [Fact]
+    public void TwoConsecutiveToolCalls_AreGroupedIntoSingleDetailsElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(ToolCallMessage("write_file", "c2"));
+
+        var contentOps = sink.ContentOperations;
+        Assert.True(contentOps.Count >= 2, "Expected Replace + Append + summary update");
+
+        // First op: replace msg-0 with group wrapping it
+        var replaceOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Path);
+        Assert.Contains("grp-", replaceOp.Content);
+        Assert.Contains("read_file", replaceOp.Content);
+        Assert.Contains("chat-tool-group-body", replaceOp.Content);
+        Assert.Contains(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Content);
+
+        // Second message appended into the group body
+        var appendOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        Assert.Contains("write_file", appendOp.Content);
+
+        // Summary updated to count 2
+        var summaryOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.Contains("2 calls", summaryOp.Content);
+        Assert.Contains("write_file", summaryOp.Content);
+    }
+
+    [Fact]
+    public void ThreeConsecutiveToolCalls_GroupIsExtendedInPlace()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolCallMessage("write_file", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(ToolCallMessage("list_files", "c3"));
+
+        var contentOps = sink.ContentOperations;
+
+        // No Replace that creates a new chat-tool-group — group already exists
+        Assert.DoesNotContain(contentOps, op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+
+        // Third message appended into group body
+        var appendOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        Assert.Contains("list_files", appendOp.Content);
+
+        // Summary updated to count 3
+        var summaryOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.Contains("3 calls", summaryOp.Content);
+    }
+
+    [Fact]
+    public void TextThenToolCall_ToolCallIsStandalone_NoGroupWrapper()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "thinking"),
+            ToolCallMessage("read_file"),
+        };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var contentOps = sink.ContentOperations;
+        Assert.Equal(2, contentOps.Count);
+        // Neither message should be inside a message-level group body.
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group-body"));
+    }
+
+    [Fact]
+    public void ToolCallThenText_TextInsertsAfterToolCallMessage()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.Assistant, "done"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains(">done<", op.Content);
+    }
+
+    [Fact]
+    public void ConsecutiveToolCallsThenText_TextAnchorsAfterGroupElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolCallMessage("write_file", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.Assistant, "finished"));
+
+        var contentOps = sink.ContentOperations;
+        var insertOp = contentOps.First(op => op.Content.Contains("finished"));
+        Assert.Equal(ChatOutputUpdateLocation.After, insertOp.Location);
+        Assert.StartsWith("grp-", insertOp.Path);
+    }
+
+    // ── Content-level tool-group tests (issue #154) ────────────────────────────
+
+    [Fact]
+    public void MessageWithSingleFunctionCall_RendersToolGroupItem_NoOuterWrapper()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-1", "my_tool")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Contains("chat-tool-group-item", op.Content);
+        Assert.DoesNotContain("chat-tool-group-wrapper", op.Content);
+    }
+
+    [Fact]
+    public void MessageWithMultipleFunctionCalls_RendersOuterToolGroupWrapper()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new FunctionCallContent("call-1", "tool_a"),
+                    new FunctionCallContent("call-2", "tool_b"),
+                ],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Contains("chat-tool-group-wrapper", op.Content);
+        Assert.Contains("chat-tool-group-item", op.Content);
+        Assert.Contains("2 calls", op.Content);
+    }
+
+    [Fact]
+    public void MessageWithFunctionCallAndMatchingResult_ResultNestedInsideCallItem()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new FunctionCallContent("call-1", "my_tool"),
+                    new FunctionResultContent("call-1", "result data"),
+                ],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        // Both call and result sections present in a single element.
+        Assert.Contains("chat-tool-call", op.Content);
+        Assert.Contains("chat-tool-result", op.Content);
+    }
+
+    [Fact]
+    public void MessageWithFunctionResultOnly_NoMatchingCall_RenderedStandalone()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.Tool,
+                Contents = [new FunctionResultContent("orphan-id", "orphan result")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        // Unmatched result: falls back to standalone RenderContent path, no content-level grouping.
+        Assert.DoesNotContain("chat-tool-group-item", op.Content);
+        Assert.DoesNotContain("chat-tool-group-wrapper", op.Content);
+    }
+
+    [Fact]
+    public void ToolRoleMessage_RenderHeader_ReturnsEmpty()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "tool");
+        Assert.Empty(html);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_ProducesCollapsedDetails_NoOpenAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "\"result\"");
+
+        Assert.Contains("chat-tool-group-item", html);
+        Assert.Contains("chat-tool-call", html);
+        Assert.Contains("chat-tool-result", html);
+        Assert.DoesNotContain("<details open", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_ProducesOuterDetailsWithCallCount()
+    {
+        var inner = "<span>item</span>";
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper("g0", 3, "last_tool(…)", inner);
+
+        Assert.Contains("chat-tool-group-wrapper", html);
+        Assert.Contains("3 calls", html);
+        Assert.Contains(inner, html);
+        Assert.DoesNotContain("<details open", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderContent_FunctionCallContent_EmitsDataDetailsTarget()
+    {
+        var call = new FunctionCallContent("call-1", "my_tool");
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            call,
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("data-details-target=", html);
+    }
+
+    [Fact]
+    public void RenderContent_TextContent_EmitsDataDetailsTargetWithMarkdownSource()
+    {
+        const string markdown = "**bold** text";
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent(markdown),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains($"data-details-target=\"{ChatOutputHtmlRenderer.HtmlEscape(markdown)}\"", html);
+    }
+
+    [Fact]
+    public void RenderContent_TextReasoningContent_EmitsDataDetailsTarget()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextReasoningContent("my reasoning"),
+            includeReasoning: true,
+            isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("data-details-target=\"my reasoning\"", html);
     }
 }

@@ -1,11 +1,13 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows.Input;
 using Avalonia.Media.Imaging;
 using Microsoft.Extensions.AI;
-using Phantom.Workspaces.Agent.Gui.ViewModels.SlashCommands;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
@@ -18,6 +20,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
     private readonly ObservableCollection<QueueComposerAttachmentViewModel> attachmentPreviews = [];
     private string inputText = string.Empty;
     private bool isFormattedMode;
+    private CancellationTokenSource? completionsCts;
 
     /// <summary>
     /// When set, called with the raw input text when the user submits text starting with '/'.
@@ -26,6 +29,15 @@ public sealed class QueueComposerViewModel : ViewModelBase
     /// interceptor is set and the input starts with '/'.
     /// </summary>
     public Func<string, Task>? SlashCommandInterceptorAsync { get; set; }
+
+    /// <summary>
+    /// When set, called with (commandName, partialArguments, cancellationToken) whenever
+    /// <see cref="InputText"/> starts with '/' to populate the completions popup.
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<IReadOnlyList<SlashCommandCompletion>>>? SlashCompletionsProviderAsync { get; set; }
+
+    /// <summary>Completions popup state driven by <see cref="InputText"/> changes.</summary>
+    public SlashCompletionsViewModel Completions { get; } = new();
 
     public QueueComposerViewModel(
         InputQueueViewModel parent,
@@ -37,7 +49,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         this.IsDefaultComposer = isDefaultComposer;
         this.targetQueue.Changed += this.OnTargetQueueChanged;
         this.SubmitCommand = new RelayCommand(this.Submit);
-        this.SubmitToNewQueueCommand = new RelayCommand(this.SubmitToNewQueue);
+        this.SubmitToNewQueueCommand = new RelayCommand(() => this.SubmitToNewQueue());
         this.CreateNewQueueCommand = new RelayCommand(this.CreateNewQueue);
         this.SetQueueImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
@@ -46,9 +58,14 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public string PlaceholderText => this.IsDefaultComposer
         ? (this.isFormattedMode
-            ? "Multi-line mode  (Ctrl+Enter · send  |  Enter · new line  |  Esc · cancel)"
-            : "Type a message…  (Enter · send  |  Shift+Enter · multi-line  |  Ctrl+Enter · send to new queue)")
+            ? "Multi-line mode"
+            : "Type a message…  (Enter · send  |  Shift+Enter · multi-line  |  Ctrl+Q · enqueue)")
         : "Append to this queue...";
+
+    public string? FormattedModeHint =>
+        this.isFormattedMode && this.IsDefaultComposer
+            ? "Ctrl+Enter · send   Enter · new line   Esc · exit multi-line"
+            : null;
 
     public string SubmitButtonText => this.IsDefaultComposer ? "Send" : "Add";
 
@@ -71,7 +88,13 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public string InputText
     {
         get => this.inputText;
-        set => this.SetProperty(ref this.inputText, value);
+        set
+        {
+            if (this.SetProperty(ref this.inputText, value))
+            {
+                this.OnInputTextChanged(value);
+            }
+        }
     }
 
     public bool IsFormattedMode
@@ -82,6 +105,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
             if (this.SetProperty(ref this.isFormattedMode, value))
             {
                 this.RaisePropertyChanged(nameof(this.PlaceholderText));
+                this.RaisePropertyChanged(nameof(this.FormattedModeHint));
             }
         }
     }
@@ -179,10 +203,15 @@ public sealed class QueueComposerViewModel : ViewModelBase
 
     public void Submit()
     {
+        this.Submit(this.targetQueue);
+    }
+
+    public bool Submit(AgentChatQueue targetQueue)
+    {
         var text = this.SanitizeText(this.InputText);
         if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
         {
-            return;
+            return false;
         }
 
         // Intercept slash commands on the default (primary) composer. Non-default queue
@@ -194,7 +223,7 @@ public sealed class QueueComposerViewModel : ViewModelBase
         {
             this.InputText = string.Empty;
             _ = interceptor(text);
-            return;
+            return true;
         }
 
         var contents = new List<AIContent>();
@@ -204,30 +233,36 @@ public sealed class QueueComposerViewModel : ViewModelBase
         }
 
         contents.AddRange(this.attachments);
-        this.parent.AppendToQueue(this.targetQueue, contents);
+        this.parent.AppendToQueue(targetQueue, contents);
         this.InputText = string.Empty;
         this.ClearAttachments();
         this.IsFormattedMode = false;
         if (!this.IsDefaultComposer)
         {
-            this.parent.HideQueueComposer(this.targetQueue);
+            this.parent.HideQueueComposer(targetQueue);
         }
+
+        return true;
     }
 
-    public void SubmitToMostRecentQueue()
+    public bool SubmitToMostRecentQueue()
     {
         if (this.IsDefaultComposer)
         {
-            this.parent.SubmitToMostRecentQueue();
+            return this.parent.SubmitToMostRecentQueue();
         }
+
+        return false;
     }
 
-    public void SubmitToNewQueue()
+    public bool SubmitToNewQueue()
     {
         if (this.IsDefaultComposer)
         {
-            this.parent.SubmitToNewQueue();
+            return this.parent.SubmitToNewQueue();
         }
+
+        return false;
     }
 
     public void CreateNewQueue()
@@ -247,7 +282,57 @@ public sealed class QueueComposerViewModel : ViewModelBase
     public void Dispose()
     {
         this.targetQueue.Changed -= this.OnTargetQueueChanged;
+        this.completionsCts?.Cancel();
+        this.completionsCts?.Dispose();
+        this.completionsCts = null;
         this.ClearAttachments();
+    }
+
+    private void OnInputTextChanged(string text)
+    {
+        this.completionsCts?.Cancel();
+        this.completionsCts?.Dispose();
+        this.completionsCts = null;
+
+        if (!this.IsDefaultComposer
+            || !text.StartsWith('/')
+            || this.SlashCompletionsProviderAsync is not { } provider)
+        {
+            this.Completions.Dismiss();
+            return;
+        }
+
+        // Split "/commandName rest" → commandName + rest
+        var withoutSlash = text.Substring(1);
+        var parts = withoutSlash.Split(' ', 2);
+        var commandName = parts[0];
+        var partialArgs = parts.Length > 1 ? parts[1] : string.Empty;
+
+        var cts = new CancellationTokenSource();
+        this.completionsCts = cts;
+        _ = this.FetchAndApplyCompletionsAsync(provider, commandName, partialArgs, cts.Token);
+    }
+
+    private async Task FetchAndApplyCompletionsAsync(
+        Func<string, string, CancellationToken, Task<IReadOnlyList<SlashCommandCompletion>>> provider,
+        string commandName,
+        string partialArgs,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<SlashCommandCompletion> completions;
+        try
+        {
+            completions = await provider(commandName, partialArgs, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            this.Completions.SetItems(completions);
+        }
     }
 
     private string FormatImagePlaceholder(int width, int height, string? fileName)

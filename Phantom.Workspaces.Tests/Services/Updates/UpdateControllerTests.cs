@@ -20,7 +20,7 @@ public sealed class UpdateControllerTests
         UpdateAvailability? raised = null;
         harness.Controller.UpdateAvailabilityChanged += (_, availability) => raised = availability;
 
-        var result = await harness.Controller.CheckForUpdatesAsync();
+        var result = await harness.Controller.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
 
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("1.2.0", result.LatestVersion);
@@ -34,7 +34,7 @@ public sealed class UpdateControllerTests
     {
         var harness = new Harness(runningVersion: "2.0.0", latestTag: "v1.2.0");
 
-        var result = await harness.Controller.CheckForUpdatesAsync();
+        var result = await harness.Controller.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
 
         Assert.False(result.IsUpdateAvailable);
         Assert.Null(result.LatestVersion);
@@ -44,9 +44,9 @@ public sealed class UpdateControllerTests
     public async Task DownloadInstallAndRelaunchAsync_LaunchesStagedExeAndRequestsShutdown()
     {
         var harness = new Harness(runningVersion: "1.0.0", latestTag: "v1.2.0");
-        await harness.Controller.CheckForUpdatesAsync();
+        await harness.Controller.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
 
-        await harness.Controller.DownloadInstallAndRelaunchAsync();
+        await harness.Controller.DownloadInstallAndRelaunchAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(harness.LaunchedRequest);
         Assert.Equal(harness.Layout.GetVersionExecutablePath("1.2.0"), harness.LaunchedRequest!.FileName);
@@ -61,7 +61,7 @@ public sealed class UpdateControllerTests
     {
         var harness = new Harness(runningVersion: "1.0.0", latestTag: "v1.2.0");
 
-        await harness.Controller.DownloadInstallAndRelaunchAsync();
+        await harness.Controller.DownloadInstallAndRelaunchAsync(TestContext.Current.CancellationToken);
 
         Assert.Null(harness.LaunchedRequest);
         Assert.False(harness.ShutdownRequested);

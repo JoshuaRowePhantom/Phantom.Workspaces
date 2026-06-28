@@ -1,6 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/shell.json",
-  "description": "Schema for shell entities that represent executable shell commands with working directory and arguments.",
+  "description": "Schema for shell entities that represent saved shell configurations (command, run mode, working directory, and arguments). Shell entities are launched against a host chosen at open time and are not used for ephemeral shells.",
   "allOf": [
     {
       "$ref": "entity.json"
@@ -17,20 +17,32 @@
         "const": "shell"
       }
     },
-    "working-directory": {
+    "mode": {
       "type": "string",
-      "description": "Working directory path where the command will be executed. If not specified, uses the host's default."
+      "enum": ["pty", "pipe"],
+      "description": "Run mode for the saved configuration. 'pty' spawns a pseudo-terminal (interactive programs, colors, and mouse tracking); 'pipe' redirects stdin/stdout without a terminal (non-interactive capture)."
     },
     "command": {
       "type": "string",
-      "description": "Shell command or executable to run (e.g., 'pwsh', 'bash', 'cmd')."
+      "description": "Executable to run (e.g., 'pwsh', 'bash', 'cmd')."
     },
     "command-arguments": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "Command-line arguments passed to the shell command."
+      "description": "Arguments passed to the command."
+    },
+    "working-directory": {
+      "type": "string",
+      "description": "Absolute path on the host where the shell starts. If not specified, uses the host's default."
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Extra environment variables layered over the host defaults. Keys and values are strings."
     }
   },
   "required": [

@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Tools;
@@ -35,15 +36,20 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
     private const int DefaultMaxDepth = 6;
 
+    private readonly ILogger<GitWorkspaceScanTool> logger;
     private readonly Func<IEnumerable<string>> localFixedDriveRootsProvider;
 
     /// <param name="localFixedDriveRootsProvider">
     /// Supplies the local fixed-drive root paths scanned by default when no <c>scan-root</c>/<c>scan-roots</c>
     /// is configured. Defaults to the machine's ready fixed drives; overridable for testing.
     /// </param>
-    public GitWorkspaceScanTool(Func<IEnumerable<string>>? localFixedDriveRootsProvider = null)
+    /// <param name="logger">Logger for this tool; defaults to <see cref="NullLogger{T}.Instance"/>.</param>
+    public GitWorkspaceScanTool(
+        Func<IEnumerable<string>>? localFixedDriveRootsProvider = null,
+        ILogger<GitWorkspaceScanTool>? logger = null)
     {
         this.localFixedDriveRootsProvider = localFixedDriveRootsProvider ?? GetLocalFixedDriveRoots;
+        this.logger = logger ?? NullLogger<GitWorkspaceScanTool>.Instance;
     }
 
     public string ToolType => "git-workspace-scan";
@@ -55,7 +61,10 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         var scanRoots = this.ResolveScanRoots(context.Tool.Data);
         if (scanRoots.Count == 0)
         {
-            return new WorkspaceToolExecutionResult();
+            return new WorkspaceToolExecutionResult
+            {
+                ResultContent = "No scan roots resolved; no repositories scanned.",
+            };
         }
 
         var maxDepth = ReadIntProperty(context.Tool.Data, MaxDepthProperty) ?? DefaultMaxDepth;
@@ -74,7 +83,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
                 changes.Add(new EntityChange
                 {
-                    EntityId = new EntityId(DeterministicId(repositoryPath)),
+                    EntityId = DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath)),
                     ConcurrencyTag = null,
                     Data = document.RootElement.Clone(),
                     EntityChangeMode = EntityChangeMode.Replace,
@@ -82,20 +91,22 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             }
         }
 
-        if (changes.Count == 0)
+        var repositoriesFound = seenRepositoryPaths.Count;
+        var rootsDescription = string.Join(", ", scanRoots);
+
+        if (changes.Count > 0)
         {
-            return new WorkspaceToolExecutionResult();
+            await context.DataAccessLayer.UpdateAsync(
+                new UpdateRequest
+                {
+                    UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Scan for Git repositories." } },
+                    Changes = changes,
+                },
+                context.CancellationToken).ConfigureAwait(false);
         }
 
-        await context.DataAccessLayer.UpdateAsync(
-            new UpdateRequest
-            {
-                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Scan for Git repositories." } },
-                Changes = changes,
-            },
-            context.CancellationToken).ConfigureAwait(false);
-
-        return new WorkspaceToolExecutionResult();
+        var summary = $"Scanned {scanRoots.Count} root(s) [{rootsDescription}]. Found {repositoriesFound} repositories.";
+        return new WorkspaceToolExecutionResult { ResultContent = summary };
     }
 
     /// <summary>
@@ -110,11 +121,29 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             configuredRoots = [.. configuredRoots, singleRoot];
         }
 
-        var roots = configuredRoots.Count > 0
-            ? configuredRoots
-            : this.localFixedDriveRootsProvider().ToList();
+        var existingConfiguredRoots = configuredRoots
+            .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        return roots
+        if (existingConfiguredRoots.Count > 0)
+        {
+            return existingConfiguredRoots;
+        }
+
+        IEnumerable<string> driveRoots;
+        try
+        {
+            driveRoots = this.localFixedDriveRootsProvider();
+        }
+        catch (IOException ex)
+        {
+            this.logger.LogWarning(ex, "Failed to enumerate fixed drives; scan may be incomplete.");
+            return [];
+        }
+
+        return driveRoots
             .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -123,17 +152,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
     private static IEnumerable<string> GetLocalFixedDriveRoots()
     {
-        DriveInfo[] drives;
-        try
-        {
-            drives = DriveInfo.GetDrives();
-        }
-        catch (IOException)
-        {
-            return [];
-        }
-
-        return drives
+        return DriveInfo.GetDrives()
             .Where(drive => drive.DriveType == DriveType.Fixed && drive.IsReady)
             .Select(drive => drive.RootDirectory.FullName)
             .ToList();
@@ -190,11 +209,9 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         return Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git"));
     }
 
-    private static Guid DeterministicId(string repositoryPath)
+    private static string NormalizeRepositoryPath(string repositoryPath)
     {
-        var normalized = Path.GetFullPath(repositoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var bytes = MD5.HashData(Encoding.UTF8.GetBytes("git-workspace-scan:" + normalized.ToLowerInvariant()));
-        return new Guid(bytes);
+        return Path.GetFullPath(repositoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
     }
 
     private static string BuildGitEntityJson(string repositoryPath)
@@ -206,7 +223,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteString("entity-id", DeterministicId(repositoryPath).ToString());
+            writer.WriteString("entity-id", DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath)).ToString());
 
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();

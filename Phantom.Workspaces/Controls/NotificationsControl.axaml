@@ -39,11 +39,18 @@
                                             BorderThickness="0"
                                             Padding="4">
                                         <StackPanel Spacing="2">
-                                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                                <TextBlock Text="{Binding TabTitle}" />
-                                                <TextBlock Text=" · " />
-                                                <TextBlock Text="{Binding Reason}" Classes="muted" />
-                                            </StackPanel>
+                                            <TextBlock Text="{Binding TabTitle}"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Heading}"
+                                                       Classes="muted"
+                                                       TextWrapping="NoWrap"
+                                                       IsVisible="{Binding IsRunning}" />
+                                            <TextBlock Text="{Binding Description}"
+                                                       Classes="muted"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding HasDescription}" />
                                             <TextBlock Text="{Binding RelativeTime}" 
                                                        Classes="caption" />
                                         </StackPanel>

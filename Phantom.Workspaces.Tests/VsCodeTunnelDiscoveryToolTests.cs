@@ -99,14 +99,68 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
             new FakeExecutionContextProvider(),
             (_, _) => Task.FromResult(0));
 
-        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
 
+        Assert.True(result.IsSuccess);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.NotNull(entity);
         Assert.Contains("vscode-tunnel", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
         Assert.Equal("my-desktop", entity.Value.GetProperty("tunnel-name").GetString());
         Assert.Equal("https://vscode.dev/tunnel/my-desktop", entity.Value.GetProperty("tunnel-url").GetString());
         Assert.True(entity.Value.GetProperty("active").GetBoolean());
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_MissingTunnelJson_ReturnsFailure()
+    {
+        var noJsonPath = Path.Combine(this.testRoot, "nonexistent.json");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            (_, _) => Task.FromResult(0));
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: noJsonPath));
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(noJsonPath, result.ErrorMessage);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.Null(entity);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_InvalidTunnelJson_ReturnsFailure()
+    {
+        var invalidJsonPath = Path.Combine(this.testRoot, "code_tunnel.json");
+        File.WriteAllText(invalidJsonPath, "{\"other_property\": \"value\"}");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            (_, _) => Task.FromResult(0));
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: invalidJsonPath));
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(invalidJsonPath, result.ErrorMessage);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.Null(entity);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_CliThrows_ReturnsFailure()
+    {
+        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            (_, _) => throw new InvalidOperationException("CLI not found"));
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+
+        Assert.False(result.IsSuccess);
+        Assert.StartsWith("Failed to run VS Code CLI:", result.ErrorMessage);
+        Assert.Contains("CLI not found", result.ErrorMessage);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.Null(entity);
     }
 
     [Fact]
@@ -166,5 +220,25 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         Assert.Equal(
             entity1!.Value.GetProperty("entity-id").GetString(),
             entity2!.Value.GetProperty("entity-id").GetString());
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_DefaultCliPath_UsesLocatorResolvedPath()
+    {
+        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        string? capturedCliPath = null;
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            (cliPath, _) =>
+            {
+                capturedCliPath = cliPath;
+                return Task.FromResult(0);
+            },
+            defaultCliPathResolver: () => @"C:\fake\code.cmd");
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+
+        Assert.Equal(@"C:\fake\code.cmd", capturedCliPath);
     }
 }

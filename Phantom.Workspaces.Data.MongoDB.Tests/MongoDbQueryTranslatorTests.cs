@@ -28,8 +28,7 @@ public sealed class MongoDbQueryTranslatorTests
         });
 
         var rendered = Render(filter);
-        Assert.Equal(true, rendered["current.is-deleted"]["$ne"].AsBoolean);
-        // Eq renders as a direct field/value assignment on the current.data path.
+        Assert.True(rendered["current.is-deleted"]["$ne"].AsBoolean);
         Assert.Equal("00000000-0000-0000-0000-000000000001", rendered["current.data.participants.user"].AsString);
     }
 
@@ -61,7 +60,7 @@ public sealed class MongoDbQueryTranslatorTests
 
         var rendered = Render(filter);
         // The driver flattens the not-deleted guard and the type constraint into one document.
-        Assert.Equal(true, rendered["current.is-deleted"]["$ne"].AsBoolean);
+        Assert.True(rendered["current.is-deleted"]["$ne"].AsBoolean);
         Assert.Equal(2, rendered["current.type-names"]["$all"].AsBsonArray.Count);
     }
 

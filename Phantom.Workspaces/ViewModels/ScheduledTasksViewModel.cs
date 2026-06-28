@@ -41,7 +41,7 @@ public sealed class ScheduledTaskItemViewModel
 /// (tool + schedule + target, with their ids resolved to display names) and hosts the tool-execution
 /// results tree so currently running and recently completed tool runs can be inspected.
 /// </summary>
-public sealed class ScheduledTasksViewModel : ViewModelBase
+public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
 {
     private const string ToolRelationshipEntityType = "tool-relationship";
 
@@ -57,11 +57,14 @@ public sealed class ScheduledTasksViewModel : ViewModelBase
         EntityBroker entityBroker,
         ScheduledToolPauseStateService? pauseStateService = null,
         EntityId hostEntityId = default,
+        ScheduledToolHost? scheduledToolHost = null,
         Action<Action>? dispatch = null)
     {
         this.entityBroker = entityBroker ?? throw new ArgumentNullException(nameof(entityBroker));
         this.entityReferenceSearch = new EntityReferenceSearch(entityBroker);
-        this.ToolResults = new ToolResultBrowserViewModel(entityBroker.EntityRepository.DataAccessLayer);
+        this.ScheduledToolsRunning = scheduledToolHost is not null
+            ? new ScheduledToolsRunningViewModel(scheduledToolHost, entityBroker.EntityRepository.DataAccessLayer, dispatch)
+            : null;
         this.pauseStateService = pauseStateService;
         this.hostEntityId = hostEntityId;
         this.dispatch = dispatch ?? (action => action());
@@ -78,8 +81,8 @@ public sealed class ScheduledTasksViewModel : ViewModelBase
     /// <summary>The scheduled tool-relationships.</summary>
     public ObservableCollection<ScheduledTaskItemViewModel> ScheduledTasks { get; } = new();
 
-    /// <summary>The currently running and recently completed tool executions.</summary>
-    public ToolResultBrowserViewModel ToolResults { get; }
+    /// <summary>The running and historical tool executions; null when no tool host is available.</summary>
+    public ScheduledToolsRunningViewModel? ScheduledToolsRunning { get; }
 
     /// <summary>Whether the host-wide pause control should be shown at all.</summary>
     public bool HasPauseControl => this.pauseStateService is not null;
@@ -147,7 +150,10 @@ public sealed class ScheduledTasksViewModel : ViewModelBase
             }
 
             this.RaisePropertyChanged(nameof(this.HasScheduledTasks));
-            await this.ToolResults.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            if (this.ScheduledToolsRunning is not null)
+            {
+                await this.ScheduledToolsRunning.RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
+            }
         }
         finally
         {
@@ -246,5 +252,14 @@ public sealed class ScheduledTasksViewModel : ViewModelBase
         }
 
         return null;
+    }
+
+    public void Dispose()
+    {
+        this.ScheduledToolsRunning?.Dispose();
+        if (this.pauseStateService is not null)
+        {
+            this.pauseStateService.PauseStateChanged -= this.OnPauseStateChanged;
+        }
     }
 }

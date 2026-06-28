@@ -190,6 +190,11 @@ public sealed class ToolExecutionResultWriter
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();
             writer.WriteStringValue("entity");
+            if (!string.IsNullOrEmpty(content))
+            {
+                writer.WriteStringValue("note");
+            }
+
             writer.WriteStringValue(ToolExecutionResultEntityType);
             writer.WriteEndArray();
 
@@ -220,7 +225,10 @@ public sealed class ToolExecutionResultWriter
                 writer.WritePropertyName("default");
                 writer.WriteStartObject();
                 writer.WriteString("mime-type", "text/plain");
+                writer.WritePropertyName("content");
+                writer.WriteStartObject();
                 writer.WriteString("text", content);
+                writer.WriteEndObject();
                 writer.WriteEndObject();
                 writer.WriteEndObject();
             }

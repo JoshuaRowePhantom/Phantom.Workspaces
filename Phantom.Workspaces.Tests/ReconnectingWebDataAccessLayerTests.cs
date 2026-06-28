@@ -29,8 +29,8 @@ public sealed class ReconnectingWebDataAccessLayerTests
             reconnectOptions: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await reconnecting.StartAsync();
-        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest());
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
+        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(DevTunnelConnectionState.Connected, reconnecting.Status.State);
@@ -60,8 +60,8 @@ public sealed class ReconnectingWebDataAccessLayerTests
             reconnectOptions: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await reconnecting.StartAsync();
-        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest());
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
+        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(DevTunnelConnectionState.Connected, reconnecting.Status.State);
@@ -81,9 +81,9 @@ public sealed class ReconnectingWebDataAccessLayerTests
             reconnectOptions: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await reconnecting.StartAsync();
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
 
-        var exception = await Assert.ThrowsAsync<WebDataAccessRequestException>(() => reconnecting.UpdateAsync(EmptyUpdateRequest()));
+        var exception = await Assert.ThrowsAsync<WebDataAccessRequestException>(() => reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken));
         Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
         Assert.Equal(1, resolveCount); // only the initial connect; no reconnection attempted
         Assert.Equal(DevTunnelConnectionState.Connected, reconnecting.Status.State);
@@ -108,9 +108,9 @@ public sealed class ReconnectingWebDataAccessLayerTests
             reconnectOptions: NoJitterOptions with { MaxAttempts = 2 },
             nextJitterSample: () => 0.0);
 
-        await reconnecting.StartAsync();
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
 
-        await Assert.ThrowsAsync<WebDataAccessRequestException>(() => reconnecting.UpdateAsync(EmptyUpdateRequest()));
+        await Assert.ThrowsAsync<WebDataAccessRequestException>(() => reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken));
         Assert.Equal(DevTunnelConnectionState.Failed, reconnecting.Status.State);
     }
 

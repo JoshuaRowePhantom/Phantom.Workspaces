@@ -24,6 +24,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     private AgentViewModel? agent;
     private ObservableLoggerFactory? loggerFactory;
     private bool wasRunning;
+    private long lastStreamingNotifyTicks;
+    private const long StreamingThrottleMs = 500;
     private readonly AgentRunningIndicatorTabHeaderItemViewModel agentRunningIndicator;
 
     public AgentSessionWorkspaceTabViewModel()
@@ -102,12 +104,45 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
         if (isRunning && !this.wasRunning)
         {
-            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, null);
+            this.lastStreamingNotifyTicks = Environment.TickCount64;
+            var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(vm.History, vm.RunningItems);
+            this.NotificationService?.Notify(new Notification(
+                new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                "Running",
+                textSummary ?? string.Empty,
+                DateTime.UtcNow,
+                RunningState.Running,
+                NotificationState.Interesting));
         }
-        else if (!isRunning && this.wasRunning && !IsInterrupted(vm))
+        else if (!isRunning && this.wasRunning)
         {
-            var reason = BuildIdleReason(vm);
-            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, reason);
+            var interrupted = IsInterrupted(vm);
+            var heading = interrupted ? "Interrupted" : "Completed";
+            var reason = interrupted ? "Interrupted" : BuildIdleReason(vm);
+            this.NotificationService?.Notify(new Notification(
+                new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                heading,
+                reason,
+                DateTime.UtcNow,
+                RunningState.Idle,
+                NotificationState.Interesting));
+        }
+        else if (isRunning)
+        {
+            // Throttled streaming update
+            var now = Environment.TickCount64;
+            if (now - this.lastStreamingNotifyTicks >= StreamingThrottleMs)
+            {
+                this.lastStreamingNotifyTicks = now;
+                var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(vm.History, vm.RunningItems);
+                this.NotificationService?.Notify(new Notification(
+                    new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                    "Running",
+                    textSummary ?? string.Empty,
+                    DateTime.UtcNow,
+                    RunningState.Running,
+                    NotificationState.NotInteresting));
+            }
         }
 
         this.wasRunning = isRunning;
@@ -153,7 +188,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         if (this.agent is not null)
         {
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
-            this.NotificationService?.Notify(new TabDescriptor { TabId = this.Id }, null);
+            this.NotificationService?.Remove(this.Id);
             await this.agent.DisposeAsync();
         }
 

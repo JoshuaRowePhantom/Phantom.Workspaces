@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 using Phantom.Workspaces.Gui.Styles.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
@@ -19,7 +21,7 @@ namespace Phantom.Workspaces.Agent.Gui.Controls;
 /// The browser is built via <see cref="ControllableBrowserFactory"/> so headless tests can substitute
 /// a stub. An external "auto-scroll" toggle controls whether content updates follow the bottom.
 /// </summary>
-public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
+public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, IAgentStatusSink
 {
     private static readonly IReadOnlyDictionary<string, string> ThemeVariableResourceKeys =
         new Dictionary<string, string>
@@ -33,7 +35,14 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
             ["--chat-error"] = "Theme.Status.Bad",
             ["--chat-uri"] = "Theme.Class.accent.Foreground",
             ["--chat-tool-body-background"] = "Theme.Surface.EntityCard.Background",
+            ["--copy-btn-color"] = "Theme.Class.muted.Foreground",
+            ["--copy-btn-hover-color"] = "Theme.Class.normal.Foreground",
+            ["--copy-btn-confirmed-color"] = "Theme.Class.accent.Foreground",
         };
+
+    private static readonly IToolVisualizerFactory DefaultToolFactory = CompositeToolVisualizerFactory.Combine(
+        new WorkspaceVisualizerFactory(),
+        new CopilotToolVisualizerFactory());
 
     private readonly IControllableBrowser browser;
     private ChatOutputHtmlModel? outputModel;
@@ -48,6 +57,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
     /// </summary>
     public event EventHandler<string>? UrlNavigationRequested;
 
+    /// <summary>
+    /// Raised when the user clicks the inspect affordance on a content block.
+    /// The event argument is the element id of the content block to inspect.
+    /// </summary>
+    public event EventHandler<string>? InspectorRequested;
+
     public AgentChatOutputControl()
     {
         this.InitializeComponent();
@@ -57,6 +72,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
         this.browser.Ready += this.OnBrowserReady;
         this.browser.JavaScriptMessageReceived += this.OnBrowserMessageReceived;
         this.BrowserHost.Child = browserControl;
+        this.ActualThemeVariantChanged += (_, _) =>
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
     }
 
     public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
@@ -75,6 +92,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
 
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
     }
+
+    public void UpdateStatus(AgentStatusField field, string? value)
+        => this.subscribedViewModel?.StatusSink.UpdateStatus(field, value);
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -122,6 +142,17 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
         return reader.ReadToEnd();
     }
 
+    internal static string InjectThemeIntoHtml(
+        string html,
+        IReadOnlyDictionary<string, string> variables)
+    {
+        var sb = new StringBuilder("<style>:root{");
+        foreach (var (key, value) in variables)
+            sb.Append(key).Append(':').Append(value).Append(';');
+        sb.Append("}</style>");
+        return html.Replace("</head>", sb + "</head>", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void AttachOutputModel()
     {
         this.DetachOutputModel();
@@ -131,17 +162,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
             return;
         }
 
-        // Reload the shell so a reused control starts from an empty page; the model's initial
-        // operations are queued by the bridge until the reloaded shell is ready.
-        this.browser.HtmlShell = ReadShellHtml();
-
         this.subscribedViewModel = agentViewModel;
         agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
-        this.outputModel = new ChatOutputHtmlModel(
-            agentViewModel.History,
-            agentViewModel.RunningItems,
-            () => agentViewModel.IsReasoningVisible,
-            this);
+
+        // Reload the shell so a reused control starts from an empty page.
+        // OnBrowserReady creates the ChatOutputHtmlModel once the shell is ready, and again on
+        // every subsequent reload, so both the first-load and spontaneous-reload paths are unified.
+        var html = ReadShellHtml();
+        var themeVariables = this.BuildThemeVariables();
+        this.browser.HtmlShell = InjectThemeIntoHtml(html, themeVariables);
     }
 
     private void DetachOutputModel()
@@ -171,7 +200,28 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
     }
 
     private void OnBrowserReady(object? sender, EventArgs e)
-        => this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+    {
+        // Always post the theme first so CSS variables are set before any DOM operations arrive.
+        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+
+        // Dispose any model left from a previous load cycle, then rebuild from scratch.
+        // This fires on both the initial load and every spontaneous reload, so both paths share
+        // the same code. subscribedViewModel is null when the control has no DataContext, in
+        // which case only the theme is posted and no model is created.
+        this.outputModel?.Dispose();
+        this.outputModel = null;
+
+        if (this.subscribedViewModel is { } vm)
+        {
+            this.outputModel = new ChatOutputHtmlModel(
+                vm.History,
+                vm.RunningItems,
+                () => vm.IsReasoningVisible,
+                this,
+                DefaultToolFactory,
+                this);
+        }
+    }
 
     private void OnBrowserMessageReceived(object? sender, string message)
     {
@@ -207,6 +257,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink
                     {
                         this.UrlNavigationRequested?.Invoke(this, url);
                         this.subscribedViewModel?.OpenUrlHandler?.Invoke(url);
+                    }
+                }
+                break;
+            }
+            case "inspect":
+            {
+                if (root.TryGetProperty("contentId", out var contentIdProp))
+                {
+                    var contentId = contentIdProp.GetString();
+                    if (!string.IsNullOrEmpty(contentId))
+                    {
+                        this.InspectorRequested?.Invoke(this, contentId);
                     }
                 }
                 break;

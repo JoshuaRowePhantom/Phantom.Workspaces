@@ -21,26 +21,6 @@
         <KeyBinding Gesture="Ctrl+W"         Command="{Binding CloseActiveTabCommand}" />
         <KeyBinding Gesture="Ctrl+Tab"       Command="{Binding CycleTabForwardCommand}" />
         <KeyBinding Gesture="Ctrl+Shift+Tab" Command="{Binding CycleTabBackwardCommand}" />
-        <KeyBinding Gesture="Alt+1" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="0" />
-        <KeyBinding Gesture="Alt+2" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="1" />
-        <KeyBinding Gesture="Alt+3" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="2" />
-        <KeyBinding Gesture="Alt+4" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="3" />
-        <KeyBinding Gesture="Alt+5" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="4" />
-        <KeyBinding Gesture="Alt+6" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="5" />
-        <KeyBinding Gesture="Alt+7" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="6" />
-        <KeyBinding Gesture="Alt+8" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="7" />
-        <KeyBinding Gesture="Alt+9" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="8" />
-        <KeyBinding Gesture="Alt+0" Command="{Binding GoToTabAtIndexCommand}" CommandParameter="9" />
-        <KeyBinding Gesture="Ctrl+1" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="0" />
-        <KeyBinding Gesture="Ctrl+2" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="1" />
-        <KeyBinding Gesture="Ctrl+3" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="2" />
-        <KeyBinding Gesture="Ctrl+4" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="3" />
-        <KeyBinding Gesture="Ctrl+5" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="4" />
-        <KeyBinding Gesture="Ctrl+6" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="5" />
-        <KeyBinding Gesture="Ctrl+7" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="6" />
-        <KeyBinding Gesture="Ctrl+8" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="7" />
-        <KeyBinding Gesture="Ctrl+9" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="8" />
-        <KeyBinding Gesture="Ctrl+0" Command="{Binding GoToWorkspacePaneAtIndexCommand}" CommandParameter="9" />
         <KeyBinding Gesture="F7" Command="{Binding NavigatePreviousNotificationCommand}" />
         <KeyBinding Gesture="F8" Command="{Binding NavigateNextNotificationCommand}" />
         <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding NavigateBackCommand}" />
@@ -97,18 +77,33 @@
                                ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
                 </Panel>
 
-                <Button Grid.Column="3"
-                        Classes="settings-gear"
-                        Content="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
-                        ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
-                        Click="OnOpenScheduledTasksClicked" />
+                <Panel Grid.Column="3">
+                    <Button Classes="settings-gear"
+                            ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
+                            Click="OnOpenScheduledTasksClicked">
+                        <TextBlock Text="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
+                                   Classes.scheduled-tool-running="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}" />
+                    </Button>
+                    <TextBlock Text="❗"
+                               Foreground="{DynamicResource Theme.Status.Bad}"
+                               FontSize="9"
+                               FontWeight="Bold"
+                               IsHitTestVisible="False"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Top"
+                               Margin="0,-2,-2,0"
+                               IsVisible="{Binding ScheduledToolsRunning.HasFailure, FallbackValue=False}"
+                               ToolTip.Tip="A scheduled tool run has failed" />
+                </Panel>
 
                 <Panel Grid.Column="4">
                     <Button x:Name="NotificationBellButton"
                             Classes="settings-gear"
-                            Content="🔔"
                             ToolTip.Tip="Notifications"
-                            Command="{Binding NotificationsViewModel.ToggleOpenCommand}" />
+                            Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
+                        <TextBlock Text="🔔"
+                                   Classes.notification-bell-ringing="{Binding NotificationsViewModel.HasActiveRun}" />
+                    </Button>
                     <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
                                IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
                                Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
@@ -151,7 +146,7 @@
                 </Border>
 
                 <ScrollViewer Grid.Row="1">
-                    <ItemsControl ItemsSource="{Binding SelectedTopLevelView.Entities}">
+                    <ItemsControl ItemsSource="{Binding CurrentViewPopulation.Entities}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ViewEntityViewModel">
                                 <StackPanel Margin="{Binding IndentMargin}"

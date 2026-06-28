@@ -1,5 +1,5 @@
+using System;
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -21,13 +21,16 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider;
     private readonly Func<string, CancellationToken, Task<int>>? processRunner;
+    private readonly Func<string> defaultCliPathResolver;
 
     public VsCodeTunnelDiscoveryTool(
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
-        Func<string, CancellationToken, Task<int>>? processRunner = null)
+        Func<string, CancellationToken, Task<int>>? processRunner = null,
+        Func<string>? defaultCliPathResolver = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
         this.processRunner = processRunner;
+        this.defaultCliPathResolver = defaultCliPathResolver ?? VsCodeCliLocator.ResolveDefaultCliPath;
     }
 
     public string ToolType => "vscode-tunnel-discovery";
@@ -41,11 +44,19 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
         if (tunnelName is null)
         {
-            return new WorkspaceToolExecutionResult();
+            return WorkspaceToolExecutionResult.Failure($"Tunnel JSON not found or unreadable at {tunnelJsonPath}");
         }
 
-        var cliPath = ResolveCliPath(context.Tool.Data);
-        var active = await this.CheckTunnelActiveAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+        var cliPath = this.ResolveCliPath(context.Tool.Data);
+        bool active;
+        try
+        {
+            active = await this.CheckTunnelActiveAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return WorkspaceToolExecutionResult.Failure($"Failed to run VS Code CLI: {ex.Message}");
+        }
 
         var entityName = this.BuildEntityName();
         var entityId = CreateDeterministicEntityId(entityName);
@@ -71,7 +82,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             },
             context.CancellationToken).ConfigureAwait(false);
 
-        return new WorkspaceToolExecutionResult();
+        return WorkspaceToolExecutionResult.Success();
     }
 
     private EntityName BuildEntityName()
@@ -141,7 +152,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
         return null;
     }
 
-    private static string ResolveCliPath(JsonElement? toolData)
+    private string ResolveCliPath(JsonElement? toolData)
     {
         if (toolData is JsonElement toolDataValue
             && toolDataValue.ValueKind == JsonValueKind.Object
@@ -152,32 +163,19 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             return pathElement.GetString()!;
         }
 
-        return "code";
+        return this.defaultCliPathResolver();
     }
 
     private async Task<bool> CheckTunnelActiveAsync(string cliPath, CancellationToken cancellationToken)
     {
-        try
-        {
-            var runner = this.processRunner ?? DefaultRunTunnelStatusAsync;
-            var exitCode = await runner(cliPath, cancellationToken).ConfigureAwait(false);
-            return exitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
+        var runner = this.processRunner ?? DefaultRunTunnelStatusAsync;
+        var exitCode = await runner(cliPath, cancellationToken).ConfigureAwait(false);
+        return exitCode == 0;
     }
 
     private static async Task<int> DefaultRunTunnelStatusAsync(string cliPath, CancellationToken cancellationToken)
     {
-        var psi = new ProcessStartInfo(cliPath, "tunnel status")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
+        var psi = VsCodeCliLocator.BuildProcessStartInfo(cliPath, "tunnel status");
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start process: {cliPath}");
@@ -188,9 +186,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
     private static EntityId CreateDeterministicEntityId(EntityName entityName)
     {
-        var canonicalName = JsonSerializer.Serialize(entityName.Components);
-        var hash = MD5.HashData(Encoding.UTF8.GetBytes(canonicalName));
-        return new EntityId(new Guid(hash));
+        return DeterministicEntityId.Create(entityName.Components);
     }
 
     private static string BuildVsCodeTunnelJson(

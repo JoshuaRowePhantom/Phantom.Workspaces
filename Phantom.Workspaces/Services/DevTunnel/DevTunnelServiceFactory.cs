@@ -48,7 +48,7 @@ public sealed class DevTunnelServiceFactory
         return new DevTunnelManagementClientWrapper(managementClient);
     }
 
-    private async Task<AuthenticationHeaderValue> GetAuthenticationHeaderAsync()
+    private async Task<AuthenticationHeaderValue?> GetAuthenticationHeaderAsync()
     {
         var token = await this.authTokenProvider.GetAccessTokenAsync().ConfigureAwait(false);
         return new AuthenticationHeaderValue(TunnelAuthenticationSchemes.GitHub, token);

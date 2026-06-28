@@ -298,11 +298,66 @@ public sealed class InputQueueViewModelTests
 
 
     [AvaloniaFact]
+    public async Task SubmitToMostRecentQueue_WithTextAndAttachment_SendsBothAndClearsState()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.HoldAllQueues();
+        viewModel.CreateNewQueue();
+        viewModel.DefaultComposer.AppendImageAttachment(TinyPng, "image/png", 640, 480, "shot.png");
+        viewModel.DefaultComposer.InputText += " hello";
+
+        viewModel.SubmitToMostRecentQueue();
+
+        Assert.Empty(viewModel.InputText);
+        Assert.False(viewModel.DefaultComposer.HasAttachments);
+        Assert.Single(viewModel.Queues[1].Items);
+        var item = viewModel.Queues[1].Items[0];
+        Assert.Contains("hello", item.Text);
+        Assert.Single(item.Attachments);
+        Assert.Equal("image/png", item.Attachments[0].Label);
+    }
+
+    [AvaloniaFact]
+    public async Task SubmitToMostRecentQueue_WithAttachmentOnly_SubmitsAndClearsState()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.HoldAllQueues();
+        viewModel.CreateNewQueue();
+        viewModel.DefaultComposer.AppendImageAttachment(TinyPng, "image/png", 640, 480, "shot.png");
+        // InputText contains only the placeholder; sanitised text is empty — should still submit
+
+        var submitted = viewModel.SubmitToMostRecentQueue();
+
+        Assert.True(submitted);
+        Assert.Empty(viewModel.InputText);
+        Assert.False(viewModel.DefaultComposer.HasAttachments);
+        var item = Assert.Single(viewModel.Queues[1].Items);
+        Assert.Single(item.Attachments);
+    }
+
+    [AvaloniaFact]
+    public async Task SubmitToMostRecentQueue_WithEmptyComposer_DoesNotSubmit()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.HoldAllQueues();
+        viewModel.CreateNewQueue();
+
+        var submitted = viewModel.SubmitToMostRecentQueue();
+
+        Assert.False(submitted);
+        Assert.Empty(viewModel.Queues[1].Items);
+    }
+
+    [AvaloniaFact]
     public async Task ToggleHoldAllQueues_WhenAnyNotHeld_HoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
 
         viewModel.ToggleHoldAllQueues();
@@ -316,6 +371,7 @@ public sealed class InputQueueViewModelTests
         await using var chat = await CreateChatAsync();
 
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "hello";
         viewModel.SubmitToNewQueue();
         viewModel.ToggleHoldAllQueues();
 
@@ -353,6 +409,26 @@ public sealed class InputQueueViewModelTests
         viewModel.UnholdAllQueues();
 
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
+    }
+
+    [AvaloniaFact]
+    public async Task NonDefaultQueue_SetImmediacyCommand_ChangesSelectedImmediacyOptionLabel()
+    {
+        // Issue #127: the header status pill binds SetImmediacyCommand on InputQueueGroupViewModel.
+        // Verify the command path correctly updates SelectedImmediacyOption.Label.
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "one";
+        viewModel.SubmitToNewQueue();
+
+        var queueVm = viewModel.Queues[1];
+        Assert.Equal("queued", queueVm.SelectedImmediacyOption.Label);
+
+        queueVm.SetImmediacyCommand.Execute(queueVm.HeldImmediacyOption);
+
+        Assert.Equal("held", queueVm.SelectedImmediacyOption.Label);
+        Assert.True(queueVm.IsHeld);
     }
 
     [AvaloniaFact]

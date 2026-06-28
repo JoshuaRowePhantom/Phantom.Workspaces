@@ -111,7 +111,10 @@ public class ControllableWebViewControl : NativeWebView, IControllableBrowser
     }
 
     private void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs e)
-        => this.JavaScriptMessageReceived?.Invoke(this, e.Body);
+    {
+        if (e.Body is { } body)
+            this.JavaScriptMessageReceived?.Invoke(this, body);
+    }
 
     private void DeliverMessage(string message)
         => _ = this.InvokeScript(

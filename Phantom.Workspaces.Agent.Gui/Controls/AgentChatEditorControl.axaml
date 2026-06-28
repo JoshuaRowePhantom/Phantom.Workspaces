@@ -66,13 +66,12 @@
                         <TextBlock Classes="agent-chat-status-line-separator"
                                    Text="•"
                                    VerticalAlignment="Center"
-                                   Opacity="{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"/>
+                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
-                                  IsHitTestVisible="{Binding Agent.AutoScrollDisabled}"
-                                  Opacity="{Binding Agent.AutoScrollDisabled, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"/>
+                                  Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <TextBlock Classes="agent-chat-status-line-separator"
                                    Text="•"
                                    VerticalAlignment="Center" />
@@ -80,8 +79,21 @@
                                 VerticalAlignment="Center"
                                 Command="{Binding Agent.ToggleReasoningVisibilityCommand}"
                                 ToolTip.Tip="Toggle reasoning text visibility (Ctrl+T)">
-                            <TextBlock Text="{Binding StatusLine.ReasoningIndicatorText}"
-                                       Classes.muted="{Binding !Agent.IsReasoningVisible}" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Panel>
+                                    <TextBlock Text="🧠"
+                                               Classes="agent-chat-status-line-brain-glyph" />
+                                    <TextBlock Text="⃠"
+                                               Classes="agent-chat-status-line-cancel-overlay"
+                                               IsVisible="{Binding !Agent.IsReasoningVisible}" />
+                                </Panel>
+                                <TextBlock Text="Showing Reasoning"
+                                           Classes="agent-chat-status-line-label"
+                                           IsVisible="{Binding Agent.IsReasoningVisible}" />
+                                <TextBlock Text="Not Showing Reasoning"
+                                           Classes="agent-chat-status-line-label muted"
+                                           IsVisible="{Binding !Agent.IsReasoningVisible}" />
+                            </StackPanel>
                         </Button>
                     </StackPanel>
                 </Border>

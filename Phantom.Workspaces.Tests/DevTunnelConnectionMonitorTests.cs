@@ -25,7 +25,7 @@ public sealed class DevTunnelConnectionMonitorTests
             options: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await monitor.StartAsync();
+        await monitor.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DevTunnelConnectionState.Connected, monitor.Status.State);
         Assert.Equal(resolution.BaseUri, monitor.Status.CurrentBaseUri);
@@ -52,7 +52,7 @@ public sealed class DevTunnelConnectionMonitorTests
             options: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await monitor.HandleConnectionFailedAsync(new InvalidOperationException("initial drop"));
+        await monitor.HandleConnectionFailedAsync(new InvalidOperationException("initial drop"), TestContext.Current.CancellationToken);
 
         Assert.Equal(DevTunnelConnectionState.Connected, monitor.Status.State);
         Assert.Equal(new Uri("https://t-6000.usw2.devtunnels.ms/"), monitor.Status.CurrentBaseUri);
@@ -75,7 +75,7 @@ public sealed class DevTunnelConnectionMonitorTests
             options: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await monitor.HandleConnectionFailedAsync(new InvalidOperationException("initial drop"));
+        await monitor.HandleConnectionFailedAsync(new InvalidOperationException("initial drop"), TestContext.Current.CancellationToken);
 
         Assert.Equal(DevTunnelConnectionState.Connected, monitor.Status.State);
         Assert.Equal(
@@ -99,7 +99,7 @@ public sealed class DevTunnelConnectionMonitorTests
             options: NoJitterOptions with { MaxAttempts = 3 },
             nextJitterSample: () => 0.0);
 
-        await monitor.HandleConnectionFailedAsync(new InvalidOperationException("initial drop"));
+        await monitor.HandleConnectionFailedAsync(new InvalidOperationException("initial drop"), TestContext.Current.CancellationToken);
 
         Assert.Equal(DevTunnelConnectionState.Failed, monitor.Status.State);
     }
@@ -115,7 +115,7 @@ public sealed class DevTunnelConnectionMonitorTests
             options: NoJitterOptions,
             nextJitterSample: () => 0.0);
 
-        await monitor.StartAsync();
+        await monitor.StartAsync(TestContext.Current.CancellationToken);
 
         // No failure reported: resolution happened exactly once (at start), none afterward.
         Assert.Equal(1, resolveCount);
