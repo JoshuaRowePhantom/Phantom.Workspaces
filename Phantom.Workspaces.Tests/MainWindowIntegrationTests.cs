@@ -1982,7 +1982,7 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabB);
 
         // tabB is active; notify tabA so it becomes the unread candidate.
-        viewModel.NotificationService.Notify(new TabDescriptor { TabId = "nav-prev-a" }, "test notification");
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "nav-prev-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
 
         viewModel.NavigatePreviousNotificationCommand.Execute(null);
 
@@ -2003,7 +2003,7 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabB);
 
         // tabB is active; notify tabA so it becomes the unread candidate.
-        viewModel.NotificationService.Notify(new TabDescriptor { TabId = "nav-next-a" }, "test notification");
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "nav-next-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
 
         viewModel.NavigateNextNotificationCommand.Execute(null);
 
@@ -2024,10 +2024,11 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabB);
 
         // tabB is active; notify tabA so it becomes the unread candidate.
-        viewModel.NotificationService.Notify(new TabDescriptor { TabId = "ctrl-f7-prev-a" }, "test notification");
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "ctrl-f7-prev-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
 
         var window = new MainWindow(viewModel);
         window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
 
@@ -2050,10 +2051,11 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabB);
 
         // tabB is active; notify tabA so it becomes the unread candidate.
-        viewModel.NotificationService.Notify(new TabDescriptor { TabId = "ctrl-f8-next-a" }, "test notification");
+        viewModel.NotificationService.Notify(new Notification(new TabDescriptor { TabId = "ctrl-f8-next-a" }, "Tab A", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
 
         var window = new MainWindow(viewModel);
         window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
 
