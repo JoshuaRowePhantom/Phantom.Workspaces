@@ -195,6 +195,239 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Empty(workspaceNode.Children);
     }
 
+    [Fact]
+    public void RepositoryEntityTypeViewJson_HasTraverseRelationshipsWithRelated()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        const string resourceName = "Phantom.Workspaces.Data.JsonEntities.entity_type_views.repository-entity-type-view.json";
+
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+
+        using var document = JsonDocument.Parse(stream);
+        var root = document.RootElement;
+
+        Assert.True(
+            root.TryGetProperty("traverse-relationships", out var traversals),
+            "repository-entity-type-view.json must contain a 'traverse-relationships' property");
+
+        Assert.Equal(JsonValueKind.Array, traversals.ValueKind);
+        Assert.NotEmpty(traversals.EnumerateArray());
+
+        var relatedEntry = traversals.EnumerateArray().FirstOrDefault(
+            static t => t.TryGetProperty("relationship-type-ids", out var ids)
+                && ids.EnumerateArray().Any(static id => id.GetString() == "related"));
+
+        Assert.True(
+            relatedEntry.ValueKind != JsonValueKind.Undefined,
+            "traverse-relationships must include an entry with relationship-type-ids containing 'related'");
+    }
+
+    [AvaloniaFact]
+    public async Task PullRequestsView_ShowsPullRequestsGroupedUnderRepository()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "repository"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var repoAId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "owner", "repo-a"]],
+              "display-name": { "default": "repo-a" }
+            }
+            """);
+        var repoBId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "owner", "repo-b"]],
+              "display-name": { "default": "repo-b" }
+            }
+            """);
+
+        var pr1Id = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request", "github-pull-request"],
+              "names": [["github-pull-requests", "owner", "repo-a", "1"]],
+              "display-name": { "default": "PR 1" }
+            }
+            """);
+        var pr2Id = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request", "github-pull-request"],
+              "names": [["github-pull-requests", "owner", "repo-a", "2"]],
+              "display-name": { "default": "PR 2" }
+            }
+            """);
+        var pr3Id = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request", "github-pull-request"],
+              "names": [["github-pull-requests", "owner", "repo-b", "3"]],
+              "display-name": { "default": "PR 3" }
+            }
+            """);
+
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "repo-a-pr1"]],
+              "participants": { "entities": ["{{repoAId.Value}}", "{{pr1Id.Value}}"] }
+            }
+            """);
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "repo-a-pr2"]],
+              "participants": { "entities": ["{{repoAId.Value}}", "{{pr2Id.Value}}"] }
+            }
+            """);
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "repo-b-pr3"]],
+              "participants": { "entities": ["{{repoBId.Value}}", "{{pr3Id.Value}}"] }
+            }
+            """);
+
+        var repoARoots = (await broker.GetEntitiesAsync([repoAId], ct)).ToArray();
+        var repoBRoots = (await broker.GetEntitiesAsync([repoBId], ct)).ToArray();
+        var assembler = new ViewHierarchyAssembler(broker);
+
+        var repoAHierarchy = await assembler.AssembleAsync(repoARoots, ct);
+        var repoBHierarchy = await assembler.AssembleAsync(repoBRoots, ct);
+
+        var repoANode = Assert.Single(repoAHierarchy);
+        Assert.Equal(repoAId, repoANode.Entity.EntityId);
+        Assert.Equal(2, repoANode.Children.Count);
+        Assert.Contains(repoANode.Children, c => c.Entity.EntityId == pr1Id);
+        Assert.Contains(repoANode.Children, c => c.Entity.EntityId == pr2Id);
+
+        var repoBNode = Assert.Single(repoBHierarchy);
+        Assert.Equal(repoBId, repoBNode.Entity.EntityId);
+        var child = Assert.Single(repoBNode.Children);
+        Assert.Equal(pr3Id, child.Entity.EntityId);
+    }
+
+    [AvaloniaFact]
+    public async Task PullRequestsView_ShowsEmptyRepositoryNode_WhenNoPrsExist()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "repository"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var repoId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "owner", "empty-repo"]],
+              "display-name": { "default": "empty-repo" }
+            }
+            """);
+
+        var roots = (await broker.GetEntitiesAsync([repoId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var repoNode = Assert.Single(hierarchy);
+        Assert.Equal(repoId, repoNode.Entity.EntityId);
+        Assert.Empty(repoNode.Children);
+    }
+
+    [AvaloniaFact]
+    public async Task PullRequestsView_ShowsPullRequestsFromMultipleProviders()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "repository"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var githubRepoId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "org", "gh-repo"]],
+              "display-name": { "default": "gh-repo" }
+            }
+            """);
+        var gitRepoId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository"],
+              "names": [["git-repositories", "https://example.com/git-repo.git"]],
+              "display-name": { "default": "git-repo" }
+            }
+            """);
+
+        var githubPrId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request", "github-pull-request"],
+              "names": [["github-pull-requests", "org", "gh-repo", "42"]],
+              "display-name": { "default": "GitHub PR #42" }
+            }
+            """);
+        var gitPrId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request"],
+              "names": [["git-pull-requests", "https://example.com/git-repo.git", "7"]],
+              "display-name": { "default": "Git PR #7" }
+            }
+            """);
+
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "gh-repo-pr42"]],
+              "participants": { "entities": ["{{githubRepoId.Value}}", "{{githubPrId.Value}}"] }
+            }
+            """);
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "git-repo-pr7"]],
+              "participants": { "entities": ["{{gitRepoId.Value}}", "{{gitPrId.Value}}"] }
+            }
+            """);
+
+        var assembler = new ViewHierarchyAssembler(broker);
+
+        var githubRoots = (await broker.GetEntitiesAsync([githubRepoId], ct)).ToArray();
+        var githubHierarchy = await assembler.AssembleAsync(githubRoots, ct);
+        var githubNode = Assert.Single(githubHierarchy);
+        var githubChild = Assert.Single(githubNode.Children);
+        Assert.Equal(githubPrId, githubChild.Entity.EntityId);
+
+        var gitRoots = (await broker.GetEntitiesAsync([gitRepoId], ct)).ToArray();
+        var gitHierarchy = await assembler.AssembleAsync(gitRoots, ct);
+        var gitNode = Assert.Single(gitHierarchy);
+        var gitChild = Assert.Single(gitNode.Children);
+        Assert.Equal(gitPrId, gitChild.Entity.EntityId);
+    }
+
     private static Task<EntityId> SeedNoteAsync(IDataAccessLayer dataAccessLayer, string name, string displayName)
         => SeedAsync(
             dataAccessLayer,

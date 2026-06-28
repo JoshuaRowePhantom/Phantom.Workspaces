@@ -1,0 +1,11 @@
+{
+  "entity-id": "b3c7e9f1-4a2d-4e8b-9c6a-1d5f7a3b8e2c",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "repository"]],
+  "display-name": { "default": "Repository View" },
+  "fields": [],
+  "traversed-entity-display-disposition": "collapsed",
+  "traverse-relationships": [
+    { "relationship-type-ids": ["related"] }
+  ]
+}
