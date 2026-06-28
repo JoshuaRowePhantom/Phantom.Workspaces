@@ -1,0 +1,33 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git-repository.json",
+  "description": "Schema for git-layer repository entities with git-specific remote URL fields.",
+  "allOf": [
+    {
+      "$ref": "repository.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "git-repository"
+      }
+    },
+    "clone-url": {
+      "type": "string",
+      "format": "uri",
+      "description": "HTTPS clone URL"
+    },
+    "ssh-url": {
+      "type": "string",
+      "description": "SSH clone URL"
+    }
+  }
+}

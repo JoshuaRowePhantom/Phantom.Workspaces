@@ -1,0 +1,64 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/work-item.json",
+  "description": "Platform-agnostic schema for work item entities shared by all issue-tracking integrations.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    },
+    {
+      "$ref": "task.json"
+    },
+    {
+      "$ref": "external.json"
+    }
+  ],
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "work-item"
+      }
+    },
+    "title": {
+      "$ref": "core.json#/$defs/local-string",
+      "description": "Title or summary of the work item"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "in-progress",
+        "closed"
+      ],
+      "description": "Current status of the work item",
+      "x-field-status": {
+        "good-status-values": [
+          "closed"
+        ],
+        "bad-status-values": []
+      }
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Platform-native label/tag strings"
+    },
+    "related-commits": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Git commit SHA linked to this work item"
+      },
+      "description": "Git commit SHAs explicitly associated with this work item by the source platform"
+    }
+  }
+}

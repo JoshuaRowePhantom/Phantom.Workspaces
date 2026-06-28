@@ -655,6 +655,24 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         }
     }
 
+    /// <summary>
+    /// Re-establishes the insertion point after a DOM failure by discarding the current transformer,
+    /// clearing message slots, and re-inserting the container via <c>Append</c> into
+    /// <paramref name="containerPath"/> — a location that is always reachable (e.g. the static
+    /// running-items region).  Activates a fresh inner transformer so subsequent streaming chunks
+    /// arrive into the newly-placed contents div.
+    /// </summary>
+    public void ReInsert(string containerPath)
+    {
+        this.IsInserted = false;
+        this.transformer?.Dispose();
+        this.transformer = null;
+        this.messageSlots.Clear();
+        this.sink.UpdateContent(containerPath, ChatOutputUpdateLocation.Append, this.BuildHtml());
+        this.IsInserted = true;
+        this.Activate();
+    }
+
     public void Dispose() => this.transformer?.Dispose();
 }
 
@@ -792,6 +810,26 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.sink.ScrollToBottom();
+    }
+
+    /// <summary>
+    /// Called when the browser reports that a DOM command targeting
+    /// <paramref name="failedPath"/> was silently dropped because the element did not exist.
+    /// Finds the affected running-item model (by its element id or its contents-div id) and
+    /// calls <see cref="RunningChatItemHtmlModel.ReInsert"/> to recover the insertion point
+    /// using a stable <c>Append</c> fallback.
+    /// </summary>
+    public void NotifyInsertionFailed(string failedPath)
+    {
+        foreach (var model in this.runningModels)
+        {
+            if (model.ElementId == failedPath ||
+                ChatOutputHtmlRenderer.RunningItemContentsId(model.ElementId) == failedPath)
+            {
+                model.ReInsert(ChatOutputHtmlRenderer.RunningContainerId);
+                return;
+            }
+        }
     }
 
     public void Dispose()

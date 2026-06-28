@@ -1,0 +1,33 @@
+{
+  "entity-id": "f54fdd80-d425-4425-9bed-4479cf2d4cdc",
+  "entity-display-order": 370,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/git-repository.json"
+    ],
+    [
+      "entity-types",
+      "git-repository"
+    ]
+  ],
+  "display-name": {
+    "default": "Git Repository Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/git-repository-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/git-repository.json"
+  },
+  "default-name-prefixes": []
+}

@@ -52,6 +52,19 @@ public abstract class TransientPopupViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.IsAutoClosing));
     }
 
+    /// <summary>
+    /// Trigger the hold → fade close sequence without changing <see cref="IsOpen"/>.
+    /// Use this when a user action should let the popup fade naturally instead of closing immediately.
+    /// Safe to call while the hold timer is already running: always restarts it from the full duration.
+    /// </summary>
+    public void TriggerFadeClose()
+    {
+        // Bypass SetProperty to force PropertyChanged on every call, so the control always
+        // restarts its hold timer — even when IsAutoClosing is already true.
+        this.isAutoClosing = true;
+        this.RaisePropertyChanged(nameof(this.IsAutoClosing));
+    }
+
     /// <summary>Immediately hide the popup without fading.</summary>
     public void Dismiss()
     {
