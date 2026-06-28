@@ -472,6 +472,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         [
             new Tools.VectorIndexerTool(),
             new Tools.GitWorkspaceScanTool(),
+            new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
         ]);
