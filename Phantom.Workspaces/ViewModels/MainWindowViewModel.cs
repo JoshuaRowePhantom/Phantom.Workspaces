@@ -2817,7 +2817,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return false;
         }
 
-        queryRequest = deserialized;
+        queryRequest = deserialized with
+        {
+            RelationshipsToReturn = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
+                ? relationshipsToReturn
+                : null,
+        };
         return true;
     }
 
