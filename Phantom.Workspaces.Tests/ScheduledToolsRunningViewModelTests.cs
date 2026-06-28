@@ -255,4 +255,87 @@ public sealed class ScheduledToolsRunningViewModelTests
         var run = Assert.Single(row.RecentRuns);
         Assert.Equal(TimeSpan.FromSeconds(5), run.Duration);
     }
+
+    [Fact]
+    public async Task HasFailure_IsTrueOnViewModel_WhenAnyToolHasLastRunFailed()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "oops");
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(viewModel.HasFailure);
+    }
+
+    [Fact]
+    public async Task HasFailure_IsFalseOnViewModel_WhenAllRunsSucceeded()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(viewModel.HasFailure);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_DoesNotDuplicateRow_WhenCalledTwice()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(viewModel.Tools);
+    }
+
+    [Fact]
+    public async Task ExpandCommand_TogglesIsExpanded_AndTriggersRecentRunsLoad()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        Assert.False(row.IsExpanded);
+        Assert.Empty(row.RecentRuns);
+
+        row.ExpandCommand.Execute(null);
+
+        Assert.True(row.IsExpanded);
+        Assert.Single(row.RecentRuns);
+    }
+
+    [Fact]
+    public async Task ExpandCommand_CollapsesRow_WhenExecutedWhileExpanded()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        row.ExpandCommand.Execute(null);
+        Assert.True(row.IsExpanded);
+
+        row.ExpandCommand.Execute(null);
+        Assert.False(row.IsExpanded);
+    }
 }
