@@ -123,7 +123,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append(">");
         builder.Append("<summary class=\"chat-collapsible-summary\">tool ").Append(callSummary).Append("</summary>");
 
-        builder.Append("<details class=\"chat-tool-call\">");
+        builder.Append("<details class=\"chat-tool-call\" open>");
         builder.Append("<summary class=\"chat-collapsible-summary\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
@@ -135,7 +135,7 @@ internal static class ChatOutputHtmlRenderer
         if (resultJson is not null)
         {
             var resultSummary = FirstLine(resultJson);
-            builder.Append("<details class=\"chat-tool-result\">");
+            builder.Append("<details class=\"chat-tool-result\" open>");
             builder.Append("<summary class=\"chat-collapsible-summary\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
@@ -267,7 +267,6 @@ internal static class ChatOutputHtmlRenderer
         AIContent content,
         bool includeReasoning,
         bool isDiagnostic,
-        bool includeDiagnostics = true,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -281,9 +280,7 @@ internal static class ChatOutputHtmlRenderer
 
                 return TextBlock(contentId, "chat-reasoning", reasoning.Text, SerializeContentJson(reasoning));
             case TextContent text when isDiagnostic && !string.IsNullOrWhiteSpace(text.Text):
-                return includeDiagnostics
-                    ? RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text), SerializeContentJson(text))
-                    : null;
+                return RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text), SerializeContentJson(text));
             case TextContent text:
                 return string.IsNullOrWhiteSpace(text.Text) ? null : MarkdownBlock(contentId, "chat-text", text.Text, SerializeContentJson(text));
             case FunctionCallContent call:
