@@ -225,8 +225,14 @@ internal sealed class ChatMessageHtmlModel
                 continue;
             }
 
+            if (isDiagnostic && !includeDiagnostics && content is TextContent)
+            {
+                contentIndex++;
+                continue;
+            }
+
             var contentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
-            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, includeDiagnostics, this.toolFactory, this.statusSink);
+            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
