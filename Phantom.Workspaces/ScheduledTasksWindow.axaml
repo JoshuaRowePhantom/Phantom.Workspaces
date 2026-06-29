@@ -72,8 +72,11 @@
                 <TextBlock Text="Select a task above to see its run history."
                            IsVisible="{Binding SelectedTask, Converter={x:Static ObjectConverters.IsNull}}"
                            Opacity="0.7" />
+                <TextBlock Text="No runs recorded for this task."
+                           IsVisible="{Binding HasNoRunsForSelectedTask}"
+                           Opacity="0.7" />
                 <TreeView ItemsSource="{Binding SelectedToolRow.RecentRuns}"
-                          IsVisible="{Binding SelectedTask, Converter={x:Static ObjectConverters.IsNotNull}}">
+                          IsVisible="{Binding SelectedToolRow, Converter={x:Static ObjectConverters.IsNotNull}}">
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate ItemsSource="{Binding SubRuns}">
                             <StackPanel Orientation="Horizontal" Spacing="8">

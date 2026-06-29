@@ -2473,6 +2473,7 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain(entities, e => e.IndentLevel > 0);
     }
 
+
     // ── Single-window guard tests (issue #240) ────────────────────────────────
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -2547,6 +2548,22 @@ public sealed class MainWindowIntegrationTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(trackingField);
         Assert.Null(trackingField!.GetValue(mainWindow));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_RunVsCodeTunnelTool_IsRegistered()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var hostField = typeof(MainWindowViewModel).GetField(
+            "scheduledToolHost",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(hostField);
+        var host = Assert.IsType<Phantom.Workspaces.ScheduledTools.ScheduledToolHost>(hostField!.GetValue(viewModel));
+
+        Assert.True(host.TryGetTool("run-vscode-tunnel", out _));
+
     }
 
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
