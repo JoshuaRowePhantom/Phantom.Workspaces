@@ -75,4 +75,18 @@ public sealed class ReverseTrustedExecutor : ITrustedExecutor
 
         return connection.OpenStreamAsync(request, ct);
     }
+
+    /// <inheritdoc />
+    public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!this.registry.TryGetConnection(request.TargetClientInstance, out var connection))
+        {
+            throw new InvalidOperationException(
+                $"No reverse connection is available to run a tool on client instance '{request.TargetClientInstance}'.");
+        }
+
+        return connection.RunToolAsync(request, cancellationToken);
+    }
 }

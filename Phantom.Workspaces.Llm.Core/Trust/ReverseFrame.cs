@@ -51,6 +51,9 @@ public sealed record ReverseFrame
     /// <summary>stream-data: the <see cref="Phantom.Workspaces.Llm.Shell.StreamFrameKind"/> byte (0=Data, 1=Control).</summary>
     public byte? StreamFrameKindByte { get; init; }
 
+    /// <summary>run-tool: the tool execution request to run on C.</summary>
+    public TrustedToolRequest? ToolRequest { get; init; }
+
     public static class Types
     {
         public const string Register = "register";
@@ -67,6 +70,12 @@ public sealed record ReverseFrame
 
         /// <summary>Both directions: the byte stream is closed (no more data will follow for this correlation).</summary>
         public const string StreamClose = "stream-close";
+
+        /// <summary>S→C: run a workspace tool on the connecting instance.</summary>
+        public const string RunTool = "run-tool";
+
+        /// <summary>C→S: the tool run requested by a <c>run-tool</c> frame has completed (successfully or with an error).</summary>
+        public const string RunToolComplete = "run-tool-complete";
     }
 }
 

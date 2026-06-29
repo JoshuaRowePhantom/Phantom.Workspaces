@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ScheduledTools;
 using Phantom.Workspaces.Tools;
 using Xunit;
@@ -400,5 +404,61 @@ public sealed class ScheduledToolHostTests
             ],
         });
         return result.Batches.SelectMany(batch => batch.Entities).Select(entity => entity.Data!.Value).ToArray();
+    }
+
+    private sealed class CapturingExecutor : ITrustedExecutor
+    {
+        private readonly string targetClientInstance;
+
+        public CapturingExecutor(string targetClientInstance) => this.targetClientInstance = targetClientInstance;
+
+        public TrustedToolRequest? ReceivedRequest { get; private set; }
+
+        public bool CanExecute(string targetClientInstance)
+            => string.Equals(targetClientInstance, this.targetClientInstance, StringComparison.Ordinal);
+
+        public Task<AgentChat> CreateAgentChatAsync(
+            TrustedExecutionRequest request,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
+        {
+            this.ReceivedRequest = request;
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task RunDueTools_WithRemoteExecutor_RoutesViaExecutorInsteadOfRunningLocally()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var tool = new RecordingTool();
+        var executor = new CapturingExecutor(new EntityId(hostId).ToString());
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([tool]),
+            executors: [executor],
+            timeProvider: new FixedTimeProvider());
+
+        var ranCount = await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, ranCount);
+        Assert.Equal(0, tool.RunCount);
+        Assert.NotNull(executor.ReceivedRequest);
+        Assert.Equal("stub", executor.ReceivedRequest!.ToolTypeName);
     }
 }

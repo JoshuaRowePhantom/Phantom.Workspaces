@@ -384,6 +384,33 @@ public sealed class AgentChat : IAsyncDisposable
     }
 
     /// <summary>
+    /// Runs a single agent turn directly, bypassing the input queue, and streams back the
+    /// resulting <see cref="ChatResponseUpdate"/>s. History prepended to the LLM call is
+    /// sourced from the configured <see cref="Phantom.Workspaces.Llm.Interfaces.IAgentPersistenceStore"/>;
+    /// with <see cref="NullAgentPersistenceStore"/> only the caller-supplied messages are forwarded.
+    /// </summary>
+    /// <remarks>
+    /// This method is intended for headless (server-side) use by <see cref="AgentChatSessionCache"/>
+    /// where UI state management (running items, history conflation) is not required. It must not be
+    /// called concurrently with <see cref="EnqueueUserContents"/> on the same instance.
+    /// </remarks>
+    public async IAsyncEnumerable<ChatResponseUpdate> RunSingleTurnAsync(
+        IReadOnlyList<ChatMessage> messages,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        var session = this.GetSession();
+        var runOptions = this.CreateRunOptions();
+        await foreach (var update in session
+            .RunStreamAsync(messages.ToArray(), runOptions, cancellationToken)
+            .AsChatResponseUpdatesAsync()
+            .ConfigureAwait(false))
+        {
+            yield return update;
+        }
+    }
+
+    /// <summary>
     /// Adds a user message to the target queue and waits for submission before history is created.
     /// </summary>
     public void EnqueueUserMessage(string text)
@@ -1414,9 +1441,9 @@ public sealed class AgentChat : IAsyncDisposable
 
     private void RegisterSlashCommands(IChatClient resolvedClient)
     {
-        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient)
+        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
         {
-            this.slashCommands.Register(new WorkingDirectorySlashCommandHandler());
+            this.slashCommands.Register(new CopilotSdkWorkingDirectorySlashCommandHandler(copilotSdkClient));
         }
 
         this.slashCommands.Register(new HelpSlashCommandHandler(this.slashCommands));

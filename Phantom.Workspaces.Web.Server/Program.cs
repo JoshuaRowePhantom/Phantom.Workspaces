@@ -10,6 +10,9 @@ builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 var reverseExecutionRegistry = new ReverseExecutionRegistry();
 builder.Services.AddSingleton(reverseExecutionRegistry);
 
+var localTrustedExecutor = new LocalTrustedExecutor();
+builder.Services.AddSingleton(localTrustedExecutor);
+
 var app = builder.Build();
 
 app.UseWebSockets();
@@ -19,5 +22,6 @@ app.MapWebDataAccessEndpoints();
 app.MapAgentEndpoints();
 app.MapReverseEndpoints(reverseExecutionRegistry);
 app.MapStreamEndpoints();
+app.MapWorkspaceToolEndpoints();
 
 app.Run();

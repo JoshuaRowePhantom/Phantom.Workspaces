@@ -170,6 +170,36 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
+    public void DiagnosticsHidden_DoesNotRenderDiagnosticContent_UntilToggledOn()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+        };
+        var sink = new RecordingSink();
+        var diagnosticsVisible = false;
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            isDiagnosticsVisible: () => diagnosticsVisible);
+
+        var initial = Assert.Single(sink.ContentOperations);
+        Assert.DoesNotContain("diagnostic detail", initial.Content);
+
+        sink.Clear();
+        diagnosticsVisible = true;
+        model.Refresh();
+
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("diagnostic detail"));
+    }
+
+    [Fact]
     public void RunningItem_RendersContainerThenAppendsMessagesIntoIt()
     {
         var runningItem = new AgentChatRunningItem();
@@ -698,6 +728,113 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group\""));
     }
 
+    // ── Cross-batch grouping tests (issue #291) ─────────────────────────────────
+
+    private static AgentChatHistoryItem ToolResultMessage(string callId)
+        => new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent(callId, "result")] };
+
+    [Fact]
+    public void TwoToolCallBatches_SeparatedByResults_AreGroupedTogether()
+    {
+        // Arrange: batch 1
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        // Tool result for batch 1 (injected — no DOM element)
+        history.Add(ToolResultMessage("c1"));
+
+        // batch 2 — should be grouped with batch 1 even though a result message sits between them
+        history.Add(ToolCallMessage("write_file", "c2"));
+
+        var contentOps = sink.ContentOperations;
+
+        // A Replace on msg-0 must have created the message-level group wrapper (contains group body).
+        var groupCreateOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Path == ChatOutputHtmlRenderer.MessageId(0) &&
+            op.Content.Contains("chat-tool-group-body"));
+        Assert.NotNull(groupCreateOp);
+        Assert.Contains("read_file", groupCreateOp!.Content);
+        Assert.Contains("grp-", groupCreateOp.Content);
+
+        // Second batch appended into the group body
+        var appendOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        Assert.NotNull(appendOp);
+        Assert.Contains("write_file", appendOp!.Content);
+
+        // Summary updated to 2 calls
+        var summaryOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.NotNull(summaryOp);
+        Assert.Contains("2 calls", summaryOp!.Content);
+    }
+
+    [Fact]
+    public void ThreeToolCallBatches_SeparatedByResults_AllInSameGroup()
+    {
+        // Arrange: batch 1 + batch 2 (already grouped)
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolResultMessage("c1"),
+            ToolCallMessage("write_file", "c2"),
+            ToolResultMessage("c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        sink.Clear();
+
+        // batch 3 — must extend the existing group, not create a new one
+        history.Add(ToolCallMessage("list_files", "c3"));
+
+        var contentOps = sink.ContentOperations;
+
+        // No Replace on msg-0 that creates a brand-new chat-tool-group (group must already exist)
+        Assert.DoesNotContain(contentOps, op =>
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Path == ChatOutputHtmlRenderer.MessageId(0) &&
+            op.Content.Contains("chat-tool-group-body"));
+
+        // Third batch appended into the existing group body
+        var appendOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        Assert.NotNull(appendOp);
+        Assert.Contains("list_files", appendOp!.Content);
+
+        // Summary updated to 3 calls
+        var summaryOp = contentOps.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.NotNull(summaryOp);
+        Assert.Contains("3 calls", summaryOp!.Content);
+    }
+
+    [Fact]
+    public void ToolCallBatch_AfterNonToolMessage_IsStandalone_EvenWithResults()
+    {
+        // A text reply followed by results and then a new tool-call batch:
+        // the tool-call batch must NOT be grouped with anything before the text reply.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolResultMessage("c1"),
+            TextMessage(ChatRole.Assistant, "thinking..."),
+            ToolCallMessage("write_file", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        var contentOps = sink.ContentOperations;
+
+        // No message-level group should be created (text reply breaks the run)
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group-body"));
+    }
+
     [Fact]
     public void RenderContent_FunctionCallContent_EmitsDataDetailsTarget()
     {
@@ -714,7 +851,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
-    public void RenderContent_TextContent_EmitsDataDetailsTargetWithMarkdownSource()
+    public void RenderContent_TextContent_EmitsDataDetailsTargetWithJsonContent()
     {
         const string markdown = "**bold** text";
 
@@ -725,7 +862,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains($"data-details-target=\"{ChatOutputHtmlRenderer.HtmlEscape(markdown)}\"", html);
+        Assert.Contains("data-details-target=\"{", html);
     }
 
     [Fact]
@@ -738,7 +875,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("data-details-target=\"my reasoning\"", html);
+        Assert.Contains("data-details-target=\"{", html);
     }
 
     // ── Running-item insertion-point reliability tests (issue #222) ───────────

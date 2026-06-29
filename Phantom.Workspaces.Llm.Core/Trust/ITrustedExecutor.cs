@@ -46,4 +46,10 @@ public interface ITrustedExecutor
 
     /// <summary>Opens a streaming session and returns its duplex byte stream.</summary>
     Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Executes a scheduled workspace tool on the target client instance identified by
+    /// <see cref="TrustedToolRequest.TargetClientInstance"/>.
+    /// </summary>
+    Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default);
 }

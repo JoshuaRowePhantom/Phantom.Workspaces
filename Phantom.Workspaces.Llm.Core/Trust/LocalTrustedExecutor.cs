@@ -18,6 +18,7 @@ namespace Phantom.Workspaces.Llm.Trust;
 public sealed class LocalTrustedExecutor : ITrustedExecutor
 {
     private readonly Dictionary<string, ILocalStreamHandler> _streamHandlers = new(StringComparer.Ordinal);
+    private Func<TrustedToolRequest, CancellationToken, Task>? _toolRunner;
 
     public LocalTrustedExecutor()
     {
@@ -41,6 +42,17 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
         ArgumentNullException.ThrowIfNull(kind);
         ArgumentNullException.ThrowIfNull(handler);
         _streamHandlers[kind] = handler;
+    }
+
+    /// <summary>
+    /// Registers a runner that will be called by <see cref="RunToolAsync"/> when a tool execution
+    /// request arrives for the local instance. Only one runner may be registered at a time; calling
+    /// this method again replaces the previous registration.
+    /// </summary>
+    public void RegisterToolRunner(Func<TrustedToolRequest, CancellationToken, Task> runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        _toolRunner = runner;
     }
 
     /// <summary>
@@ -99,5 +111,24 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
         var pair = new InMemoryStreamMessageChannelPair();
         _ = handler.HandleAsync(request.OpenPayload, pair.HostEnd, ct);
         return Task.FromResult<Stream>(new StreamMessageChannelStream(pair.ClientEnd));
+    }
+
+    /// <inheritdoc />
+    public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!this.CanExecute(request.TargetClientInstance))
+        {
+            throw new InvalidOperationException(
+                $"LocalTrustedExecutor cannot run a tool on client instance '{request.TargetClientInstance}'.");
+        }
+
+        if (_toolRunner is null)
+        {
+            throw new NotSupportedException("No tool runner has been registered on this LocalTrustedExecutor.");
+        }
+
+        return _toolRunner(request, cancellationToken);
     }
 }
