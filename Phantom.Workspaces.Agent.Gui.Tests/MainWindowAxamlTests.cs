@@ -530,6 +530,56 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void MainWindow_HasBrainIconSet()
+    {
+        // Issue #327: the agent chat window must declare Window.Icon pointing at the pre-rendered
+        // brain.ico so the OS taskbar / title bar shows a correctly-sized icon.
+        var mainWindowContent = ReadMainWindowAxaml();
+
+        Assert.Contains(
+            "<Window.Icon>",
+            mainWindowContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "avares://Phantom.Workspaces.Gui.Styles/Assets/brain.ico",
+            mainWindowContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BrainIco_FileExistsInGuiStylesAssets()
+    {
+        // Issue #327: the pre-rendered brain.ico must be present in the shared asset library.
+        var repositoryRoot = FindRepositoryRoot();
+        var icoPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Styles",
+            "Assets",
+            "brain.ico");
+
+        Assert.True(File.Exists(icoPath), $"brain.ico not found at: {icoPath}");
+    }
+
+    [Fact]
+    public void BrainIco_IsEmbeddedAsAvaloniaResource()
+    {
+        // Issue #327: brain.ico must be declared as an AvaloniaResource so it is accessible
+        // via the avares:// URI scheme at runtime.
+        var csprojContent = ReadGuiStylesFile("Phantom.Workspaces.Gui.Styles.csproj");
+
+        Assert.Contains(
+            "AvaloniaResource",
+            csprojContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "brain.ico",
+            csprojContent,
+            StringComparison.Ordinal);
+    }
+
     private static string ReadMainWindowAxaml()
     {
         return ReadAgentGuiFile("MainWindow.axaml");

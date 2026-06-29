@@ -8,8 +8,9 @@ public class WorkspaceDocument : Document
 {
     private bool hasUnreadNotification;
     private string baseTitle = string.Empty;
-    private readonly NotificationIndicatorTabHeaderItemViewModel notificationIndicator;
+    private readonly StatusTabHeaderItemViewModel statusIndicator;
     private readonly TabHeaderViewModel cachedTabHeader;
+    private IStatusItem? subscribedTabStatus;
 
     public WorkspaceDocument(WorkspaceTabViewModel tabViewModel)
     {
@@ -19,11 +20,33 @@ public class WorkspaceDocument : Document
         this.Title = this.baseTitle;
         this.CanClose = true;
 
-        this.notificationIndicator = new NotificationIndicatorTabHeaderItemViewModel();
+        this.statusIndicator = new StatusTabHeaderItemViewModel();
         this.cachedTabHeader = new TabHeaderViewModel { Title = this.baseTitle };
         this.RebuildTabHeaderItems();
+        this.UpdateStatusRunning();
 
         tabViewModel.PropertyChanged += OnTabViewModelPropertyChanged;
+        this.SubscribeToTabStatus(tabViewModel.TabStatus);
+    }
+
+    private void SubscribeToTabStatus(IStatusItem? tabStatus)
+    {
+        if (this.subscribedTabStatus is not null)
+            this.subscribedTabStatus.PropertyChanged -= this.OnTabStatusPropertyChanged;
+        this.subscribedTabStatus = tabStatus;
+        if (this.subscribedTabStatus is not null)
+            this.subscribedTabStatus.PropertyChanged += this.OnTabStatusPropertyChanged;
+    }
+
+    private void OnTabStatusPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(IStatusItem.RunningStatus))
+            this.UpdateStatusRunning();
+    }
+
+    private void UpdateStatusRunning()
+    {
+        this.statusIndicator.Status.RunningStatus = this.TabViewModel.TabStatus?.RunningStatus ?? RunningStatus.Idle;
     }
 
     private void OnTabViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -34,11 +57,16 @@ public class WorkspaceDocument : Document
             this.RebuildTabHeaderItems();
             this.UpdateTitle();
         }
+        else if (e.PropertyName is nameof(WorkspaceTabViewModel.TabStatus))
+        {
+            this.SubscribeToTabStatus(this.TabViewModel.TabStatus);
+            this.UpdateStatusRunning();
+        }
     }
 
     /// <summary>
     /// The cached tab header model for this document. Always contains a
-    /// <see cref="NotificationIndicatorTabHeaderItemViewModel"/> as the last item,
+    /// <see cref="StatusTabHeaderItemViewModel"/> as the last item,
     /// preceded by any icon items from <see cref="WorkspaceTabViewModel.TabHeader"/>.
     /// </summary>
     public TabHeaderViewModel EffectiveTabHeader => this.cachedTabHeader;
@@ -50,7 +78,7 @@ public class WorkspaceDocument : Document
         {
             if (this.hasUnreadNotification == value) return;
             this.hasUnreadNotification = value;
-            this.notificationIndicator.HasUnread = value;
+            this.statusIndicator.Status.ErrorStatus = value ? ErrorStatus.Error : ErrorStatus.None;
         }
     }
 
@@ -59,12 +87,12 @@ public class WorkspaceDocument : Document
         this.cachedTabHeader.Items.Clear();
         if (this.TabViewModel.TabHeader is { Items: { } items })
         {
-            foreach (var item in items.Where(i => i is not NotificationIndicatorTabHeaderItemViewModel))
+            foreach (var item in items.Where(i => i is not StatusTabHeaderItemViewModel))
             {
                 this.cachedTabHeader.Items.Add(item);
             }
         }
-        this.cachedTabHeader.Items.Add(this.notificationIndicator);
+        this.cachedTabHeader.Items.Add(this.statusIndicator);
     }
 
     private void UpdateTitle()

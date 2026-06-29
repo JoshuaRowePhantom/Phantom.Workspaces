@@ -16,6 +16,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
@@ -1010,6 +1011,138 @@ public sealed class MainWindowIntegrationTests
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute("99");
 
         Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("ff000001-ff00-4f00-8f00-ff0000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "ff000001-ff00-4f00-8f00-ff0000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-switch-a"]],
+              "display-name": { "default": "Notif Pane Switch A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("ff000002-ff00-4f00-8f00-ff0000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "ff000002-ff00-4f00-8f00-ff0000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-switch-b"]],
+              "display-name": { "default": "Notif Pane Switch B" },
+              "regions": []
+            }
+            """);
+
+        // Open both workspaces; after OpenWorkspaceAsync(B) pane B (index 1) is selected.
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane B while it is the selected pane.
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-switch-tab-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        // Switch to pane A so pane B's tab is no longer visible/active in the view.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+        // Post an unread notification to pane B's tab. Because pane B is not selected,
+        // OnActiveDockableChanged is not fired for it, so the notification stays unread.
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-pane-switch-tab-b" },
+            "Tab B", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        Assert.False(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
+
+        // Switch back to pane B — this should mark the notification as read.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+
+        Assert.True(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInCurrentPaneHasUnreadNotification_OnlyMarksTargetPaneTabRead()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("ff000003-ff00-4f00-8f00-ff0000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "ff000003-ff00-4f00-8f00-ff0000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-only-a"]],
+              "display-name": { "default": "Notif Pane Only A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("ff000004-ff00-4f00-8f00-ff0000000004");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "ff000004-ff00-4f00-8f00-ff0000000004",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-only-b"]],
+              "display-name": { "default": "Notif Pane Only B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane B (currently selected after OpenWorkspaceAsync(B)).
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-only-tab-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        // Switch to pane A and open a tab there.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-only-tab-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        // Post unread notifications to both tabs. Pane A is selected so tabA is visible,
+        // but the notification is posted directly; tabB's pane is not selected.
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-pane-only-tab-a" },
+            "Tab A", "test notification A", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-pane-only-tab-b" },
+            "Tab B", "test notification B", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        // Switch to pane B — only pane B's active tab notification should be marked read.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+
+        Assert.True(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-only-tab-b").IsRead,
+            "Switching to pane B should mark pane B's active tab notification as read.");
+        Assert.False(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-only-tab-a").IsRead,
+            "Pane A's tab notification should remain unread after switching away.");
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -3190,6 +3323,166 @@ public sealed class MainWindowIntegrationTests
             AgentDefinition = agentDefinition,
             ForegroundScheduler = TaskScheduler.Default,
         });
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_OpenSameSession_Twice_CreatesTwoTabsWithSameAgentChat()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("aa050001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa050001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "shared-chat-echo"]],
+              "display-name": { "default": "Shared Chat Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "shared-chat-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var agentTabs = documentDock!.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel as AgentSessionWorkspaceTabViewModel)
+            .Where(t => t is not null && string.Equals(
+                t.AgentSessionId, agentSessionEntity!.EntityId.ToString(), StringComparison.Ordinal))
+            .Select(t => t!)
+            .ToList();
+        Assert.Equal(2, agentTabs?.Count);
+
+        await WaitForAgentReadyAsync(agentTabs![0]);
+        await WaitForAgentReadyAsync(agentTabs![1]);
+
+        Assert.NotEqual(agentTabs[0].Id, agentTabs[1].Id);
+        Assert.NotNull(agentTabs[0].Lease);
+        Assert.NotNull(agentTabs[1].Lease);
+        Assert.Same(agentTabs[0].Lease!.AgentChat, agentTabs[1].Lease!.AgentChat);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionWorkspaceTabViewModel_DisposeWithLease_ReleasesChat_OnLastDispose()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("aa060001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa060001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "shared-dispose-echo"]],
+              "display-name": { "default": "Shared Dispose Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "shared-dispose-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var agentTabs = documentDock!.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel as AgentSessionWorkspaceTabViewModel)
+            .Where(t => t is not null && string.Equals(
+                t.AgentSessionId, agentSessionEntity!.EntityId.ToString(), StringComparison.Ordinal))
+            .Select(t => t!)
+            .ToList();
+        Assert.Equal(2, agentTabs?.Count);
+
+        await WaitForAgentReadyAsync(agentTabs![0]);
+        await WaitForAgentReadyAsync(agentTabs![1]);
+
+        Assert.NotNull(agentTabs[0].Lease);
+        Assert.NotNull(agentTabs[1].Lease);
+        var sharedChat = agentTabs[0].Lease!.AgentChat;
+        Assert.Same(sharedChat, agentTabs[1].Lease!.AgentChat);
+
+        // After disposing first tab, acquire on same key should return cached chat (second tab still holds lease)
+        await agentTabs[0].DisposeAsync();
+
+        var callCount = 0;
+        Task<AgentChat> TrackedFactory()
+        {
+            callCount++;
+            return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                    {
+                        "kind": "prompt",
+                        "name": "shared-dispose-echo",
+                        "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                        "tools": []
+                    }
+                    """),
+                AgentSessionId = agentSessionId,
+                ForegroundScheduler = TaskScheduler.Default,
+            });
+        }
+
+        var probe1 = await table.AcquireAsync(agentSessionId, TrackedFactory);
+        Assert.Equal(0, callCount); // factory not called — chat still alive via second tab
+        Assert.Same(sharedChat, probe1.AgentChat);
+        await probe1.DisposeAsync();
+
+        // After disposing second tab, the chat should be gone
+        await agentTabs[1].DisposeAsync();
+
+        var probe2 = await table.AcquireAsync(agentSessionId, TrackedFactory);
+        Assert.Equal(1, callCount); // factory called — chat was disposed and entry removed
+        await probe2.DisposeAsync();
     }
 
 }

@@ -14,10 +14,6 @@ namespace Phantom.Workspaces.ViewModels;
 /// <summary>A scheduled tool-relationship shown in the scheduled tasks view.</summary>
 public sealed class ScheduledTaskItemViewModel : ViewModelBase
 {
-    private bool isRunning;
-    private bool hasFailure;
-    private bool lastRunSucceeded;
-
     public ScheduledTaskItemViewModel(
         string toolType,
         string toolDisplayName,
@@ -45,25 +41,59 @@ public sealed class ScheduledTaskItemViewModel : ViewModelBase
 
     public bool HasNote => !string.IsNullOrWhiteSpace(this.Note);
 
+    public StatusItem Status { get; } = new();
+
     /// <summary>Whether the tool is currently executing an in-flight run.</summary>
     public bool IsRunning
     {
-        get => this.isRunning;
-        set => this.SetProperty(ref this.isRunning, value);
+        get => this.Status.RunningStatus == RunningStatus.Running;
+        set
+        {
+            var newStatus = value ? RunningStatus.Running : RunningStatus.Idle;
+            if (this.Status.RunningStatus != newStatus)
+            {
+                this.Status.RunningStatus = newStatus;
+                this.RaisePropertyChanged();
+            }
+        }
     }
 
     /// <summary>True when the most-recent completed run failed.</summary>
     public bool HasFailure
     {
-        get => this.hasFailure;
-        set => this.SetProperty(ref this.hasFailure, value);
+        get => this.Status.ErrorStatus == ErrorStatus.Error;
+        set
+        {
+            if (value && this.Status.ErrorStatus != ErrorStatus.Error)
+            {
+                this.Status.ErrorStatus = ErrorStatus.Error;
+                this.RaisePropertyChanged();
+            }
+            else if (!value && this.Status.ErrorStatus == ErrorStatus.Error)
+            {
+                this.Status.ErrorStatus = ErrorStatus.None;
+                this.RaisePropertyChanged();
+            }
+        }
     }
 
     /// <summary>True when the most-recent completed run succeeded.</summary>
     public bool LastRunSucceeded
     {
-        get => this.lastRunSucceeded;
-        set => this.SetProperty(ref this.lastRunSucceeded, value);
+        get => this.Status.ErrorStatus == ErrorStatus.Successful;
+        set
+        {
+            if (value && this.Status.ErrorStatus != ErrorStatus.Successful)
+            {
+                this.Status.ErrorStatus = ErrorStatus.Successful;
+                this.RaisePropertyChanged();
+            }
+            else if (!value && this.Status.ErrorStatus == ErrorStatus.Successful)
+            {
+                this.Status.ErrorStatus = ErrorStatus.None;
+                this.RaisePropertyChanged();
+            }
+        }
     }
 }
 

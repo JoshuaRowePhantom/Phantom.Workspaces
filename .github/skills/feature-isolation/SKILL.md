@@ -144,25 +144,27 @@ Then run the fast test suite:
 
 Read `scripts\test-results.log`. All suites must show `Failed: 0`. Fix any failures before proceeding.
 
-If a test failure appears unrelated to the current changes (e.g. a pre-existing race condition,
-timing sensitivity, or infrastructure dependency), treat it as a flaky test:
+If a test fails, perform root cause analysis before classifying it as transient:
 
-1. Re-run the test suite once to confirm the failure is non-deterministic:
+1. **Read the failure output and the affected files.** Determine whether the failure is plausibly related to the current changes by examining the failing test name, error message, and the files touched in this branch.
+2. **If the failure could be related to the current changes** — treat it as a real failure. Fix it before proceeding. Do not re-run to escape it.
+3. **Only if the failure is clearly unrelated** (different subsystem, a pre-existing known flake, infrastructure crash) — attempt a second run:
    ```powershell
    .\scripts\run-tests.ps1 -Mode fast
    ```
-2. If it passes on re-run, proceed — the failure was transient.
-3. If it fails consistently, investigate whether the current changes are the cause before proceeding.
-4. File a next-up GitHub issue for the flaky test regardless of whether you proceed:
-   ```powershell
-   gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces \
-     --title "Bug: flaky test — <TestName>" \
-     --label "bug,next-up" \
-     --body "## Flaky test report\n\n**Test:** <FullyQualifiedTestName>\n**Failure message:**\n\`\`\`\n<paste error output here>\n\`\`\`\n**Observed during:** fix/feature branch for issue #<ORIGINAL_NUMBER>\n**Why it appears unrelated:** <explain>"
-   ```
-5. Add a note to the original issue comment or commit message referencing the filed bug.
+4. **If it passes on the second run** — the failure was transient. File a next-up bug (see below) and proceed.
+5. **If it fails again on the second run** — investigate further: read the test code, identify the specific mechanism causing the failure (e.g. missing `await`, shared static state, timer dependency, missing `Dispose`). "Non-deterministic" is not an acceptable root cause. Either fix the test or document the specific mechanism in a filed bug before proceeding.
+6. **Only proceed past a failing test** when the root cause is confirmed to be outside the scope of the current change and is documented in a filed bug with a specific diagnosis.
 
-Do not attempt to fix flaky tests that are outside the scope of the current issue.
+File a next-up bug for any test failure that you proceed past:
+```powershell
+gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
+  --title "Bug: flaky test — <TestName>" `
+  --label "bug,next-up" `
+  --body "## Flaky test report`n`n**Test:** <FullyQualifiedTestName>`n**Failure message:**`n``````n<paste error output here>`n``````n**Observed during:** fix/feature branch for issue #<ORIGINAL_NUMBER>`n**Why it appears unrelated:** <explain>`n**Root cause diagnosis:** <specific mechanism — e.g. missing await on async setup, shared static counter not reset between tests>"
+```
+
+Add a note to the original issue comment or commit message referencing the filed bug.
 
 Run the full suite only when the change touches the filesystem or Git repository layers:
 ```powershell
@@ -233,7 +235,7 @@ dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Ob
 
 All `error ` lines from the build must be zero. Read `scripts\test-results.log`. If either the build or any tests fail:
 1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
-2. If the failure is unrelated to the merge or your changes (pre-existing flaky test), file a next-up bug for it (see flaky-test handling in Step 9), re-run once to confirm it is non-deterministic, and proceed if it passes. Otherwise fix the failing test or code.
+2. If the failure is unrelated to the merge or your changes (pre-existing flaky test), apply the root cause analysis process from Step 9 — read the failure, confirm it is clearly unrelated, attempt a second run, and document the specific root cause in a filed next-up bug before proceeding. Otherwise fix the failing test or code.
 3. Run tests again.
 4. Repeat until `Failed: 0` across all suites.
 

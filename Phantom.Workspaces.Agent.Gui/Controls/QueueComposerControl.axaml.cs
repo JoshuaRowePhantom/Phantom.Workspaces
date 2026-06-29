@@ -1,12 +1,15 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Avalonia.VisualTree;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
@@ -86,6 +89,32 @@ public partial class QueueComposerControl : UserControl
                 if (c == '\n')
                 {
                     caretLine++;
+                }
+            }
+
+            // In normal mode there are no '\n' characters, so caretLine above is always 0
+            // even when the text box wraps its content across multiple visual lines.
+            // Query the TextPresenter's layout to get the actual visual line index so that
+            // Up does not hijack history navigation when the caret is not on the first line.
+            if (caretLine == 0)
+            {
+                var presenter = tb.GetVisualDescendants()
+                    .OfType<TextPresenter>()
+                    .FirstOrDefault();
+                if (presenter is not null)
+                {
+                    var textLines = presenter.TextLayout.TextLines;
+                    for (var lineIndex = 1; lineIndex < textLines.Count; lineIndex++)
+                    {
+                        if (clampedCaret >= textLines[lineIndex].FirstTextSourceIndex)
+                        {
+                            caretLine = lineIndex;
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
                 }
             }
         }

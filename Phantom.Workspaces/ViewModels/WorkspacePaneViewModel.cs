@@ -61,6 +61,11 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         set => this.SetProperty(ref this.contentLayout, value);
     }
 
+    /// <summary>
+    /// Aggregated status from all tabs across all regions in this pane.
+    /// </summary>
+    public StatusItem PaneStatus { get; } = new();
+
     public void SetRegions(
         IEnumerable<WorkspaceRegionViewModel> regions)
     {
@@ -85,11 +90,69 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         }
     }
 
+    private readonly List<(WorkspaceRegionViewModel region, NotifyCollectionChangedEventHandler handler)> subscribedRegions = [];
+    private readonly List<(IStatusItem tabStatus, System.ComponentModel.PropertyChangedEventHandler handler)> subscribedTabStatuses = [];
+
     private void OnRegionsCollectionChanged(
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
         this.RaisePropertyChanged(nameof(this.HasRegions));
         this.RaisePropertyChanged(nameof(this.HasNoRegions));
+        this.ResubscribeToRegions();
+        this.RecomputePaneStatus();
+    }
+
+    private void ResubscribeToRegions()
+    {
+        // Unsubscribe from all region tab collections and tab statuses
+        foreach (var (region, handler) in this.subscribedRegions)
+            region.Tabs.CollectionChanged -= handler;
+        this.subscribedRegions.Clear();
+
+        foreach (var (tabStatus, handler) in this.subscribedTabStatuses)
+            tabStatus.PropertyChanged -= handler;
+        this.subscribedTabStatuses.Clear();
+
+        // Subscribe to each region's Tabs collection
+        foreach (var region in this.Regions)
+        {
+            NotifyCollectionChangedEventHandler tabsHandler = (_, _) =>
+            {
+                this.ResubscribeToTabStatuses();
+                this.RecomputePaneStatus();
+            };
+            region.Tabs.CollectionChanged += tabsHandler;
+            this.subscribedRegions.Add((region, tabsHandler));
+        }
+
+        this.ResubscribeToTabStatuses();
+    }
+
+    private void ResubscribeToTabStatuses()
+    {
+        foreach (var (tabStatus, handler) in this.subscribedTabStatuses)
+            tabStatus.PropertyChanged -= handler;
+        this.subscribedTabStatuses.Clear();
+
+        foreach (var tab in this.Regions.SelectMany(r => r.Tabs))
+        {
+            if (tab.TabStatus is { } ts)
+            {
+                System.ComponentModel.PropertyChangedEventHandler statusHandler = (_, _) => this.RecomputePaneStatus();
+                ts.PropertyChanged += statusHandler;
+                this.subscribedTabStatuses.Add((ts, statusHandler));
+            }
+        }
+    }
+
+    private void RecomputePaneStatus()
+    {
+        var allTabStatuses = this.Regions
+            .SelectMany(r => r.Tabs)
+            .Select(t => t.TabStatus)
+            .Where(s => s is not null)
+            .Select(s => s!);
+        StatusItemAggregator.UpdateFrom(this.PaneStatus, allTabStatuses);
     }
 }

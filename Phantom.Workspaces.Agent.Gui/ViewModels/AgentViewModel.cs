@@ -398,6 +398,12 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await this.DisposeViewResourcesAsync();
+        await this.agentChat.DisposeAsync();
+    }
+
+    public async ValueTask DisposeViewResourcesAsync()
+    {
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
@@ -407,7 +413,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         {
             runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
         }
-        await this.agentChat.DisposeAsync();
+        await Task.CompletedTask;
     }
 
     private Model? ResolveAgentModel()
