@@ -1414,9 +1414,9 @@ public sealed class AgentChat : IAsyncDisposable
 
     private void RegisterSlashCommands(IChatClient resolvedClient)
     {
-        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient)
+        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
         {
-            this.slashCommands.Register(new WorkingDirectorySlashCommandHandler());
+            this.slashCommands.Register(new CopilotSdkWorkingDirectorySlashCommandHandler(copilotSdkClient));
         }
 
         this.slashCommands.Register(new HelpSlashCommandHandler(this.slashCommands));
