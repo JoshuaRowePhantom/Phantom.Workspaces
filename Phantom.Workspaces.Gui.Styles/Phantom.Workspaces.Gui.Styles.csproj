@@ -9,6 +9,9 @@
     <PackageReference Include="Dock.Avalonia" />
   </ItemGroup>
   <ItemGroup>
+    <AvaloniaResource Include="Assets\brain.ico" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Phantom.Workspaces.Gui.Styles.Tests" />
   </ItemGroup>
 </Project>
