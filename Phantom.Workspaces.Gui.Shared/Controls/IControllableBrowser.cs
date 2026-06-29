@@ -1,6 +1,6 @@
 using System;
 
-namespace Phantom.Workspaces.Gui.Styles.Controls;
+namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 /// <summary>
 /// The bridge contract for a browser-hosted UI surface: load a static HTML shell, run startup scripts

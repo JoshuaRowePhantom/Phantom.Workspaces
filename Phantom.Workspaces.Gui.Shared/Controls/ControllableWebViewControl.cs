@@ -4,7 +4,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 
-namespace Phantom.Workspaces.Gui.Styles.Controls;
+namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 /// <summary>
 /// A reusable browser-hosted UI primitive: a <see cref="NativeWebView"/> that loads a static HTML

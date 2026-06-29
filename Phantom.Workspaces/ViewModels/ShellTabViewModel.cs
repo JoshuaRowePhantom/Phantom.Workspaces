@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Phantom.Workspaces.Gui.Styles.ViewModels;
+using Phantom.Workspaces.Gui.Shared.ViewModels;
 using Phantom.Workspaces.Llm.Shell;
 
 namespace Phantom.Workspaces.ViewModels;
