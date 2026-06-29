@@ -71,6 +71,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private bool isAltHeld;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
+    private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -1197,13 +1198,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // arrive after the card is created and populate the entity's observable status-badge model.
         _ = this.PopulateStatusBadgesAsync(entity);
 
-        return new ViewEntityViewModel(
+        var vm = new ViewEntityViewModel(
             entity,
             this,
             this.shortcutManager,
             indentLevel,
             isParentContext,
             this.fieldEditorFactory);
+
+        // Restore the expansion state for this entity, defaulting to expanded.
+        var entityIdStr = entity.EntityId.ToString();
+        vm.IsExpanded = this.expandedEntityIds.GetValueOrDefault(entityIdStr, true);
+
+        // Persist expansion state changes and trigger a view rebuild on toggle.
+        vm.PropertyChanged += (sender, e) =>
+        {
+            if (string.Equals(e.PropertyName, nameof(ViewEntityViewModel.IsExpanded), StringComparison.Ordinal)
+                && sender is ViewEntityViewModel toggled)
+            {
+                this.expandedEntityIds[entityIdStr] = toggled.IsExpanded;
+                _ = this.ApplySelectedViewAsync();
+            }
+        };
+
+        return vm;
     }
 
     /// <summary>
@@ -1250,14 +1268,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewHierarchyNode node,
         int indentLevel)
     {
+        ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            population.Entities.Add(this.CreateViewEntityViewModel(node.Entity!, indentLevel));
+            vm = this.CreateViewEntityViewModel(node.Entity!, indentLevel);
+            if (node.Children.Count > 0)
+            {
+                vm.HasTraversedChildren = true;
+            }
+
+            population.Entities.Add(vm);
         }
 
-        foreach (var child in node.Children)
+        if (vm is null || vm.IsExpanded)
         {
-            this.AddHierarchyNode(population, child, indentLevel + 1);
+            foreach (var child in node.Children)
+            {
+                this.AddHierarchyNode(population, child, indentLevel + 1);
+            }
         }
     }
 

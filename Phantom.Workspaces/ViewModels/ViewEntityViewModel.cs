@@ -11,6 +11,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
 {
     private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
     private readonly EntityListNodeViewModel entityCardNode;
+    private bool hasTraversedChildren;
+    private bool isExpanded = true;
 
     public ViewEntityViewModel(
         SubscribedEntityViewModel entity,
@@ -37,6 +39,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.entityCardNode.Card.SetBadges(this.Badges);
         this.entityCardNode.Card.SetStatusBadges(this.StatusBadges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
+        this.ToggleExpandCommand = new RelayCommand(_ => this.IsExpanded = !this.IsExpanded);
         this.RefreshCollections();
     }
 
@@ -51,6 +54,28 @@ public sealed class ViewEntityViewModel : ViewModelBase
     public int IndentLevel { get; }
 
     public bool IsParentContext { get; }
+
+    public bool HasTraversedChildren
+    {
+        get => this.hasTraversedChildren;
+        internal set => this.SetProperty(ref this.hasTraversedChildren, value);
+    }
+
+    public bool IsExpanded
+    {
+        get => this.isExpanded;
+        internal set
+        {
+            if (this.SetProperty(ref this.isExpanded, value))
+            {
+                this.RaisePropertyChanged(nameof(this.ExpandArrow));
+            }
+        }
+    }
+
+    public string ExpandArrow => this.isExpanded ? "▼" : "▶";
+
+    public RelayCommand ToggleExpandCommand { get; }
 
     public BadgesViewModel Badges { get; }
 
