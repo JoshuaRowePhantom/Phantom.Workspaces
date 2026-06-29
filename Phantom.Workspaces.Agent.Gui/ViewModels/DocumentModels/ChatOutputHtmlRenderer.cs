@@ -267,7 +267,6 @@ internal static class ChatOutputHtmlRenderer
         AIContent content,
         bool includeReasoning,
         bool isDiagnostic,
-        bool includeDiagnostics = true,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -281,9 +280,7 @@ internal static class ChatOutputHtmlRenderer
 
                 return TextBlock(contentId, "chat-reasoning", reasoning.Text, SerializeContentJson(reasoning));
             case TextContent text when isDiagnostic && !string.IsNullOrWhiteSpace(text.Text):
-                return includeDiagnostics
-                    ? RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text), SerializeContentJson(text))
-                    : null;
+                return RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text), SerializeContentJson(text));
             case TextContent text:
                 return string.IsNullOrWhiteSpace(text.Text) ? null : MarkdownBlock(contentId, "chat-text", text.Text, SerializeContentJson(text));
             case FunctionCallContent call:
