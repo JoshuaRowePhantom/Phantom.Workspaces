@@ -36,7 +36,7 @@
     },
     "parameter-values": {
       "type": "object",
-      "description": "Parameter values supplied when this session was created. Keyed by parameter name; all values are strings.",
+      "description": "Parameter values supplied when this session was created. Keyed by parameter name; all values are strings. The well-known key `working-directory` (kind: string) sets the working directory forwarded to the agent process; supported by the `github-copilot` and `workspaces` manifests.",
       "additionalProperties": { "type": "string" }
     }
   },
