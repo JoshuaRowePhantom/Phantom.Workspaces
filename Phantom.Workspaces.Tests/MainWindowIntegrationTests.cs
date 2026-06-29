@@ -260,6 +260,96 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task ViewEntityViewModel_TraversedEntitiesCollapsed_WhenDispositionIsCollapsed()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Override the workspace entity-type-view to have traversed-entity-display-disposition: "collapsed".
+        var entityTypeViewId = new EntityId("a9d73483-6752-40b3-9fed-5831616814a6");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            entityTypeViewId,
+            """
+            {
+              "entity-id": "a9d73483-6752-40b3-9fed-5831616814a6",
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "workspace"]],
+              "display-name": { "default": "Workspace View" },
+              "fields": [],
+              "traversed-entity-display-disposition": "collapsed",
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var workspaceId = new EntityId("b1000001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "b1000001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces", "collapse-test"]],
+              "display-name": { "default": "Collapse Test Workspace" },
+              "regions": []
+            }
+            """);
+
+        var relatedId = new EntityId("b1000002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            relatedId,
+            """
+            {
+              "entity-id": "b1000002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "collapse-test-note"]],
+              "display-name": { "default": "Related Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "note" } }
+            }
+            """);
+
+        var relId = new EntityId("b1000003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            relId,
+            $$"""
+            {
+              "entity-id": "b1000003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "collapse-test-rel"]],
+              "participants": { "entities": ["{{workspaceId.Value}}", "{{relatedId.Value}}"] }
+            }
+            """);
+
+        var workspacesView = viewModel.TopLevelViews.FirstOrDefault(
+            static v => string.Equals(v.Title, "Workspaces", StringComparison.Ordinal));
+        Assert.NotNull(workspacesView);
+        viewModel.SelectedTopLevelView = workspacesView!;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        var workspaceVm = viewModel.CurrentViewPopulation.Entities.FirstOrDefault(
+            e => e.Entity.EntityId == workspaceId);
+        Assert.NotNull(workspaceVm);
+        Assert.False(workspaceVm!.IsExpanded);
+
+        // Traversed child must NOT appear in the flat population when disposition is "collapsed".
+        Assert.DoesNotContain(
+            viewModel.CurrentViewPopulation.Entities,
+            e => e.Entity.EntityId == relatedId);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void MainWindow_ConstructsWithoutTemplateCastErrors()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2559,6 +2649,160 @@ public sealed class MainWindowIntegrationTests
 
         Assert.True(host.TryGetTool("run-vscode-tunnel", out _));
 
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_WorkspaceWithChildren_ShowsExpandAffordance()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceId = new EntityId("24900001-0000-4000-8000-000000000001");
+        var childId = new EntityId("24900002-0000-4000-8000-000000000002");
+        var relationshipId = new EntityId("24900003-0000-4000-8000-000000000003");
+
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces", "expand-affordance-test"]],
+              "display-name": { "default": "Expand Affordance Test Workspace" },
+              "regions": []
+            }
+            """);
+
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            childId,
+            $$"""
+            {
+              "entity-id": "{{childId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "expand-affordance-child"]],
+              "display-name": { "default": "Expand Affordance Child" }
+            }
+            """);
+
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            relationshipId,
+            $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "expand-affordance-relation"]],
+              "participants": { "entities": ["{{workspaceId}}", "{{childId}}"] }
+            }
+            """);
+
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+
+        var applyMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applyMethod);
+
+        viewModel.SelectedTopLevelView = workspacesView;
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        var workspaceVm = Assert.Single(
+            viewModel.CurrentViewPopulation.Entities,
+            vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+
+        Assert.True(workspaceVm.HasTraversedChildren);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_ToggleExpand_HidesAndShowsChildren()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceId = new EntityId("24900004-0000-4000-8000-000000000004");
+        var childId = new EntityId("24900005-0000-4000-8000-000000000005");
+        var relationshipId = new EntityId("24900006-0000-4000-8000-000000000006");
+
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces", "toggle-expand-test"]],
+              "display-name": { "default": "Toggle Expand Test Workspace" },
+              "regions": []
+            }
+            """);
+
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            childId,
+            $$"""
+            {
+              "entity-id": "{{childId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "toggle-expand-child"]],
+              "display-name": { "default": "Toggle Expand Child" }
+            }
+            """);
+
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            relationshipId,
+            $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "toggle-expand-relation"]],
+              "participants": { "entities": ["{{workspaceId}}", "{{childId}}"] }
+            }
+            """);
+
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+
+        var applyMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applyMethod);
+
+        viewModel.SelectedTopLevelView = workspacesView;
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        // Initially both workspace and child are visible.
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
+
+        // Collapse the workspace: child should disappear.
+        var workspaceVm = Assert.Single(
+            viewModel.CurrentViewPopulation.Entities,
+            vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        workspaceVm.ToggleExpandCommand.Execute(null);
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
+        Assert.DoesNotContain(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
+
+        // Re-expand the workspace: child should reappear.
+        var collapsedWorkspaceVm = Assert.Single(
+            viewModel.CurrentViewPopulation.Entities,
+            vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        collapsedWorkspaceVm.ToggleExpandCommand.Execute(null);
+        await (Task)applyMethod!.Invoke(viewModel, [])!;
+
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
     }
 
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
