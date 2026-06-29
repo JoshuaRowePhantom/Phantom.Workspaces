@@ -2473,6 +2473,82 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain(entities, e => e.IndentLevel > 0);
     }
 
+    // ── Single-window guard tests (issue #240) ────────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void OnOpenScheduledTasksClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var mainWindow = new MainWindow(viewModel);
+
+        var trackingField = typeof(MainWindow).GetField(
+            "openScheduledTasksWindow",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(trackingField);
+
+        var existingDialog = new ScheduledTasksWindow();
+        trackingField!.SetValue(mainWindow, existingDialog);
+
+        var handler = typeof(MainWindow).GetMethod(
+            "OnOpenScheduledTasksClicked",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(handler);
+        handler!.Invoke(mainWindow, [null, new RoutedEventArgs()]);
+
+        // The tracking field must still reference the same existing dialog — the guard returned early.
+        Assert.Same(existingDialog, trackingField.GetValue(mainWindow));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void OnOpenGitWorkspacesClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var mainWindow = new MainWindow(viewModel);
+
+        var trackingField = typeof(MainWindow).GetField(
+            "openGitWorkspacesWindow",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(trackingField);
+
+        var existingDialog = new GitWorkspacesWindow();
+        trackingField!.SetValue(mainWindow, existingDialog);
+
+        var handler = typeof(MainWindow).GetMethod(
+            "OnOpenGitWorkspacesClicked",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(handler);
+        handler!.Invoke(mainWindow, [null, new RoutedEventArgs()]);
+
+        // The tracking field must still reference the same existing dialog — the guard returned early.
+        Assert.Same(existingDialog, trackingField.GetValue(mainWindow));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void OnOpenScheduledTasksClicked_TrackingField_InitiallyNull()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var mainWindow = new MainWindow(viewModel);
+
+        var trackingField = typeof(MainWindow).GetField(
+            "openScheduledTasksWindow",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(trackingField);
+        Assert.Null(trackingField!.GetValue(mainWindow));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void OnOpenGitWorkspacesClicked_TrackingField_InitiallyNull()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var mainWindow = new MainWindow(viewModel);
+
+        var trackingField = typeof(MainWindow).GetField(
+            "openGitWorkspacesWindow",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(trackingField);
+        Assert.Null(trackingField!.GetValue(mainWindow));
+    }
+
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
     {
         const string echoAgentJson =

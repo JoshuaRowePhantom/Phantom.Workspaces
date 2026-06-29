@@ -182,10 +182,19 @@ public partial class MainWindow : Window
         statusWindow.ShowDialog(this);
     }
 
+    private ScheduledTasksWindow? openScheduledTasksWindow;
+    private GitWorkspacesWindow? openGitWorkspacesWindow;
+
     private async void OnOpenScheduledTasksClicked(
         object? sender,
         RoutedEventArgs e)
     {
+        if (this.openScheduledTasksWindow is { } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
         if (this.DataContext is not MainWindowViewModel viewModel
             || viewModel.TryCreateScheduledTasksViewModel() is not { } scheduledTasksViewModel)
         {
@@ -194,7 +203,9 @@ public partial class MainWindow : Window
 
         await scheduledTasksViewModel.RefreshAsync();
         var scheduledTasksWindow = new ScheduledTasksWindow(scheduledTasksViewModel);
+        this.openScheduledTasksWindow = scheduledTasksWindow;
         await scheduledTasksWindow.ShowDialog(this);
+        this.openScheduledTasksWindow = null;
         scheduledTasksViewModel.Dispose();
     }
 
@@ -202,6 +213,12 @@ public partial class MainWindow : Window
         object? sender,
         RoutedEventArgs e)
     {
+        if (this.openGitWorkspacesWindow is { } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
         if (this.DataContext is not MainWindowViewModel viewModel
             || viewModel.TryCreateGitWorkspacesViewModel() is not { } gitWorkspacesViewModel)
         {
@@ -210,7 +227,9 @@ public partial class MainWindow : Window
 
         await gitWorkspacesViewModel.RefreshAsync();
         var gitWorkspacesWindow = new GitWorkspacesWindow(gitWorkspacesViewModel);
+        this.openGitWorkspacesWindow = gitWorkspacesWindow;
         await gitWorkspacesWindow.ShowDialog(this);
+        this.openGitWorkspacesWindow = null;
     }
 
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
