@@ -1531,6 +1531,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.SelectedWorkspacePane = this.WorkspacePanes[index];
 
+        var contentLayout = this.SelectedWorkspacePane.ContentLayout;
+        var documentDock = contentLayout is not null ? this.FindDocumentDock(contentLayout) : null;
+        if (documentDock?.ActiveDockable is WorkspaceDocument activeDoc)
+        {
+            this.notificationService.MarkRead(activeDoc.Id);
+        }
+
         if (!this.navigatingViaHistory)
         {
             var activeTabId = this.ActiveTabId;

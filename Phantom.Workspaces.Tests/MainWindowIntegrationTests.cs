@@ -1014,6 +1014,138 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("ff000001-ff00-4f00-8f00-ff0000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "ff000001-ff00-4f00-8f00-ff0000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-switch-a"]],
+              "display-name": { "default": "Notif Pane Switch A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("ff000002-ff00-4f00-8f00-ff0000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "ff000002-ff00-4f00-8f00-ff0000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-switch-b"]],
+              "display-name": { "default": "Notif Pane Switch B" },
+              "regions": []
+            }
+            """);
+
+        // Open both workspaces; after OpenWorkspaceAsync(B) pane B (index 1) is selected.
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane B while it is the selected pane.
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-switch-tab-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        // Switch to pane A so pane B's tab is no longer visible/active in the view.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+        // Post an unread notification to pane B's tab. Because pane B is not selected,
+        // OnActiveDockableChanged is not fired for it, so the notification stays unread.
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-pane-switch-tab-b" },
+            "Tab B", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        Assert.False(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
+
+        // Switch back to pane B — this should mark the notification as read.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+
+        Assert.True(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInCurrentPaneHasUnreadNotification_OnlyMarksTargetPaneTabRead()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("ff000003-ff00-4f00-8f00-ff0000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "ff000003-ff00-4f00-8f00-ff0000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-only-a"]],
+              "display-name": { "default": "Notif Pane Only A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("ff000004-ff00-4f00-8f00-ff0000000004");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "ff000004-ff00-4f00-8f00-ff0000000004",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-only-b"]],
+              "display-name": { "default": "Notif Pane Only B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane B (currently selected after OpenWorkspaceAsync(B)).
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-only-tab-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        // Switch to pane A and open a tab there.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-only-tab-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        // Post unread notifications to both tabs. Pane A is selected so tabA is visible,
+        // but the notification is posted directly; tabB's pane is not selected.
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-pane-only-tab-a" },
+            "Tab A", "test notification A", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-pane-only-tab-b" },
+            "Tab B", "test notification B", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        // Switch to pane B — only pane B's active tab notification should be marked read.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+
+        Assert.True(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-only-tab-b").IsRead,
+            "Switching to pane B should mark pane B's active tab notification as read.");
+        Assert.False(viewModel.NotificationService.Notifications
+            .First(n => n.TabKey == "notif-pane-only-tab-a").IsRead,
+            "Pane A's tab notification should remain unread after switching away.");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithFocusedTabId_ActivatesFocusedTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
