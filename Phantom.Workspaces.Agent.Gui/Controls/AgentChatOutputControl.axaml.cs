@@ -10,7 +10,7 @@ using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 

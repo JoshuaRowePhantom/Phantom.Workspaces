@@ -1,6 +1,6 @@
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 
-namespace Phantom.Workspaces.Gui.Styles.Tests;
+namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public class TreeStickyTests
 {

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Avalonia.Controls;
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
