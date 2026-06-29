@@ -56,4 +56,16 @@ public sealed class AgentChatSlashCommandRegistrationTests
         var help = Assert.Single(chat.SlashCommands.Commands, c => c.Name == "help");
         Assert.IsType<HelpSlashCommandHandler>(help);
     }
+
+    [Fact]
+    public async Task SlashCommands_ForCopilotAgent_WorkingDirectoryCommand_IsCopilotSdkSpecificHandler()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = CreateCopilotAgent(),
+        });
+
+        var handler = Assert.Single(chat.SlashCommands.Commands, c => c.Name == "working-directory");
+        Assert.IsType<CopilotSdkWorkingDirectorySlashCommandHandler>(handler);
+    }
 }

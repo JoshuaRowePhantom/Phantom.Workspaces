@@ -170,22 +170,23 @@ public sealed class ViewHierarchyAssemblerTests
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
 
+        // Use "task" (no built-in entity-type-view) so the seeded view without
+        // traversed-entity-display-disposition is the only one found for this type.
         await SeedAsync(dataAccessLayer, """
             {
               "entity-types": ["entity", "entity-type-view"],
-              "names": [["entity-type-views","workspace"]],
+              "names": [["entity-type-views","task"]],
               "traverse-relationships": [
                 { "relationship-type-ids": ["related"] }
               ]
             }
             """);
 
-        var workspaceId = await SeedAsync(dataAccessLayer, """
+        var taskId = await SeedAsync(dataAccessLayer, """
             {
-              "entity-types": ["entity", "workspace"],
-              "names": [["workspaces","ws-default-expanded"]],
-              "display-name": { "default": "Default Expanded Workspace" },
-              "regions": []
+              "entity-types": ["entity", "task"],
+              "names": [["tasks","task-default-expanded"]],
+              "display-name": { "default": "Default Expanded Task" }
             }
             """);
         var noteId = await SeedAsync(dataAccessLayer, """
@@ -199,16 +200,16 @@ public sealed class ViewHierarchyAssemblerTests
         await SeedAsync(dataAccessLayer, $$"""
             {
               "entity-types": ["entity", "related", "relationship"],
-              "names": [["relationships","ws-note-expanded-rel"]],
-              "participants": { "entities": ["{{workspaceId.Value}}", "{{noteId.Value}}"] }
+              "names": [["relationships","task-note-expanded-rel"]],
+              "participants": { "entities": ["{{taskId.Value}}", "{{noteId.Value}}"] }
             }
             """);
 
-        var roots = (await broker.GetEntitiesAsync([workspaceId], ct)).ToArray();
+        var roots = (await broker.GetEntitiesAsync([taskId], ct)).ToArray();
         var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
 
-        var workspaceNode = Assert.Single(hierarchy);
-        Assert.True(workspaceNode.IsExpanded);
+        var taskNode = Assert.Single(hierarchy);
+        Assert.True(taskNode.IsExpanded);
     }
 
     [AvaloniaFact]

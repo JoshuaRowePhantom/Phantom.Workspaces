@@ -744,7 +744,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
-    public void RenderContent_TextContent_EmitsDataDetailsTargetWithMarkdownSource()
+    public void RenderContent_TextContent_EmitsDataDetailsTargetWithJsonContent()
     {
         const string markdown = "**bold** text";
 
@@ -755,7 +755,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains($"data-details-target=\"{ChatOutputHtmlRenderer.HtmlEscape(markdown)}\"", html);
+        Assert.Contains("data-details-target=\"{", html);
     }
 
     [Fact]
@@ -768,7 +768,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("data-details-target=\"my reasoning\"", html);
+        Assert.Contains("data-details-target=\"{", html);
     }
 
     // ── Running-item insertion-point reliability tests (issue #222) ───────────

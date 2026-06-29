@@ -178,10 +178,42 @@ git commit -m "Fix #<NUMBER>: <short description>
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-## Step 11 — Close the issue
+## Step 11 — Post a resolution comment
+
+After the commit the SHA is known. Post a final comment summarising the resolution so the issue thread is a self-contained record of the fix:
 
 ```powershell
-gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
+$sha = git rev-parse HEAD
+gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Resolution
+
+Root cause: <confirmed root cause>
+
+Changes:
+
+- ``<file>`` — <what changed and why>
+
+Deviations from design: <none, or describe>
+
+Commit: $sha"
+```
+
+## Step 11a — Post a resolution comment
+
+After the commit SHA is known and the issue is closed, post a comment that makes the issue thread a self-contained record of the fix:
+
+```powershell
+$sha = git rev-parse HEAD
+gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Resolution
+
+**Root cause:** <confirmed root cause for bugs; or chosen approach for enhancements>
+
+**Changes:**
+- \`<file>\` — <brief description of what changed and why>
+- ...
+
+**Deviations from design:** <note any decisions that differ from the Step 5 design comment, or 'None'>
+
+**Commit:** $sha"
 ```
 
 ## Step 12 — Merge `features` into the branch
@@ -222,6 +254,12 @@ git merge --ff-only <branch-name> features   # update features ref without check
 
 Because `C:\dev\phantom.workspaces-design` is in detached HEAD, `git merge --ff-only` updates the `features` branch ref directly. This succeeds only if `features` is a direct ancestor of the feature branch. If step 12 was done correctly this should always fast-forward cleanly. If it fails, return to step 12.
 
+Once the fast-forward succeeds, close the issue:
+
+```powershell
+gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
+```
+
 ---
 
 ## Rules
@@ -231,13 +269,13 @@ Because `C:\dev\phantom.workspaces-design` is in detached HEAD, `git merge --ff-
 3. Never create a worktree that is already checked out to a feature branch held by another worktree.
 4. All work (file edits, builds, tests, commits) runs from inside the worktree directory. Never edit files directly in `C:\dev\phantom.workspaces-design`.
 5. `C:\dev\phantom.workspaces-design` must always remain in **detached HEAD** state. Never check out `features` or any feature branch there.
-5. Tests must pass before committing (step 9 before step 10).
-6. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
-7. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
-8. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
-9. Do not push any branch unless explicitly instructed.
-10. Never commit without passing tests.
-11. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
-12. Each issue gets its own commit. Do not batch multiple issues into one commit.
-13. If there are open questions, assign back to the reporter and stop — do not guess.
-14. Always include the `Co-authored-by: Copilot` trailer in every commit message.
+6. Tests must pass before committing (step 9 before step 10).
+7. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
+8. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
+9. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
+10. Do not push any branch unless explicitly instructed.
+11. Never commit without passing tests.
+12. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
+13. Each issue gets its own commit. Do not batch multiple issues into one commit.
+14. If there are open questions, assign back to the reporter and stop — do not guess.
+15. Always include the `Co-authored-by: Copilot` trailer in every commit message.
