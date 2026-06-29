@@ -544,4 +544,42 @@ public sealed class WebViewModelTests
 
         return await task!;
     }
+
+    // ── Accelerator-key event forwarding ──────────────────────────────────────────
+
+    [Fact]
+    public void WebViewModel_RaiseGoToTabAtIndex_FiresGoToTabAtIndexRequestedWithIndex()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "accel-goto-1", Title = "T" };
+        int? received = null;
+        vm.GoToTabAtIndexRequested += (_, idx) => received = idx;
+
+        vm.RaiseGoToTabAtIndex(3);
+
+        Assert.Equal(3, received);
+    }
+
+    [Fact]
+    public void WebViewModel_RaiseAltKeyStateChanged_True_FiresWithTrue()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "accel-alt-true", Title = "T" };
+        bool? received = null;
+        vm.AltKeyStateChanged += (_, v) => received = v;
+
+        vm.RaiseAltKeyStateChanged(true);
+
+        Assert.True(received);
+    }
+
+    [Fact]
+    public void WebViewModel_RaiseAltKeyStateChanged_False_FiresWithFalse()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "accel-alt-false", Title = "T" };
+        bool? received = null;
+        vm.AltKeyStateChanged += (_, v) => received = v;
+
+        vm.RaiseAltKeyStateChanged(false);
+
+        Assert.False(received);
+    }
 }

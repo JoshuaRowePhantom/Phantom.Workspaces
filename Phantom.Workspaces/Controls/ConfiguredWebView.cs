@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Gui.Styles.Controls;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Controls;
@@ -13,7 +14,7 @@ namespace Phantom.Workspaces.Controls;
 /// A WebView control configured to use a persistent user data folder for cookies and cache.
 /// Supports navigation commands and URL updates.
 /// </summary>
-public class ConfiguredWebView : NativeWebView
+public class ConfiguredWebView : AcceleratorAwareWebView
 {
     private static string? userDataFolderPath;
     private static bool environmentConfigured;
@@ -87,6 +88,10 @@ public class ConfiguredWebView : NativeWebView
         this.NewWindowRequested += OnNewWindowRequested;
 
         this.WebMessageReceived += OnWebMessageReceived;
+
+        // Forward accelerator events (from AcceleratorAwareWebView) to the bound ViewModel.
+        this.AltKeyStateChanged += (_, held) => this.ViewModel?.RaiseAltKeyStateChanged(held);
+        this.GoToTabAtIndexRequested += (_, idx) => this.ViewModel?.RaiseGoToTabAtIndex(idx);
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)

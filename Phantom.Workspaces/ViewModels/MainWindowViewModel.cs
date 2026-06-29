@@ -1713,6 +1713,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        // Wire up accelerator-key callbacks so Alt+1–0 and IsAltHeld work when this tab's WebView has focus.
+        if (tab is WebViewModel webVm)
+        {
+            webVm.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+        }
+        else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
+        {
+            agentTab.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+        }
+
         // Check if tab already exists
         var existingDocument = documentDock.VisibleDockables
             ?.OfType<WorkspaceDocument>()

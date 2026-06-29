@@ -58,6 +58,19 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
     public INotificationService? NotificationService { get; init; }
 
+    public event EventHandler<bool>? AltKeyStateChanged;
+    public event EventHandler<int>? GoToTabAtIndexRequested;
+
+    public void RaiseAltKeyStateChanged(bool isAltHeld)
+    {
+        this.AltKeyStateChanged?.Invoke(this, isAltHeld);
+    }
+
+    public void RaiseGoToTabAtIndex(int index)
+    {
+        this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
     public override void RequestFocusPrimaryControl()
     {
         base.RequestFocusPrimaryControl();
@@ -69,6 +82,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         this.loggerFactory = factory;
         this.Agent = agentViewModel;
         agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
+        agentViewModel.AltKeyStateChanged += this.OnAgentAltKeyStateChanged;
+        agentViewModel.GoToTabAtIndexRequested += this.OnAgentGoToTabAtIndexRequested;
         this.agentRunningIndicator.IsRunning = agentViewModel.IsChatRunning;
         this.wasRunning = agentViewModel.IsChatRunning;
         this.State = AgentTabState.Ready;
@@ -83,6 +98,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         if (this.agent is not null)
         {
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
+            this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
+            this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
             await this.agent.DisposeAsync();
             this.Agent = null;
         }
@@ -154,6 +171,16 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         this.wasRunning = isRunning;
     }
 
+    private void OnAgentAltKeyStateChanged(object? sender, bool isAltHeld)
+    {
+        this.RaiseAltKeyStateChanged(isAltHeld);
+    }
+
+    private void OnAgentGoToTabAtIndexRequested(object? sender, int index)
+    {
+        this.RaiseGoToTabAtIndex(index);
+    }
+
     private static bool IsInterrupted(AgentViewModel vm)
     {
         var lastItem = vm.History.LastOrDefault();
@@ -194,6 +221,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         if (this.agent is not null)
         {
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
+            this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
+            this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
             this.NotificationService?.Remove(this.Id);
             await this.agent.DisposeAsync();
         }
