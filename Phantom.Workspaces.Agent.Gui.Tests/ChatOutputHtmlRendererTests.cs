@@ -231,30 +231,16 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void DiagnosticBlock_WhenIncludeDiagnosticsTrue_RendersCollapsibleElement()
+    public void DiagnosticBlock_WhenIsDiagnosticTrue_RendersCollapsibleElement()
     {
         var html = ChatOutputHtmlRenderer.RenderContent(
             "c0",
             new TextContent("diag info"),
             includeReasoning: false,
-            isDiagnostic: true,
-            includeDiagnostics: true);
+            isDiagnostic: true);
 
         Assert.NotNull(html);
         Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void DiagnosticBlock_WhenIncludeDiagnosticsFalse_ReturnsNull()
-    {
-        var html = ChatOutputHtmlRenderer.RenderContent(
-            "c0",
-            new TextContent("diag info"),
-            includeReasoning: false,
-            isDiagnostic: true,
-            includeDiagnostics: false);
-
-        Assert.Null(html);
     }
 
     [Fact]
