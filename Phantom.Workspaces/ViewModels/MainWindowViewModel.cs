@@ -111,6 +111,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(new StartShellFromEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
