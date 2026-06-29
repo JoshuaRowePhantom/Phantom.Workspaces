@@ -16,6 +16,13 @@ public sealed record ReverseFrame
     /// <summary>register: the claimed client instance id (a user-computer-profile entity id).</summary>
     public string? ClientInstanceId { get; init; }
 
+    /// <summary>
+    /// register: the absolute base URL of C's own Phantom.Workspaces HTTP endpoint (optional). When
+    /// present, S can create a <c>RemoteTrustedExecutor</c> targeting C's endpoint so S can route
+    /// agent execution directly to C over the forward HTTP path without the reverse WebSocket.
+    /// </summary>
+    public string? Endpoint { get; init; }
+
     /// <summary>register: the agent definition names C will accept (optional allow-list).</summary>
     public IReadOnlyList<string>? AcceptedAgentDefinitionNames { get; init; }
 

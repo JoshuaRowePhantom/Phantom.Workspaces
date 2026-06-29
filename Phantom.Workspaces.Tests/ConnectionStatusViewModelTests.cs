@@ -23,6 +23,7 @@ public sealed class ConnectionStatusViewModelTests
         }
 
         public string ClientInstanceId { get; }
+        public string? AnnouncedEndpoint => null;
         public DateTimeOffset ConnectedAt { get; }
         public int InFlightCount { get; }
 

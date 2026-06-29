@@ -14,13 +14,16 @@ public sealed class ReverseExecutionRegistryTests
 {
     private sealed class FakeConnection : IReverseConnection
     {
-        public FakeConnection(string clientInstanceId, int inFlight = 0)
+        public FakeConnection(string clientInstanceId, int inFlight = 0, string? announcedEndpoint = null)
         {
             this.ClientInstanceId = clientInstanceId;
             this.InFlightCount = inFlight;
+            this.AnnouncedEndpoint = announcedEndpoint;
         }
 
         public string ClientInstanceId { get; }
+
+        public string? AnnouncedEndpoint { get; }
 
         public DateTimeOffset ConnectedAt { get; } = new(2026, 6, 16, 0, 0, 0, TimeSpan.Zero);
 
@@ -109,5 +112,19 @@ public sealed class ReverseExecutionRegistryTests
     {
         var registry = new ReverseExecutionRegistry();
         Assert.False(registry.IsConnected("missing"));
+    }
+
+    [Fact]
+    public void GetConnectedInstances_IncludesAnnouncedEndpoint_WhenPresent()
+    {
+        var registry = new ReverseExecutionRegistry();
+        registry.Register(new FakeConnection("computer-a", announcedEndpoint: "https://computer-a.example/"));
+        registry.Register(new FakeConnection("computer-b"));
+
+        var statuses = registry.GetConnectedInstances();
+
+        Assert.Equal("https://computer-a.example/",
+            statuses.Single(s => s.ClientInstanceId == "computer-a").AnnouncedEndpoint);
+        Assert.Null(statuses.Single(s => s.ClientInstanceId == "computer-b").AnnouncedEndpoint);
     }
 }
