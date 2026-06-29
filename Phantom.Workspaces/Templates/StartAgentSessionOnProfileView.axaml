@@ -10,16 +10,16 @@
       <TextBlock Text="Start Agent Session" 
                  FontSize="24" 
                  FontWeight="Bold"/>
-      <TextBlock Text="Select an agent definition to start a new session" 
+      <TextBlock Text="Select an agent to start a new session" 
                  FontSize="14" 
                  Opacity="0.7"/>
     </StackPanel>
     
-    <!-- Agent Definitions List -->
+    <!-- Agent Sources List -->
     <ScrollViewer Grid.Row="1">
-      <ItemsControl ItemsSource="{Binding AgentDefinitions}">
+      <ItemsControl ItemsSource="{Binding AgentSources}">
         <ItemsControl.ItemTemplate>
-          <DataTemplate DataType="vm:StartAgentSessionOnProfileViewModel+AgentDefinitionItem">
+          <DataTemplate DataType="vm:StartAgentSessionOnProfileViewModel+AgentSourceItem">
             <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                     BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                     BorderThickness="1"
@@ -31,13 +31,10 @@
                   <TextBlock Text="{Binding DisplayName}" 
                              FontWeight="SemiBold"
                              FontSize="16"/>
-                  <TextBlock Text="{Binding Definition.Name}" 
-                             FontSize="12"
-                             Opacity="0.6"/>
                 </StackPanel>
                 <RadioButton Grid.Column="1"
-                             GroupName="AgentDefinitions"
-                             IsChecked="{Binding $parent[ItemsControl].((vm:StartAgentSessionOnProfileViewModel)DataContext).SelectedAgentDefinition, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"/>
+                             GroupName="AgentSources"
+                             IsChecked="{Binding $parent[ItemsControl].((vm:StartAgentSessionOnProfileViewModel)DataContext).SelectedAgentSource, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"/>
               </Grid>
             </Border>
           </DataTemplate>
