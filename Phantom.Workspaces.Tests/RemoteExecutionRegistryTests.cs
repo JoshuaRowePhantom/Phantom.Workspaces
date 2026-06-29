@@ -159,6 +159,9 @@ public sealed class RemoteExecutionRegistryTests
         public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UnixEpoch;
         public int InFlightCount => 0;
 
+        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
         public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
             RemoteAgentRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -179,6 +182,9 @@ public sealed class RemoteExecutionRegistryTests
         public string? AnnouncedEndpoint => null;
         public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UnixEpoch;
         public int InFlightCount => 0;
+
+        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
 
         public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
             RemoteAgentRequest request,
