@@ -361,6 +361,29 @@ public sealed class AgentChat : IAsyncDisposable
     }
 
     /// <summary>
+    /// Updates the live <see cref="ChatOptions.AdditionalProperties"/> with the supplied parameter
+    /// values so that the next turn picks up the change.  The key mapping is 1:1: for example the
+    /// <c>working-directory</c> parameter value is written directly to
+    /// <c>AdditionalProperties["working-directory"]</c>, which <see cref="CopilotSdkChatClient"/>
+    /// reads when computing the session signature and building the session config.
+    /// </summary>
+    public void UpdateParameterValues(IReadOnlyDictionary<string, string> parameterValues)
+    {
+        ArgumentNullException.ThrowIfNull(parameterValues);
+        var chatOptions = this.chatOptions?.ChatOptions;
+        if (chatOptions is null)
+        {
+            return;
+        }
+
+        chatOptions.AdditionalProperties ??= [];
+        foreach (var (key, value) in parameterValues)
+        {
+            chatOptions.AdditionalProperties[key] = value;
+        }
+    }
+
+    /// <summary>
     /// Adds a user message to the target queue and waits for submission before history is created.
     /// </summary>
     public void EnqueueUserMessage(string text)
