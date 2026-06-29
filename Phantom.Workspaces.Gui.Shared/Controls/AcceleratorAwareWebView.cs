@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 using Avalonia.Controls;
 using Avalonia.Threading;
 
-namespace Phantom.Workspaces.Gui.Styles.Controls;
+namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 /// <summary>
 /// Abstract base class that sits between <see cref="NativeWebView"/> and concrete web-view

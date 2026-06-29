@@ -11,8 +11,8 @@
     <Application.Styles>
         <FluentTheme />
 
-        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
-        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
-        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SlashCompletionsStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/AgentChatStatusLineStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/SlashCompletionsStyles.axaml" />
     </Application.Styles>
 </Application>
