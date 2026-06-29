@@ -225,8 +225,14 @@ internal sealed class ChatMessageHtmlModel
                 continue;
             }
 
+            if (isDiagnostic && !includeDiagnostics && content is TextContent)
+            {
+                contentIndex++;
+                continue;
+            }
+
             var contentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
-            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, includeDiagnostics, this.toolFactory, this.statusSink);
+            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
@@ -427,9 +433,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         {
             var toolName = GetLastToolName(sourceItem);
 
-            if (index > 0)
+            var prevIndex = this.FindPrecedingToolCallSlotIndex(index);
+            if (prevIndex >= 0)
             {
-                var prevSlot = this.Target[index - 1];
+                var prevSlot = this.Target[prevIndex];
 
                 if (prevSlot.Group is { } existingGroup)
                 {
@@ -439,11 +446,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     return;
                 }
 
-                if (IsToolCallOnlyItem(this.Source[index - 1]))
+                if (IsToolCallOnlyItem(this.Source[prevIndex]))
                 {
                     // Previous item was a standalone tool call: promote both into a new group.
                     var groupId = ChatOutputHtmlRenderer.ToolCallGroupId(this.nextId());
-                    var prevToolName = GetLastToolName(this.Source[index - 1]);
+                    var prevToolName = GetLastToolName(this.Source[prevIndex]);
                     var group = new ToolCallGroupHtmlModel(groupId, this.sink, prevToolName);
 
                     // Replace the previous standalone message with the group that wraps it.
@@ -535,6 +542,32 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Searches backwards from <paramref name="index"/> - 1, skipping tool-result-only messages,
+    /// and returns the index of the most recent source item that is either a tool-call-only message
+    /// or already belongs to a group. Returns -1 if the search reaches the start of the collection
+    /// or hits any other kind of message.
+    /// </summary>
+    private int FindPrecedingToolCallSlotIndex(int index)
+    {
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (IsToolResultOnlyItem(this.Source[i]))
+            {
+                continue;
+            }
+
+            if (IsToolCallOnlyItem(this.Source[i]) || this.Target[i].Group is not null)
+            {
+                return i;
+            }
+
+            return -1;
+        }
+
+        return -1;
     }
 
     private static string GetLastToolName(AgentChatHistoryItem item)

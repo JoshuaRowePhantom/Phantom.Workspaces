@@ -243,18 +243,19 @@ All `error ` lines from the build must be zero. Read `scripts\test-results.log`.
 
 ## Step 13 — Fast-forward `features` to the feature branch
 
-`C:\dev\phantom.workspaces-design` stays in detached HEAD — `features` is fast-forwarded as a ref update without checking it out:
+Use `git fetch` to fast-forward the `features` ref without checking it out, so other worktrees remain free to update it:
 
 ```powershell
+$branchName = git branch --show-current
+git fetch . "$($branchName):features"
+
 # Free the worktree by detaching HEAD so it has no associated branch and can be reused
 git checkout --detach
 
 Pop-Location
-cd C:\dev\phantom.workspaces-design
-git merge --ff-only <branch-name> features   # update features ref without checking it out
 ```
 
-Because `C:\dev\phantom.workspaces-design` is in detached HEAD, `git merge --ff-only` updates the `features` branch ref directly. This succeeds only if `features` is a direct ancestor of the feature branch. If step 12 was done correctly this should always fast-forward cleanly. If it fails, return to step 12.
+`git fetch . <branch>:features` fast-forwards `features` to the tip of the feature branch without a checkout. It fails (non-fast-forward) if `features` is not a direct ancestor — if that happens, return to step 12.
 
 Once the fast-forward succeeds, close the issue:
 
