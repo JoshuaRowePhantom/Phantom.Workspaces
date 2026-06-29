@@ -23,7 +23,7 @@
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-brain.idle">
-        <Setter Property="Opacity" Value="0.35" />
+        <Setter Property="Opacity" Value="0.25" />
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-brain.thinking">
@@ -47,7 +47,7 @@
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.TabHeader.Icon.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
         <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="Opacity" Value="0.4" />
+        <Setter Property="Opacity" Value="0.25" />
     </Style>
 
     <Style Selector="TextBlock.agent-tab-header-brain.thinking">

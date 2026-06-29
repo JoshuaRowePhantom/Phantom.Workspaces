@@ -260,7 +260,7 @@ internal static class ChatOutputHtmlRenderer
     /// <summary>
     /// Renders a single content block to a <c>div.chat-content</c> (or collapsible <c>details</c>)
     /// element, or returns <see langword="null"/> when the block should not be shown (hidden reasoning
-    /// or empty text). Each rendered block includes a small inline inspector affordance button.
+    /// or empty text).
     /// </summary>
     public static string? RenderContent(
         string contentId,
@@ -292,7 +292,7 @@ internal static class ChatOutputHtmlRenderer
                     var interpreted = ToolVisualizationInterpreter.Interpret(factoryResult, contentId, statusSink);
                     if (interpreted is not null)
                     {
-                        return string.IsNullOrEmpty(interpreted) ? string.Empty : AppendInspector(interpreted, contentId);
+                        return string.IsNullOrEmpty(interpreted) ? string.Empty : interpreted;
                     }
                 }
 
@@ -308,7 +308,7 @@ internal static class ChatOutputHtmlRenderer
                     var interpreted = ToolVisualizationInterpreter.Interpret(factoryResult, contentId, statusSink);
                     if (interpreted is not null)
                     {
-                        return string.IsNullOrEmpty(interpreted) ? string.Empty : AppendInspector(interpreted, contentId);
+                        return string.IsNullOrEmpty(interpreted) ? string.Empty : interpreted;
                     }
                 }
 
@@ -385,7 +385,7 @@ internal static class ChatOutputHtmlRenderer
     }
 
     private static string TextBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{HtmlEscape(text)}{InspectorAffordance(contentId)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{HtmlEscape(text)}</div>";
 
     /// <summary>
     /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
@@ -393,7 +393,7 @@ internal static class ChatOutputHtmlRenderer
     /// with raw HTML disabled so model output cannot inject markup into the WebView.
     /// </summary>
     private static string MarkdownBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}{InspectorAffordance(contentId)}</div>";
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
 
     private static string MarkdownToHtml(string text)
     {
@@ -411,7 +411,7 @@ internal static class ChatOutputHtmlRenderer
     {
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-details-target=\"").Append(HtmlEscape(body)).Append("\" data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append(InspectorAffordance(contentId)).Append("</summary>");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
             builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(body)).Append("</pre>");
@@ -420,26 +420,6 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("</details>");
         return builder.ToString();
     }
-
-    /// <summary>
-    /// Appends the inline inspector affordance button to an already-rendered HTML block.
-    /// Used for HTML produced by <see cref="ToolVisualizationInterpreter"/> which builds its own
-    /// element wrapper.
-    /// </summary>
-    private static string AppendInspector(string html, string contentId)
-    {
-        // Insert the affordance just before the closing tag of the root element.
-        var closeIndex = html.LastIndexOf("</", StringComparison.Ordinal);
-        if (closeIndex < 0)
-        {
-            return html;
-        }
-
-        return html[..closeIndex] + InspectorAffordance(contentId) + html[closeIndex..];
-    }
-
-    private static string InspectorAffordance(string contentId)
-        => $"<button class=\"chat-inspect\" data-content-id=\"{contentId}\" onclick=\"postInspect(this)\" title=\"Inspect\">…</button>";
 
     private static string FirstLine(string text)
     {
