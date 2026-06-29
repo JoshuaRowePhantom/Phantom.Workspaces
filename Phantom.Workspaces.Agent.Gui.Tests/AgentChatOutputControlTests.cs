@@ -441,6 +441,107 @@ public sealed class AgentChatOutputControlTests
         Assert.True(browser.PostedMessages.Count > 0, "Expected incremental update messages.");
     }
 
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_ScrollsToBottom_AfterInitialContentLoad()
+    {
+        // Arrange: attach a view model with existing history, then trigger OnBrowserReady.
+        // Assert: a "scroll" command is posted after the batch.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+
+        // The initial DataContext assignment drives OnBrowserReady; collect all posted messages.
+        Assert.True(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "scroll";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected a 'scroll' command to be posted after the initial content load.");
+    }
+
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()
+    {
+        // Arrange: attach a view model with AutoScrollEnabled = false, then trigger OnBrowserReady.
+        // Assert: AutoScrollEnabled is true afterwards.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        viewModel.AutoScrollEnabled = false;
+
+        var control = new AgentChatOutputControl();
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+
+        Assert.True(viewModel.AutoScrollEnabled, "AutoScrollEnabled must be true after OnBrowserReady.");
+    }
+
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_DoesNotDoubleScroll_WhenSettingAutoScrollEnabled()
+    {
+        // Arrange: attach a view model, trigger OnBrowserReady.
+        // Assert: exactly one "scroll" command is posted — the suppressScrollOnEnable guard
+        // prevents the PropertyChanged side-effect from emitting a second scroll.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+
+        var scrollCount = browser.PostedMessages.Count(msg =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(msg);
+                return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "scroll";
+            }
+            catch (JsonException) { return false; }
+        });
+
+        Assert.Equal(1, scrollCount);
+    }
+
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
     {
         var field = typeof(AgentChatOutputControl)

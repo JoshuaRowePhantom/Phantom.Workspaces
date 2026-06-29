@@ -222,6 +222,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 DefaultToolFactory,
                 this);
             this.browser.EndBatch();
+
+            // Scroll to bottom and enable auto-scroll after initial content load.
+            this.suppressScrollOnEnable = true;
+            vm.AutoScrollEnabled = true;
+            this.suppressScrollOnEnable = false;
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
         }
     }
 
