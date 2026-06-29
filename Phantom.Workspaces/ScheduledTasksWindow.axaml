@@ -1,7 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
-        xmlns:converters="using:Phantom.Workspaces.Converters"
         x:Class="Phantom.Workspaces.ScheduledTasksWindow"
         x:DataType="vm:ScheduledTasksViewModel"
         x:CompileBindings="False"
@@ -34,20 +33,18 @@
                                         BorderBrush="{DynamicResource Theme.Class.muted.Foreground}">
                                     <StackPanel Spacing="2">
                                         <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <TextBlock Text="🔔"
-                                                       Classes="scheduled-tool-running"
-                                                       Opacity="{Binding IsRunning, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"
-                                                       VerticalAlignment="Center"
-                                                       ToolTip.Tip="Running" />
-                                            <TextBlock Text="❗"
-                                                       Foreground="{DynamicResource Theme.Status.Bad}"
-                                                       Opacity="{Binding HasFailure, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"
-                                                       VerticalAlignment="Center"
-                                                       ToolTip.Tip="Last run failed" />
-                                            <TextBlock Text="✅"
-                                                       Opacity="{Binding LastRunSucceeded, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"
-                                                       VerticalAlignment="Center"
-                                                       ToolTip.Tip="Last run succeeded" />
+                                            <ProgressBar Classes="running-indicator"
+                                                         IsIndeterminate="{Binding IsRunning}"
+                                                         VerticalAlignment="Center"
+                                                         ToolTip.Tip="Running" />
+                                            <ProgressBar Classes="running-indicator"
+                                                         Classes.failed="{Binding HasFailure}"
+                                                         VerticalAlignment="Center"
+                                                         ToolTip.Tip="Last run failed" />
+                                            <ProgressBar Classes="running-indicator"
+                                                         Classes.succeeded="{Binding LastRunSucceeded}"
+                                                         VerticalAlignment="Center"
+                                                         ToolTip.Tip="Last run succeeded" />
                                             <TextBlock Text="{Binding ToolDisplayName}" FontWeight="SemiBold" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" Spacing="12">

@@ -25,6 +25,24 @@ public sealed class NotificationsStylesTests
 
         // Measure/Arrange triggers style application and animation keyframe interpretation.
         // This throws InvalidOperationException if RenderTransform keyframe values are strings.
+        // The animation keyframes have been removed (#323); the base style retains the typed
+        // RenderTransform setter so this guard remains valid.
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void NotificationIndicator_ApplyingClassToProgressBar_DoesNotThrow()
+    {
+        var styles = LoadNotificationsStyles();
+
+        var progressBar = new ProgressBar();
+        progressBar.Classes.Add("notification-indicator");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
         host.Measure(new Size(1000, 1000));
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }

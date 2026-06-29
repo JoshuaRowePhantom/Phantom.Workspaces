@@ -18,6 +18,16 @@
     "name": "github-copilot",
     "displayName": "GitHub Copilot Workspace Assistant",
     "description": "Default GitHub Copilot SDK agent for workspace entity operations.",
+    "parameters": {
+      "properties": [
+        {
+          "name": "working-directory",
+          "kind": "string",
+          "description": "The working directory for the Copilot agent process. If not specified, the agent uses its default.",
+          "required": false
+        }
+      ]
+    },
     "template": {
       "kind": "prompt",
       "name": "github-copilot",
@@ -33,7 +43,10 @@
         },
         "options": {
           "temperature": 0.2,
-          "maxOutputTokens": 2048
+          "maxOutputTokens": 2048,
+          "additionalProperties": {
+            "working-directory": "${working-directory}"
+          }
         }
       },
       "instructions": "You are a helpful AI assistant powered by the GitHub Copilot SDK.\nRespond clearly and concisely.\nUse workspace entity tools to inspect and modify workspace data safely.\nUse the GitHub tools to read and manage repositories, issues, and pull requests when asked.",

@@ -702,6 +702,35 @@
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.accent.Foreground}" />
     </Style>
 
+    <!-- running-indicator: replaces emoji TextBlock status glyphs for running/success/error state.
+         Idle (no modifier): hidden (opacity 0, preserves layout).
+         :indeterminate (running): visible with Avalonia built-in animation.
+         .succeeded: full green bar (Value=100 set by this style).
+         .failed: full red bar (Value=100 set by this style). -->
+    <Style Selector="ProgressBar.running-indicator">
+        <Setter Property="Height" Value="3" />
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Maximum" Value="100" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="ProgressBar.running-indicator:indeterminate">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="ProgressBar.running-indicator.succeeded">
+        <Setter Property="Value" Value="100" />
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Good}" />
+    </Style>
+    <Style Selector="ProgressBar.running-indicator.failed">
+        <Setter Property="Value" Value="100" />
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+    </Style>
+
     <Style Selector="TextBlock.terminal-mono">
         <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
     </Style>

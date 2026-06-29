@@ -24,4 +24,21 @@ public sealed class ReverseEndpointRouteBuilderExtensionsTests
 
         Assert.Contains("/reverse/connect", routePatterns);
     }
+
+    [Fact]
+    public void MapReverseEndpoints_MapsHttpConnectRoute()
+    {
+        var builder = WebApplication.CreateBuilder();
+        var app = builder.Build();
+
+        app.MapReverseEndpoints(new ReverseExecutionRegistry());
+
+        var routePatterns = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static dataSource => dataSource.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(static endpoint => endpoint.RoutePattern.RawText)
+            .ToArray();
+
+        Assert.Contains("/reverse/connect-http", routePatterns);
+    }
 }
