@@ -182,26 +182,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 
 ## Step 11 — Post a resolution comment
 
-After the commit the SHA is known. Post a final comment summarising the resolution so the issue thread is a self-contained record of the fix:
-
-```powershell
-$sha = git rev-parse HEAD
-gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Resolution
-
-Root cause: <confirmed root cause>
-
-Changes:
-
-- ``<file>`` — <what changed and why>
-
-Deviations from design: <none, or describe>
-
-Commit: $sha"
-```
-
-## Step 11a — Post a resolution comment
-
-After the commit SHA is known and the issue is closed, post a comment that makes the issue thread a self-contained record of the fix:
+After the commit SHA is known, post a comment that makes the issue thread a self-contained record of the fix:
 
 ```powershell
 $sha = git rev-parse HEAD
@@ -249,6 +230,9 @@ Use `git fetch` to fast-forward the `features` ref without checking it out, so o
 $branchName = git branch --show-current
 git fetch . "$($branchName):features"
 
+# Fast-forward succeeded — close the issue now that features is updated
+gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
+
 # Free the worktree by detaching HEAD so it has no associated branch and can be reused
 git checkout --detach
 
@@ -256,12 +240,6 @@ Pop-Location
 ```
 
 `git fetch . <branch>:features` fast-forwards `features` to the tip of the feature branch without a checkout. It fails (non-fast-forward) if `features` is not a direct ancestor — if that happens, return to step 12.
-
-Once the fast-forward succeeds, close the issue:
-
-```powershell
-gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
-```
 
 ---
 
@@ -274,7 +252,7 @@ gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 5. `C:\dev\phantom.workspaces-design` must always remain in **detached HEAD** state. Never check out `features` or any feature branch there.
 6. Tests must pass before committing (step 9 before step 10).
 7. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
-8. Use `--ff-only` when updating `features` (step 13); if it fails, return to step 12.
+8. Use `git fetch . "<branch>:features"` to update the `features` ref (step 13); if it fails (non-fast-forward), return to step 12.
 9. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
 10. Do not push any branch unless explicitly instructed.
 11. Never commit without passing tests.
