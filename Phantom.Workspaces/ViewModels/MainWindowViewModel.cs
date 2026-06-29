@@ -1184,6 +1184,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ViewEntityViewModel CreateViewEntityViewModel(
         SubscribedEntityViewModel entity,
         int indentLevel,
+        bool isExpanded = true,
         bool isParentContext = false)
     {
         // Project the entity's interests (from its loaded relationships) into toggleable badge glyphs.
@@ -1202,8 +1203,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this,
             this.shortcutManager,
             indentLevel,
-            isParentContext,
-            this.fieldEditorFactory);
+            isExpanded: isExpanded,
+            isParentContext: isParentContext,
+            fieldEditorFactory: this.fieldEditorFactory);
     }
 
     /// <summary>
@@ -1252,12 +1254,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         if (!node.IsAncestorGroup)
         {
-            population.Entities.Add(this.CreateViewEntityViewModel(node.Entity!, indentLevel));
+            population.Entities.Add(this.CreateViewEntityViewModel(node.Entity!, indentLevel, isExpanded: node.IsExpanded));
         }
 
-        foreach (var child in node.Children)
+        if (node.IsExpanded)
         {
-            this.AddHierarchyNode(population, child, indentLevel + 1);
+            foreach (var child in node.Children)
+            {
+                this.AddHierarchyNode(population, child, indentLevel + 1);
+            }
         }
     }
 

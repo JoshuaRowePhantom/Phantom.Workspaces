@@ -17,6 +17,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         MainWindowViewModel mainWindowViewModel,
         ShortcutManager shortcutManager,
         int indentLevel,
+        bool isExpanded = true,
         bool isParentContext = false,
         FieldEditorFactory? fieldEditorFactory = null)
     {
@@ -24,6 +25,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.Badges = new BadgesViewModel(entity.Badges);
         this.StatusBadges = new StatusBadgesViewModel(entity.StatusBadges);
         this.IndentLevel = indentLevel;
+        this.IsExpanded = isExpanded;
         this.IsParentContext = isParentContext;
         this.entityCardNode = new EntityListNodeViewModel(
             entity,
@@ -49,6 +51,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
     public string EntityType => this.Entity.EntityType;
 
     public int IndentLevel { get; }
+
+    public bool IsExpanded { get; }
 
     public bool IsParentContext { get; }
 

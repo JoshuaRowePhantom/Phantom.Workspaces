@@ -116,6 +116,13 @@ public sealed class ViewHierarchyNode
     /// <summary><see langword="true"/> when this node is a synthesized ancestor group rather than a real entity.</summary>
     public bool IsAncestorGroup => this.NamePrefix is not null;
 
+    /// <summary>
+    /// <see langword="true"/> when traversed children of this node should be visible in the flat entity list.
+    /// Populated by <see cref="ViewHierarchyAssembler"/> from the entity-type-view's
+    /// <c>traversed-entity-display-disposition</c>; defaults to <see langword="true"/> (expanded).
+    /// </summary>
+    public bool IsExpanded { get; set; } = true;
+
     public List<ViewHierarchyNode> Children { get; } = [];
 }
 
@@ -183,10 +190,40 @@ public sealed class ViewHierarchyAssembler
                 }
             }
 
+            rootNode.IsExpanded = await this.IsExpandedByDefaultAsync(root, cancellationToken).ConfigureAwait(false);
             rootNodes.Add(rootNode);
         }
 
         return rootNodes;
+    }
+
+    /// <summary>
+    /// Reads <c>traversed-entity-display-disposition</c> from the entity-type-views for the given entity.
+    /// Returns <see langword="false"/> when any entity-type-view declares <c>"collapsed"</c>;
+    /// returns <see langword="true"/> otherwise (the default when the field is absent).
+    /// </summary>
+    private async Task<bool> IsExpandedByDefaultAsync(
+        SubscribedEntityViewModel entity,
+        CancellationToken cancellationToken)
+    {
+        foreach (var entityTypeName in ReadEntityTypes(entity))
+        {
+            var entityTypeView = await this.GetEntityTypeViewAsync(entityTypeName, cancellationToken)
+                .ConfigureAwait(false);
+            if (entityTypeView?.Snapshot.Data is not { } viewData)
+            {
+                continue;
+            }
+
+            if (viewData.TryGetProperty("traversed-entity-display-disposition", out var disposition)
+                && disposition.ValueKind == JsonValueKind.String
+                && string.Equals(disposition.GetString(), "collapsed", StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
