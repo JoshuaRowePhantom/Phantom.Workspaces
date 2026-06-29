@@ -30,6 +30,12 @@ public sealed class WorkingDirectorySlashCommandHandler : ISlashCommandHandler
         client creation time and is unaffected; only the session-level cwd changes.
         """;
 
+    public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
+        SlashCommandContext context,
+        string partialArguments,
+        CancellationToken cancellationToken)
+        => Task.FromResult(DirectoryBrowserCompletionHelper.GetCompletions(partialArguments.Trim()));
+
     public Task<SlashCommandResult> ExecuteAsync(
         SlashCommandContext context,
         string arguments,
