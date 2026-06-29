@@ -169,9 +169,6 @@ public sealed class RemoteExecutionRegistryTests
             await Task.Yield();
             yield break;
         }
-
-        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
     }
 
     private sealed class FakeConnectionNoEndpoint : IReverseConnection
@@ -196,8 +193,5 @@ public sealed class RemoteExecutionRegistryTests
             await Task.Yield();
             yield break;
         }
-
-        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
     }
 }
