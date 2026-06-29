@@ -283,7 +283,10 @@ public sealed class ScheduledToolHost
                         },
                         executionCancellation.Token).ConfigureAwait(false);
 
-                    await this.resultWriter.CompleteAsync(handle, success: true, content: null, cancellationToken).ConfigureAwait(false);
+                    // Use CancellationToken.None so that recording the outcome always succeeds even when
+                    // the outer token is cancelled (e.g. during shutdown). A result entity left in the
+                    // "running" state would otherwise appear as a phantom in-progress entry on next startup.
+                    await this.resultWriter.CompleteAsync(handle, success: true, content: null, CancellationToken.None).ConfigureAwait(false);
                     return true;
                 }
             }
@@ -303,12 +306,15 @@ public sealed class ScheduledToolHost
             }
 
             var result = await tool!.ExecuteAsync(executionContext).ConfigureAwait(false);
-            await this.resultWriter.CompleteAsync(handle, success: result.IsSuccess, content: result.ResultContent ?? result.ErrorMessage, cancellationToken).ConfigureAwait(false);
+            // Use CancellationToken.None so that recording the outcome always succeeds even when
+            // the outer token is cancelled (e.g. during shutdown). A result entity left in the
+            // "running" state would otherwise appear as a phantom in-progress entry on next startup.
+            await this.resultWriter.CompleteAsync(handle, success: result.IsSuccess, content: result.ResultContent ?? result.ErrorMessage, CancellationToken.None).ConfigureAwait(false);
             return true;
         }
         catch (Exception exception)
         {
-            await this.resultWriter.CompleteAsync(handle, success: false, content: exception.Message, cancellationToken).ConfigureAwait(false);
+            await this.resultWriter.CompleteAsync(handle, success: false, content: exception.Message, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
         finally
