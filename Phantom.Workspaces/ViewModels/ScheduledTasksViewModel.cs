@@ -130,6 +130,7 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
             if (this.SetProperty(ref this.selectedTask, value))
             {
                 this.RaisePropertyChanged(nameof(this.SelectedToolRow));
+                this.RaisePropertyChanged(nameof(this.HasNoRunsForSelectedTask));
                 if (this.SelectedToolRow is { } row)
                 {
                     _ = row.LoadRecentRunsAsync();
@@ -148,6 +149,16 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
             ? null
             : this.ScheduledToolsRunning.Tools.FirstOrDefault(r =>
                 string.Equals(r.ToolType, this.selectedTask.ToolType, StringComparison.Ordinal));
+
+    /// <summary>
+    /// True when a task is selected but no <see cref="ToolRowViewModel"/> exists for its tool type
+    /// (i.e. no execution results have been recorded yet). The view uses this to show an empty-state
+    /// placeholder rather than retaining a stale runs pane.
+    /// </summary>
+    public bool HasNoRunsForSelectedTask =>
+        this.selectedTask is not null &&
+        this.ScheduledToolsRunning is not null &&
+        this.SelectedToolRow is null;
 
     /// <summary>Whether the host-wide pause control should be shown at all.</summary>
     public bool HasPauseControl => this.pauseStateService is not null;
@@ -220,6 +231,7 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
                 await this.ScheduledToolsRunning.RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
                 this.SyncStatusIndicators();
                 this.RaisePropertyChanged(nameof(this.SelectedToolRow));
+                this.RaisePropertyChanged(nameof(this.HasNoRunsForSelectedTask));
             }
         }
         finally
