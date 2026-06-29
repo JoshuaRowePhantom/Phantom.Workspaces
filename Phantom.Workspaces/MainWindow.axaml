@@ -81,9 +81,11 @@
                         <Button Classes="settings-gear"
                                 ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
                                 Click="OnOpenScheduledTasksClicked">
-                            <TextBlock Text="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}"
-                                       Classes.scheduled-tool-running="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}" />
+                            <TextBlock Text="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}" />
                         </Button>
+                        <ProgressBar Classes="running-indicator"
+                                     VerticalAlignment="Bottom"
+                                     IsIndeterminate="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}" />
                         <TextBlock Text="❗"
                                    Foreground="{DynamicResource Theme.Status.Bad}"
                                    FontSize="9"
@@ -101,9 +103,11 @@
                                 Classes="settings-gear"
                                 ToolTip.Tip="Notifications"
                                 Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
-                            <TextBlock Text="🔔"
-                                       Classes.notification-bell-ringing="{Binding NotificationsViewModel.HasActiveRun}" />
+                            <TextBlock Text="🔔" />
                         </Button>
+                        <ProgressBar Classes="running-indicator"
+                                     VerticalAlignment="Bottom"
+                                     IsIndeterminate="{Binding NotificationsViewModel.HasActiveRun}" />
                         <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
                                    IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
                                    Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
