@@ -83,6 +83,12 @@
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <Style Selector="TextBlock.agent-chat-status-line-bug">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+
     <Style Selector="TextBlock.agent-chat-status-line-cancel-overlay">
         <Setter Property="Foreground" Value="#CC3030" />
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
