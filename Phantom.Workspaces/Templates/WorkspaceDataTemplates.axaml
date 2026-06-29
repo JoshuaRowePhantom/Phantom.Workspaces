@@ -534,9 +534,8 @@
     <!-- Tab header item templates (top-level so they are individually testable and visible to the full
          template-resolution chain inside ItemsControl) -->
     <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <TextBlock Text="🧠"
-                   Classes="agent-tab-header-brain"
-                   Classes.thinking="{Binding IsRunning}" />
+        <ProgressBar Classes="running-indicator"
+                     IsIndeterminate="{Binding IsRunning}" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
@@ -562,11 +561,9 @@
                             <TextBlock Text="{Binding Icon}" />
                         </DataTemplate>
                         <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-                            <!-- Always occupies space; opacity hides it when there is no unread notification -->
-                            <TextBlock Text="❗"
-                                       Foreground="Red"
-                                       FontWeight="Bold"
-                                       Opacity="{Binding HasUnread, Converter={x:Static converters:BoolToOpacityConverter.Instance}}" />
+                            <!-- Always occupies space; empty bar hides it when there is no unread notification -->
+                            <ProgressBar Classes="notification-indicator"
+                                         Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
                         </DataTemplate>
                         <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
                             <entityControls:StatusControl Item="{Binding Status}" />
