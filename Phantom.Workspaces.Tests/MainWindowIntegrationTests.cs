@@ -16,6 +16,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
@@ -3103,6 +3104,166 @@ public sealed class MainWindowIntegrationTests
             AgentDefinition = agentDefinition,
             ForegroundScheduler = TaskScheduler.Default,
         });
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_OpenSameSession_Twice_CreatesTwoTabsWithSameAgentChat()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("aa050001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa050001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "shared-chat-echo"]],
+              "display-name": { "default": "Shared Chat Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "shared-chat-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var agentTabs = documentDock!.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel as AgentSessionWorkspaceTabViewModel)
+            .Where(t => t is not null && string.Equals(
+                t.AgentSessionId, agentSessionEntity!.EntityId.ToString(), StringComparison.Ordinal))
+            .Select(t => t!)
+            .ToList();
+        Assert.Equal(2, agentTabs?.Count);
+
+        await WaitForAgentReadyAsync(agentTabs![0]);
+        await WaitForAgentReadyAsync(agentTabs![1]);
+
+        Assert.NotEqual(agentTabs[0].Id, agentTabs[1].Id);
+        Assert.NotNull(agentTabs[0].Lease);
+        Assert.NotNull(agentTabs[1].Lease);
+        Assert.Same(agentTabs[0].Lease!.AgentChat, agentTabs[1].Lease!.AgentChat);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionWorkspaceTabViewModel_DisposeWithLease_ReleasesChat_OnLastDispose()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("aa060001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa060001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "shared-dispose-echo"]],
+              "display-name": { "default": "Shared Dispose Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "shared-dispose-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var agentTabs = documentDock!.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel as AgentSessionWorkspaceTabViewModel)
+            .Where(t => t is not null && string.Equals(
+                t.AgentSessionId, agentSessionEntity!.EntityId.ToString(), StringComparison.Ordinal))
+            .Select(t => t!)
+            .ToList();
+        Assert.Equal(2, agentTabs?.Count);
+
+        await WaitForAgentReadyAsync(agentTabs![0]);
+        await WaitForAgentReadyAsync(agentTabs![1]);
+
+        Assert.NotNull(agentTabs[0].Lease);
+        Assert.NotNull(agentTabs[1].Lease);
+        var sharedChat = agentTabs[0].Lease!.AgentChat;
+        Assert.Same(sharedChat, agentTabs[1].Lease!.AgentChat);
+
+        // After disposing first tab, acquire on same key should return cached chat (second tab still holds lease)
+        await agentTabs[0].DisposeAsync();
+
+        var callCount = 0;
+        Task<AgentChat> TrackedFactory()
+        {
+            callCount++;
+            return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                    {
+                        "kind": "prompt",
+                        "name": "shared-dispose-echo",
+                        "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                        "tools": []
+                    }
+                    """),
+                AgentSessionId = agentSessionId,
+                ForegroundScheduler = TaskScheduler.Default,
+            });
+        }
+
+        var probe1 = await table.AcquireAsync(agentSessionId, TrackedFactory);
+        Assert.Equal(0, callCount); // factory not called — chat still alive via second tab
+        Assert.Same(sharedChat, probe1.AgentChat);
+        await probe1.DisposeAsync();
+
+        // After disposing second tab, the chat should be gone
+        await agentTabs[1].DisposeAsync();
+
+        var probe2 = await table.AcquireAsync(agentSessionId, TrackedFactory);
+        Assert.Equal(1, callCount); // factory called — chat was disposed and entry removed
+        await probe2.DisposeAsync();
     }
 
 }

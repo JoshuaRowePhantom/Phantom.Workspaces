@@ -6,6 +6,7 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -27,6 +28,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
     private readonly AgentRunningIndicatorTabHeaderItemViewModel agentRunningIndicator;
+    private RunningAgentChatLease? lease;
 
     public AgentSessionWorkspaceTabViewModel()
     {
@@ -57,6 +59,12 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     public ObservableLoggerFactory? LoggerFactory => this.loggerFactory;
 
     public INotificationService? NotificationService { get; init; }
+
+    public string? AgentSessionId { get; init; }
+
+    public RunningAgentChatLease? Lease => this.lease;
+
+    public void SetLease(RunningAgentChatLease value) => this.lease = value;
 
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
@@ -100,7 +108,16 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
             this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
-            await this.agent.DisposeAsync();
+            if (this.lease is not null)
+            {
+                await this.agent.DisposeViewResourcesAsync();
+                await this.lease.DisposeAsync();
+                this.lease = null;
+            }
+            else
+            {
+                await this.agent.DisposeAsync();
+            }
             this.Agent = null;
         }
 
@@ -224,7 +241,15 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
             this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
             this.NotificationService?.Remove(this.Id);
-            await this.agent.DisposeAsync();
+            if (this.lease is not null)
+            {
+                await this.agent.DisposeViewResourcesAsync();
+                await this.lease.DisposeAsync();
+            }
+            else
+            {
+                await this.agent.DisposeAsync();
+            }
         }
 
         this.loggerFactory?.Dispose();
