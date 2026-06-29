@@ -29,10 +29,13 @@ public class WebViewModel : WorkspaceTabViewModel
         this.sourceUri = Uri.TryCreate(initialUrl, UriKind.Absolute, out var uri) ? uri : null;
         this.tabService = tabService;
 
+        this.HomeUrl = string.IsNullOrEmpty(initialUrl) ? null : initialUrl;
+
         this.NavigateCommand = new RelayCommand(_ => this.Navigate());
         this.GoBackCommand = new RelayCommand(_ => this.GoBack(), _ => this.CanGoBack);
         this.GoForwardCommand = new RelayCommand(_ => this.GoForward(), _ => this.CanGoForward);
         this.OpenInExternalBrowserCommand = new RelayCommand(_ => this.OpenInExternalBrowser());
+        this.NavigateHomeCommand = new RelayCommand(_ => this.NavigateHome(), _ => this.HomeUrl != null);
 
         this.faviconItem = new FaviconTabHeaderItemViewModel();
         this.TabHeader = new TabHeaderViewModel { Title = string.Empty };
@@ -95,14 +98,33 @@ public class WebViewModel : WorkspaceTabViewModel
 
     public bool HasError => !string.IsNullOrEmpty(this.ErrorMessage);
 
+    public string? HomeUrl { get; }
+
+    public bool HasHomeUrl => this.HomeUrl != null;
+
     public ICommand NavigateCommand { get; }
     public ICommand GoBackCommand { get; }
     public ICommand GoForwardCommand { get; }
     public ICommand OpenInExternalBrowserCommand { get; }
+    public ICommand NavigateHomeCommand { get; }
 
     private void Navigate()
     {
         if (Uri.TryCreate(this.AddressBarUrl, UriKind.Absolute, out var uri))
+        {
+            this.SourceUri = uri;
+        }
+    }
+
+    private void NavigateHome()
+    {
+        if (this.HomeUrl == null)
+        {
+            return;
+        }
+
+        this.AddressBarUrl = this.HomeUrl;
+        if (Uri.TryCreate(this.HomeUrl, UriKind.Absolute, out var uri))
         {
             this.SourceUri = uri;
         }
