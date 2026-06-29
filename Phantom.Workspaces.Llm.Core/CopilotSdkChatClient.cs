@@ -45,6 +45,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
     private int disposeStarted;
+    private volatile string? workingDirectoryOverride;
 
     /// <summary>
     /// Raised when a steering message is forwarded to the live Copilot session so the owning
@@ -238,6 +239,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         this.pendingResumeSessionId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId;
     }
+
+    /// <summary>
+    /// Overrides the working directory used for the next Copilot session creation or resumption,
+    /// so that <see cref="EnsureSessionAsync"/> immediately detects a signature change and resumes
+    /// with the new working directory on the next turn — without waiting for the new value to be
+    /// persisted to the agent-session entity's parameter store.
+    /// </summary>
+    internal void SetWorkingDirectory(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        this.workingDirectoryOverride = path;
+    }
+
+    /// <summary>
+    /// The working-directory override set by <see cref="SetWorkingDirectory"/>, or
+    /// <see langword="null"/> when no in-process override has been applied.
+    /// Exposed internally for unit-test assertions.
+    /// </summary>
+    internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
     /// <inheritdoc />
     public async Task<ChatResponse> GetResponseAsync(
@@ -728,7 +748,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private async Task<CopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
-        var signature = ComputeSessionSignature(options);
+        var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
         if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature)
         {
@@ -804,6 +824,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             try
             {
                 var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options);
+                if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
+                {
+                    resumeConfig.WorkingDirectory = this.workingDirectoryOverride;
+                }
+
                 return await this.copilotClient!
                     .ResumeSessionAsync(resumeSessionId, resumeConfig, cancellationToken)
                     .ConfigureAwait(false);
@@ -818,6 +843,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
+        if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
+        {
+            sessionConfig.WorkingDirectory = this.workingDirectoryOverride;
+        }
+
         return await this.copilotClient!.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
     }
 
@@ -828,6 +858,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// included. Tool order is ignored so that only an actual change to the tool set forces a recreation.
     /// </summary>
     public static string ComputeSessionSignature(ChatOptions? options)
+        => ComputeSessionSignatureCore(options, workingDirectoryOverride: null);
+
+    // Core implementation used by both the public static overload and EnsureSessionAsync (which
+    // also factors in the in-process working-directory override set by SetWorkingDirectory).
+    private static string ComputeSessionSignatureCore(ChatOptions? options, string? workingDirectoryOverride)
     {
         var toolNames = options?.Tools?
             .OfType<AIFunction>()
@@ -837,7 +872,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var instructions = options?.Instructions ?? string.Empty;
         var reasoning = MapReasoningEffort(options?.Reasoning?.Effort) ?? string.Empty;
-        var workingDirectory = GetWorkingDirectory(options) ?? string.Empty;
+        var workingDirectory = workingDirectoryOverride ?? GetWorkingDirectory(options) ?? string.Empty;
 
         return string.Join(
             '\u0001',

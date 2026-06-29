@@ -184,6 +184,25 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 gh issue close <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 ```
 
+## Step 11a — Post a resolution comment
+
+After the commit SHA is known and the issue is closed, post a comment that makes the issue thread a self-contained record of the fix:
+
+```powershell
+$sha = git rev-parse HEAD
+gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Resolution
+
+**Root cause:** <confirmed root cause for bugs; or chosen approach for enhancements>
+
+**Changes:**
+- \`<file>\` — <brief description of what changed and why>
+- ...
+
+**Deviations from design:** <note any decisions that differ from the Step 5 design comment, or 'None'>
+
+**Commit:** $sha"
+```
+
 ## Step 12 — Merge `features` into the branch
 
 Pull any upstream changes from `features` before merging back:

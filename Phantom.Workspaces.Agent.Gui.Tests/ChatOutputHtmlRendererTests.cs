@@ -231,42 +231,47 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void DiagnosticBlock_WhenIncludeDiagnosticsTrue_RendersCollapsibleElement()
+    public void RenderContent_TextContent_DataDetailsTargetIsJsonNotRawText()
     {
-        var html = ChatOutputHtmlRenderer.RenderContent(
-            "c0",
-            new TextContent("diag info"),
-            includeReasoning: false,
-            isDiagnostic: true,
-            includeDiagnostics: true);
+        const string text = "hello world";
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent(text), includeReasoning: false, isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($"data-details-target=\"{text}\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=\"{", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void DiagnosticBlock_WhenIncludeDiagnosticsFalse_ReturnsNull()
+    public void RenderContent_TextReasoningContent_DataDetailsTargetIsJsonNotRawText()
     {
-        var html = ChatOutputHtmlRenderer.RenderContent(
-            "c0",
-            new TextContent("diag info"),
-            includeReasoning: false,
-            isDiagnostic: true,
-            includeDiagnostics: false);
+        const string text = "thinking about this";
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextReasoningContent(text), includeReasoning: true, isDiagnostic: false);
 
-        Assert.Null(html);
+        Assert.NotNull(html);
+        Assert.DoesNotContain($"data-details-target=\"{text}\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=\"{", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void DiagnosticBlock_DefaultIncludeDiagnostics_RendersCollapsibleElement()
+    public void RenderContent_FunctionCallContent_DataDetailsTargetIsJsonNotRawText()
     {
-        var html = ChatOutputHtmlRenderer.RenderContent(
-            "c0",
-            new TextContent("diag info"),
-            includeReasoning: false,
-            isDiagnostic: true);
+        var call = new FunctionCallContent("call-1", "my_tool", new Dictionary<string, object?> { ["arg"] = "val" });
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=\"{", html, StringComparison.Ordinal);
+        // The attribute should be the full content JSON, not just the arguments body
+        Assert.DoesNotContain("data-details-target=\"{\n  &quot;arg&quot;", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_ErrorContent_DataDetailsTargetIsJsonNotRawText()
+    {
+        const string message = "something went wrong";
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new ErrorContent(message), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain($"data-details-target=\"{message}\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=\"{", html, StringComparison.Ordinal);
     }
 }
