@@ -58,6 +58,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private string selectedThemeName = ProfileThemeSettings.Dark.Name;
     private bool suppressThemeSelectionChange;
     private bool showHiddenItems;
+    private readonly Llm.Trust.ReverseExecutionRegistry reverseExecutionRegistry = new();
     private readonly WorkspaceDockFactory dockFactory;
     private IRootDock? layout;
     private ScheduledTools.ScheduledToolHost? scheduledToolHost;
@@ -107,7 +108,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
-        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
+        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, trustedExecutorSelector);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);

@@ -15,6 +15,7 @@ using Dock.Model.Core;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
@@ -464,7 +465,7 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
@@ -509,7 +510,7 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -556,7 +557,7 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
@@ -1173,6 +1174,190 @@ public sealed class MainWindowIntegrationTests
 
         Assert.NotNull(contentDock!.ActiveDockable);
     }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateAgentSessionEntityAsync_WithOwningProfileEntityId_StoresOwningProfileEntityIdInData()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var localProfileEntityId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+
+        var agentDefinitionId = new EntityId("aa010001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa010001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "owner-store-echo"]],
+              "display-name": { "default": "Owner Store Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "owner-store-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var createdSession = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: localProfileEntityId);
+
+        Assert.NotNull(createdSession);
+        Assert.True(createdSession!.Data is JsonElement data
+            && data.TryGetProperty("owning-profile-entity-id", out var idElement)
+            && string.Equals(idElement.GetString(), localProfileEntityId.ToString(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_WithLocalProfileOwner_RoutesToLocalExecutorSuccessfully()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var localProfileEntityId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+
+        var agentDefinitionId = new EntityId("aa020001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa020001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "local-owner-echo"]],
+              "display-name": { "default": "Local Owner Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "local-owner-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: localProfileEntityId);
+        Assert.NotNull(agentSessionEntity);
+
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector());
+
+        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.Equal(AgentTabState.Ready, agentTab.State);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_WithNoOwningProfile_DefaultsToLocalExecution()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionId = new EntityId("aa030001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa030001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "no-owner-echo"]],
+              "display-name": { "default": "No Owner Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "no-owner-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // No owningProfileEntityId → defaults to local
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector());
+
+        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.Equal(AgentTabState.Ready, agentTab.State);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_WithRemoteProfileOwner_SetsFailedWhenNoConnectionAvailable()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionId = new EntityId("aa040001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa040001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "remote-owner-echo"]],
+              "display-name": { "default": "Remote Owner Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "remote-owner-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // Use a different GUID as the owning profile (simulates a remote profile with no connection)
+        var remoteProfileEntityId = new EntityId(Guid.NewGuid());
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: remoteProfileEntityId);
+        Assert.NotNull(agentSessionEntity);
+
+        // Empty registry → no reverse connection available for the remote profile
+        var emptyRegistry = new ReverseExecutionRegistry();
+        var selectorWithNoRemote = TrustedExecutorComposition.CreateSelector(emptyRegistry);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            selectorWithNoRemote);
+
+        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.Equal(AgentTabState.Failed, agentTab.State);
+    }
+
+    private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
+        => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
 
     private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)
     {
