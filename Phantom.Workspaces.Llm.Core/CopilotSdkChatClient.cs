@@ -415,7 +415,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 sendCancellationToken => session.SendAsync(
                     messageOptions,
                     sendCancellationToken),
-                () => this.AbortAndInvalidateSessionAsync(session));
+                () => this.AbortAndInvalidateSessionAsync(session),
+                () => { this.InvalidateBrokenSession(session); return Task.CompletedTask; });
         }
     }
 
@@ -436,13 +437,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
+            // GetReadyTurnAsync handles IOException from SendAsync by retrying once with a fresh
+            // session. This is kept in a separate (non-iterator) method because async iterators
+            // do not permit yield inside a try block that has catch clauses.
+            var turn = await this.GetReadyTurnAsync(beginTurnAsync, cancellationToken).ConfigureAwait(false);
             using (turn.Subscription)
             {
                 try
                 {
-                    await turn.SendAsync(cancellationToken).ConfigureAwait(false);
-
                     await foreach (var update in turn.Reader
                         .ReadAllAsync(cancellationToken)
                         .ConfigureAwait(false))
@@ -463,6 +465,40 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             this.turnLock.Release();
         }
+    }
+
+    // Establishes a turn and sends its prompt. If SendAsync throws IOException (broken pipe from a
+    // resumed session), calls OnPipeBrokenAsync to invalidate the session without re-arming
+    // pendingResumeSessionId, then retries once with a fresh session.
+    private async Task<StreamingTurnContext> GetReadyTurnAsync(
+        Func<CancellationToken, Task<StreamingTurnContext>> beginTurnAsync,
+        CancellationToken cancellationToken)
+    {
+        var turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await turn.SendAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (System.IO.IOException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The resumed session's pipe is broken. Dispose its subscription, invalidate the session
+            // without re-arming the resume id, then retry once with a brand-new session.
+            turn.Subscription.Dispose();
+            await turn.OnPipeBrokenAsync().ConfigureAwait(false);
+
+            turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await turn.SendAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                turn.Subscription.Dispose();
+                throw;
+            }
+        }
+
+        return turn;
     }
 
     // Actually stops the in-flight Copilot CLI turn. Cancelling the read loop alone leaves the CLI
@@ -507,6 +543,32 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogDebug(exception, "Disposing the invalidated Copilot session failed.");
+            }
+        });
+    }
+
+    // Drops the cached session without re-arming pendingResumeSessionId. Used when the session's
+    // pipe broke (GitHub issue #267): the broken session cannot be resumed, so the next
+    // EnsureSessionAsync must create a fresh session rather than trying to resume the broken one.
+    private void InvalidateBrokenSession(CopilotSession session)
+    {
+        if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session)
+        {
+            return;
+        }
+
+        this.pendingResumeSessionId = null;
+        this.currentSessionSignature = null;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
+                    .LogDebug(exception, "Disposing the broken Copilot session failed.");
             }
         });
     }
@@ -829,8 +891,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 /// Invoked when the turn is cancelled, before the lock is released, to abort the in-flight CLI turn and
 /// invalidate the session.
 /// </param>
+/// <param name="OnPipeBrokenAsync">
+/// Invoked when <see cref="SendAsync"/> throws <see cref="System.IO.IOException"/> on a resumed session,
+/// before the retry. Invalidates the session without setting <c>pendingResumeSessionId</c> so the retry
+/// creates a fresh session instead of attempting to resume the broken one again.
+/// </param>
 internal sealed record StreamingTurnContext(
     System.Threading.Channels.ChannelReader<ChatResponseUpdate> Reader,
     IDisposable Subscription,
     Func<CancellationToken, Task> SendAsync,
-    Func<Task> OnCancelledAsync);
+    Func<Task> OnCancelledAsync,
+    Func<Task> OnPipeBrokenAsync);

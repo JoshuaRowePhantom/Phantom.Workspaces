@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -38,7 +39,8 @@ public sealed class CopilotSdkChatClientTests
                 {
                     onCancelledInvoked = true;
                     return Task.CompletedTask;
-                }));
+                },
+                () => Task.CompletedTask));
 
         await using (var enumerator = client.RunStreamingTurnAsync(BeginTurnAsync, cancellation.Token)
                          .GetAsyncEnumerator())
@@ -67,6 +69,7 @@ public sealed class CopilotSdkChatClientTests
                 completedChannel.Reader,
                 new FlagDisposable(),
                 _ => Task.CompletedTask,
+                () => Task.CompletedTask,
                 () => Task.CompletedTask));
         }
 
@@ -102,7 +105,8 @@ public sealed class CopilotSdkChatClientTests
                 {
                     onCancelledInvoked = true;
                     return Task.CompletedTask;
-                }));
+                },
+                () => Task.CompletedTask));
 
         var received = 0;
         await foreach (var _ in client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None))
@@ -113,6 +117,105 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal(1, received);
         Assert.False(onCancelledInvoked);
         Assert.True(subscription.Disposed);
+    }
+
+    [Fact]
+    public async Task RunStreamingTurn_WhenSendAsyncThrowsIOException_RetriesWithFreshTurn()
+    {
+        // Reproduces GitHub issue #267 (Bug 1): when a resumed session's pipe is broken, the first
+        // SendAsync throws IOException. RunStreamingTurnAsync must call OnPipeBrokenAsync, invoke
+        // beginTurnAsync a second time, and yield updates from the fresh turn — not surface the pipe
+        // error as a provider exception.
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var onPipeBrokenInvoked = false;
+        var beginCallCount = 0;
+
+        // Second turn's channel carries the real response.
+        var freshChannel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        freshChannel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, "recovered"));
+        freshChannel.Writer.Complete();
+
+        Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _)
+        {
+            beginCallCount++;
+            if (beginCallCount == 1)
+            {
+                // First call: SendAsync throws IOException (broken pipe from resumed session).
+                var brokenChannel = Channel.CreateUnbounded<ChatResponseUpdate>();
+                return Task.FromResult(new StreamingTurnContext(
+                    brokenChannel.Reader,
+                    new FlagDisposable(),
+                    _ => Task.FromException(new IOException("The pipe is being closed.")),
+                    () => Task.CompletedTask,
+                    () =>
+                    {
+                        onPipeBrokenInvoked = true;
+                        return Task.CompletedTask;
+                    }));
+            }
+
+            // Second call: fresh session succeeds.
+            return Task.FromResult(new StreamingTurnContext(
+                freshChannel.Reader,
+                new FlagDisposable(),
+                _ => Task.CompletedTask,
+                () => Task.CompletedTask,
+                () => Task.CompletedTask));
+        }
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None))
+        {
+            updates.Add(update);
+        }
+
+        Assert.Equal(2, beginCallCount);
+        Assert.True(onPipeBrokenInvoked, "OnPipeBrokenAsync must be called when SendAsync throws IOException.");
+        Assert.Single(updates);
+        Assert.Equal("recovered", updates[0].Text);
+    }
+
+    [Fact]
+    public async Task RunStreamingTurn_WhenSendAsyncThrowsIOException_FirstSubscriptionIsDisposed()
+    {
+        // The first (broken) turn's subscription must be disposed before the retry, so resources
+        // from the broken session are released regardless of what happens during the retry.
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var firstSubscription = new FlagDisposable();
+        var beginCallCount = 0;
+
+        var freshChannel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        freshChannel.Writer.Complete();
+
+        Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _)
+        {
+            beginCallCount++;
+            if (beginCallCount == 1)
+            {
+                var brokenChannel = Channel.CreateUnbounded<ChatResponseUpdate>();
+                return Task.FromResult(new StreamingTurnContext(
+                    brokenChannel.Reader,
+                    firstSubscription,
+                    _ => Task.FromException(new IOException("The pipe is being closed.")),
+                    () => Task.CompletedTask,
+                    () => Task.CompletedTask));
+            }
+
+            return Task.FromResult(new StreamingTurnContext(
+                freshChannel.Reader,
+                new FlagDisposable(),
+                _ => Task.CompletedTask,
+                () => Task.CompletedTask,
+                () => Task.CompletedTask));
+        }
+
+        await foreach (var _ in client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None))
+        {
+        }
+
+        Assert.True(firstSubscription.Disposed, "The first subscription must be disposed when SendAsync throws IOException.");
     }
 
     private sealed class FlagDisposable : IDisposable
