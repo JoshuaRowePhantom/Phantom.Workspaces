@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        xmlns:converters="using:Phantom.Workspaces.Converters"
         x:Class="Phantom.Workspaces.ScheduledTasksWindow"
         x:DataType="vm:ScheduledTasksViewModel"
         x:CompileBindings="False"
@@ -34,16 +35,20 @@
                                     <StackPanel Spacing="2">
                                         <StackPanel Orientation="Horizontal" Spacing="6">
                                             <TextBlock Text="🔔"
-                                                       IsVisible="{Binding IsRunning}"
+                                                       Classes="scheduled-tool-running"
+                                                       Opacity="{Binding IsRunning, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"
+                                                       VerticalAlignment="Center"
                                                        ToolTip.Tip="Running" />
                                             <TextBlock Text="❗"
                                                        Foreground="{DynamicResource Theme.Status.Bad}"
-                                                       IsVisible="{Binding HasFailure}"
+                                                       Opacity="{Binding HasFailure, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"
+                                                       VerticalAlignment="Center"
                                                        ToolTip.Tip="Last run failed" />
                                             <TextBlock Text="✅"
-                                                       IsVisible="{Binding LastRunSucceeded}"
+                                                       Opacity="{Binding LastRunSucceeded, Converter={x:Static converters:BoolToOpacityConverter.Instance}}"
+                                                       VerticalAlignment="Center"
                                                        ToolTip.Tip="Last run succeeded" />
-                                            <TextBlock Text="{Binding ToolDisplayName}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding ToolDisplayName}" FontWeight="SemiBold" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" Spacing="12">
                                             <TextBlock Text="{Binding ScheduleDisplayName, StringFormat='Schedule: {0}'}" Opacity="0.8" />

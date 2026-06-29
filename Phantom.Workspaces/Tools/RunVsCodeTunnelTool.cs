@@ -53,7 +53,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
             if (installExitCode != 0)
                 return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
         }
-        else if (status == VsCodeTunnelServiceStatus.Invalid)
+        else if (status == VsCodeTunnelServiceStatus.Stopped)
         {
             var uninstallExitCode = await this.UninstallServiceAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
             if (uninstallExitCode != 0)
@@ -108,7 +108,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         var runner = this.cliRunner ?? DefaultRunCliAsync;
         try
         {
-            var (output, exitCode) = await runner(cliPath, "tunnel service log", cancellationToken).ConfigureAwait(false);
+            var (output, exitCode) = await runner(cliPath, "tunnel service status", cancellationToken).ConfigureAwait(false);
 
             if (exitCode == 0 && output.Contains("running", StringComparison.OrdinalIgnoreCase))
                 return (VsCodeTunnelServiceStatus.Running, null);
@@ -116,7 +116,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
             if (exitCode != 0)
                 return (VsCodeTunnelServiceStatus.NotInstalled, null);
 
-            return (VsCodeTunnelServiceStatus.Invalid, null);
+            return (VsCodeTunnelServiceStatus.Stopped, null);
         }
         catch (Exception ex)
         {
@@ -147,10 +147,10 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         var result = await ProcessRunner.RunAndLogAsync(
             parameters,
             this.logger,
-            operationDescription: "vscode tunnel service log",
+            operationDescription: "vscode tunnel service status",
             cancellationToken).ConfigureAwait(false);
         return (result.StandardOut, result.ExitCode);
     }
 }
 
-internal enum VsCodeTunnelServiceStatus { NotInstalled, Invalid, Running, CliNotFound }
+internal enum VsCodeTunnelServiceStatus { NotInstalled, Stopped, Running, CliNotFound }
