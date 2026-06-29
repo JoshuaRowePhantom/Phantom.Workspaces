@@ -62,6 +62,20 @@ Read the located implementation files. Assess:
 - Are key fields, logic branches, and edge cases present?
 - Are there obvious gaps (e.g. a schema file exists but a required field is absent; a method exists but a described code path is missing)?
 
+**Data-flow issues — end-to-end tracing (apply when the issue describes a value produced in one layer and consumed in another):**
+
+Determine whether the issue involves a data pipeline (e.g. a value set on a model object, written to storage, read back, and displayed). If it does, trace every link in the chain explicitly:
+
+1. **Produced** — identify where the value is set or created (e.g. where is `Timestamp` assigned on a message object?).
+2. **Persisted** — confirm the value is written to storage (database schema includes the field; serialisation code writes it).
+3. **Reloaded** — confirm the value is read back from storage and mapped onto the in-memory model.
+4. **Forwarded** — confirm the value is passed through every intermediate layer to the output/rendering layer.
+5. **Rendered** — confirm the rendering layer actually reads and uses the value (not just that rendering code exists).
+
+If any link in the chain is absent or disconnected, **conclude `behaviour not implemented`** — do not declare success because code that looks relevant happens to exist nearby.
+
+For issues that do not involve a data pipeline (e.g. a pure UI layout change, a refactor, an API surface addition with no storage), skip the data-flow trace and apply only the general assessment above.
+
 **Conclude `behaviour not implemented`** if significant described behaviour is absent.
 
 ---
