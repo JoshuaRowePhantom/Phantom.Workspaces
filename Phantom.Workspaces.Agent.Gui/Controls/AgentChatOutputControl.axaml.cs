@@ -187,7 +187,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible))
+        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible) ||
+            e.PropertyName == nameof(AgentViewModel.IsDiagnosticsVisible))
         {
             this.outputModel?.Refresh();
         }
@@ -217,10 +218,11 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             this.outputModel = new ChatOutputHtmlModel(
                 vm.History,
                 vm.RunningItems,
-                () => vm.IsReasoningVisible,
-                this,
-                DefaultToolFactory,
-                this);
+                isReasoningVisible: () => vm.IsReasoningVisible,
+                sink: this,
+                isDiagnosticsVisible: () => vm.IsDiagnosticsVisible,
+                toolFactory: DefaultToolFactory,
+                statusSink: this);
             this.browser.EndBatch();
 
             // Scroll to bottom and enable auto-scroll after initial content load.

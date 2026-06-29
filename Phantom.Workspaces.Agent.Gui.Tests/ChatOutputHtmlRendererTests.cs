@@ -229,4 +229,44 @@ public sealed class ChatOutputHtmlRendererTests
 
         Assert.DoesNotContain("data-utc=", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void DiagnosticBlock_WhenIncludeDiagnosticsTrue_RendersCollapsibleElement()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("diag info"),
+            includeReasoning: false,
+            isDiagnostic: true,
+            includeDiagnostics: true);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DiagnosticBlock_WhenIncludeDiagnosticsFalse_ReturnsNull()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("diag info"),
+            includeReasoning: false,
+            isDiagnostic: true,
+            includeDiagnostics: false);
+
+        Assert.Null(html);
+    }
+
+    [Fact]
+    public void DiagnosticBlock_DefaultIncludeDiagnostics_RendersCollapsibleElement()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("diag info"),
+            includeReasoning: false,
+            isDiagnostic: true);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+    }
 }
