@@ -15,6 +15,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -22,13 +23,16 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 {
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
+    private readonly IRunningAgentChatTable? runningAgentChatTable;
 
     public OpenAgentSessionShortcutHandler(
         AgentSessionShortcutContext agentSessionShortcutContext,
-        ITrustedExecutorSelector trustedExecutorSelector)
+        ITrustedExecutorSelector trustedExecutorSelector,
+        IRunningAgentChatTable? runningAgentChatTable = null)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
+        this.runningAgentChatTable = runningAgentChatTable;
     }
 
     public override bool ShouldApplyTo(
@@ -46,14 +50,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         SubscribedEntityViewModel entityViewModel)
     {
         // Open a loading tab immediately so the user sees feedback right away.
-        // OpenTabAsync dedupes by Id, so if the session is already open it just activates it.
+        // Each open gets a unique id so the same session can be open in multiple tabs.
         var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
-            Id = entityViewModel.EntityId.ToString(),
+            Id = Guid.NewGuid().ToString("n"),
             Title = entityViewModel.DisplayName,
             DockRegion = "full",
             Entity = entityViewModel,
             NotificationService = mainWindowViewModel.NotificationService,
+            AgentSessionId = entityViewModel.EntityId.ToString(),
         };
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
@@ -75,8 +80,12 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, foregroundScheduler);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (result is var (agent, loggerFactory))
+                if (result is var (agent, loggerFactory, lease))
                 {
+                    if (lease is not null)
+                    {
+                        tab.SetLease(lease);
+                    }
                     tab.SetReady(agent, loggerFactory);
                 }
                 else
@@ -138,7 +147,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         return tab;
     }
 
-    private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory)?> TryBuildAgentAsync(
+    private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)?> TryBuildAgentAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
         TaskScheduler foregroundScheduler)
@@ -199,7 +208,21 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             return null;
         }
 
-        var agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
+        AgentChat agentChat;
+        RunningAgentChatLease? lease = null;
+
+        if (this.runningAgentChatTable is not null)
+        {
+            lease = await this.runningAgentChatTable.AcquireAsync(
+                agentSessionId!,
+                () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel));
+            agentChat = lease.AgentChat;
+        }
+        else
+        {
+            agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
+        }
+
         var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
 
         agent.ConfigureSlashCommands(
@@ -242,7 +265,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             };
         }
 
-        return (agent, loggerFactory);
+        return (agent, loggerFactory, lease);
     }
 
     private async Task<AgentChat> CreateAgentChatAsync(

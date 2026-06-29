@@ -77,7 +77,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public MainWindowViewModel(
         RepositorySource repositorySource,
         WorkspacesConfiguration? configuration = null,
-        ProfileStore? profileStore = null)
+        ProfileStore? profileStore = null,
+        ApplicationServices? applicationServices = null)
     {
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
@@ -106,9 +107,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
-            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride,
+            persistenceStoreCache: applicationServices?.AgentPersistenceStoreCache);
         var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
-        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, trustedExecutorSelector);
+        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, trustedExecutorSelector, applicationServices?.RunningAgentChats);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
@@ -1527,6 +1530,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         this.SelectedWorkspacePane = this.WorkspacePanes[index];
+
+        var contentLayout = this.SelectedWorkspacePane.ContentLayout;
+        var documentDock = contentLayout is not null ? this.FindDocumentDock(contentLayout) : null;
+        if (documentDock?.ActiveDockable is WorkspaceDocument activeDoc)
+        {
+            this.notificationService.MarkRead(activeDoc.Id);
+        }
 
         if (!this.navigatingViaHistory)
         {

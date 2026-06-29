@@ -8,12 +8,11 @@ public sealed class NotificationRowViewModel : ViewModelBase
 {
     private bool isRead;
     private bool isSnoozed;
-    private bool isRunning;
-    private bool isInteresting;
     private bool isHighlighted;
     private string heading;
     private string description;
     private DateTime when;
+    private readonly StatusItem status = new();
 
     public NotificationRowViewModel(
         NotificationEntry entry,
@@ -25,8 +24,8 @@ public sealed class NotificationRowViewModel : ViewModelBase
         this.heading = entry.Heading;
         this.description = entry.Description;
         this.when = entry.When;
-        this.isRunning = entry.IsRunning;
-        this.isInteresting = entry.IsInteresting;
+        this.status.RunningStatus = entry.IsRunning ? RunningStatus.Running : RunningStatus.Idle;
+        this.status.ErrorStatus = entry.IsInteresting ? ErrorStatus.Error : ErrorStatus.None;
         this.isRead = entry.IsRead;
         this.isSnoozed = entry.IsSnoozed;
         this.NavigateCommand = navigateCommand;
@@ -35,6 +34,8 @@ public sealed class NotificationRowViewModel : ViewModelBase
 
     public string TabKey { get; }
     public string TabTitle { get; }
+
+    public IStatusItem Status => this.status;
 
     public string Heading
     {
@@ -58,14 +59,30 @@ public sealed class NotificationRowViewModel : ViewModelBase
 
     public bool IsRunning
     {
-        get => this.isRunning;
-        set => this.SetProperty(ref this.isRunning, value);
+        get => this.status.RunningStatus == RunningStatus.Running;
+        set
+        {
+            var newStatus = value ? RunningStatus.Running : RunningStatus.Idle;
+            if (this.status.RunningStatus != newStatus)
+            {
+                this.status.RunningStatus = newStatus;
+                this.RaisePropertyChanged();
+            }
+        }
     }
 
     public bool IsInteresting
     {
-        get => this.isInteresting;
-        set => this.SetProperty(ref this.isInteresting, value);
+        get => this.status.ErrorStatus == ErrorStatus.Error;
+        set
+        {
+            var newError = value ? ErrorStatus.Error : ErrorStatus.None;
+            if (this.status.ErrorStatus != newError)
+            {
+                this.status.ErrorStatus = newError;
+                this.RaisePropertyChanged();
+            }
+        }
     }
 
     public DateTime When

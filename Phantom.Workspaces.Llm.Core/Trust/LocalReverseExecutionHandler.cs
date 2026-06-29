@@ -16,14 +16,31 @@ namespace Phantom.Workspaces.Llm.Trust;
 /// reverse channel. This mirrors <c>AgentRespondHandler</c> (the forward host side) but streams, so
 /// the server (S) sees incremental updates. See <c>docs/design/reverse-tunnel-trust-execution.md</c>.
 /// </summary>
+/// <remarks>
+/// When an <see cref="AgentChatSessionCache"/> is provided and the incoming
+/// <see cref="RemoteAgentRequest.AgentSessionId"/> is non-empty, each turn is routed through the
+/// cache so stateful providers (e.g. <c>CopilotSdkChatClient</c>) keep their session alive across
+/// turns. Without a cache the handler falls back to the existing stateless path.
+/// </remarks>
 public sealed class LocalReverseExecutionHandler : IReverseExecutionHandler
 {
     private readonly LocalTrustedExecutor localExecutor;
+    private readonly AgentChatSessionCache? sessionCache;
 
-    /// <summary>Creates a handler backed by the supplied executor (or a default one if <see langword="null"/>).</summary>
-    public LocalReverseExecutionHandler(LocalTrustedExecutor? localExecutor = null)
+    /// <summary>
+    /// Creates a handler with an optional session cache and executor.
+    /// </summary>
+    /// <param name="localExecutor">Stream handler executor; a default one is used when <see langword="null"/>.</param>
+    /// <param name="sessionCache">
+    /// Optional cache for stateful sessions. When provided, requests that carry a non-empty
+    /// <see cref="RemoteAgentRequest.AgentSessionId"/> are routed through the cache.
+    /// </param>
+    public LocalReverseExecutionHandler(
+        LocalTrustedExecutor? localExecutor = null,
+        AgentChatSessionCache? sessionCache = null)
     {
         this.localExecutor = localExecutor ?? new LocalTrustedExecutor();
+        this.sessionCache = sessionCache;
     }
 
     /// <inheritdoc />
@@ -32,6 +49,24 @@ public sealed class LocalReverseExecutionHandler : IReverseExecutionHandler
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (!string.IsNullOrEmpty(request.AgentSessionId) && this.sessionCache is not null)
+        {
+            var turnRequest = new AgentChatTurnRequest
+            {
+                AgentDefinitionJson = request.AgentDefinitionJson,
+                AgentSessionId = request.AgentSessionId,
+                Messages = request.Messages,
+            };
+            await foreach (var update in this.sessionCache
+                .RunTurnAsync(turnRequest, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return update;
+            }
+
+            yield break;
+        }
 
         var agentDefinition = AgentDefinition.FromJson(request.AgentDefinitionJson);
         var (chatClient, _) = AgentFactory.CreateChatClient(agentDefinition);

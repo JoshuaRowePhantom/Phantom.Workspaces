@@ -239,6 +239,9 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new DiagnosticsSlashCommandHandler(
             getValue: () => this.IsDiagnosticsVisible,
             setValue: v => this.SetDiagnosticsVisibility(v)));
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new ReasoningSlashCommandHandler(
+            getValue: () => this.IsReasoningVisible,
+            setValue: v => this.SetReasoningVisibility(v)));
     }
 
     private async Task RunSlashCommandAsync(
@@ -395,6 +398,12 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await this.DisposeViewResourcesAsync();
+        await this.agentChat.DisposeAsync();
+    }
+
+    public async ValueTask DisposeViewResourcesAsync()
+    {
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
@@ -404,7 +413,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         {
             runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
         }
-        await this.agentChat.DisposeAsync();
+        await Task.CompletedTask;
     }
 
     private Model? ResolveAgentModel()
