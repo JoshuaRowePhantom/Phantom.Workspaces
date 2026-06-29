@@ -1,14 +1,13 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class AgentViewModelNavigationTests
 {
-    [AvaloniaFact]
+    [Fact]
     public async Task EditorTree_RootNode_IsCollapsedByDefault()
     {
         var chat = await CreateChatAsync();
@@ -19,7 +18,7 @@ public sealed class AgentViewModelNavigationTests
         Assert.False(root.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [Fact]
     [Trait("Category", "Integration")]
     public async Task BuildToolNavigationItem_TopLevelItems_StartCollapsed()
     {
@@ -35,7 +34,7 @@ public sealed class AgentViewModelNavigationTests
         Assert.False(topLevelMcpItem.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [Fact]
     [Trait("Category", "Integration")]
     public async Task BuildToolNavigationItem_ChildItems_StartExpanded()
     {

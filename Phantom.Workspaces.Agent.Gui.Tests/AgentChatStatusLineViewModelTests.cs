@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
@@ -7,10 +7,9 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class AgentChatStatusLineViewModelTests
 {
-    [AvaloniaFact]
+    [Fact]
     public async Task EmptyAgent_ShowsNoneDisplaysAndNoTokens()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -26,7 +25,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.True(statusLine.HasVisibleContent);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ModelAndProvider_DisplayResolvedAgentModel()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -39,7 +38,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.True(statusLine.HasProvider);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task IsThinking_FollowsRunningItems()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -77,7 +76,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.True(statusLine.HasTokens);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task IsReasoningVisible_WhenAgentPropertyChanges_PropagatesChange()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -99,7 +98,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.False(statusLine.IsReasoningVisible);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task Dispose_UnsubscribesFromAgentChanges()
     {
         using var loggerFactory = new ObservableLoggerFactory();

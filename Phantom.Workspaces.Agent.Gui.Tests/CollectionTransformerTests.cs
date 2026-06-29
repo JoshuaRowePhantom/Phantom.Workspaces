@@ -1,12 +1,11 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class CollectionTransformerTests
 {
-    [AvaloniaFact]
+    [Fact]
     public void SourceInsert_UpdatesTargetCollection()
     {
         var source = new ObservableCollection<SourceItem>
@@ -27,7 +26,7 @@ public sealed class CollectionTransformerTests
         Assert.Same(preservedC, target[2]);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SourceMove_ReordersTargetCollection()
     {
         var source = new ObservableCollection<SourceItem>
@@ -46,7 +45,7 @@ public sealed class CollectionTransformerTests
         Assert.Same(first, target[1]);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void Dispose_StopsCollectionSubscriptions()
     {
         var source = new ObservableCollection<SourceItem>
@@ -63,7 +62,7 @@ public sealed class CollectionTransformerTests
         Assert.Equal("a", target[0].Id);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void InitialTransform_PopulatesTargetCollectionOnConstruction()
     {
         var source = new ObservableCollection<SourceItem>
@@ -81,7 +80,7 @@ public sealed class CollectionTransformerTests
         Assert.Equal("c", target[2].Id);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SourceRemove_DisposesDisposableTargetItem()
     {
         var source = new ObservableCollection<SourceItem>
@@ -99,7 +98,7 @@ public sealed class CollectionTransformerTests
         Assert.True(removed.IsDisposed);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SourceClear_DisposesAllDisposableTargetItems()
     {
         var source = new ObservableCollection<SourceItem>
@@ -122,7 +121,7 @@ public sealed class CollectionTransformerTests
         Assert.True(third.IsDisposed);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SourceRemoveMultiple_DisposesAllRemovedItems()
     {
         var source = new ObservableCollection<SourceItem>
