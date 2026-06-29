@@ -260,6 +260,96 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task ViewEntityViewModel_TraversedEntitiesCollapsed_WhenDispositionIsCollapsed()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Override the workspace entity-type-view to have traversed-entity-display-disposition: "collapsed".
+        var entityTypeViewId = new EntityId("a9d73483-6752-40b3-9fed-5831616814a6");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            entityTypeViewId,
+            """
+            {
+              "entity-id": "a9d73483-6752-40b3-9fed-5831616814a6",
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "workspace"]],
+              "display-name": { "default": "Workspace View" },
+              "fields": [],
+              "traversed-entity-display-disposition": "collapsed",
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var workspaceId = new EntityId("b1000001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "b1000001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces", "collapse-test"]],
+              "display-name": { "default": "Collapse Test Workspace" },
+              "regions": []
+            }
+            """);
+
+        var relatedId = new EntityId("b1000002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            relatedId,
+            """
+            {
+              "entity-id": "b1000002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "collapse-test-note"]],
+              "display-name": { "default": "Related Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "note" } }
+            }
+            """);
+
+        var relId = new EntityId("b1000003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            relId,
+            $$"""
+            {
+              "entity-id": "b1000003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "collapse-test-rel"]],
+              "participants": { "entities": ["{{workspaceId.Value}}", "{{relatedId.Value}}"] }
+            }
+            """);
+
+        var workspacesView = viewModel.TopLevelViews.FirstOrDefault(
+            static v => string.Equals(v.Title, "Workspaces", StringComparison.Ordinal));
+        Assert.NotNull(workspacesView);
+        viewModel.SelectedTopLevelView = workspacesView!;
+
+        var applySelectedViewMethod = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(applySelectedViewMethod);
+        await (Task)applySelectedViewMethod!.Invoke(viewModel, [])!;
+
+        var workspaceVm = viewModel.CurrentViewPopulation.Entities.FirstOrDefault(
+            e => e.Entity.EntityId == workspaceId);
+        Assert.NotNull(workspaceVm);
+        Assert.False(workspaceVm!.IsExpanded);
+
+        // Traversed child must NOT appear in the flat population when disposition is "collapsed".
+        Assert.DoesNotContain(
+            viewModel.CurrentViewPopulation.Entities,
+            e => e.Entity.EntityId == relatedId);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void MainWindow_ConstructsWithoutTemplateCastErrors()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());

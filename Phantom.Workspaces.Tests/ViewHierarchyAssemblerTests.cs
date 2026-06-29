@@ -112,6 +112,106 @@ public sealed class ViewHierarchyAssemblerTests
     }
 
     [AvaloniaFact]
+    public async Task AssembleAsync_WithCollapsedDisposition_SetsIsExpandedFalseOnRootNode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","workspace"]],
+              "traversed-entity-display-disposition": "collapsed",
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var workspaceId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces","ws-collapsed"]],
+              "display-name": { "default": "Collapsed Workspace" },
+              "regions": []
+            }
+            """);
+        var noteId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "note"],
+              "names": [["notes","n-collapsed"]],
+              "display-name": { "default": "Related Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "note" } }
+            }
+            """);
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships","ws-note-collapsed-rel"]],
+              "participants": { "entities": ["{{workspaceId.Value}}", "{{noteId.Value}}"] }
+            }
+            """);
+
+        var roots = (await broker.GetEntitiesAsync([workspaceId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var workspaceNode = Assert.Single(hierarchy);
+        Assert.Equal(workspaceId, workspaceNode.Entity!.EntityId);
+        // The node should have the child in the hierarchy but be collapsed.
+        Assert.Single(workspaceNode.Children);
+        Assert.False(workspaceNode.IsExpanded);
+    }
+
+    [AvaloniaFact]
+    public async Task AssembleAsync_WithoutDisposition_DefaultsToIsExpandedTrue()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","workspace"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+        var workspaceId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "workspace"],
+              "names": [["workspaces","ws-default-expanded"]],
+              "display-name": { "default": "Default Expanded Workspace" },
+              "regions": []
+            }
+            """);
+        var noteId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "note"],
+              "names": [["notes","n-default-expanded"]],
+              "display-name": { "default": "Related Note" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "note" } }
+            }
+            """);
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships","ws-note-expanded-rel"]],
+              "participants": { "entities": ["{{workspaceId.Value}}", "{{noteId.Value}}"] }
+            }
+            """);
+
+        var roots = (await broker.GetEntitiesAsync([workspaceId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var workspaceNode = Assert.Single(hierarchy);
+        Assert.True(workspaceNode.IsExpanded);
+    }
+
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithRelatedEntity_RendersEntityAsChild()
     {
         var ct = TestContext.Current.CancellationToken;

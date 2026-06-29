@@ -1185,6 +1185,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ViewEntityViewModel CreateViewEntityViewModel(
         SubscribedEntityViewModel entity,
         int indentLevel,
+        bool isExpanded = true,
         bool isParentContext = false)
     {
         // Project the entity's interests (from its loaded relationships) into toggleable badge glyphs.
@@ -1203,14 +1204,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this,
             this.shortcutManager,
             indentLevel,
-            isParentContext,
-            this.fieldEditorFactory);
-
-        // Restore the expansion state for this entity, defaulting to expanded.
-        var entityIdStr = entity.EntityId.ToString();
-        vm.IsExpanded = this.expandedEntityIds.GetValueOrDefault(entityIdStr, true);
+            isExpanded: this.expandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
+            isParentContext: isParentContext,
+            fieldEditorFactory: this.fieldEditorFactory);
 
         // Persist expansion state changes and trigger a view rebuild on toggle.
+        var entityIdStr = entity.EntityId.ToString();
         vm.PropertyChanged += (sender, e) =>
         {
             if (string.Equals(e.PropertyName, nameof(ViewEntityViewModel.IsExpanded), StringComparison.Ordinal)
@@ -1271,7 +1270,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            vm = this.CreateViewEntityViewModel(node.Entity!, indentLevel);
+            vm = this.CreateViewEntityViewModel(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
             if (node.Children.Count > 0)
             {
                 vm.HasTraversedChildren = true;
