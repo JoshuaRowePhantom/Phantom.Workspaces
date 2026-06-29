@@ -38,11 +38,9 @@
                         Classes="agent-chat-status-line"
                         IsVisible="{Binding StatusLine.HasVisibleContent}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Classes="agent-chat-status-line-brain"
-                                   FontFamily="Segoe UI Emoji"
-                                   Text="🧠"
-                                   VerticalAlignment="Center"
-                                   Classes.thinking="{Binding StatusLine.IsThinking}"/>
+                        <ProgressBar Classes="running-indicator"
+                                     VerticalAlignment="Center"
+                                     IsIndeterminate="{Binding StatusLine.IsThinking}"/>
                         <TextBlock Classes="agent-chat-status-line-value"
                                    Text="{Binding StatusLine.ModelDisplay}"
                                    VerticalAlignment="Center"
