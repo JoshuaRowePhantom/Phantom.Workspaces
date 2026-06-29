@@ -392,8 +392,8 @@
         <Setter Property="VerticalAlignment" Value="Bottom" />
     </Style>
     <Style Selector="Border.queue-status-pill.dynamic">
-        <Setter Property="Background" Value="{ReflectionBinding SubmitStatusOption.Background}" />
-        <Setter Property="BorderBrush" Value="{ReflectionBinding SubmitStatusOption.BorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="0" />
     </Style>
@@ -403,8 +403,8 @@
         <Setter Property="Padding" Value="10,4" />
     </Style>
     <Style Selector="Border.queue-immediacy-option-pill">
-        <Setter Property="Background" Value="{ReflectionBinding Background}" />
-        <Setter Property="BorderBrush" Value="{ReflectionBinding BorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
     </Style>
     <Style Selector="Border.queue-item-card">
         <Setter Property="Margin" Value="0,0,0,4" />
@@ -415,17 +415,8 @@
     <Style Selector="TextBlock.queue-immediacy-label">
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
     </Style>
-    <Style Selector="TextBlock.queue-immediacy-option-label">
-        <Setter Property="Foreground" Value="{ReflectionBinding Foreground}" />
-    </Style>
-    <Style Selector="TextBlock.queue-status-label">
-        <Setter Property="Foreground" Value="{ReflectionBinding SubmitStatusOption.Foreground}" />
-    </Style>
     <Style Selector="TextBlock.queue-immediacy-caret">
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
-    </Style>
-    <Style Selector="TextBlock.queue-status-caret">
-        <Setter Property="Foreground" Value="{ReflectionBinding SubmitStatusOption.Foreground}" />
     </Style>
     <Style Selector="UserControl.agent-chat-output-root">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
