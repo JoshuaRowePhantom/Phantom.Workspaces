@@ -224,7 +224,8 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
             this.mainWindowViewModel,
             definitionEntity,
-            agentChat.AgentSessionId);
+            agentChat.AgentSessionId,
+            owningProfileEntityId: this.profileEntity.EntityId);
 
         if (createdAgentSessionEntity is null)
         {

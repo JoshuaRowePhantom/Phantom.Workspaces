@@ -1,6 +1,7 @@
 using System;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -102,7 +103,10 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     private static StartAgentSessionFromEntityShortcutHandler CreateHandler()
     {
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var trustedExecutorSelector = new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            trustedExecutorSelector);
         return new StartAgentSessionFromEntityShortcutHandler(
             agentSessionShortcutContext,
             openAgentSessionShortcutHandler);
