@@ -206,10 +206,10 @@ public sealed class ToolVisualizationTests
         Assert.Null(statusLine.IntentDisplay);
     }
 
-    // --- Inspector affordance in ChatOutputHtmlRenderer ---
+    // --- Inline inspector affordance removed (#293) ---
 
     [Fact]
-    public void ChatOutputHtmlRenderer_FunctionCallBlock_ContainsInspectorAffordance()
+    public void ChatOutputHtmlRenderer_FunctionCallBlock_DoesNotContainInspectorAffordance()
     {
         var call = new FunctionCallContent("call-1", "my_tool",
             new Dictionary<string, object?> { ["arg"] = "val" });
@@ -217,27 +217,27 @@ public sealed class ToolVisualizationTests
         var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("chat-inspect", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ChatOutputHtmlRenderer_FunctionResultBlock_ContainsInspectorAffordance()
+    public void ChatOutputHtmlRenderer_FunctionResultBlock_DoesNotContainInspectorAffordance()
     {
         var result = new FunctionResultContent("call-1", "result value");
 
         var html = ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("chat-inspect", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ChatOutputHtmlRenderer_TextBlock_ContainsInspectorAffordance()
+    public void ChatOutputHtmlRenderer_TextBlock_DoesNotContainInspectorAffordance()
     {
         var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("hello"), includeReasoning: false, isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("chat-inspect", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
     }
 
     [Fact]
