@@ -16,14 +16,17 @@ public sealed class ReverseExecutionEndToEndTests
     {
         private readonly string[] chunks;
         private readonly bool fail;
+        private readonly bool failTool;
 
-        public StubHandler(bool fail, params string[] chunks)
+        public StubHandler(bool fail, bool failTool = false, params string[] chunks)
         {
             this.fail = fail;
+            this.failTool = failTool;
             this.chunks = chunks;
         }
 
         public RemoteAgentRequest? Received { get; private set; }
+        public TrustedToolRequest? ReceivedToolRequest { get; private set; }
 
         public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
             RemoteAgentRequest request,
@@ -48,10 +51,18 @@ public sealed class ReverseExecutionEndToEndTests
             Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
             CancellationToken cancellationToken)
             => Task.CompletedTask;
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+        {
+            this.ReceivedToolRequest = request;
+            if (this.failTool)
+                throw new InvalidOperationException("boom");
+            return Task.CompletedTask;
+        }
     }
 
     private static async Task<(ReverseExecutionRegistry Registry, IReverseConnection Connection, StubHandler Handler, CancellationTokenSource Cts)>
-        ConnectAsync(bool fail = false, params string[] chunks)
+        ConnectAsync(bool fail = false, bool failTool = false, params string[] chunks)
     {
         var pair = new InMemoryReverseMessageChannelPair();
         var registry = new ReverseExecutionRegistry();
@@ -68,7 +79,7 @@ public sealed class ReverseExecutionEndToEndTests
         var acceptor = new ReverseConnectionAcceptor(registry);
         _ = acceptor.AcceptAsync(pair.ServerEnd, cts.Token);
 
-        var handler = new StubHandler(fail, chunks);
+        var handler = new StubHandler(fail, failTool, chunks);
         var worker = new ReverseExecutionWorker(pair.ClientEnd, "computer-a", handler);
         _ = worker.RunAsync(cts.Token);
 
@@ -80,7 +91,7 @@ public sealed class ReverseExecutionEndToEndTests
     [Fact]
     public async Task Execute_StreamsResultBackFromConnectingInstance()
     {
-        var (_, connection, handler, cts) = await ConnectAsync(fail: false, "Hello, ", "world");
+        var (_, connection, handler, cts) = await ConnectAsync(fail: false, failTool: false, "Hello, ", "world");
         try
         {
             var request = new RemoteAgentRequest
@@ -107,7 +118,7 @@ public sealed class ReverseExecutionEndToEndTests
     [Fact]
     public async Task Execute_ThroughReverseRemoteChatClient_AggregatesResponse()
     {
-        var (registry, _, _, cts) = await ConnectAsync(fail: false, "Hello, ", "world");
+        var (registry, _, _, cts) = await ConnectAsync(fail: false, failTool: false, "Hello, ", "world");
         try
         {
             var client = new ReverseRemoteChatClient(registry, "computer-a", "{}");
@@ -123,7 +134,7 @@ public sealed class ReverseExecutionEndToEndTests
     [Fact]
     public async Task Execute_PropagatesHandlerFailure_AsError()
     {
-        var (_, connection, _, cts) = await ConnectAsync(fail: true, "partial");
+        var (_, connection, _, cts) = await ConnectAsync(fail: true, failTool: false, "partial");
         try
         {
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -144,7 +155,7 @@ public sealed class ReverseExecutionEndToEndTests
     [Fact]
     public async Task Disconnect_FaultsInFlightAndDeregisters()
     {
-        var (registry, connection, _, cts) = await ConnectAsync(fail: false, "x");
+        var (registry, connection, _, cts) = await ConnectAsync(fail: false, failTool: false, "x");
         Assert.True(registry.IsConnected("computer-a"));
 
         // Cancelling tears down the worker and server, closing the channel.
@@ -152,5 +163,51 @@ public sealed class ReverseExecutionEndToEndTests
 
         // The connection's completion resolves once its read loop ends.
         await ((ReverseChannelConnection)connection).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task RunTool_ExecutesOnConnectingInstance()
+    {
+        var (_, connection, handler, cts) = await ConnectAsync();
+        try
+        {
+            var request = new TrustedToolRequest
+            {
+                ToolTypeName = "git-workspace-scan",
+                ToolEntityId = Guid.NewGuid().ToString(),
+                TargetClientInstance = "computer-a",
+            };
+
+            await ((ReverseChannelConnection)connection).RunToolAsync(request, cts.Token);
+
+            Assert.NotNull(handler.ReceivedToolRequest);
+            Assert.Equal("git-workspace-scan", handler.ReceivedToolRequest!.ToolTypeName);
+        }
+        finally
+        {
+            cts.Cancel();
+        }
+    }
+
+    [Fact]
+    public async Task RunTool_PropagatesHandlerFailure()
+    {
+        var (_, connection, _, cts) = await ConnectAsync(failTool: true);
+        try
+        {
+            var request = new TrustedToolRequest
+            {
+                ToolTypeName = "git-workspace-scan",
+                ToolEntityId = Guid.NewGuid().ToString(),
+                TargetClientInstance = "computer-a",
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => ((ReverseChannelConnection)connection).RunToolAsync(request, cts.Token));
+        }
+        finally
+        {
+            cts.Cancel();
+        }
     }
 }

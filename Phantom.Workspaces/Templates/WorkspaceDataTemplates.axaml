@@ -51,6 +51,11 @@
                 <Grid ColumnDefinitions="Auto,Auto,*,Auto">
                     <!-- Back/Forward buttons -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" Margin="0,0,8,0">
+                        <Button Command="{Binding NavigateHomeCommand}"
+                                Content="🏠"
+                                ToolTip.Tip="Go to home page"
+                                IsVisible="{Binding HasHomeUrl}"
+                                Width="32" />
                         <Button Command="{Binding GoBackCommand}" 
                                 Content="←"
                                 ToolTip.Tip="Go back"
@@ -534,6 +539,10 @@
                    Classes.thinking="{Binding IsRunning}" />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
+        <entityControls:StatusControl Item="{Binding Status}" />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:TabHeaderViewModel">
         <Grid>
             <StackPanel Orientation="Horizontal" Spacing="4">
@@ -558,6 +567,9 @@
                                        Foreground="Red"
                                        FontWeight="Bold"
                                        Opacity="{Binding HasUnread, Converter={x:Static converters:BoolToOpacityConverter.Instance}}" />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
+                            <entityControls:StatusControl Item="{Binding Status}" />
                         </DataTemplate>
                     </ItemsControl.DataTemplates>
                 </ItemsControl>

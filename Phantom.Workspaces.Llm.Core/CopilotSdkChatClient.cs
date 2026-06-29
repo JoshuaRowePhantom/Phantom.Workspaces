@@ -45,6 +45,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
     private int disposeStarted;
+    private volatile string? workingDirectoryOverride;
 
     /// <summary>
     /// Raised when a steering message is forwarded to the live Copilot session so the owning
@@ -238,6 +239,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         this.pendingResumeSessionId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId;
     }
+
+    /// <summary>
+    /// Overrides the working directory used for the next Copilot session creation or resumption,
+    /// so that <see cref="EnsureSessionAsync"/> immediately detects a signature change and resumes
+    /// with the new working directory on the next turn — without waiting for the new value to be
+    /// persisted to the agent-session entity's parameter store.
+    /// </summary>
+    internal void SetWorkingDirectory(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        this.workingDirectoryOverride = path;
+    }
+
+    /// <summary>
+    /// The working-directory override set by <see cref="SetWorkingDirectory"/>, or
+    /// <see langword="null"/> when no in-process override has been applied.
+    /// Exposed internally for unit-test assertions.
+    /// </summary>
+    internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
     /// <inheritdoc />
     public async Task<ChatResponse> GetResponseAsync(
@@ -629,42 +649,62 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     }
 
     /// <summary>
-    /// Builds a <see cref="MessageOptions"/> from the message history by locating the last user
-    /// message and extracting its text prompt and any inline image/data attachments.
+    /// Builds a <see cref="MessageOptions"/> from the message history by collecting all consecutive
+    /// trailing user messages (the current batch) and combining their text content and data attachments
+    /// into a single prompt. When multiple messages are queued in one turn their texts are joined with
+    /// <c>\n\n---\n\n</c> so every queued message is visible to the model.
     /// </summary>
     internal static MessageOptions BuildMessageOptions(IEnumerable<ChatMessage> messages)
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
 
+        // Collect consecutive trailing user messages — these are the batched messages for this turn.
+        // Stop as soon as a non-user message is encountered so earlier historical turns are not included.
+        var batchMessages = new List<ChatMessage>();
         for (var index = materialized.Count - 1; index >= 0; index--)
         {
             var message = materialized[index];
             if (message.Role != ChatRole.User)
             {
-                continue;
+                break;
             }
 
-            var text = message.Text;
-            var dataItems = message.Contents.OfType<DataContent>().ToList();
+            batchMessages.Add(message);
+        }
 
-            if (!string.IsNullOrEmpty(text) || dataItems.Count > 0)
+        batchMessages.Reverse();
+
+        var batchWithContent = batchMessages
+            .Where(m => !string.IsNullOrEmpty(m.Text) || m.Contents.OfType<DataContent>().Any())
+            .ToList();
+
+        if (batchWithContent.Count > 0)
+        {
+            var texts = batchWithContent
+                .Select(m => m.Text)
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+            var combinedText = string.Join("\n\n---\n\n", texts);
+
+            var options = new MessageOptions { Prompt = combinedText };
+
+            var dataItems = batchWithContent
+                .SelectMany(m => m.Contents.OfType<DataContent>())
+                .ToList();
+
+            if (dataItems.Count > 0)
             {
-                var options = new MessageOptions { Prompt = text ?? string.Empty };
-
-                if (dataItems.Count > 0)
-                {
-                    options.Attachments = dataItems
-                        .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
-                        {
-                            Data = Convert.ToBase64String(d.Data.ToArray()),
-                            MimeType = d.MediaType ?? string.Empty,
-                            DisplayName = d.MediaType ?? "attachment",
-                        })
-                        .ToList();
-                }
-
-                return options;
+                options.Attachments = dataItems
+                    .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+                    {
+                        Data = Convert.ToBase64String(d.Data.ToArray()),
+                        MimeType = d.MediaType ?? string.Empty,
+                        DisplayName = d.MediaType ?? "attachment",
+                    })
+                    .ToList();
             }
+
+            return options;
         }
 
         var lastWithText = materialized.LastOrDefault(message => !string.IsNullOrEmpty(message.Text));
@@ -708,7 +748,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private async Task<CopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
-        var signature = ComputeSessionSignature(options);
+        var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
         if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature)
         {
@@ -784,6 +824,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             try
             {
                 var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options);
+                if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
+                {
+                    resumeConfig.WorkingDirectory = this.workingDirectoryOverride;
+                }
+
                 return await this.copilotClient!
                     .ResumeSessionAsync(resumeSessionId, resumeConfig, cancellationToken)
                     .ConfigureAwait(false);
@@ -798,6 +843,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
+        if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
+        {
+            sessionConfig.WorkingDirectory = this.workingDirectoryOverride;
+        }
+
         return await this.copilotClient!.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
     }
 
@@ -808,6 +858,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// included. Tool order is ignored so that only an actual change to the tool set forces a recreation.
     /// </summary>
     public static string ComputeSessionSignature(ChatOptions? options)
+        => ComputeSessionSignatureCore(options, workingDirectoryOverride: null);
+
+    // Core implementation used by both the public static overload and EnsureSessionAsync (which
+    // also factors in the in-process working-directory override set by SetWorkingDirectory).
+    private static string ComputeSessionSignatureCore(ChatOptions? options, string? workingDirectoryOverride)
     {
         var toolNames = options?.Tools?
             .OfType<AIFunction>()
@@ -817,7 +872,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var instructions = options?.Instructions ?? string.Empty;
         var reasoning = MapReasoningEffort(options?.Reasoning?.Effort) ?? string.Empty;
-        var workingDirectory = GetWorkingDirectory(options) ?? string.Empty;
+        var workingDirectory = workingDirectoryOverride ?? GetWorkingDirectory(options) ?? string.Empty;
 
         return string.Join(
             '\u0001',

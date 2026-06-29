@@ -77,7 +77,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public MainWindowViewModel(
         RepositorySource repositorySource,
         WorkspacesConfiguration? configuration = null,
-        ProfileStore? profileStore = null)
+        ProfileStore? profileStore = null,
+        ApplicationServices? applicationServices = null)
     {
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
@@ -106,9 +107,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
-            userComputerProfileOverride: configuration?.UserComputerProfileOverride);
+            userComputerProfileOverride: configuration?.UserComputerProfileOverride,
+            persistenceStoreCache: applicationServices?.AgentPersistenceStoreCache);
         var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
-        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, trustedExecutorSelector);
+        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, trustedExecutorSelector, applicationServices?.RunningAgentChats);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
@@ -134,7 +137,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.notificationService = new NotificationService(this);
         this.notificationsViewModel = new NotificationsViewModel(
             this.notificationService,
-            tabId => _ = this.NavigateToNotificationTabAsync(tabId));
+            tabId => this.NavigateToNotificationTab(tabId));
         this.NavigateNextNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(+1));
         this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
@@ -1528,6 +1531,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.SelectedWorkspacePane = this.WorkspacePanes[index];
 
+        var contentLayout = this.SelectedWorkspacePane.ContentLayout;
+        var documentDock = contentLayout is not null ? this.FindDocumentDock(contentLayout) : null;
+        if (documentDock?.ActiveDockable is WorkspaceDocument activeDoc)
+        {
+            this.notificationService.MarkRead(activeDoc.Id);
+        }
+
         if (!this.navigatingViaHistory)
         {
             var activeTabId = this.ActiveTabId;
@@ -1711,6 +1721,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (documentDock is null)
         {
             return;
+        }
+
+        // Wire up accelerator-key callbacks so Alt+1–0 and IsAltHeld work when this tab's WebView has focus.
+        if (tab is WebViewModel webVm)
+        {
+            webVm.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+        }
+        else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
+        {
+            agentTab.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
         }
 
         // Check if tab already exists
@@ -3233,33 +3255,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var target = candidates[nextIndex];
         this.notificationService.MarkRead(target.TabKey);
-        _ = this.NavigateToNotificationTabAsync(target.TabKey);
+        this.NavigateToNotificationTab(target.TabKey);
         this.notificationsViewModel?.OpenWithHighlight(target.TabKey);
     }
 
-    private async Task NavigateToNotificationTabAsync(string tabId)
+    private void NavigateToNotificationTab(string tabId)
     {
-        foreach (var pane in this.WorkspacePanes)
+        var workspacePaneId = this.notificationService.Notifications
+            .FirstOrDefault(e => e.TabKey == tabId)
+            ?.TabDescriptor.WorkspaceId;
+        this.ActivateTabById(tabId, workspacePaneId);
+        if (!this.navigatingViaHistory && this.SelectedWorkspacePane is not null)
         {
-            if (pane.ContentLayout is null) continue;
-            var documentDock = this.FindDocumentDock(pane.ContentLayout);
-            if (documentDock?.VisibleDockables is null) continue;
-            var doc = documentDock.VisibleDockables
-                .OfType<WorkspaceDocument>()
-                .FirstOrDefault(d => d.Id == tabId);
-            if (doc is not null)
-            {
-                this.dockFactory.SetActiveDockable(doc);
-                this.dockFactory.SetFocusedDockable(documentDock, doc);
-                if (!this.navigatingViaHistory)
-                {
-                    this.navigationHistoryService.Push(new NavigationEntry(tabId, pane.Id));
-                }
-                return;
-            }
+            this.navigationHistoryService.Push(new NavigationEntry(tabId, this.SelectedWorkspacePane.Id));
         }
-        // Tab not found open - nothing to do (reopen not implemented in this iteration)
-        await Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()

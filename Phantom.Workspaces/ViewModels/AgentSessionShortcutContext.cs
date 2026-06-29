@@ -10,6 +10,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -19,15 +20,18 @@ public sealed class AgentSessionShortcutContext
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
     private readonly Func<DateTimeOffset> currentTimeProvider;
     private readonly string? userComputerProfileOverride;
+    private readonly IAgentPersistenceStoreCache? persistenceStoreCache;
     private Task<IAgentPersistenceStore>? agentPersistenceStoreTask;
 
     public AgentSessionShortcutContext(
         Func<DateTimeOffset>? currentTimeProvider = null,
-        string? userComputerProfileOverride = null)
+        string? userComputerProfileOverride = null,
+        IAgentPersistenceStoreCache? persistenceStoreCache = null)
     {
         this.currentTimeProvider = currentTimeProvider
             ?? (() => DateTimeOffset.UtcNow);
         this.userComputerProfileOverride = userComputerProfileOverride;
+        this.persistenceStoreCache = persistenceStoreCache;
     }
 
     public async Task<AgentServices> CreateAgentServicesAsync(
@@ -143,6 +147,11 @@ public sealed class AgentSessionShortcutContext
     private Task<IAgentPersistenceStore> GetAgentPersistenceStoreAsync(
         MainWindowViewModel mainWindowViewModel)
     {
+        if (this.persistenceStoreCache is not null)
+        {
+            return this.persistenceStoreCache.GetOrCreateAsync(mainWindowViewModel.RepositorySource);
+        }
+
         if (this.agentPersistenceStoreTask is not null)
         {
             return this.agentPersistenceStoreTask;

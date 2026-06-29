@@ -23,61 +23,18 @@ public partial class AIContentInspectorWindow : Window
     {
         this.InitializeComponent();
         this.Title = $"Inspect: {content.GetType().Name} [{contentId}]";
-        this.PayloadTextBox.Text = BuildPayload(contentId, content);
+        this.PayloadTextBox.Text = BuildPayload(content);
     }
 
-    private static string BuildPayload(string contentId, AIContent content)
+    private static string BuildPayload(AIContent content)
     {
-        var info = new Dictionary<string, object?>
-        {
-            ["contentId"] = contentId,
-            ["contentType"] = content.GetType().FullName,
-        };
-
-        switch (content)
-        {
-            case FunctionCallContent call:
-                info["name"] = call.Name;
-                info["callId"] = call.CallId;
-                info["arguments"] = call.Arguments;
-                break;
-            case FunctionResultContent result:
-                info["callId"] = result.CallId;
-                info["result"] = result.Result;
-                break;
-            case TextContent text:
-                info["text"] = text.Text;
-                break;
-            case TextReasoningContent reasoning:
-                info["text"] = reasoning.Text;
-                break;
-            case ErrorContent error:
-                info["message"] = error.Message;
-                break;
-            case UriContent uri:
-                info["uri"] = uri.Uri.ToString();
-                break;
-            case DataContent data:
-                info["mediaType"] = data.MediaType;
-                info["dataLength"] = data.Data.Length;
-                break;
-            default:
-                info["toString"] = content.ToString();
-                break;
-        }
-
-        if (content.AdditionalProperties is { Count: > 0 } extra)
-        {
-            info["additionalProperties"] = extra;
-        }
-
         try
         {
-            return JsonSerializer.Serialize(info, PrettyJson);
+            return JsonSerializer.Serialize(content, PrettyJson);
         }
         catch
         {
-            return info.ToString() ?? string.Empty;
+            return content.ToString() ?? string.Empty;
         }
     }
 

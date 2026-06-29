@@ -22,6 +22,7 @@ internal sealed class ChatMessageHtmlModel
 
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly List<ContentBinding> bindings = [];
@@ -29,6 +30,7 @@ internal sealed class ChatMessageHtmlModel
     private string? renderedRoleLabel;
     private bool hasRendered;
     private bool lastReasoningVisible;
+    private bool lastDiagnosticsVisible;
     private Dictionary<string, FunctionResultContent>? supplementalResults;
 
     public ChatMessageHtmlModel(
@@ -36,6 +38,7 @@ internal sealed class ChatMessageHtmlModel
         AgentChatHistoryItem source,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
+        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -44,6 +47,7 @@ internal sealed class ChatMessageHtmlModel
         this.ElementId = elementId;
         this.source = source;
         this.isReasoningVisible = isReasoningVisible;
+        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.sink = sink;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
@@ -127,7 +131,10 @@ internal sealed class ChatMessageHtmlModel
     private void Render(bool emit)
     {
         var includeReasoning = this.isReasoningVisible();
+        var includeDiagnostics = this.isDiagnosticsVisible?.Invoke() ?? true;
         var reasoningChanged = !this.hasRendered || includeReasoning != this.lastReasoningVisible;
+        var diagnosticsChanged = !this.hasRendered || includeDiagnostics != this.lastDiagnosticsVisible;
+        var visibilityChanged = reasoningChanged || diagnosticsChanged;
 
         var roleLabel = this.source.Role.Value;
         var isDiagnostic = string.Equals(
@@ -218,6 +225,12 @@ internal sealed class ChatMessageHtmlModel
                 continue;
             }
 
+            if (isDiagnostic && !includeDiagnostics && content is TextContent)
+            {
+                contentIndex++;
+                continue;
+            }
+
             var contentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
             var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
             if (html is not null)
@@ -231,17 +244,18 @@ internal sealed class ChatMessageHtmlModel
 
         if (emit)
         {
-            this.EmitDiff(newBindings, roleLabel, reasoningChanged);
+            this.EmitDiff(newBindings, roleLabel, visibilityChanged);
         }
 
         this.bindings.Clear();
         this.bindings.AddRange(newBindings);
         this.hasRendered = true;
         this.lastReasoningVisible = includeReasoning;
+        this.lastDiagnosticsVisible = includeDiagnostics;
         this.renderedRoleLabel = roleLabel;
     }
 
-    private void EmitDiff(List<ContentBinding> newBindings, string roleLabel, bool reasoningChanged)
+    private void EmitDiff(List<ContentBinding> newBindings, string roleLabel, bool visibilityChanged)
     {
         if (!string.Equals(this.renderedRoleLabel, roleLabel, StringComparison.Ordinal))
         {
@@ -255,7 +269,7 @@ internal sealed class ChatMessageHtmlModel
         {
             if (index < this.bindings.Count)
             {
-                if (!reasoningChanged && this.bindings[index].Key == newBindings[index].Key)
+                if (!visibilityChanged && this.bindings[index].Key == newBindings[index].Key)
                 {
                     continue;
                 }
@@ -348,6 +362,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly Func<int> nextId;
     private readonly string containerPath;
     private readonly IToolVisualizerFactory? toolFactory;
@@ -360,12 +375,14 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         Func<bool> isReasoningVisible,
         Func<int> nextId,
         string containerPath,
+        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
         : base(source, target)
     {
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
+        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.nextId = nextId;
         this.containerPath = containerPath;
         this.toolFactory = toolFactory;
@@ -374,7 +391,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     }
 
     protected override RenderSlot Create(AgentChatHistoryItem sourceItem)
-        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.toolFactory, this.statusSink));
+        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink));
 
     protected override void Update(RenderSlot target, AgentChatHistoryItem sourceItem)
         => target.Model.Update(sourceItem);
@@ -603,6 +620,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly Func<int> nextId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
@@ -615,6 +633,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
         Func<int> nextId,
+        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -623,6 +642,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         this.ElementId = elementId;
         this.Source = source;
         this.isReasoningVisible = isReasoningVisible;
+        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.sink = sink;
         this.nextId = nextId;
         this.toolFactory = toolFactory;
@@ -651,6 +671,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             this.isReasoningVisible,
             this.nextId,
             ChatOutputHtmlRenderer.RunningItemContentsId(this.ElementId),
+            this.isDiagnosticsVisible,
             this.toolFactory,
             this.statusSink);
     }
@@ -708,6 +729,7 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly Func<int> nextId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
@@ -718,12 +740,14 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
         IChatOutputHtmlSink sink,
         Func<bool> isReasoningVisible,
         Func<int> nextId,
+        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
         : base(source, target)
     {
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
+        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.nextId = nextId;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
@@ -733,7 +757,7 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
     public IReadOnlyList<RunningChatItemHtmlModel> Models => (List<RunningChatItemHtmlModel>)this.Target;
 
     protected override RunningChatItemHtmlModel Create(AgentChatRunningItem sourceItem)
-        => new(ChatOutputHtmlRenderer.RunningItemId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.nextId, this.toolFactory, this.statusSink);
+        => new(ChatOutputHtmlRenderer.RunningItemId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.nextId, this.isDiagnosticsVisible, this.toolFactory, this.statusSink);
 
     protected override void Update(RunningChatItemHtmlModel target, AgentChatRunningItem sourceItem)
         => target.Update(sourceItem);
@@ -777,6 +801,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IReadOnlyList<AgentChatRunningItem> runningItems,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
+        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -796,6 +821,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             isReasoningVisible,
             this.NextId,
             ChatOutputHtmlRenderer.HistoryContainerId,
+            isDiagnosticsVisible,
             toolFactory,
             statusSink);
         this.runningTransformer = new RunningChatItemsHtmlTransformer(
@@ -804,6 +830,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             sink,
             isReasoningVisible,
             this.NextId,
+            isDiagnosticsVisible,
             toolFactory,
             statusSink);
 

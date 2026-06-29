@@ -37,6 +37,9 @@ public sealed class ConnectionStatusViewModelTests
 
         public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     [Fact]
