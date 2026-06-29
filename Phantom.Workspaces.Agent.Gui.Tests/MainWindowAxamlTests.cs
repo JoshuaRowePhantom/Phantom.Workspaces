@@ -216,7 +216,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Classes.thinking=\"{Binding StatusLine.IsThinking}\"",
+            "IsIndeterminate=\"{Binding StatusLine.IsThinking}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
