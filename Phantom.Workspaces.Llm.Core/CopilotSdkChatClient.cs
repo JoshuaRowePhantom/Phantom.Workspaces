@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
+using AgentSchema;
 using GitHub.Copilot.SDK;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -36,6 +37,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly ILoggerFactory? loggerFactory;
     private readonly CopilotByokOptions? byokOptions;
     private readonly string? cliPath;
+    private readonly ModelOptions? modelOptions;
     private readonly AgentInputQueueManager? queueManager;
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
@@ -78,6 +80,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Optional input-queue manager. When supplied, items added to non-held queues during a streaming
     /// turn are forwarded to the live Copilot session as immediate steering input.
     /// </param>
+    /// <param name="modelOptions">
+    /// Optional model-level options from the agent definition (for example <c>working-directory</c>).
+    /// These are fixed for the lifetime of the client and are read at session creation time.
+    /// </param>
     public CopilotSdkChatClient(
         string modelId,
         string displayName,
@@ -85,7 +91,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ILoggerFactory? loggerFactory,
         CopilotByokOptions? byokOptions = null,
         string? cliPath = null,
-        AgentInputQueueManager? queueManager = null)
+        AgentInputQueueManager? queueManager = null,
+        ModelOptions? modelOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -97,6 +104,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.byokOptions = byokOptions;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? null : cliPath;
         this.queueManager = queueManager;
+        this.modelOptions = modelOptions;
     }
 
     /// <summary>
@@ -136,7 +144,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     public static SessionConfig BuildSessionConfig(
         string modelId,
         CopilotByokOptions? byokOptions,
-        ChatOptions? options)
+        ChatOptions? options,
+        ModelOptions? modelOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
@@ -163,7 +172,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
         }
 
-        var workingDirectory = GetWorkingDirectory(options);
+        var workingDirectory = GetWorkingDirectory(options, modelOptions);
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             sessionConfig.WorkingDirectory = workingDirectory;
@@ -187,7 +196,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     public static ResumeSessionConfig BuildResumeSessionConfig(
         string modelId,
         CopilotByokOptions? byokOptions,
-        ChatOptions? options)
+        ChatOptions? options,
+        ModelOptions? modelOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
@@ -214,7 +224,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             resumeConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
         }
 
-        var workingDirectory = GetWorkingDirectory(options);
+        var workingDirectory = GetWorkingDirectory(options, modelOptions);
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             resumeConfig.WorkingDirectory = workingDirectory;
@@ -735,7 +745,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     CliPath = this.cliPath,
                 };
 
-                var workingDirectory = GetWorkingDirectory(options);
+                var workingDirectory = GetWorkingDirectory(options, this.modelOptions);
                 if (!string.IsNullOrWhiteSpace(workingDirectory))
                 {
                     clientOptions.Cwd = workingDirectory;
@@ -783,7 +793,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             try
             {
-                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options);
+                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions);
                 return await this.copilotClient!
                     .ResumeSessionAsync(resumeSessionId, resumeConfig, cancellationToken)
                     .ConfigureAwait(false);
@@ -797,7 +807,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
         }
 
-        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options);
+        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions);
         return await this.copilotClient!.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
     }
 
@@ -817,7 +827,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var instructions = options?.Instructions ?? string.Empty;
         var reasoning = MapReasoningEffort(options?.Reasoning?.Effort) ?? string.Empty;
-        var workingDirectory = GetWorkingDirectory(options) ?? string.Empty;
+        var workingDirectory = GetWorkingDirectory(options, modelOptions: null) ?? string.Empty;
 
         return string.Join(
             '\u0001',
@@ -852,19 +862,22 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         return null;
     }
 
-    // Extracts the working directory from model options forwarded via AdditionalProperties.
-    // The key "working-directory" is set by AgentDefinitionParameterSubstitutor after parameter
-    // substitution, and maps to both CopilotClientOptions.Cwd (process level) and
-    // SessionConfig.WorkingDirectory (session level).
-    private static string? GetWorkingDirectory(ChatOptions? options)
+    // Extracts the working directory, preferring a runtime override in ChatOptions.AdditionalProperties
+    // (set by AgentChat.UpdateParameterValues for the /working-directory slash command) over the
+    // model-level default in ModelOptions.AdditionalProperties (set via manifest parameter substitution
+    // and passed to this client's constructor). Both map to CopilotClientOptions.Cwd (process level)
+    // and SessionConfig.WorkingDirectory / ResumeSessionConfig.WorkingDirectory (session level).
+    private static string? GetWorkingDirectory(ChatOptions? options, ModelOptions? modelOptions)
     {
-        if (options?.AdditionalProperties is null)
+        if (options?.AdditionalProperties?.TryGetValue("working-directory", out var chatValue) == true
+            && chatValue is string chatDir
+            && !string.IsNullOrEmpty(chatDir))
         {
-            return null;
+            return chatDir;
         }
 
-        return options.AdditionalProperties.TryGetValue("working-directory", out var value)
-            ? value as string
+        return modelOptions?.AdditionalProperties?.TryGetValue("working-directory", out var modelValue) == true
+            ? modelValue as string
             : null;
     }
 
