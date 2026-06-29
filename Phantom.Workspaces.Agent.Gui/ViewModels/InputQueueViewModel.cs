@@ -18,7 +18,7 @@ public sealed class InputQueueViewModel : ViewModelBase
     private readonly AgentInputQueueManager? inputQueueManager;
     private readonly Dictionary<AgentChatQueue, InputQueueGroupViewModel> queueViewModels = [];
     private readonly InputQueueCollectionTransformer queueCollectionTransformer;
-    private AgentChatQueue? mostRecentlyCreatedQueue;
+    private readonly List<AgentChatQueue> queueUseHistory = [];
     private bool hasMultipleQueues;
     private readonly ICommand holdAllQueuesCommand;
     private readonly ICommand unholdAllQueuesCommand;
@@ -118,10 +118,28 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public bool SubmitToMostRecentQueue()
     {
-        var queue = this.HasQueueManager
-            ? (this.mostRecentlyCreatedQueue ?? this.DefaultInputQueue)
-            : this.DefaultInputQueue;
-        return this.DefaultComposer.Submit(queue);
+        if (!this.HasQueueManager)
+        {
+            return this.DefaultComposer.Submit(this.DefaultInputQueue);
+        }
+
+        var queue = this.queueUseHistory.FirstOrDefault(q => q != this.DefaultInputQueue);
+        if (queue is not null)
+        {
+            return this.DefaultComposer.Submit(queue);
+        }
+
+        if (this.DefaultInputQueue.IsImmediate)
+        {
+            var newQueue = this.agentChat.QueueManager.CreateInputQueue(
+                immediacy: this.InputQueues.All(q => q.IsHeld)
+                    ? AgentInputQueueImmediacy.Held
+                    : AgentInputQueueImmediacy.Queue);
+            this.RecordQueueUse(newQueue);
+            return this.DefaultComposer.Submit(newQueue);
+        }
+
+        return this.DefaultComposer.Submit(this.DefaultInputQueue);
     }
 
     public bool SubmitToNewQueue()
@@ -140,7 +158,6 @@ public sealed class InputQueueViewModel : ViewModelBase
             immediacy: this.InputQueues.All(q => q.IsHeld)
                 ? AgentInputQueueImmediacy.Held
                 : AgentInputQueueImmediacy.Queue);
-        this.mostRecentlyCreatedQueue = queue;
         return this.DefaultComposer.Submit(queue);
     }
 
@@ -155,7 +172,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             immediacy: this.InputQueues.All(queue => queue.IsHeld)
                 ? AgentInputQueueImmediacy.Held
                 : AgentInputQueueImmediacy.Queue);
-        this.mostRecentlyCreatedQueue = queue;
+        this.RecordQueueUse(queue);
     }
 
     public void ToggleHoldAllQueues()
@@ -226,12 +243,14 @@ public sealed class InputQueueViewModel : ViewModelBase
             return false;
         }
 
-        if (this.mostRecentlyCreatedQueue == queue)
-        {
-            this.mostRecentlyCreatedQueue = this.DefaultInputQueue;
-        }
-
+        this.queueUseHistory.Remove(queue);
         return true;
+    }
+
+    private void RecordQueueUse(AgentChatQueue queue)
+    {
+        this.queueUseHistory.Remove(queue);
+        this.queueUseHistory.Insert(0, queue);
     }
 
     public void UpdateQueueItem(AgentChatQueue queue, int index, string text)
@@ -268,6 +287,7 @@ public sealed class InputQueueViewModel : ViewModelBase
         }
 
         this.agentChat.EnqueueUserMessage(text, queue);
+        this.RecordQueueUse(queue);
         this.RefreshQueue(queue);
     }
 
@@ -279,6 +299,7 @@ public sealed class InputQueueViewModel : ViewModelBase
         }
 
         this.agentChat.EnqueueUserContents(contents, queue);
+        this.RecordQueueUse(queue);
         this.RefreshQueue(queue);
     }
 
