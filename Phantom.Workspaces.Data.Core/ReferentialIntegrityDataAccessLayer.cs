@@ -95,7 +95,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             includeRelationships: true,
             cancellationToken).ConfigureAwait(false);
 
-        var requestSchemasByName = this.GetSchemasFromRequest(
+        var requestSchemaAccessor = this.CreateSchemaAccessor(
             new UpdateRequest
             {
                 UpdateMetadata = request.UpdateMetadata,
@@ -106,7 +106,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             changesByEntityId,
             currentSnapshotsById,
             orderedChangesByEntityId,
-            requestSchemasByName,
+            requestSchemaAccessor,
             order,
             cancellationToken).ConfigureAwait(false);
         this.ApplyRelationshipDeleteCascade(changesByEntityId, currentSnapshotsById, orderedChangesByEntityId, ref order);
@@ -125,7 +125,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         var validationFailures = await this.ValidateReferencesAsync(
             changesByEntityId,
-            requestSchemasByName,
+            requestSchemaAccessor,
             currentSnapshotsById,
             cancellationToken).ConfigureAwait(false);
         if (validationFailures.Count > 0)
@@ -254,7 +254,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         IDictionary<EntityId, EntityChange> changesByEntityId,
         IReadOnlyDictionary<EntityId, EntitySnapshot> currentSnapshotsById,
         IDictionary<EntityId, OrderedChange> orderedChangesByEntityId,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        ISchemaAccessor schemaAccessor,
         int nextOrder,
         CancellationToken cancellationToken)
     {
@@ -273,11 +273,11 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 : null;
             var previousReferenceTargets = await this.GetManagedReferenceTargetsAsync(
                 previousData,
-                requestSchemaEntitiesByName,
+                schemaAccessor,
                 cancellationToken).ConfigureAwait(false);
             var newReferenceTargets = await this.GetManagedReferenceTargetsAsync(
                 change.Data.Value,
-                requestSchemaEntitiesByName,
+                schemaAccessor,
                 cancellationToken).ConfigureAwait(false);
             var allTargets = previousReferenceTargets
                 .Concat(newReferenceTargets)
@@ -548,7 +548,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
     private async Task<IReadOnlyCollection<EntityUpdateResult>> ValidateReferencesAsync(
         IReadOnlyDictionary<EntityId, EntityChange> changesByEntityId,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        ISchemaAccessor schemaAccessor,
         IReadOnlyDictionary<EntityId, EntitySnapshot> currentSnapshotsById,
         CancellationToken cancellationToken)
     {
@@ -572,7 +572,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
             var references = await this.ExtractReferencesAsync(
                 sourceData,
-                requestSchemaEntitiesByName,
+                schemaAccessor,
                 cancellationToken).ConfigureAwait(false);
             referencesBySource[sourceEntityId] = references;
             foreach (var reference in references)
@@ -872,12 +872,12 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
     private async Task<List<ReferenceConstraint>> ExtractReferencesAsync(
         JsonElement entityData,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        ISchemaAccessor schemaAccessor,
         CancellationToken cancellationToken)
     {
         var references = new List<ReferenceConstraint>();
         references.AddRange(this.ExtractRelationshipParticipantReferences(entityData));
-        references.AddRange(await this.ExtractSchemaTypedReferencesAsync(entityData, requestSchemaEntitiesByName, cancellationToken).ConfigureAwait(false));
+        references.AddRange(await this.ExtractSchemaTypedReferencesAsync(entityData, schemaAccessor, cancellationToken).ConfigureAwait(false));
         return references
             .GroupBy(
                 static reference => (
@@ -903,10 +903,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
     private async Task<IReadOnlyCollection<ReferenceConstraint>> ExtractSchemaTypedReferencesAsync(
         JsonElement entityData,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        ISchemaAccessor schemaAccessor,
         CancellationToken cancellationToken)
     {
-        var applicableSchemas = await this.ResolveApplicableSchemasAsync(entityData, requestSchemaEntitiesByName, cancellationToken).ConfigureAwait(false);
+        var applicableSchemas = await this.ResolveApplicableSchemasAsync(entityData, schemaAccessor, cancellationToken).ConfigureAwait(false);
         if (applicableSchemas.Count == 0)
         {
             return Array.Empty<ReferenceConstraint>();
@@ -930,7 +930,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 entityData,
                 schemaNode.Value,
                 applicableSchema.SchemaReference,
-                requestSchemaEntitiesByName,
+                schemaAccessor,
                 references,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -942,16 +942,18 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         JsonElement value,
         JsonElement schema,
         string schemaName,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        ISchemaAccessor schemaAccessor,
         ICollection<ReferenceConstraint> references,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Uri? baseUri = null)
     {
         var directRequiredTypes = this.GetRequiredEntityTypesFromSchema(schema);
         var resolvedSchema = await this.ResolveSchemaNodeAsync(
             schema,
             schemaName,
-            requestSchemaEntitiesByName,
-            cancellationToken).ConfigureAwait(false);
+            schemaAccessor,
+            cancellationToken,
+            baseUri).ConfigureAwait(false);
         if (resolvedSchema is null)
         {
             return;
@@ -971,6 +973,13 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
             return;
         }
 
+        if (resolvedSchema.Value.TryGetProperty("$id", out var resolvedIdElement)
+            && resolvedIdElement.ValueKind == JsonValueKind.String
+            && Uri.TryCreate(resolvedIdElement.GetString(), UriKind.Absolute, out var resolvedSchemaId))
+        {
+            baseUri = resolvedSchemaId;
+        }
+
         if (value.ValueKind == JsonValueKind.Object
             && resolvedSchema.Value.TryGetProperty("properties", out var properties)
             && properties.ValueKind == JsonValueKind.Object)
@@ -986,9 +995,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     property.Value,
                     propertySchema,
                     schemaName,
-                    requestSchemaEntitiesByName,
+                    schemaAccessor,
                     references,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    baseUri).ConfigureAwait(false);
             }
         }
 
@@ -1001,9 +1011,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     item,
                     itemsSchema,
                     schemaName,
-                    requestSchemaEntitiesByName,
+                    schemaAccessor,
                     references,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    baseUri).ConfigureAwait(false);
             }
         }
 
@@ -1026,9 +1037,10 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                     value,
                     nestedSchema,
                     schemaName,
-                    requestSchemaEntitiesByName,
+                    schemaAccessor,
                     references,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    baseUri).ConfigureAwait(false);
             }
         }
     }
@@ -1121,12 +1133,20 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     private async Task<JsonElement?> ResolveSchemaNodeAsync(
         JsonElement schema,
         string schemaName,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
-        CancellationToken cancellationToken)
+        ISchemaAccessor schemaAccessor,
+        CancellationToken cancellationToken,
+        Uri? baseUri = null)
     {
         if (schema.ValueKind != JsonValueKind.Object)
         {
             return schema;
+        }
+
+        if (schema.TryGetProperty("$id", out var idElement)
+            && idElement.ValueKind == JsonValueKind.String
+            && Uri.TryCreate(idElement.GetString(), UriKind.Absolute, out var schemaId))
+        {
+            baseUri = schemaId;
         }
 
         if (!schema.TryGetProperty("$ref", out var referenceElement)
@@ -1145,9 +1165,8 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
                 return localResolution;
             }
 
-            var rootSchema = await this.ResolveSchemaAsync(
+            var rootSchema = await schemaAccessor.ResolveSchemaByReferenceAsync(
                 schemaName,
-                requestSchemaEntitiesByName,
                 cancellationToken).ConfigureAwait(false);
             if (rootSchema is null)
             {
@@ -1174,10 +1193,16 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
         {
             referencedSchemaName = schemaName;
         }
+        else if (baseUri is not null
+            && !referencedSchemaName.StartsWith('[')
+            && !Uri.TryCreate(referencedSchemaName, UriKind.Absolute, out _)
+            && Uri.TryCreate(baseUri, referencedSchemaName, out var resolvedUri))
+        {
+            referencedSchemaName = JsonSerializer.Serialize(new[] { "json-schemas", resolvedUri.ToString() });
+        }
 
-        var referencedSchema = await this.ResolveSchemaAsync(
+        var referencedSchema = await schemaAccessor.ResolveSchemaByReferenceAsync(
             referencedSchemaName,
-            requestSchemaEntitiesByName,
             cancellationToken).ConfigureAwait(false);
         if (referencedSchema is null)
         {
@@ -1404,7 +1429,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
     private async Task<IReadOnlyCollection<EntityId>> GetManagedReferenceTargetsAsync(
         JsonElement? entityData,
-        IReadOnlyDictionary<string, JsonElement> requestSchemaEntitiesByName,
+        ISchemaAccessor schemaAccessor,
         CancellationToken cancellationToken)
     {
         if (entityData is not { ValueKind: JsonValueKind.Object } data)
@@ -1414,7 +1439,7 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
 
         var references = await this.ExtractSchemaTypedReferencesAsync(
             data,
-            requestSchemaEntitiesByName,
+            schemaAccessor,
             cancellationToken).ConfigureAwait(false);
         var selfEntityId = this.ResolveEntityId(data);
         return references

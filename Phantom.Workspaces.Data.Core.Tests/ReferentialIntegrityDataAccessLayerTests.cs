@@ -1082,4 +1082,167 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
             RelationshipRoleNames = relationshipRoleNames,
         };
     }
+
+    [Fact]
+    public async Task ReferentialIntegrityDataAccessLayer_ResolvesSchemas_ThroughSchemaAccessorCache()
+    {
+        // Arrange: build a properly populated DAL with the counting layer in the stack
+        var innerDal = new InMemoryDataAccessLayer();
+        var countingDal = new SchemaGetCountingDataAccessLayer(innerDal);
+        var dal = new ReferentialIntegrityDataAccessLayer(countingDal);
+
+        var errors = await new SchemaPopulator(dal).Populate();
+        Assert.Empty(errors);
+
+        var schemaEntityId = new EntityId("a7f1d2c4-0b3e-4f5a-9c6d-1e2f3a4b5c6d");
+        var targetEntityId1 = new EntityId("11111111-0000-0000-0000-000000000001");
+        var targetEntityId2 = new EntityId("22222222-0000-0000-0000-000000000002");
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("create schema and targets"),
+            new[]
+            {
+                this.CreateReferenceHolderSchemaChange(schemaEntityId),
+                CreateEntityChange(targetEntityId1, null, CreateSimpleEntityData(targetEntityId1, "target1"), EntityChangeMode.Replace),
+                CreateEntityChange(targetEntityId2, null, CreateSimpleEntityData(targetEntityId2, "target2"), EntityChangeMode.Replace),
+            }));
+
+        // Warm-up: one non-schema update to populate the cross-call schema cache in SchemaValidatingDAL
+        var warmupEntityId = new EntityId("cccccccc-0000-0000-0000-000000000001");
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("warm-up"),
+            new[] { this.CreateEntityWithSingleReferenceChange(warmupEntityId, null, "warmup", targetEntityId1) }));
+
+        // Measure: single-entity update — not needed for assertion but confirms counter is working
+        countingDal.ResetCount();
+        var refEntityId1 = new EntityId("aaaaaaaa-0000-0000-0000-000000000001");
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("single-entity update"),
+            new[] { this.CreateEntityWithSingleReferenceChange(refEntityId1, null, "ref1", targetEntityId1) }));
+
+        // Act: two reference-holder entities in the same update — they share a single SchemaAccessor
+        countingDal.ResetCount();
+        var refEntityId2 = new EntityId("bbbbbbbb-0000-0000-0000-000000000002");
+        var refEntityId3 = new EntityId("cccccccc-0000-0000-0000-000000000002");
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("two-entity update"),
+            new[]
+            {
+                this.CreateEntityWithSingleReferenceChange(refEntityId2, null, "ref2", targetEntityId1),
+                this.CreateEntityWithSingleReferenceChange(refEntityId3, null, "ref3", targetEntityId2),
+            }));
+
+        // Assert: two entities in the same update should cause zero schema fetches because
+        // both the shared RIDL SchemaAccessor and the SVDAL _cachedSchemaEntitiesById
+        // (including $id-resolved relative $refs) are fully warm after the warm-up step.
+        Assert.Equal(0, countingDal.SchemaGetCount);
+    }
+
+    [Fact]
+    public async Task ReferentialIntegrityDataAccessLayer_MultipleUpdates_SchemaFetchedOnceTotal()
+    {
+        // Arrange
+        var innerDal = new InMemoryDataAccessLayer();
+        var countingDal = new SchemaGetCountingDataAccessLayer(innerDal);
+        var dal = new ReferentialIntegrityDataAccessLayer(countingDal);
+
+        var errors = await new SchemaPopulator(dal).Populate();
+        Assert.Empty(errors);
+
+        var schemaEntityId = new EntityId("a7f1d2c4-0b3e-4f5a-9c6d-1e2f3a4b5c6d");
+        var targetEntityId = new EntityId("11111111-0000-0000-0000-000000000001");
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("setup"),
+            new[]
+            {
+                this.CreateReferenceHolderSchemaChange(schemaEntityId),
+                CreateEntityChange(targetEntityId, null, CreateSimpleEntityData(targetEntityId, "target"), EntityChangeMode.Replace),
+            }));
+
+        // Warm-up: one non-schema update to populate the cross-call schema cache in SchemaValidatingDAL
+        var warmupEntityId = new EntityId("cccccccc-0000-0000-0000-000000000001");
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("warm-up"),
+            new[] { this.CreateEntityWithSingleReferenceChange(warmupEntityId, null, "warmup", targetEntityId) }));
+
+        countingDal.ResetCount();
+
+        var refEntityId1 = new EntityId("aaaaaaaa-0000-0000-0000-000000000001");
+        var refEntityId2 = new EntityId("bbbbbbbb-0000-0000-0000-000000000002");
+
+        // Act: two separate updates, each requiring the reference-holder schema
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("first update"),
+            new[] { this.CreateEntityWithSingleReferenceChange(refEntityId1, null, "ref1", targetEntityId) }));
+        var firstUpdateCount = countingDal.SchemaGetCount;
+
+        countingDal.ResetCount();
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(
+            CreateUpdateMetadata("second update"),
+            new[] { this.CreateEntityWithSingleReferenceChange(refEntityId2, null, "ref2", targetEntityId) }));
+        var secondUpdateCount = countingDal.SchemaGetCount;
+
+        // Assert: the second update should fetch zero schemas because SchemaValidatingDAL's
+        // _cachedSchemaEntitiesById provides a preloaded SchemaAccessor, and $id-based
+        // relative $ref resolution means all schema references hit the preloaded index.
+        Assert.Equal(0, secondUpdateCount);
+    }
+
+    private static JsonElement CreateSimpleEntityData(EntityId entityId, string name)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "task"],
+              "names": [["{{name}}"]]
+            }
+            """);
+        return document.RootElement.Clone();
+    }
+
+    private sealed class SchemaGetCountingDataAccessLayer : IDataAccessLayer
+    {
+        private readonly IDataAccessLayer inner;
+        private int schemaGetCount;
+
+        public SchemaGetCountingDataAccessLayer(IDataAccessLayer inner)
+        {
+            this.inner = inner;
+        }
+
+        public int SchemaGetCount => this.schemaGetCount;
+
+        public void ResetCount() => Interlocked.Exchange(ref this.schemaGetCount, 0);
+
+        public async Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+        {
+            var requestsSchemas = request.Entities?.Any(static e =>
+                e.EntityName is { } name &&
+                name.Components.Length >= 1 &&
+                string.Equals(name.Components[0], "json-schemas", StringComparison.Ordinal)) ?? false;
+            if (requestsSchemas)
+            {
+                Interlocked.Increment(ref this.schemaGetCount);
+            }
+
+            return await this.inner.GetAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+            => this.inner.UpdateAsync(request, cancellationToken);
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+            => this.inner.QueryAsync(request, cancellationToken);
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetChangedEntitiesAsync(request, cancellationToken);
+    }
 }

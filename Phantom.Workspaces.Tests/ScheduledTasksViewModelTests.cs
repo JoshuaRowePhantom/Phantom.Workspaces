@@ -154,7 +154,7 @@ public sealed class ScheduledTasksViewModelTests
             { "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "display-name": { "default": "Stub Tool" }, "tool-type": "stub" }
             """);
         await SeedAsync(broker, $$"""
-            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "folder"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" } }
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "schedule"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" }, "repeat": { "frequency": "00:01:00Z", "days-of-week": [], "start-at": [] } }
             """);
         await SeedAsync(broker, $$"""
             { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","test-host"]], "display-name": { "default": "Test Host" } }
@@ -223,7 +223,7 @@ public sealed class ScheduledTasksViewModelTests
             { "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "display-name": { "default": "Stub Tool" }, "tool-type": "stub" }
             """);
         await SeedAsync(broker, $$"""
-            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "folder"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" } }
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "schedule"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" }, "repeat": { "frequency": "00:01:00Z", "days-of-week": [], "start-at": [] } }
             """);
         await SeedAsync(broker, $$"""
             { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","test-host"]], "display-name": { "default": "Test Host" } }

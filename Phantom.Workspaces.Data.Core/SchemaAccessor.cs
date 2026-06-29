@@ -15,6 +15,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
     private readonly SemaphoreSlim loadGate = new(1, 1);
     private readonly SemaphoreSlim registryGate = new(1, 1);
     private Dictionary<string, JsonElement>? schemaEntitiesById;
+    private Dictionary<string, JsonElement>? schemasByEntityName;
     private SchemaRegistry? schemaRegistry;
 
     public SchemaAccessor(
@@ -47,6 +48,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
             static pair => pair.Key,
             static pair => pair.Value,
             StringComparer.Ordinal);
+        this.schemasByEntityName = BuildSchemasByEntityName(this.schemaEntitiesById);
     }
 
     public IReadOnlyDictionary<string, JsonElement>? SchemaEntitiesById => this.schemaEntitiesById;
@@ -66,6 +68,12 @@ public sealed class SchemaAccessor : ISchemaAccessor
             {
                 this.schemasByReference[schemaReference] = requestSchema;
                 return requestSchema;
+            }
+
+            if (this.schemasByEntityName?.TryGetValue(schemaName, out var preloadedEntity) == true)
+            {
+                this.schemasByReference[schemaReference] = preloadedEntity;
+                return preloadedEntity;
             }
 
             if (!TryParseEntityName(schemaName, out var parsedSchemaName))
@@ -221,6 +229,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
             }
 
             this.schemaEntitiesById = schemasById;
+            this.schemasByEntityName = BuildSchemasByEntityName(schemasById);
         }
         finally
         {
@@ -302,6 +311,21 @@ public sealed class SchemaAccessor : ISchemaAccessor
     {
         var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityObject);
         return schemaEntityDocument?.GetCanonicalNames() ?? Array.Empty<string>();
+    }
+
+    private static Dictionary<string, JsonElement> BuildSchemasByEntityName(
+        Dictionary<string, JsonElement> schemaEntitiesById)
+    {
+        var result = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var schemaEntity in schemaEntitiesById.Values)
+        {
+            foreach (var name in GetEntityNames(schemaEntity))
+            {
+                result.TryAdd(name, schemaEntity);
+            }
+        }
+
+        return result;
     }
 
     private static HashSet<string> GetExplicitEntityTypeNames(

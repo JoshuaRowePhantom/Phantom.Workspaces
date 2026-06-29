@@ -232,6 +232,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     protected virtual ISchemaAccessor CreateSchemaAccessor(
         UpdateRequest request)
     {
+        if (_cachedSchemaEntitiesById is { } preloaded)
+        {
+            return new SchemaAccessor(this.UnderlyingDataAccessLayer, request, preloaded);
+        }
+
         return new SchemaAccessor(this.UnderlyingDataAccessLayer, request);
     }
 
