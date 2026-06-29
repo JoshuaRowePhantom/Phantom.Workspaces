@@ -686,6 +686,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             if (this.copilotSession is { } staleSession)
             {
+                // Preserve the existing session id so the next CreateOrResumeSessionAsync call
+                // resumes the Copilot CLI session with the updated config (e.g. new working
+                // directory) rather than creating a blank new session.
+                this.pendingResumeSessionId ??= staleSession.SessionId;
                 await staleSession.DisposeAsync().ConfigureAwait(false);
                 this.copilotSession = null;
                 this.currentSessionSignature = null;

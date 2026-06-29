@@ -1,4 +1,4 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Avalonia.Input;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -7,7 +7,6 @@ using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class QueueComposerInputHistoryTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -19,7 +18,7 @@ public sealed class QueueComposerInputHistoryTests
         }
         """);
 
-    [AvaloniaFact]
+    [Fact]
     public async Task TryNavigateHistoryUp_OnFirstLine_ReturnsLastSubmittedMessage()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -40,7 +39,7 @@ public sealed class QueueComposerInputHistoryTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task TryNavigateHistoryUp_SavesDraftBeforeFirstNavigation()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -63,7 +62,7 @@ public sealed class QueueComposerInputHistoryTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task TryNavigateHistoryDown_PastNewestEntry_RestoresDraft()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -97,7 +96,7 @@ public sealed class QueueComposerInputHistoryTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task TryNavigateHistoryUp_OnNonFirstLine_ReturnsFalse()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -116,7 +115,7 @@ public sealed class QueueComposerInputHistoryTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task CommitToHistory_SkipsDuplicateOfLastEntry()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -148,7 +147,7 @@ public sealed class QueueComposerInputHistoryTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Up_WhenCompletionsVisible_DoesNotNavigateHistory()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(

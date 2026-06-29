@@ -1,10 +1,9 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class QueueComposerNormalModeHintTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -16,7 +15,7 @@ public sealed class QueueComposerNormalModeHintTests
         }
         """);
 
-    [AvaloniaFact]
+    [Fact]
     public async Task NormalModeHint_DefaultComposer_WhenNotFormattedMode_ReturnsShortcutString()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -33,7 +32,7 @@ public sealed class QueueComposerNormalModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task NormalModeHint_DefaultComposer_WhenFormattedMode_ReturnsNull()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -49,7 +48,7 @@ public sealed class QueueComposerNormalModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task NormalModeHint_NonDefaultComposer_WhenNotFormattedMode_ReturnsNull()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -65,7 +64,7 @@ public sealed class QueueComposerNormalModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ActiveHint_DefaultComposer_WhenNormalMode_ReturnsNormalModeHint()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -81,7 +80,7 @@ public sealed class QueueComposerNormalModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ActiveHint_DefaultComposer_WhenFormattedMode_ReturnsFormattedModeHint()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -97,7 +96,7 @@ public sealed class QueueComposerNormalModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task IsFormattedMode_WhenChanged_RaisesNormalModeHintPropertyChanged()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -117,7 +116,7 @@ public sealed class QueueComposerNormalModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task IsFormattedMode_WhenChanged_RaisesActiveHintPropertyChanged()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(

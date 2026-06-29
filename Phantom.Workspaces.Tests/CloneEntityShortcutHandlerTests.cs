@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -9,10 +9,9 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class CloneEntityShortcutHandlerTests
 {
-    [AvaloniaFact]
+    [Fact]
     public void ShouldApplyTo_ReturnsFalse_WhenShortcutIsNotClone()
     {
         var handler = new CloneEntityShortcutHandler();
@@ -24,7 +23,7 @@ public sealed class CloneEntityShortcutHandlerTests
         Assert.False(handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Edit, entity));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void ShouldApplyTo_ReturnsFalse_WhenEntityCannotBeEdited()
     {
         var handler = new CloneEntityShortcutHandler();
@@ -34,7 +33,7 @@ public sealed class CloneEntityShortcutHandlerTests
         Assert.False(handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void ShouldApplyTo_ReturnsTrue_WhenCloneShortcutAndCanEditEntity()
     {
         var handler = new CloneEntityShortcutHandler();

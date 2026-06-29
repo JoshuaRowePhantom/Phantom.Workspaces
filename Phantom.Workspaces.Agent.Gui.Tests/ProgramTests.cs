@@ -1,11 +1,10 @@
-using Phantom.Workspaces.Agent.Gui;
+﻿using Phantom.Workspaces.Agent.Gui;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class ProgramTests
 {
-    [AvaloniaFact]
+    [Fact]
     public void TryParseArguments_WithValidArgs_ReturnsParsedDefinition()
     {
         var success = Program.TryParseArguments(
@@ -17,7 +16,7 @@ public sealed class ProgramTests
         Assert.NotNull(parseResult!.AgentDefinition);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void TryParseArguments_WithSessionId_ReturnsParsedSessionId()
     {
         var success = Program.TryParseArguments(
@@ -29,7 +28,7 @@ public sealed class ProgramTests
         Assert.Equal("gui-session-123", parseResult!.AgentSessionId);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void TryParseArguments_WithUnknownOption_ReturnsFalse()
     {
         var success = Program.TryParseArguments(
@@ -40,7 +39,7 @@ public sealed class ProgramTests
         Assert.Null(parseResult);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void TryParseArguments_WithMissingSchemaFile_ReturnsFalseAndSetsParseError()
     {
         var success = Program.TryParseArguments(

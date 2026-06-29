@@ -207,7 +207,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     agentSessionEntity.Data is JsonElement d
                     && d.TryGetProperty("parameter-values", out var pv) ? pv : default),
                 UpdateParameterValuesAsync = (newValues, ct) =>
-                    UpdateParameterValuesInEntityAsync(mainWindowViewModel, agentSessionEntity, newValues),
+                {
+                    agentChat.UpdateParameterValues(newValues);
+                    return UpdateParameterValuesInEntityAsync(mainWindowViewModel, agentSessionEntity, newValues);
+                },
             });
 
         var profileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
