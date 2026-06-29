@@ -58,7 +58,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private string selectedThemeName = ProfileThemeSettings.Dark.Name;
     private bool suppressThemeSelectionChange;
     private bool showHiddenItems;
-    private readonly Llm.Trust.ReverseExecutionRegistry reverseExecutionRegistry = new();
     private readonly WorkspaceDockFactory dockFactory;
     private IRootDock? layout;
     private ScheduledTools.ScheduledToolHost? scheduledToolHost;
@@ -114,8 +113,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
-        this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(
-            Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry)));
+        this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
