@@ -594,4 +594,82 @@ public sealed class CopilotSdkChatClientTests
         var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments![0]);
         Assert.Equal("application/pdf", blob.MimeType);
     }
+
+    [Fact]
+    public void BuildMessageOptions_WithMultipleConsecutiveUserMessages_ConcatenatesAllTexts()
+    {
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "first"),
+            new ChatMessage(ChatRole.User, "second"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("first\n\n---\n\nsecond", result.Prompt);
+        Assert.Null(result.Attachments);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithMultipleConsecutiveUserMessages_MergesAllAttachments()
+    {
+        var png1 = new byte[] { 1, 2 };
+        var png2 = new byte[] { 3, 4 };
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, new AIContent[]
+            {
+                new TextContent("img1"),
+                new DataContent(png1, "image/png"),
+            }),
+            new ChatMessage(ChatRole.User, new AIContent[]
+            {
+                new TextContent("img2"),
+                new DataContent(png2, "image/jpeg"),
+            }),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("img1\n\n---\n\nimg2", result.Prompt);
+        Assert.NotNull(result.Attachments);
+        Assert.Equal(2, result.Attachments.Count);
+        var blob1 = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments[0]);
+        Assert.Equal("image/png", blob1.MimeType);
+        var blob2 = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments[1]);
+        Assert.Equal("image/jpeg", blob2.MimeType);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithMultipleConsecutiveUserMessages_AssistantMessageBetweenBatchesIsRespected()
+    {
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "old turn"),
+            new ChatMessage(ChatRole.Assistant, "response"),
+            new ChatMessage(ChatRole.User, "second"),
+            new ChatMessage(ChatRole.User, "third"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("second\n\n---\n\nthird", result.Prompt);
+        Assert.Null(result.Attachments);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithSingleTrailingUserMessage_BehavesAsBeforeWithNoSeparator()
+    {
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "old turn"),
+            new ChatMessage(ChatRole.Assistant, "response"),
+            new ChatMessage(ChatRole.User, "new message"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("new message", result.Prompt);
+        Assert.Null(result.Attachments);
+    }
 }

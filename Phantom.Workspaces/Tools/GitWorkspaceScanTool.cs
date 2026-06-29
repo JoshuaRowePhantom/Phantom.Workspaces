@@ -72,7 +72,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
         var maxDepth = ReadIntProperty(context.Tool.Data, MaxDepthProperty) ?? DefaultMaxDepth;
 
-        var changes = new List<EntityChange>();
+        var discoveredEntities = new List<(EntityId EntityId, JsonElement Data)>();
         var seenRepositoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var scanRoot in scanRoots)
         {
@@ -86,21 +86,81 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 }
 
                 rootRepoCount++;
+                var entityId = DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath));
                 using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
-                changes.Add(new EntityChange
-                {
-                    EntityId = DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath)),
-                    ConcurrencyTag = null,
-                    Data = document.RootElement.Clone(),
-                    EntityChangeMode = EntityChangeMode.Replace,
-                });
+                discoveredEntities.Add((entityId, document.RootElement.Clone()));
             }
 
             this.logger.LogInformation("Found {Count} git repositories in {Path}", rootRepoCount, scanRoot);
         }
 
-        var repositoriesFound = seenRepositoryPaths.Count;
+        var repositoriesFound = discoveredEntities.Count;
         var rootsDescription = string.Join(", ", scanRoots);
+
+        if (repositoriesFound == 0)
+        {
+            this.logger.LogInformation(
+                "Git workspace scan: no repositories found under {Roots} root(s) [{RootsDescription}].",
+                scanRoots.Count,
+                rootsDescription);
+
+            return new WorkspaceToolExecutionResult
+            {
+                ResultContent = $"Scanned {scanRoots.Count} root(s) [{rootsDescription}]. No repositories found.",
+            };
+        }
+
+        // Fetch existing entities to classify each discovered repository as added, changed, or unchanged.
+        var existingEntities = new Dictionary<EntityId, EntitySnapshot>();
+        var getResult = await context.DataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = discoveredEntities.Select(e => new GetEntityRequest { EntityId = e.EntityId }).ToList(),
+            },
+            context.CancellationToken).ConfigureAwait(false);
+
+        foreach (var batch in getResult.Batches)
+        {
+            foreach (var entity in batch.Entities)
+            {
+                existingEntities[entity.EntityId] = entity;
+            }
+        }
+
+        var changes = new List<EntityChange>();
+        var added = 0;
+        var changed = 0;
+        var unchanged = 0;
+
+        foreach (var (entityId, newData) in discoveredEntities)
+        {
+            if (!existingEntities.TryGetValue(entityId, out var existing) || existing.Data is null)
+            {
+                added++;
+                changes.Add(new EntityChange
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = null,
+                    Data = newData,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                });
+            }
+            else if (JsonElement.DeepEquals(existing.Data.Value, newData))
+            {
+                unchanged++;
+            }
+            else
+            {
+                changed++;
+                changes.Add(new EntityChange
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = existing.ConcurrencyTag,
+                    Data = newData,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                });
+            }
+        }
 
         if (changes.Count > 0)
         {
@@ -120,24 +180,20 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                     failedCount,
                     changes.Count);
             }
-
-            this.logger.LogInformation(
-                "Git workspace scan: wrote {Count} git {Entity} across {Roots} root(s) [{RootsDescription}].",
-                repositoriesFound,
-                repositoriesFound == 1 ? "entity" : "entities",
-                scanRoots.Count,
-                rootsDescription);
         }
-        else
+
+        this.logger.LogInformation(
+            "Git workspace scan: {Added} added, {Changed} changed, {Unchanged} unchanged across {Roots} root(s) [{RootsDescription}].",
+            added,
+            changed,
+            unchanged,
+            scanRoots.Count,
+            rootsDescription);
+
+        return new WorkspaceToolExecutionResult
         {
-            this.logger.LogInformation(
-                "Git workspace scan: no repositories found under {Roots} root(s) [{RootsDescription}].",
-                scanRoots.Count,
-                rootsDescription);
-        }
-
-        var summary = $"Scanned {scanRoots.Count} root(s) [{rootsDescription}]. Found {repositoriesFound} repositories.";
-        return new WorkspaceToolExecutionResult { ResultContent = summary };
+            ResultContent = $"Scanned {scanRoots.Count} root(s) [{rootsDescription}]. Found {repositoriesFound} repositories: added: {added}, changed: {changed}, unchanged: {unchanged}.",
+        };
     }
 
     /// <summary>

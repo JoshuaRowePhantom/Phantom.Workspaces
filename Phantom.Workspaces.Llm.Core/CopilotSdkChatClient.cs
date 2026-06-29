@@ -629,42 +629,62 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     }
 
     /// <summary>
-    /// Builds a <see cref="MessageOptions"/> from the message history by locating the last user
-    /// message and extracting its text prompt and any inline image/data attachments.
+    /// Builds a <see cref="MessageOptions"/> from the message history by collecting all consecutive
+    /// trailing user messages (the current batch) and combining their text content and data attachments
+    /// into a single prompt. When multiple messages are queued in one turn their texts are joined with
+    /// <c>\n\n---\n\n</c> so every queued message is visible to the model.
     /// </summary>
     internal static MessageOptions BuildMessageOptions(IEnumerable<ChatMessage> messages)
     {
         var materialized = messages as IReadOnlyList<ChatMessage> ?? messages.ToList();
 
+        // Collect consecutive trailing user messages — these are the batched messages for this turn.
+        // Stop as soon as a non-user message is encountered so earlier historical turns are not included.
+        var batchMessages = new List<ChatMessage>();
         for (var index = materialized.Count - 1; index >= 0; index--)
         {
             var message = materialized[index];
             if (message.Role != ChatRole.User)
             {
-                continue;
+                break;
             }
 
-            var text = message.Text;
-            var dataItems = message.Contents.OfType<DataContent>().ToList();
+            batchMessages.Add(message);
+        }
 
-            if (!string.IsNullOrEmpty(text) || dataItems.Count > 0)
+        batchMessages.Reverse();
+
+        var batchWithContent = batchMessages
+            .Where(m => !string.IsNullOrEmpty(m.Text) || m.Contents.OfType<DataContent>().Any())
+            .ToList();
+
+        if (batchWithContent.Count > 0)
+        {
+            var texts = batchWithContent
+                .Select(m => m.Text)
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+            var combinedText = string.Join("\n\n---\n\n", texts);
+
+            var options = new MessageOptions { Prompt = combinedText };
+
+            var dataItems = batchWithContent
+                .SelectMany(m => m.Contents.OfType<DataContent>())
+                .ToList();
+
+            if (dataItems.Count > 0)
             {
-                var options = new MessageOptions { Prompt = text ?? string.Empty };
-
-                if (dataItems.Count > 0)
-                {
-                    options.Attachments = dataItems
-                        .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
-                        {
-                            Data = Convert.ToBase64String(d.Data.ToArray()),
-                            MimeType = d.MediaType ?? string.Empty,
-                            DisplayName = d.MediaType ?? "attachment",
-                        })
-                        .ToList();
-                }
-
-                return options;
+                options.Attachments = dataItems
+                    .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+                    {
+                        Data = Convert.ToBase64String(d.Data.ToArray()),
+                        MimeType = d.MediaType ?? string.Empty,
+                        DisplayName = d.MediaType ?? "attachment",
+                    })
+                    .ToList();
             }
+
+            return options;
         }
 
         var lastWithText = materialized.LastOrDefault(message => !string.IsNullOrEmpty(message.Text));
