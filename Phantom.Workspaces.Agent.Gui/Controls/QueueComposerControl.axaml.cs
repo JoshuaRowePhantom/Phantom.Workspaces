@@ -161,7 +161,9 @@ public partial class QueueComposerControl : UserControl
                     var accepted = vm.Completions.Accept();
                     if (accepted is not null)
                     {
-                        vm.InputText = "/" + accepted;
+                        newText = "/" + accepted;
+                        newCaretIndex = newText.Length;
+                        vm.InputText = newText;
                     }
                 }
 
