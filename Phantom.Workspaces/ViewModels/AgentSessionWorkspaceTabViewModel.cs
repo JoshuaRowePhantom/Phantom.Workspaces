@@ -58,6 +58,12 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
     public INotificationService? NotificationService { get; init; }
 
+    public override void RequestFocusPrimaryControl()
+    {
+        base.RequestFocusPrimaryControl();
+        this.agent?.InputQueue.DefaultComposer.RequestFocusPrimaryControl();
+    }
+
     public void SetReady(AgentViewModel agentViewModel, ObservableLoggerFactory factory)
     {
         this.loggerFactory = factory;
