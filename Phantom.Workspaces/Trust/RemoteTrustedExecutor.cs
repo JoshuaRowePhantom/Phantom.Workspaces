@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Llm;
@@ -101,5 +103,41 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
 
         var client = new WebRemoteStreamClient(this.endpoint, this.devTunnelAccessToken);
         return client.OpenAsync(request, ct);
+    }
+
+    /// <inheritdoc />
+    public async Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!this.CanExecute(request.TargetClientInstance))
+        {
+            throw new InvalidOperationException(
+                $"RemoteTrustedExecutor for '{this.clientInstance}' cannot run a tool on client instance "
+                + $"'{request.TargetClientInstance}'.");
+        }
+
+        using var httpClient = CreateHttpClient(this.endpoint, this.devTunnelAccessToken);
+        using var response = await httpClient
+            .PostAsJsonAsync("/workspace/tools/run", request, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"Remote tool host returned {(int)response.StatusCode}: {body}");
+        }
+    }
+
+    private static HttpClient CreateHttpClient(string endpoint, string? devTunnelAccessToken)
+    {
+        var httpClient = new HttpClient { BaseAddress = new Uri(endpoint) };
+        if (!string.IsNullOrWhiteSpace(devTunnelAccessToken))
+        {
+            httpClient.DefaultRequestHeaders.Add("X-Tunnel-Authorization", $"tunnel {devTunnelAccessToken}");
+        }
+
+        return httpClient;
     }
 }

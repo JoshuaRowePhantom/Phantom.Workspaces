@@ -126,6 +126,9 @@ public sealed class TrustedExecutorTests
 
         public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private static TrustedStreamRequest MakeStreamRequest(string kind = "test")
@@ -213,5 +216,54 @@ public sealed class TrustedExecutorTests
         Assert.NotNull(stream);
         await stream.DisposeAsync();
         exitTcs.TrySetResult(0);
+    }
+
+    [Fact]
+    public async Task LocalExecutor_RunToolAsync_DelegatesToRegisteredRunner()
+    {
+        var local = new LocalTrustedExecutor();
+        TrustedToolRequest? received = null;
+        local.RegisterToolRunner((req, _) => { received = req; return Task.CompletedTask; });
+
+        var request = new TrustedToolRequest
+        {
+            ToolTypeName = "git-workspace-scan",
+            ToolEntityId = Guid.NewGuid().ToString(),
+            TargetClientInstance = TrustProfile.LocalClientInstance,
+        };
+
+        await local.RunToolAsync(request);
+
+        Assert.Same(request, received);
+    }
+
+    [Fact]
+    public void LocalExecutor_RunToolAsync_ThrowsWhenNoRunnerRegistered()
+    {
+        var local = new LocalTrustedExecutor();
+        var request = new TrustedToolRequest
+        {
+            ToolTypeName = "git-workspace-scan",
+            ToolEntityId = Guid.NewGuid().ToString(),
+            TargetClientInstance = TrustProfile.LocalClientInstance,
+        };
+
+        Assert.Throws<NotSupportedException>(
+            () => local.RunToolAsync(request).GetAwaiter().GetResult());
+    }
+
+    [Fact]
+    public void LocalExecutor_RunToolAsync_ThrowsWhenTargetIsNotLocal()
+    {
+        var local = new LocalTrustedExecutor();
+        var request = new TrustedToolRequest
+        {
+            ToolTypeName = "git-workspace-scan",
+            ToolEntityId = Guid.NewGuid().ToString(),
+            TargetClientInstance = "remote-a",
+        };
+
+        Assert.Throws<InvalidOperationException>(
+            () => local.RunToolAsync(request).GetAwaiter().GetResult());
     }
 }

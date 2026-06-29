@@ -267,6 +267,7 @@ internal static class ChatOutputHtmlRenderer
         AIContent content,
         bool includeReasoning,
         bool isDiagnostic,
+        bool includeDiagnostics = true,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -278,11 +279,13 @@ internal static class ChatOutputHtmlRenderer
                     return null;
                 }
 
-                return TextBlock(contentId, "chat-reasoning", reasoning.Text);
+                return TextBlock(contentId, "chat-reasoning", reasoning.Text, SerializeContentJson(reasoning));
             case TextContent text when isDiagnostic && !string.IsNullOrWhiteSpace(text.Text):
-                return RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text));
+                return includeDiagnostics
+                    ? RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text), SerializeContentJson(text))
+                    : null;
             case TextContent text:
-                return string.IsNullOrWhiteSpace(text.Text) ? null : MarkdownBlock(contentId, "chat-text", text.Text);
+                return string.IsNullOrWhiteSpace(text.Text) ? null : MarkdownBlock(contentId, "chat-text", text.Text, SerializeContentJson(text));
             case FunctionCallContent call:
             {
                 if (toolFactory is not null)
@@ -296,7 +299,7 @@ internal static class ChatOutputHtmlRenderer
                     }
                 }
 
-                return RenderCollapsible(contentId, "chat-tool", $"tool call: {call.Name}", PrettyJson(call.Arguments));
+                return RenderCollapsible(contentId, "chat-tool", $"tool call: {call.Name}", PrettyJson(call.Arguments), SerializeContentJson(call));
             }
 
             case FunctionResultContent result:
@@ -312,19 +315,19 @@ internal static class ChatOutputHtmlRenderer
                     }
                 }
 
-                return RenderCollapsible(contentId, "chat-tool", $"tool result: {result.CallId}", PrettyJson(result.Result));
+                return RenderCollapsible(contentId, "chat-tool", $"tool result: {result.CallId}", PrettyJson(result.Result), SerializeContentJson(result));
             }
 
             case DataContent data:
                 return IsImageMediaType(data.MediaType)
-                    ? TextBlock(contentId, "chat-meta", string.IsNullOrWhiteSpace(data.MediaType) ? "image" : data.MediaType)
-                    : TextBlock(contentId, "chat-monospace", string.IsNullOrWhiteSpace(data.MediaType) ? "[data]" : $"[{data.MediaType}]");
+                    ? TextBlock(contentId, "chat-meta", string.IsNullOrWhiteSpace(data.MediaType) ? "image" : data.MediaType, SerializeContentJson(data))
+                    : TextBlock(contentId, "chat-monospace", string.IsNullOrWhiteSpace(data.MediaType) ? "[data]" : $"[{data.MediaType}]", SerializeContentJson(data));
             case ErrorContent error:
-                return TextBlock(contentId, "chat-error", error.Message ?? string.Empty);
+                return TextBlock(contentId, "chat-error", error.Message ?? string.Empty, SerializeContentJson(error));
             case UriContent uri:
-                return TextBlock(contentId, "chat-uri", uri.Uri.ToString());
+                return TextBlock(contentId, "chat-uri", uri.Uri.ToString(), SerializeContentJson(uri));
             default:
-                return TextBlock(contentId, "chat-text", content.ToString() ?? string.Empty);
+                return TextBlock(contentId, "chat-text", content.ToString() ?? string.Empty, SerializeContentJson(content));
         }
     }
 
@@ -384,16 +387,16 @@ internal static class ChatOutputHtmlRenderer
         return builder.ToString();
     }
 
-    private static string TextBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{HtmlEscape(text)}</div>";
+    private static string TextBlock(string contentId, string cssClass, string text, string detailsJson)
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(detailsJson)}\" id=\"{contentId}\">{HtmlEscape(text)}</div>";
 
     /// <summary>
     /// Renders Markdown text into a <c>div.chat-content</c> container. The Markdown is converted to
     /// block-level HTML (headings, paragraphs, lists, fenced code, blockquotes, inline emphasis/code)
     /// with raw HTML disabled so model output cannot inject markup into the WebView.
     /// </summary>
-    private static string MarkdownBlock(string contentId, string cssClass, string text)
-        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(text)}\" id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
+    private static string MarkdownBlock(string contentId, string cssClass, string text, string detailsJson)
+        => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(detailsJson)}\" id=\"{contentId}\">{MarkdownToHtml(text)}</div>";
 
     private static string MarkdownToHtml(string text)
     {
@@ -407,10 +410,10 @@ internal static class ChatOutputHtmlRenderer
         return writer.ToString().TrimEnd('\n', '\r');
     }
 
-    private static string RenderCollapsible(string contentId, string cssClass, string header, string body)
+    private static string RenderCollapsible(string contentId, string cssClass, string header, string body, string detailsJson)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-details-target=\"").Append(HtmlEscape(body)).Append("\" data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
+        builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-details-target=\"").Append(HtmlEscape(detailsJson)).Append("\" data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
@@ -444,6 +447,18 @@ internal static class ChatOutputHtmlRenderer
 
     private static bool IsImageMediaType(string? mediaType)
         => !string.IsNullOrWhiteSpace(mediaType) && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private static string SerializeContentJson(AIContent content)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(content, PrettyJsonOptions);
+        }
+        catch
+        {
+            return content.ToString() ?? string.Empty;
+        }
+    }
 
     private static string PrettyJson(object? value)
     {

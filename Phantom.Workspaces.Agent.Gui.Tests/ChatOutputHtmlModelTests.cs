@@ -170,6 +170,36 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
+    public void DiagnosticsHidden_DoesNotRenderDiagnosticContent_UntilToggledOn()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+        };
+        var sink = new RecordingSink();
+        var diagnosticsVisible = false;
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            isDiagnosticsVisible: () => diagnosticsVisible);
+
+        var initial = Assert.Single(sink.ContentOperations);
+        Assert.DoesNotContain("diagnostic detail", initial.Content);
+
+        sink.Clear();
+        diagnosticsVisible = true;
+        model.Refresh();
+
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("diagnostic detail"));
+    }
+
+    [Fact]
     public void RunningItem_RendersContainerThenAppendsMessagesIntoIt()
     {
         var runningItem = new AgentChatRunningItem();
@@ -714,7 +744,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [Fact]
-    public void RenderContent_TextContent_EmitsDataDetailsTargetWithMarkdownSource()
+    public void RenderContent_TextContent_EmitsDataDetailsTargetWithJsonContent()
     {
         const string markdown = "**bold** text";
 
@@ -725,7 +755,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains($"data-details-target=\"{ChatOutputHtmlRenderer.HtmlEscape(markdown)}\"", html);
+        Assert.Contains("data-details-target=\"{", html);
     }
 
     [Fact]
@@ -738,7 +768,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("data-details-target=\"my reasoning\"", html);
+        Assert.Contains("data-details-target=\"{", html);
     }
 
     // ── Running-item insertion-point reliability tests (issue #222) ───────────

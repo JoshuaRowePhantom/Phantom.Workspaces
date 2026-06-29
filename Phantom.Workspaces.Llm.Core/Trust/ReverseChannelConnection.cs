@@ -23,6 +23,7 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
     private readonly IReverseMessageChannel channel;
     private readonly ConcurrentDictionary<string, Turn> turns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StreamRelay> streams = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<ReverseExecutionError?>> toolRuns = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource closed = new();
     private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? readLoop;
@@ -130,6 +131,33 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
         return new StreamMessageChannelStream(relay);
     }
 
+    /// <inheritdoc />
+    public async Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource<ReverseExecutionError?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        this.toolRuns[correlationId] = tcs;
+
+        try
+        {
+            await this.channel.SendAsync(
+                new ReverseFrame { Type = ReverseFrame.Types.RunTool, CorrelationId = correlationId, ToolRequest = request },
+                cancellationToken).ConfigureAwait(false);
+
+            var error = await tcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (error is { } runError)
+            {
+                throw new InvalidOperationException($"Reverse tool execution failed ({runError.Code}): {runError.Message}");
+            }
+        }
+        finally
+        {
+            this.toolRuns.TryRemove(correlationId, out _);
+        }
+    }
+
     private async Task ReadLoopAsync()
     {
         try
@@ -170,6 +198,12 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
                         && this.streams.TryRemove(closeId, out var closeRelay):
                         closeRelay.CompleteInbound();
                         break;
+
+                    case ReverseFrame.Types.RunToolComplete
+                        when frame.CorrelationId is { } runToolId
+                        && this.toolRuns.TryRemove(runToolId, out var runTcs):
+                        runTcs.TrySetResult(frame.Error);
+                        break;
                 }
             }
         }
@@ -182,6 +216,13 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
             foreach (var turn in this.turns.Values)
             {
                 turn.Complete(new ReverseExecutionError("disconnected", "The reverse connection closed."));
+            }
+
+            // Fault any in-flight tool runs so callers fail fast.
+            var disconnectedError = new ReverseExecutionError("disconnected", "The reverse connection closed.");
+            foreach (var tcs in this.toolRuns.Values)
+            {
+                tcs.TrySetResult(disconnectedError);
             }
 
             // Close any open stream relays so callers see EOF.

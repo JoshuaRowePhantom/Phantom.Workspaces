@@ -43,6 +43,9 @@ public sealed class ReverseTrustedExecutionTests
 
         public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     [Fact]
@@ -207,5 +210,8 @@ public sealed class ReverseTrustedExecutionTests
 
             await channel.DisposeAsync().ConfigureAwait(false);
         }
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+            => Task.CompletedTask;
     }
 }

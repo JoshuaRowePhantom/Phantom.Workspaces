@@ -221,5 +221,8 @@ public sealed class DevTunnelReverseShellTests : IClassFixture<InProcessDevTunne
             Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
             CancellationToken cancellationToken)
             => Task.CompletedTask;
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+            => Task.CompletedTask;
     }
 }
