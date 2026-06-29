@@ -2149,7 +2149,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindow_KeyPress_Ctrl1_ActivatesFirstWorkspacePane()
+    public async Task MainWindow_KeyPress_AltShift1_ActivatesFirstWorkspacePane()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -2193,7 +2193,7 @@ public sealed class MainWindowIntegrationTests
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
         Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Control);
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt | RawInputModifiers.Shift);
 
         Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
 
@@ -2201,7 +2201,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindow_KeyPress_Ctrl2_ActivatesSecondWorkspacePane()
+    public async Task MainWindow_KeyPress_AltShift2_ActivatesSecondWorkspacePane()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -2250,7 +2250,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindow_KeyPress_CtrlDigit_WithIndexOutOfRange_IsNoOp()
+    public async Task MainWindow_KeyPress_AltShiftDigit_WithIndexOutOfRange_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -2261,7 +2261,7 @@ public sealed class MainWindowIntegrationTests
 
         var selectedBefore = viewModel.SelectedWorkspacePane;
 
-        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
+        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Alt | RawInputModifiers.Shift);
 
         Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
 
