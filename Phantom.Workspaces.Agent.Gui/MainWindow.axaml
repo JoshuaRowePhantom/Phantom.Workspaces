@@ -8,6 +8,9 @@
         Width="1200" Height="800"
         MinWidth="600" MinHeight="400"
         Classes="agent-window">
+    <Window.Icon>
+        <WindowIcon>avares://Phantom.Workspaces.Gui.Styles/Assets/brain.ico</WindowIcon>
+    </Window.Icon>
     <Window.KeyBindings>
         <!-- Windows reports the Pause/Break key as VK_CANCEL (Key.Cancel) whenever Ctrl is held, so
              Ctrl+Break is Ctrl+Cancel and Ctrl+Shift+Break is Ctrl+Shift+Cancel. -->

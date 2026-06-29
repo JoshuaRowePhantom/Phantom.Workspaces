@@ -47,6 +47,52 @@ public sealed class WebViewModelTests
         Assert.Null(favicon.FaviconUri);
     }
 
+    // --- HomeUrl / HasHomeUrl / NavigateHomeCommand ---
+
+    [Fact]
+    public void Constructor_WithInitialUrl_ExposesHomeUrl()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-1", Title = "T" };
+        Assert.Equal("https://example.com", vm.HomeUrl);
+    }
+
+    [Fact]
+    public void Constructor_WithInitialUrl_HasHomeUrlIsTrue()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-2", Title = "T" };
+        Assert.True(vm.HasHomeUrl);
+    }
+
+    [Fact]
+    public void Constructor_WithEmptyInitialUrl_HasHomeUrlIsFalse()
+    {
+        var vm = new WebViewModel(string.Empty) { Id = "home-3", Title = "T" };
+        Assert.False(vm.HasHomeUrl);
+    }
+
+    [Fact]
+    public void NavigateHomeCommand_SetsSourceUriToHomeUrl()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-4", Title = "T" };
+        vm.AddressBarUrl = "https://other.com";
+        vm.SourceUri = new Uri("https://other.com");
+
+        vm.NavigateHomeCommand.Execute(null);
+
+        Assert.Equal(new Uri("https://example.com"), vm.SourceUri);
+    }
+
+    [Fact]
+    public void NavigateHomeCommand_ResetsAddressBarUrl()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-5", Title = "T" };
+        vm.AddressBarUrl = "https://other.com";
+
+        vm.NavigateHomeCommand.Execute(null);
+
+        Assert.Equal("https://example.com", vm.AddressBarUrl);
+    }
+
     // --- SetPageTitle / titleFixed ---
 
     [Fact]
@@ -543,5 +589,43 @@ public sealed class WebViewModelTests
         Assert.NotNull(task);
 
         return await task!;
+    }
+
+    // ── Accelerator-key event forwarding ──────────────────────────────────────────
+
+    [Fact]
+    public void WebViewModel_RaiseGoToTabAtIndex_FiresGoToTabAtIndexRequestedWithIndex()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "accel-goto-1", Title = "T" };
+        int? received = null;
+        vm.GoToTabAtIndexRequested += (_, idx) => received = idx;
+
+        vm.RaiseGoToTabAtIndex(3);
+
+        Assert.Equal(3, received);
+    }
+
+    [Fact]
+    public void WebViewModel_RaiseAltKeyStateChanged_True_FiresWithTrue()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "accel-alt-true", Title = "T" };
+        bool? received = null;
+        vm.AltKeyStateChanged += (_, v) => received = v;
+
+        vm.RaiseAltKeyStateChanged(true);
+
+        Assert.True(received);
+    }
+
+    [Fact]
+    public void WebViewModel_RaiseAltKeyStateChanged_False_FiresWithFalse()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "accel-alt-false", Title = "T" };
+        bool? received = null;
+        vm.AltKeyStateChanged += (_, v) => received = v;
+
+        vm.RaiseAltKeyStateChanged(false);
+
+        Assert.False(received);
     }
 }

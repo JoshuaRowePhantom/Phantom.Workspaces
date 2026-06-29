@@ -62,7 +62,7 @@ public sealed class RunVsCodeTunnelToolTests
         await tool.ExecuteAsync(this.Context());
 
         Assert.Single(calls);
-        Assert.Equal("tunnel service log", calls[0].Arguments);
+        Assert.Equal("tunnel service status", calls[0].Arguments);
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("uninstall"));
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("install"));
     }
@@ -82,13 +82,13 @@ public sealed class RunVsCodeTunnelToolTests
         await tool.ExecuteAsync(this.Context());
 
         Assert.Equal(2, calls.Count);
-        Assert.Equal("tunnel service log", calls[0].Arguments);
+        Assert.Equal("tunnel service status", calls[0].Arguments);
         Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[1].Arguments);
         Assert.Contains("test-machine", calls[1].Arguments);
     }
 
     [Fact]
-    public async Task RunVsCodeTunnelTool_ServiceInvalid_UninstallThenInstallCalled()
+    public async Task RunVsCodeTunnelTool_ServiceStopped_UninstallThenInstallCalled()
     {
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
@@ -96,16 +96,36 @@ public sealed class RunVsCodeTunnelToolTests
             (cli, args, _) =>
             {
                 calls.Add(new CliCall { CliPath = cli, Arguments = args });
-                return Task.FromResult(("service is degraded", 0));
+                return Task.FromResult(("service is stopped", 0));
             });
 
         await tool.ExecuteAsync(this.Context());
 
         Assert.Equal(4, calls.Count);
-        Assert.Equal("tunnel service log", calls[0].Arguments);
+        Assert.Equal("tunnel service status", calls[0].Arguments);
         Assert.Equal("tunnel service uninstall", calls[1].Arguments);
         Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[2].Arguments);
-        Assert.Equal("tunnel service log", calls[3].Arguments);
+        Assert.Equal("tunnel service status", calls[3].Arguments);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ServiceStopped_ExitZeroWithoutRunning_MapsToStopped()
+    {
+        // Verifies that exit 0 with no "running" keyword triggers uninstall+reinstall (Stopped path),
+        // distinct from exit non-zero which triggers install-only (NotInstalled path).
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                return Task.FromResult(("", 0));
+            });
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.Contains(calls, c => c.Arguments == "tunnel service uninstall");
+        Assert.Contains(calls, c => c.Arguments.StartsWith("tunnel service install", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -186,7 +206,7 @@ public sealed class RunVsCodeTunnelToolTests
             {
                 callCount++;
                 // First call: status check exits 1 (not installed); second call: install exits 2 (failure)
-                return Task.FromResult(("", callCount == 1 ? 1 : 2));
+                return Task.FromResult(("", callCount == 1 ? 1 : 2));  // exit 1 → NotInstalled; exit 2 → install failure
             });
 
         var result = await tool.ExecuteAsync(this.Context());
@@ -205,8 +225,8 @@ public sealed class RunVsCodeTunnelToolTests
             (cli, args, _) =>
             {
                 callCount++;
-                // First call: status check exits 0/degraded (invalid); second call: uninstall exits 1 (failure)
-                return Task.FromResult(callCount == 1 ? ("service is degraded", 0) : ("", 1));
+                // First call: status check exits 0 without "running" (stopped); second call: uninstall exits 1 (failure)
+                return Task.FromResult(callCount == 1 ? ("service is stopped", 0) : ("", 1));
             });
 
         var result = await tool.ExecuteAsync(this.Context());
@@ -227,9 +247,9 @@ public sealed class RunVsCodeTunnelToolTests
                 callCount++;
                 return Task.FromResult(callCount switch
                 {
-                    1 => ("", 1),                      // status: not installed
+                    1 => ("", 1),                      // status: not installed (exit non-zero)
                     2 => ("", 0),                      // install: success
-                    _ => ("service is degraded", 0),   // follow-up status: still not running
+                    _ => ("service is stopped", 0),    // follow-up status: still not running
                 });
             });
 
@@ -250,7 +270,7 @@ public sealed class RunVsCodeTunnelToolTests
                 callCount++;
                 return Task.FromResult(callCount switch
                 {
-                    1 => ("", 1),                    // status: not installed
+                    1 => ("", 1),                    // status: not installed (exit non-zero)
                     2 => ("", 0),                    // install: success
                     _ => ("service is running", 0),  // follow-up status: running
                 });

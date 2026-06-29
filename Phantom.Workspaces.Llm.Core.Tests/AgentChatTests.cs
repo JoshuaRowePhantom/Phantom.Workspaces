@@ -1513,6 +1513,72 @@ public sealed class AgentChatTests
         Assert.NotEqual(signatureBefore, signatureAfter);
     }
 
+    [Fact]
+    public async Task RunSingleTurnAsync_WithDeterministicClient_StreamsUpdates()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "hello-single-turn"));
+        stream.Complete();
+
+        await using var chat = CreateChat(client);
+
+        var updates = new System.Collections.Generic.List<ChatResponseUpdate>();
+        await foreach (var update in chat.RunSingleTurnAsync(
+            [new ChatMessage(ChatRole.User, "prompt")],
+            CancellationToken.None))
+        {
+            updates.Add(update);
+        }
+
+        var text = string.Concat(updates.Select(static u => u.Text));
+        Assert.Contains("hello-single-turn", text);
+    }
+
+    [Fact]
+    public async Task RunSingleTurnAsync_WithNullPersistenceStore_SendsOnlyLatestMessage()
+    {
+        var client = new DeterministicTestChatClient();
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = NullAgentPersistenceStore.Instance,
+            ClientOverride = client,
+            DisplayNameOverride = "null-store-test",
+            OverrideUseProvidedChatClientAsIs = false,
+        });
+
+        // Turn 1
+        var stream1 = client.EnqueueStreamingResponse();
+        stream1.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "response-1"));
+        stream1.Complete();
+        await DrainSingleTurnAsync(chat.RunSingleTurnAsync(
+            [new ChatMessage(ChatRole.User, "message-1")],
+            CancellationToken.None));
+
+        // Turn 2
+        var stream2 = client.EnqueueStreamingResponse();
+        stream2.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "response-2"));
+        stream2.Complete();
+        await DrainSingleTurnAsync(chat.RunSingleTurnAsync(
+            [new ChatMessage(ChatRole.User, "message-2")],
+            CancellationToken.None));
+
+        // With NullAgentPersistenceStore, turn 2 should not prepend turn 1's message from storage.
+        var lastMessages = client.LastRequestMessages;
+        Assert.DoesNotContain(lastMessages, m => (m.Text ?? string.Empty).Contains("message-1"));
+        Assert.Contains(lastMessages, m => (m.Text ?? string.Empty).Contains("message-2"));
+    }
+
+    private static async Task DrainSingleTurnAsync(IAsyncEnumerable<ChatResponseUpdate> source)
+    {
+        await foreach (var _ in source)
+        {
+        }
+    }
+
     /// <summary>
     /// Wraps <see cref="InMemoryAgentPersistenceStore"/> and releases a semaphore after each
     /// <see cref="StoreAsync"/> call so tests can synchronise deterministically on store writes.

@@ -31,6 +31,9 @@ public interface IReverseExecutionHandler
         string openPayloadJson,
         IStreamMessageChannel channel,
         CancellationToken cancellationToken);
+
+    /// <summary>Executes a workspace tool locally on behalf of a server-pushed run-tool request.</summary>
+    Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -84,6 +87,12 @@ public sealed class ReverseExecutionWorker
                 && frame.StreamKind is { } streamKind)
             {
                 _ = this.HandleOpenStreamAsync(streamId, streamKind, frame.StreamOpenPayload ?? "{}", cancellationToken);
+            }
+            else if (frame.Type == ReverseFrame.Types.RunTool
+                && frame.CorrelationId is { } runToolId
+                && frame.ToolRequest is { } toolRequest)
+            {
+                _ = this.HandleRunToolAsync(runToolId, toolRequest, cancellationToken);
             }
             else if (frame.Type == ReverseFrame.Types.StreamData
                 && frame.CorrelationId is { } dataId
@@ -155,6 +164,32 @@ public sealed class ReverseExecutionWorker
         {
             this.activeStreams.TryRemove(correlationId, out _);
             await workerChannel.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleRunToolAsync(
+        string correlationId,
+        TrustedToolRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.handler.RunToolAsync(request, cancellationToken).ConfigureAwait(false);
+
+            await this.channel.SendAsync(
+                new ReverseFrame { Type = ReverseFrame.Types.RunToolComplete, CorrelationId = correlationId },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await this.channel.SendAsync(
+                new ReverseFrame
+                {
+                    Type = ReverseFrame.Types.RunToolComplete,
+                    CorrelationId = correlationId,
+                    Error = new ReverseExecutionError("execution-failed", exception.Message),
+                },
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

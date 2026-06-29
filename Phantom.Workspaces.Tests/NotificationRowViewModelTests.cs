@@ -115,5 +115,33 @@ public sealed class NotificationRowViewModelTests
         Assert.True(row.IsRunning);
         Assert.True(row.IsInteresting);
     }
+
+    [Fact]
+    public void Status_WhenEntryIsRunning_RunningStatusIsRunning()
+    {
+        var row = MakeRow("live", isRunning: true);
+        Assert.Equal(RunningStatus.Running, row.Status.RunningStatus);
+    }
+
+    [Fact]
+    public void Status_WhenEntryIsNotRunning_RunningStatusIsIdle()
+    {
+        var row = MakeRow("done", isRunning: false);
+        Assert.Equal(RunningStatus.Idle, row.Status.RunningStatus);
+    }
+
+    [Fact]
+    public void Status_WhenEntryIsInteresting_ErrorStatusIsError()
+    {
+        var row = MakeRow("done", isInteresting: true);
+        Assert.Equal(ErrorStatus.Error, row.Status.ErrorStatus);
+    }
+
+    [Fact]
+    public void Status_WhenEntryIsNotInteresting_ErrorStatusIsNone()
+    {
+        var row = MakeRow("done", isInteresting: false);
+        Assert.Equal(ErrorStatus.None, row.Status.ErrorStatus);
+    }
 }
 

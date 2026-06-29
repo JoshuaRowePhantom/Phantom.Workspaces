@@ -101,6 +101,9 @@ public sealed class TrustedExecutorCompositionTests
 
         public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class FakeRemoteExecutor : ITrustedExecutor
@@ -121,6 +124,9 @@ public sealed class TrustedExecutorCompositionTests
             => throw new NotSupportedException();
 
         public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
     }
 }

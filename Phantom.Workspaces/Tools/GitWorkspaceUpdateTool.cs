@@ -18,10 +18,19 @@ namespace Phantom.Workspaces.Tools;
 /// </summary>
 public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
 {
+    private readonly Func<string, ILogger, GitMetadata?> metadataReader;
     private readonly ILogger<GitWorkspaceUpdateTool> logger;
 
-    public GitWorkspaceUpdateTool(ILogger<GitWorkspaceUpdateTool>? logger = null)
+    /// <param name="metadataReader">
+    /// Reads git metadata for a repository path. Defaults to
+    /// <see cref="GitRepositoryMetadataReader.TryReadMetadata"/>; overridable for testing.
+    /// </param>
+    /// <param name="logger">Logger for this tool; defaults to <see cref="NullLogger{T}.Instance"/>.</param>
+    public GitWorkspaceUpdateTool(
+        Func<string, ILogger, GitMetadata?>? metadataReader = null,
+        ILogger<GitWorkspaceUpdateTool>? logger = null)
     {
+        this.metadataReader = metadataReader ?? GitRepositoryMetadataReader.TryReadMetadata;
         this.logger = logger ?? NullLogger<GitWorkspaceUpdateTool>.Instance;
     }
 
@@ -55,6 +64,7 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         var entities = queryResult.Batches.SelectMany(static b => b.Entities).ToList();
 
         var changes = new List<EntityChange>();
+        var unchanged = 0;
         var skipped = 0;
 
         foreach (var entity in entities)
@@ -69,7 +79,7 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                 continue;
             }
 
-            var metadata = GitRepositoryMetadataReader.TryReadMetadata(path, this.logger);
+            var metadata = this.metadataReader(path, this.logger);
             if (metadata == null)
             {
                 this.logger.LogDebug("Skipping entity {EntityId}: could not read metadata for path '{Path}'.", entity.EntityId, path);
@@ -77,7 +87,6 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                 continue;
             }
 
-            var entityNode = JsonNode.Parse(entity.Data!.Value.GetRawText())!.AsObject();
             var gitObject = new JsonObject();
 
             if (!string.IsNullOrWhiteSpace(metadata.BranchName))
@@ -100,6 +109,14 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                     });
             }
 
+            if (IsGitSectionUnchanged(entity.Data, gitObject))
+            {
+                unchanged++;
+                continue;
+            }
+
+            var entityNode = JsonNode.Parse(entity.Data!.Value.GetRawText())!.AsObject();
+
             if (gitObject.Count > 0)
             {
                 entityNode["git"] = gitObject;
@@ -119,9 +136,11 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
             });
         }
 
+        var added = 0;
+        var changed = 0;
         if (changes.Count > 0)
         {
-            await context.DataAccessLayer.UpdateAsync(
+            var updateResult = await context.DataAccessLayer.UpdateAsync(
                 new UpdateRequest
                 {
                     UpdateMetadata = new UpdateMetadata
@@ -131,18 +150,48 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                     Changes = changes,
                 },
                 context.CancellationToken).ConfigureAwait(false);
+
+            var failedCount = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Failed);
+            if (failedCount > 0)
+            {
+                this.logger.LogWarning(
+                    "Git workspace update: {Failed}/{Total} entity writes were rejected by the DAL.",
+                    failedCount,
+                    changes.Count);
+            }
+
+            added = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Added);
+            changed = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Updated);
         }
 
-        var updated = changes.Count;
         this.logger.LogInformation(
-            "Git workspace update: refreshed {Updated} {Entity}; skipped {Skipped}.",
-            updated,
-            updated == 1 ? "entity" : "entities",
+            "Git workspace update: added {Added}, changed {Changed}, unchanged {Unchanged}; skipped {Skipped}.",
+            added,
+            changed,
+            unchanged,
             skipped);
 
         return new WorkspaceToolExecutionResult
         {
-            ResultContent = $"Updated {updated} {(updated == 1 ? "entity" : "entities")}; skipped {skipped}.",
+            ResultContent = $"Added: {added}; changed: {changed}; unchanged: {unchanged}; skipped: {skipped}.",
         };
+    }
+
+    private static bool IsGitSectionUnchanged(JsonElement? entityData, JsonObject newGitObject)
+    {
+        var hasNewGit = newGitObject.Count > 0;
+
+        if (entityData is not { } data || !data.TryGetProperty("git", out var existingGit))
+        {
+            return !hasNewGit;
+        }
+
+        if (!hasNewGit)
+        {
+            return false;
+        }
+
+        using var newGitDocument = JsonDocument.Parse(newGitObject.ToJsonString());
+        return JsonElement.DeepEquals(existingGit, newGitDocument.RootElement);
     }
 }
