@@ -1048,8 +1048,10 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task ProviderException_AppendsAssistantErrorContentTurn()
+    public async Task ProviderException_AppendsDiagnosticRoleErrorContent()
     {
+        // Reproduces GitHub issue #267 (Bug 2): the provider error item must carry DiagnosticChatRole
+        // so the renderer does not emit a second [assistant] header inside the same assistant turn.
         var client = new DeterministicTestChatClient();
         var stream = client.EnqueueStreamingResponse();
         stream.EnqueueException(new InvalidOperationException("budget limit"));
@@ -1059,15 +1061,15 @@ public sealed class AgentChatTests
         await WaitForConditionAsync(
             chat.History,
             () => chat.History.Any(item =>
-                item.Role == ChatRole.Assistant &&
+                item.Role == AgentChatHistoryItem.DiagnosticChatRole &&
                 item.Contents.OfType<ErrorContent>().Any()),
             "error content turn to be appended after provider exception");
 
-        var assistantErrorTurn = Assert.Single(
+        var diagnosticErrorTurn = Assert.Single(
             chat.History,
-            item => item.Role == ChatRole.Assistant &&
+            item => item.Role == AgentChatHistoryItem.DiagnosticChatRole &&
                 item.Contents.OfType<ErrorContent>().Any());
-        var error = Assert.Single(assistantErrorTurn.Contents.OfType<ErrorContent>());
+        var error = Assert.Single(diagnosticErrorTurn.Contents.OfType<ErrorContent>());
         Assert.Contains("budget limit", error.Message);
     }
 

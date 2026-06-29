@@ -97,13 +97,20 @@ public class ConfiguredWebView : NativeWebView
             if (e.OldValue is WebViewModel oldViewModel)
             {
                 oldViewModel.NavigationRequested -= OnNavigationRequested;
+                oldViewModel.FocusPrimaryControlRequested -= OnFocusPrimaryControlRequested;
             }
 
             if (e.NewValue is WebViewModel newViewModel)
             {
                 newViewModel.NavigationRequested += OnNavigationRequested;
+                newViewModel.FocusPrimaryControlRequested += OnFocusPrimaryControlRequested;
             }
         }
+    }
+
+    private void OnFocusPrimaryControlRequested(object? sender, EventArgs e)
+    {
+        this.Focus();
     }
 
     private void OnNavigationRequested(object? sender, NavigationDirection direction)

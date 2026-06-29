@@ -1090,7 +1090,7 @@ public sealed class AgentChat : IAsyncDisposable
                         .Concat([
                             new AgentChatHistoryItem
                             {
-                                Role = ChatRole.Assistant,
+                                Role = AgentChatHistoryItem.DiagnosticChatRole,
                                 Contents = [new ErrorContent($"Provider error: {ex.Message}")],
                                 Timestamp = DateTimeOffset.UtcNow,
                             },
