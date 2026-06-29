@@ -1489,6 +1489,175 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Failed, agentTab.State);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_Handle_UsesEntityIdAsTabId()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ab010001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab010001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "tab-id-echo"]],
+              "display-name": { "default": "Tab ID Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "tab-id-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        Assert.Equal(agentSessionEntity!.EntityId.ToString(), tab.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_Handle_SameEntityOpenedTwiceInSameWorkspace_DeduplicatesTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ab020001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab020001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "dedup-echo"]],
+              "display-name": { "default": "Dedup Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "dedup-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var agentSessionDocs = documentDock!.VisibleDockables
+            ?.OfType<WorkspaceDocument>()
+            .Where(d => d.Id == agentSessionEntity!.EntityId.ToString())
+            .ToList();
+        Assert.NotNull(agentSessionDocs);
+        Assert.Single(agentSessionDocs!);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_Handle_WithRunningAgentChatTable_AcrossTwoWorkspacePanes_SharesAgentChat()
+    {
+        var runningAgentChatTable = new RunningAgentChatTable();
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("ab030001-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("ab030002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "ab030001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "shared-chat-a"]],
+              "display-name": { "default": "Shared Chat A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "ab030002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "shared-chat-b"]],
+              "display-name": { "default": "Shared Chat B" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var agentDefinitionId = new EntityId("ab030003-0000-4000-8000-000000000003");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab030003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "shared-chat-echo"]],
+              "display-name": { "default": "Shared Chat Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "shared-chat-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), runningAgentChatTable);
+
+        // Open in pane A
+        var paneAIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdA.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tabA = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+
+        // Open in pane B
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+
+        await WaitForAgentReadyAsync(tabA);
+        await WaitForAgentReadyAsync(tabB);
+
+        Assert.Equal(AgentTabState.Ready, tabA.State);
+        Assert.Equal(AgentTabState.Ready, tabB.State);
+        Assert.NotNull(tabA.Lease);
+        Assert.NotNull(tabB.Lease);
+        Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
+    }
+
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
 
@@ -3326,7 +3495,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task OpenAgentSessionShortcutHandler_OpenSameSession_Twice_CreatesTwoTabsWithSameAgentChat()
+    public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_CreatesTwoTabsWithSameAgentChat()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
@@ -3353,6 +3522,31 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
+        var workspaceIdA = new EntityId("aa050002-0000-4000-8000-000000000002");
+        var workspaceIdB = new EntityId("aa050003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "aa050002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "shared-chat-ws-a"]],
+              "display-name": { "default": "Shared Chat WS A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "aa050003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "shared-chat-ws-b"]],
+              "display-name": { "default": "Shared Chat WS B" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
@@ -3364,28 +3558,27 @@ public sealed class MainWindowIntegrationTests
             CreateLocalTrustedExecutorSelector(),
             table);
 
+        // Open in pane A
+        var paneAIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdA.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tabA = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+
+        // Open in pane B
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
+        await WaitForAgentReadyAsync(tabA);
+        await WaitForAgentReadyAsync(tabB);
 
-        var agentTabs = documentDock!.VisibleDockables?
-            .OfType<WorkspaceDocument>()
-            .Select(d => d.TabViewModel as AgentSessionWorkspaceTabViewModel)
-            .Where(t => t is not null && string.Equals(
-                t.AgentSessionId, agentSessionEntity!.EntityId.ToString(), StringComparison.Ordinal))
-            .Select(t => t!)
-            .ToList();
-        Assert.Equal(2, agentTabs?.Count);
-
-        await WaitForAgentReadyAsync(agentTabs![0]);
-        await WaitForAgentReadyAsync(agentTabs![1]);
-
-        Assert.NotEqual(agentTabs[0].Id, agentTabs[1].Id);
-        Assert.NotNull(agentTabs[0].Lease);
-        Assert.NotNull(agentTabs[1].Lease);
-        Assert.Same(agentTabs[0].Lease!.AgentChat, agentTabs[1].Lease!.AgentChat);
+        Assert.NotEqual(tabA.Id, tabB.Id);
+        Assert.NotNull(tabA.Lease);
+        Assert.NotNull(tabB.Lease);
+        Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -3416,6 +3609,31 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
+        var workspaceIdA = new EntityId("aa060002-0000-4000-8000-000000000002");
+        var workspaceIdB = new EntityId("aa060003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "aa060002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "dispose-ws-a"]],
+              "display-name": { "default": "Dispose WS A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "aa060003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "dispose-ws-b"]],
+              "display-name": { "default": "Dispose WS B" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
@@ -3427,31 +3645,30 @@ public sealed class MainWindowIntegrationTests
             CreateLocalTrustedExecutorSelector(),
             table);
 
+        // Open in pane A
+        var paneAIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdA.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tabA = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+
+        // Open in pane B
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
+        await WaitForAgentReadyAsync(tabA);
+        await WaitForAgentReadyAsync(tabB);
 
-        var agentTabs = documentDock!.VisibleDockables?
-            .OfType<WorkspaceDocument>()
-            .Select(d => d.TabViewModel as AgentSessionWorkspaceTabViewModel)
-            .Where(t => t is not null && string.Equals(
-                t.AgentSessionId, agentSessionEntity!.EntityId.ToString(), StringComparison.Ordinal))
-            .Select(t => t!)
-            .ToList();
-        Assert.Equal(2, agentTabs?.Count);
-
-        await WaitForAgentReadyAsync(agentTabs![0]);
-        await WaitForAgentReadyAsync(agentTabs![1]);
-
-        Assert.NotNull(agentTabs[0].Lease);
-        Assert.NotNull(agentTabs[1].Lease);
-        var sharedChat = agentTabs[0].Lease!.AgentChat;
-        Assert.Same(sharedChat, agentTabs[1].Lease!.AgentChat);
+        Assert.NotNull(tabA.Lease);
+        Assert.NotNull(tabB.Lease);
+        var sharedChat = tabA.Lease!.AgentChat;
+        Assert.Same(sharedChat, tabB.Lease!.AgentChat);
 
         // After disposing first tab, acquire on same key should return cached chat (second tab still holds lease)
-        await agentTabs[0].DisposeAsync();
+        await tabA.DisposeAsync();
 
         var callCount = 0;
         Task<AgentChat> TrackedFactory()
@@ -3478,7 +3695,7 @@ public sealed class MainWindowIntegrationTests
         await probe1.DisposeAsync();
 
         // After disposing second tab, the chat should be gone
-        await agentTabs[1].DisposeAsync();
+        await tabB.DisposeAsync();
 
         var probe2 = await table.AcquireAsync(agentSessionId, TrackedFactory);
         Assert.Equal(1, callCount); // factory called — chat was disposed and entry removed
