@@ -451,6 +451,17 @@ public sealed class InputQueueViewModelTests
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
 
+    [Fact]
+    public void QueueImmediacyOption_HasNoColorProperties()
+    {
+        // Issue #253: QueueImmediacyOption must not expose per-state color properties.
+        // Colors are now applied via theme resources in SharedStyles.axaml.
+        var type = typeof(QueueImmediacyOption);
+        Assert.Null(type.GetProperty("Background"));
+        Assert.Null(type.GetProperty("BorderBrush"));
+        Assert.Null(type.GetProperty("Foreground"));
+    }
+
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,

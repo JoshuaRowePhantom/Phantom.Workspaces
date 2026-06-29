@@ -1456,6 +1456,61 @@ public sealed class AgentChatTests
         }
     }
 
+    [Fact]
+    public async Task UpdateParameterValues_SetsWorkingDirectoryInAdditionalProperties()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {
+                  "kind": "prompt",
+                  "name": "test-agent",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                }
+                """),
+        });
+
+        chat.UpdateParameterValues(new Dictionary<string, string> { ["working-directory"] = @"C:\updated" });
+
+        var chatOptions = (ChatClientAgentOptions?)typeof(AgentChat)
+            .GetField("chatOptions", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(chat);
+        Assert.NotNull(chatOptions);
+        var additionalProperties = chatOptions.ChatOptions!.AdditionalProperties;
+        Assert.NotNull(additionalProperties);
+        Assert.Equal(@"C:\updated", additionalProperties["working-directory"] as string);
+    }
+
+    [Fact]
+    public async Task UpdateParameterValues_ChangesSessionSignatureForCopilotClient()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {
+                  "kind": "prompt",
+                  "name": "test-agent",
+                  "model": {
+                    "id": "echo",
+                    "provider": "echo",
+                    "apiType": "Echo",
+                    "options": { "additionalProperties": { "working-directory": "C:\\original" } }
+                  }
+                }
+                """),
+        });
+
+        var chatOptions = (ChatClientAgentOptions?)typeof(AgentChat)
+            .GetField("chatOptions", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(chat);
+        var signatureBefore = CopilotSdkChatClient.ComputeSessionSignature(chatOptions!.ChatOptions);
+
+        chat.UpdateParameterValues(new Dictionary<string, string> { ["working-directory"] = @"C:\updated" });
+
+        var signatureAfter = CopilotSdkChatClient.ComputeSessionSignature(chatOptions.ChatOptions);
+        Assert.NotEqual(signatureBefore, signatureAfter);
+    }
+
     /// <summary>
     /// Wraps <see cref="InMemoryAgentPersistenceStore"/> and releases a semaphore after each
     /// <see cref="StoreAsync"/> call so tests can synchronise deterministically on store writes.
