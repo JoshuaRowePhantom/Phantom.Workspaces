@@ -24,10 +24,10 @@
   <Project Path="Phantom.Workspaces.Data.Web.Server/Phantom.Workspaces.Data.Web.Server.csproj" />
   <Project Path="Phantom.Workspaces.Docs.Tests/Phantom.Workspaces.Docs.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Docs/Phantom.Workspaces.Docs.csproj" />
-  <Project Path="Phantom.Workspaces.Gui.Styles/Phantom.Workspaces.Gui.Styles.csproj" />
+  <Project Path="Phantom.Workspaces.Gui.Shared/Phantom.Workspaces.Gui.Shared.csproj" />
   <Project Path="Phantom.Workspaces.Install/Phantom.Workspaces.Install.csproj" />
   <Project Path="Phantom.Workspaces.Install.Tests/Phantom.Workspaces.Install.Tests.csproj" />
-  <Project Path="Phantom.Workspaces.Gui.Styles.Tests/Phantom.Workspaces.Gui.Styles.Tests.csproj" />
+  <Project Path="Phantom.Workspaces.Gui.Shared.Tests/Phantom.Workspaces.Gui.Shared.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core.Tests/Phantom.Workspaces.Llm.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Core/Phantom.Workspaces.Llm.Core.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Test.Mcp/Phantom.Workspaces.Llm.Test.Mcp.csproj" />

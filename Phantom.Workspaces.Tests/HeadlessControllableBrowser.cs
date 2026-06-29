@@ -1,6 +1,6 @@
 using System;
 using Avalonia.Controls;
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Tests;
 

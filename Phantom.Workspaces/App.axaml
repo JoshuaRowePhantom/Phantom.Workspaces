@@ -7,9 +7,9 @@
     <Application.Styles>
         <FluentTheme />
         <dockFluent:DockFluentTheme CacheDocumentTabContent="True" />
-        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml" />
-        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml" />
-        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Styles/Styles/NotificationsStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/AgentChatStatusLineStyles.axaml" />
+        <StyleInclude Source="avares://Phantom.Workspaces.Gui.Shared/Styles/NotificationsStyles.axaml" />
     </Application.Styles>
 
     <Application.Resources>
