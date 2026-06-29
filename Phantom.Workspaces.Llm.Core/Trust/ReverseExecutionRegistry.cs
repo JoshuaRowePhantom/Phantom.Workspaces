@@ -19,6 +19,12 @@ public interface IReverseConnection
     /// <summary>The client instance id (a user-computer-profile entity id) claimed by C.</summary>
     string ClientInstanceId { get; }
 
+    /// <summary>
+    /// The absolute base URL of C's own Phantom.Workspaces HTTP endpoint, as announced in the
+    /// <c>register</c> frame. <see langword="null"/> when C did not announce an endpoint.
+    /// </summary>
+    string? AnnouncedEndpoint { get; }
+
     /// <summary>When the connection was established.</summary>
     DateTimeOffset ConnectedAt { get; }
 
@@ -42,7 +48,8 @@ public interface IReverseConnection
 public sealed record ConnectedInstanceStatus(
     string ClientInstanceId,
     DateTimeOffset ConnectedAt,
-    int InFlightCount);
+    int InFlightCount,
+    string? AnnouncedEndpoint = null);
 
 /// <summary>
 /// An in-memory registry of the instances currently connected to this server for reverse execution,
@@ -127,7 +134,8 @@ public sealed class ReverseExecutionRegistry
                 .Select(connection => new ConnectedInstanceStatus(
                     connection.ClientInstanceId,
                     connection.ConnectedAt,
-                    connection.InFlightCount))
+                    connection.InFlightCount,
+                    connection.AnnouncedEndpoint))
                 .ToArray();
         }
     }

@@ -9,6 +9,7 @@ using Dock.Model.Controls;
 using Dock.Model.Core;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Shell;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -120,6 +121,75 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         // The local machine's profile should resolve to the local client instance "."
         Assert.Equal(".", receivedClientInstance);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_OnLocalUserComputerProfile_CallsSelectExecutorWithLocalClientInstance()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var profileEntities = await entityBroker.GetEntitiesAsync([profileId], TestContext.Current.CancellationToken);
+        var profileEntity = Assert.Single(profileEntities);
+
+        string? receivedInstance = null;
+        TrustProfile? receivedProfile = null;
+        var fakeSelector = new RecordingExecutorSelector((profile, instance) =>
+        {
+            receivedInstance = instance;
+            receivedProfile = profile;
+            throw new SentinelException();
+        });
+
+        var handler = new StartShellOnProfileShortcutHandler(fakeSelector);
+
+        await Assert.ThrowsAsync<SentinelException>(
+            () => handler.Handle(viewModel, Shortcut.StartShell, profileEntity));
+
+        Assert.Equal(TrustProfile.LocalClientInstance, receivedInstance);
+        Assert.NotNull(receivedProfile);
+        Assert.True(receivedProfile!.AllowsClientInstance(TrustProfile.LocalClientInstance));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_OnNonLocalProfile_CallsSelectExecutorWithProfileEntityId()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var nonLocalEntityId = new EntityId(Guid.NewGuid());
+        using var snapshotData = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{nonLocalEntityId}}",
+              "entity-types": ["entity", "user-computer-profile"],
+              "display-name": { "default": "Remote Machine" }
+            }
+            """);
+        var nonLocalSnapshot = new EntitySnapshot
+        {
+            EntityId = nonLocalEntityId,
+            ModifiedTime = new Timestamp(DateTimeOffset.MinValue, "0"),
+            Relationships = [],
+            Data = snapshotData.RootElement.Clone(),
+        };
+        var nonLocalEntity = new SubscribedEntityViewModel(nonLocalSnapshot);
+
+        string? receivedInstance = null;
+        var fakeSelector = new RecordingExecutorSelector((_, instance) =>
+        {
+            receivedInstance = instance;
+            throw new SentinelException();
+        });
+
+        var handler = new StartShellOnProfileShortcutHandler(fakeSelector);
+
+        await Assert.ThrowsAsync<SentinelException>(
+            () => handler.Handle(viewModel, Shortcut.StartShell, nonLocalEntity));
+
+        Assert.Equal(nonLocalEntityId.ToString(), receivedInstance);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -235,4 +305,16 @@ public sealed class StartShellOnProfileShortcutHandlerTests
             return ValueTask.CompletedTask;
         }
     }
+
+    private sealed class RecordingExecutorSelector(
+        Action<TrustProfile, string> onSelectExecutor) : ITrustedExecutorSelector
+    {
+        public ITrustedExecutor SelectExecutor(TrustProfile trustProfile, string targetClientInstance)
+        {
+            onSelectExecutor(trustProfile, targetClientInstance);
+            throw new InvalidOperationException("RecordingExecutorSelector: callback did not throw.");
+        }
+    }
+
+    private sealed class SentinelException : Exception { }
 }

@@ -1,0 +1,9 @@
+{
+  "entity-id": "378be27d-d637-4ef3-81ac-3a335c35d91d",
+  "entity-types": ["entity", "relationship", "default"],
+  "participants": {
+    "applied-to": "f5a6b7c8-d9e0-f1a2-b3c4-d5e6f7a8b9c0",
+    "value": "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0e"
+  },
+  "note": "Default agent manifest for git entity type."
+}

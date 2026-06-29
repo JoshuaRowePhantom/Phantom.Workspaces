@@ -24,6 +24,7 @@ public sealed class ReverseTrustedExecutionTests
         }
 
         public string ClientInstanceId { get; }
+        public string? AnnouncedEndpoint => null;
         public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UnixEpoch;
         public int InFlightCount => 0;
         public RemoteAgentRequest? LastRequest { get; private set; }

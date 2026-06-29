@@ -27,17 +27,28 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
     private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? readLoop;
 
-    public ReverseChannelConnection(IReverseMessageChannel channel, string clientInstanceId, DateTimeOffset connectedAt)
+    public ReverseChannelConnection(
+        IReverseMessageChannel channel,
+        string clientInstanceId,
+        DateTimeOffset connectedAt,
+        string? announcedEndpoint = null)
     {
         this.channel = channel ?? throw new ArgumentNullException(nameof(channel));
         ArgumentException.ThrowIfNullOrWhiteSpace(clientInstanceId);
         this.ClientInstanceId = clientInstanceId;
         this.ConnectedAt = connectedAt;
+        this.AnnouncedEndpoint = announcedEndpoint;
     }
 
     public string ClientInstanceId { get; }
 
     public DateTimeOffset ConnectedAt { get; }
+
+    /// <summary>
+    /// The absolute base URL of C's own Phantom.Workspaces HTTP endpoint, as announced in the
+    /// <c>register</c> frame. <see langword="null"/> when C did not announce an endpoint.
+    /// </summary>
+    public string? AnnouncedEndpoint { get; }
 
     public int InFlightCount => this.turns.Count;
 

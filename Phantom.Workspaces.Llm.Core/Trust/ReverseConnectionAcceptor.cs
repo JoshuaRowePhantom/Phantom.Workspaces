@@ -51,7 +51,11 @@ public sealed class ReverseConnectionAcceptor
             return;
         }
 
-        var connection = new ReverseChannelConnection(channel, registerFrame.ClientInstanceId, this.timeProvider.GetUtcNow());
+        var connection = new ReverseChannelConnection(
+            channel,
+            registerFrame.ClientInstanceId,
+            this.timeProvider.GetUtcNow(),
+            registerFrame.Endpoint);
         this.registry.Register(connection);
         connection.Start();
         try

@@ -50,6 +50,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly ShortcutManager shortcutManager = new();
     private EntityClickShortcutHandler? entityClickShortcutHandler;
     private OpenAgentSessionShortcutHandler? openAgentSessionShortcutHandler;
+    private readonly Llm.Trust.ReverseExecutionRegistry reverseExecutionRegistry = new();
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -57,7 +58,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private string selectedThemeName = ProfileThemeSettings.Dark.Name;
     private bool suppressThemeSelectionChange;
     private bool showHiddenItems;
-    private readonly Llm.Trust.ReverseExecutionRegistry reverseExecutionRegistry = new();
     private readonly WorkspaceDockFactory dockFactory;
     private IRootDock? layout;
     private ScheduledTools.ScheduledToolHost? scheduledToolHost;
@@ -114,7 +114,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionFromEntityShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
-        this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new StartShellFromEntityShortcutHandler(trustedExecutorSelector));
+        this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());

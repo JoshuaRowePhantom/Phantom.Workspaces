@@ -1,0 +1,9 @@
+{
+  "entity-id": "47b79b08-2bff-4b5e-a107-9346b718f34f",
+  "entity-types": ["entity", "relationship", "default"],
+  "participants": {
+    "applied-to": "c7d8e9f0-a1b2-c3d4-e5f6-a7b8c9d0e1f2",
+    "value": "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0e"
+  },
+  "note": "Default agent manifest for git-worktree entity type."
+}
