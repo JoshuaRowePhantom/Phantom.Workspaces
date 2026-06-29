@@ -2,6 +2,11 @@ namespace Phantom.Workspaces.ViewModels;
 
 public abstract class WorkspaceTabViewModel : ViewModelBase
 {
+    public event EventHandler? FocusPrimaryControlRequested;
+
+    public virtual void RequestFocusPrimaryControl() =>
+        FocusPrimaryControlRequested?.Invoke(this, EventArgs.Empty);
+
     private string title = string.Empty;
     private string? tabTooltip;
     private TabHeaderViewModel? tabHeader;

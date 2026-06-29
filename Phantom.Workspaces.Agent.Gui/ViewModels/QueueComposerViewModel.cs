@@ -59,6 +59,11 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         this.SetImmediacyCommand = new RelayCommand<QueueImmediacyOption>(this.SetQueueImmediacy);
     }
 
+    public event EventHandler? FocusPrimaryControlRequested;
+
+    public void RequestFocusPrimaryControl() =>
+        FocusPrimaryControlRequested?.Invoke(this, EventArgs.Empty);
+
     public bool IsDefaultComposer { get; }
 
     public string PlaceholderText => this.IsDefaultComposer
