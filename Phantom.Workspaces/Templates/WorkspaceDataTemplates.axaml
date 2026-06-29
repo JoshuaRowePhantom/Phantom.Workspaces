@@ -578,4 +578,22 @@
     <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
         <templates:GitWorktreeReviewView />
     </DataTemplate>
+
+    <DataTemplate DataType="vm:ExternalEntityCardViewModel">
+        <ItemsControl ItemsSource="{Binding Urls}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:ExternalUrlViewModel">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{Binding Key}"
+                                   IsVisible="{Binding ShowKey}"
+                                   Classes="muted workspace-field-label" />
+                        <Button Content="{Binding Url}"
+                                Classes="workspace-url-link"
+                                Command="{Binding OpenCommand}"
+                                HorizontalAlignment="Left" />
+                    </StackPanel>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </DataTemplate>
 </DataTemplates>

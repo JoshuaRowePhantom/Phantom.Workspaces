@@ -30,6 +30,7 @@ public sealed class EntityCardViewModel : ViewModelBase
     private readonly JsonValidationViewModel validation;
     private readonly List<EntityDisplayItemViewModel> displayItems = [];
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
+    private ExternalEntityCardViewModel? externalCard;
     private string rawJsonText;
     private bool isEditMode;
     private bool isJsonVisible;
@@ -67,6 +68,7 @@ public sealed class EntityCardViewModel : ViewModelBase
             _ => this.IsEditMode);
         this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
         this.DeleteEntityCommand = entity.DeleteEntityCommand;
+        this.externalCard = this.cardViewName == "external" ? ExternalEntityCardViewModel.Create(entity) : null;
         _ = this.BuildFieldEditorsAsync();
     }
 
@@ -108,6 +110,8 @@ public sealed class EntityCardViewModel : ViewModelBase
     public string EntityType => this.entity?.EntityType ?? this.entityType;
 
     public string CardViewName => this.cardViewName;
+
+    public ExternalEntityCardViewModel? ExternalCard => this.externalCard;
 
     public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
@@ -494,6 +498,12 @@ public sealed class EntityCardViewModel : ViewModelBase
                 this.rawJsonText = BuildRawJsonText(this.entity?.Data);
                 this.RaisePropertyChanged(nameof(this.RawJsonText));
                 _ = this.BuildFieldEditorsAsync();
+            }
+
+            if (this.cardViewName == "external" && this.entity is not null)
+            {
+                this.externalCard = ExternalEntityCardViewModel.Create(this.entity);
+                this.RaisePropertyChanged(nameof(this.ExternalCard));
             }
 
             return;
