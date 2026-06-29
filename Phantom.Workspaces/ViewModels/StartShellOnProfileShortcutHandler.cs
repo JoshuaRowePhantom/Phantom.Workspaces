@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Llm.Shell;
@@ -11,14 +12,14 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
 {
-    private readonly Func<string, CancellationToken, Task<ITerminalSession>>? sessionOpener;
+    private readonly Func<string, string?, CancellationToken, Task<ITerminalSession>>? sessionOpener;
 
     /// <summary>Production constructor: uses <see cref="LocalTrustedExecutor"/> for local sessions.</summary>
     public StartShellOnProfileShortcutHandler() { }
 
     /// <summary>Test constructor: injects a custom session-opener so no real PTY is spawned.</summary>
     internal StartShellOnProfileShortcutHandler(
-        Func<string, CancellationToken, Task<ITerminalSession>> sessionOpener)
+        Func<string, string?, CancellationToken, Task<ITerminalSession>> sessionOpener)
     {
         this.sessionOpener = sessionOpener;
     }
@@ -44,7 +45,13 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
             ? TrustProfile.LocalClientInstance
             : entityViewModel.EntityId.ToString();
 
-        var session = await this.OpenSessionAsync(targetClientInstance, CancellationToken.None);
+        var workingDirectory = entityViewModel.Data is JsonElement entityData
+            && entityData.TryGetProperty("home-directory", out var homeDirElement)
+            && homeDirElement.ValueKind == JsonValueKind.String
+            ? homeDirElement.GetString()
+            : null;
+
+        var session = await this.OpenSessionAsync(targetClientInstance, workingDirectory, CancellationToken.None);
 
         var command = GetDefaultCommand();
         var tab = new ShellTabViewModel(session)
@@ -57,21 +64,26 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
         return true;
     }
 
-    private Task<ITerminalSession> OpenSessionAsync(string targetClientInstance, CancellationToken ct)
+    private Task<ITerminalSession> OpenSessionAsync(string targetClientInstance, string? workingDirectory, CancellationToken ct)
     {
         if (this.sessionOpener is not null)
         {
-            return this.sessionOpener(targetClientInstance, ct);
+            return this.sessionOpener(targetClientInstance, workingDirectory, ct);
         }
 
         var command = GetDefaultCommand();
-        using var payloadDocument = JsonDocument.Parse(
-            $$"""
-            {
-              "mode": "pty",
-              "command": "{{command}}"
-            }
-            """);
+        var payloadNode = new JsonObject
+        {
+            ["mode"] = "pty",
+            ["command"] = command,
+        };
+
+        if (workingDirectory is not null)
+        {
+            payloadNode["working-directory"] = workingDirectory;
+        }
+
+        using var payloadDocument = JsonDocument.Parse(payloadNode.ToJsonString());
 
         var request = new TrustedStreamRequest
         {

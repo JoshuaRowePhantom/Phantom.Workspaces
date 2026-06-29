@@ -28,7 +28,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var fakeSession = new FakeTerminalSession();
         var handler = new StartShellOnProfileShortcutHandler(
-            (_, _) => Task.FromResult<ITerminalSession>(fakeSession));
+            (_, _, _) => Task.FromResult<ITerminalSession>(fakeSession));
 
         var handled = await handler.Handle(viewModel, Shortcut.StartShell, profileEntity);
 
@@ -59,7 +59,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var fakeSession = new FakeTerminalSession();
         var handler = new StartShellOnProfileShortcutHandler(
-            (_, _) => Task.FromResult<ITerminalSession>(fakeSession));
+            (_, _, _) => Task.FromResult<ITerminalSession>(fakeSession));
 
         await handler.Handle(viewModel, Shortcut.StartShell, profileEntity);
 
@@ -80,7 +80,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var fakeSession = new FakeTerminalSession();
         var handler = new StartShellOnProfileShortcutHandler(
-            (_, _) => Task.FromResult<ITerminalSession>(fakeSession));
+            (_, _, _) => Task.FromResult<ITerminalSession>(fakeSession));
 
         await handler.Handle(viewModel, Shortcut.StartShell, profileEntity);
 
@@ -110,7 +110,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         string? receivedClientInstance = null;
         var handler = new StartShellOnProfileShortcutHandler(
-            (target, _) =>
+            (target, _, _) =>
             {
                 receivedClientInstance = target;
                 return Task.FromResult<ITerminalSession>(new FakeTerminalSession());
@@ -120,6 +120,62 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         // The local machine's profile should resolve to the local client instance "."
         Assert.Equal(".", receivedClientInstance);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_WhenEntityHasHomeDirectory_PassesHomeDirectoryAsWorkingDirectoryToSessionOpener()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId(Guid.NewGuid()),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+            Data = JsonDocument.Parse("""{"entity-types":["user-computer-profile"],"home-directory":"C:\\Users\\tester"}""").RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        string? receivedWorkingDirectory = "sentinel";
+        var handler = new StartShellOnProfileShortcutHandler(
+            (_, workDir, _) =>
+            {
+                receivedWorkingDirectory = workDir;
+                return Task.FromResult<ITerminalSession>(new FakeTerminalSession());
+            });
+
+        await handler.Handle(viewModel, Shortcut.StartShell, entityViewModel);
+
+        Assert.Equal(@"C:\Users\tester", receivedWorkingDirectory);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_WhenEntityHasNoHomeDirectory_PassesNullWorkingDirectoryToSessionOpener()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId(Guid.NewGuid()),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+            Data = JsonDocument.Parse("""{"entity-types":["user-computer-profile"]}""").RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        string? receivedWorkingDirectory = "sentinel";
+        var handler = new StartShellOnProfileShortcutHandler(
+            (_, workDir, _) =>
+            {
+                receivedWorkingDirectory = workDir;
+                return Task.FromResult<ITerminalSession>(new FakeTerminalSession());
+            });
+
+        await handler.Handle(viewModel, Shortcut.StartShell, entityViewModel);
+
+        Assert.Null(receivedWorkingDirectory);
     }
 
     private static EntityBroker GetEntityBroker(MainWindowViewModel viewModel)
