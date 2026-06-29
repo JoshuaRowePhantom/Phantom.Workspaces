@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -7,12 +7,11 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class WebViewModelTests
 {
     // --- TabHeader / FaviconTabHeaderItemViewModel ---
 
-    [AvaloniaFact]
+    [Fact]
     public void WebViewModel_Constructor_TabHeader_ContainsFaviconItem()
     {
         var vm = new WebViewModel("https://example.com") { Id = "web-favicon-1", Title = "T" };
@@ -21,7 +20,7 @@ public sealed class WebViewModelTests
         Assert.NotNull(favicon);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void WebViewModel_Constructor_FaviconItem_UriIsNull()
     {
         var vm = new WebViewModel("https://example.com") { Id = "web-favicon-2", Title = "T" };
@@ -29,7 +28,7 @@ public sealed class WebViewModelTests
         Assert.Null(favicon.FaviconUri);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void WebViewModel_SetFaviconUri_UpdatesFaviconItem()
     {
         var vm = new WebViewModel("https://example.com") { Id = "web-favicon-3", Title = "T" };
@@ -38,7 +37,7 @@ public sealed class WebViewModelTests
         Assert.Equal("https://example.com/favicon.ico", favicon.FaviconUri);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void WebViewModel_SetFaviconUri_ToNull_ClearsFaviconItem()
     {
         var vm = new WebViewModel("https://example.com") { Id = "web-favicon-4", Title = "T" };
@@ -50,7 +49,7 @@ public sealed class WebViewModelTests
 
     // --- SetPageTitle / titleFixed ---
 
-    [AvaloniaFact]
+    [Fact]
     public void SetPageTitle_WhenTitleNotFixed_UpdatesTitle()
     {
         var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: false)
@@ -64,7 +63,7 @@ public sealed class WebViewModelTests
         Assert.Equal("New Title", vm.Title);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SetPageTitle_WhenTitleFixed_DoesNotUpdateTitle()
     {
         var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: true)
@@ -78,7 +77,7 @@ public sealed class WebViewModelTests
         Assert.Equal("Pinned", vm.Title);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SetPageTitle_WhenTitleFixed_TooltipStillReflectsPageTitle()
     {
         var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: true)

@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
 using AgentSchema;
@@ -8,7 +8,6 @@ using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class ChatHistoryItemViewModelTests
 {
     private static AgentDefinition CreateTestProviderAgentDefinition()
@@ -33,7 +32,7 @@ public sealed class ChatHistoryItemViewModelTests
                 AgentDefinition = CreateTestProviderAgentDefinition(),
             });
 
-    [AvaloniaFact]
+    [Fact]
     public void Constructor_UserRole_MapsToUserLabel()
     {
         var source = new AgentChatHistoryItem
@@ -49,7 +48,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.Equal("hello", viewModel.Text);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void Constructor_AssistantRole_MapsToAssistantLabel()
     {
         var source = new AgentChatHistoryItem
@@ -67,7 +66,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.False(viewModel.HasReasoningLine);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void Constructor_AssistantInProgressWithoutText_ShowsThinking()
     {
         var source = new AgentChatHistoryItem
@@ -81,7 +80,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.True(viewModel.HasReasoningLine);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void Constructor_AssistantInProgressWithText_DoesNotShowThinking()
     {
         var source = new AgentChatHistoryItem
@@ -96,7 +95,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.False(viewModel.HasReasoningLine);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void UpdateFrom_UpdatesTextAndProgressState()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -115,7 +114,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.Empty(viewModel.ReasoningDisplayText);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void UpdateFrom_CompletingResponse_RefreshesReasoningVisibility()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -139,7 +138,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.Empty(viewModel.ReasoningDisplayText);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SetReasoningVisible_ShowsReasoningText()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -153,7 +152,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.Equal("step 1", viewModel.ReasoningDisplayText);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void SetReasoningVisible_WhenNotInProgress_ShowsReasoningText()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -168,8 +167,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.True(viewModel.HasReasoningLine);
     }
 
-    [AvaloniaFact]
-    [Trait("Category", "SlowLayout")]
+    [Fact]
     public void Constructor_WithImageContent_ExposesAttachmentPreview()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -184,7 +182,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.StartsWith("image/png", attachment.Label, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void UpdateFrom_WithEquivalentContents_DoesNotResetContentsBinding()
     {
         var viewModel = new ChatHistoryItemViewModel(new AgentChatHistoryItem
@@ -205,8 +203,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.Contents), changed);
     }
 
-    [AvaloniaFact]
-    [Trait("Category", "SlowLayout")]
+    [Fact]
     public void Constructor_RenderableContents_IncludesAllContents()
     {
         var imageBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO3ZfV0AAAAASUVORK5CYII=");
@@ -227,7 +224,7 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.Same(call, viewModel.RenderableContents[3]);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task UpdateFrom_TestProviderEquivalentAssistantTurn_DoesNotResetContentsBinding()
     {
         var chat = await CreateChatAsync();

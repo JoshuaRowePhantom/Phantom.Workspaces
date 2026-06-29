@@ -1,8 +1,7 @@
-using System.Linq;
+﻿using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
-using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
@@ -10,10 +9,9 @@ using Phantom.Workspaces.Agent.Gui.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class MainWindowAxamlTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void MainWindow_UsesBinding_ForChildControlDataContexts()
     {
         var mainWindowContent = ReadMainWindowAxaml();
@@ -24,7 +22,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void AgentChatEditorControl_UsesTreeNavigationAndSelectedDetailPane()
     {
         var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
@@ -207,7 +205,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void AgentChatEditorControl_ConversationDetailIncludesStatusLine()
     {
         var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
@@ -292,7 +290,7 @@ public sealed class MainWindowAxamlTests
         Assert.Equal(new GridLength(24), editorGrid.ColumnDefinitions[1].Width);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void ChildControls_DisableCompiledBindings_ForRuntimeDataContextHandoff()
     {
         var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
@@ -412,7 +410,7 @@ public sealed class MainWindowAxamlTests
         Assert.True(unholdGesture.Matches(ctrlShiftBreak));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void AgentChatInputQueueControl_NonDefaultQueueHeader_ContainsStatusPillBoundToSetImmediacyCommand()
     {
         // Issue #127 (updated by #162): the status pill is now a ContentControl delegating to
@@ -429,7 +427,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void QueueStyles_ContainsQueueImmediacyPickerTemplateWithAllBindings()
     {
         // Issue #162: QueueStyles.axaml must define the shared DataTemplate with all
@@ -466,7 +464,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void QueueComposerControl_StatusPill_UsesContentControlWithQueueImmediacyPickerTemplate()
     {
         // Issue #162: QueueComposerControl must delegate the pill to QueueImmediacyPickerTemplate
@@ -487,7 +485,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void QueueComposerControl_StatusPill_IsHiddenForNonDefaultComposer()
     {
         // Issue #127: the status pill inside QueueComposerControl must be hidden for
@@ -501,7 +499,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [Fact]
     public void AgentChatEditorControl_AutoScrollCheckbox_UsesScrollLockedClassForAnimation()
     {
         // Issue #130: the auto-scroll checkbox (and preceding separator) must animate between opacity

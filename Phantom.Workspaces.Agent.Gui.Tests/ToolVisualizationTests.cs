@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Reflection;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -160,8 +160,7 @@ public sealed class ToolVisualizationTests
 
     // --- AgentChatStatusLineViewModel ---
 
-    [Trait("Category", "SlowLayout")]
-    [AvaloniaFact]
+    [Fact]
     public async Task AgentChatStatusLineViewModel_UpdateStatus_SetsIntentDisplay()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -173,8 +172,7 @@ public sealed class ToolVisualizationTests
         Assert.Equal("doing a thing", statusLine.IntentDisplay);
     }
 
-    [Trait("Category", "SlowLayout")]
-    [AvaloniaFact]
+    [Fact]
     public async Task AgentChatStatusLineViewModel_IntentDisplay_ClearedWhenThinkingStops()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -195,8 +193,7 @@ public sealed class ToolVisualizationTests
         Assert.Null(statusLine.IntentDisplay);
     }
 
-    [Trait("Category", "SlowLayout")]
-    [AvaloniaFact]
+    [Fact]
     public async Task AgentChatStatusLineViewModel_UpdateStatus_EmptyValue_ClearsDisplay()
     {
         using var loggerFactory = new ObservableLoggerFactory();

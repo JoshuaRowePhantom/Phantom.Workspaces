@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -13,7 +13,6 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class StartShellOnProfileShortcutHandlerTests
 {
     [AvaloniaFact(Timeout = 15_000)]
@@ -24,7 +23,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var entityBroker = GetEntityBroker(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var profileEntities = await entityBroker.GetEntitiesAsync([profileId]);
+        var profileEntities = await entityBroker.GetEntitiesAsync([profileId], TestContext.Current.CancellationToken);
         var profileEntity = Assert.Single(profileEntities);
 
         var fakeSession = new FakeTerminalSession();
@@ -52,10 +51,10 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var entityBroker = GetEntityBroker(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var profileEntities = await entityBroker.GetEntitiesAsync([profileId]);
+        var profileEntities = await entityBroker.GetEntitiesAsync([profileId], TestContext.Current.CancellationToken);
         var profileEntity = Assert.Single(profileEntities);
 
-        var snapshotsBefore = await entityBroker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshotsBefore = await entityBroker.EntityRepository.ExportEntitySnapshotsAsync(TestContext.Current.CancellationToken);
         var entityCountBefore = snapshotsBefore.Count;
 
         var fakeSession = new FakeTerminalSession();
@@ -64,7 +63,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         await handler.Handle(viewModel, Shortcut.StartShell, profileEntity);
 
-        var snapshotsAfter = await entityBroker.EntityRepository.ExportEntitySnapshotsAsync();
+        var snapshotsAfter = await entityBroker.EntityRepository.ExportEntitySnapshotsAsync(TestContext.Current.CancellationToken);
         Assert.Equal(entityCountBefore, snapshotsAfter.Count);
     }
 
@@ -76,7 +75,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var entityBroker = GetEntityBroker(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var profileEntities = await entityBroker.GetEntitiesAsync([profileId]);
+        var profileEntities = await entityBroker.GetEntitiesAsync([profileId], TestContext.Current.CancellationToken);
         var profileEntity = Assert.Single(profileEntities);
 
         var fakeSession = new FakeTerminalSession();
@@ -106,7 +105,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
 
         var entityBroker = GetEntityBroker(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var profileEntities = await entityBroker.GetEntitiesAsync([profileId]);
+        var profileEntities = await entityBroker.GetEntitiesAsync([profileId], TestContext.Current.CancellationToken);
         var profileEntity = Assert.Single(profileEntities);
 
         string? receivedClientInstance = null;

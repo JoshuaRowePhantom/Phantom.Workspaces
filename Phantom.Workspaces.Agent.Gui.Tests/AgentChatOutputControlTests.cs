@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using AgentSchema;
-using Avalonia.Headless.XUnit;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -26,7 +25,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("e.preventDefault()", html, StringComparison.Ordinal);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_RaisesUrlNavigationRequested()
     {
@@ -48,7 +46,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("https://example.com", receivedUrl);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_WithEmptyUrl_DoesNotRaiseEvent()
     {
@@ -65,7 +62,6 @@ public sealed class AgentChatOutputControlTests
         Assert.False(raised);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_UnknownMessageType_DoesNotThrow()
     {
@@ -78,7 +74,6 @@ public sealed class AgentChatOutputControlTests
         browser.FireMessage("""{"type":"unknownType","data":"anything"}""");
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public void ActualThemeVariantChanged_PostsThemeCommandToBrowser()
     {
@@ -139,7 +134,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(0, readyCount);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OnBrowserReady_PostsThemeCommand()
     {
@@ -165,7 +159,6 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'theme' command to be posted when the browser reports ready.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_SpuriousReload_PostsThemeCommandAgain()
     {
@@ -238,7 +231,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("}</style></head>", result, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AttachOutputModel_HtmlShellAlreadyContainsInjectedThemeStyle()
     {
@@ -269,7 +261,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("<style>:root{", browser.HtmlShell, StringComparison.Ordinal);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_AfterHtmlShellSet_StillPostsThemeCommand()
     {
@@ -360,7 +351,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, browser.BatchCount);
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_InitialHistoryWithMessages_UsesOneBatch()
     {
@@ -406,7 +396,6 @@ public sealed class AgentChatOutputControlTests
             "Expected at least one 'update' command for the initial history items.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_IncrementalMessageAfterInitial_DoesNotStartNewBatch()
     {

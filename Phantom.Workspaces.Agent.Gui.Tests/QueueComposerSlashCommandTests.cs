@@ -1,4 +1,4 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -7,7 +7,6 @@ using System.Collections.Generic;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class QueueComposerSlashCommandTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -19,7 +18,7 @@ public sealed class QueueComposerSlashCommandTests
         }
         """);
 
-    [AvaloniaFact]
+    [Fact]
     public async Task Submit_WithSlashCommand_AndInterceptorSet_DoesNotQueueMessage_AndCallsInterceptor()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -40,7 +39,7 @@ public sealed class QueueComposerSlashCommandTests
         composer.InputText = "/working-directory C:\\Projects\\Foo";
         composer.Submit();
 
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(intercepted);
         Assert.Equal(string.Empty, composer.InputText);
@@ -74,7 +73,7 @@ public sealed class QueueComposerSlashCommandTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task Submit_WithNoInterceptor_AndSlashText_QueuesNormally()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -92,7 +91,7 @@ public sealed class QueueComposerSlashCommandTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task InputText_StartingWithSlash_CallsCompletionsProvider()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -116,14 +115,14 @@ public sealed class QueueComposerSlashCommandTests
         };
 
         composer.InputText = "/working-directory";
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(providerCalled);
 
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task InputText_NotStartingWithSlash_DismissesCompletions()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -146,7 +145,7 @@ public sealed class QueueComposerSlashCommandTests
 
         // First trigger completions.
         composer.InputText = "/working-directory";
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Now type non-slash text — completions should be dismissed.
         composer.InputText = "hello";
@@ -156,7 +155,7 @@ public sealed class QueueComposerSlashCommandTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task InputText_WithJustSlash_PassesSentinelEmptyCommandNameToProvider()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -176,14 +175,14 @@ public sealed class QueueComposerSlashCommandTests
         };
 
         composer.InputText = "/";
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(string.Empty, capturedCommandName);
 
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task InputText_WithPartialCommandName_PassesSentinelEmptyCommandNameToProvider()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -205,7 +204,7 @@ public sealed class QueueComposerSlashCommandTests
         };
 
         composer.InputText = "/wor";
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(string.Empty, capturedCommandName);
         Assert.Equal("wor", capturedPartialArgs);
@@ -213,7 +212,7 @@ public sealed class QueueComposerSlashCommandTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task InputText_WithCommandNameAndSpace_PassesCommandNameAndPartialArgsToProvider()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -235,7 +234,7 @@ public sealed class QueueComposerSlashCommandTests
         };
 
         composer.InputText = "/working-directory /some/path";
-        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await tcs.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal("working-directory", capturedCommandName);
         Assert.Equal("/some/path", capturedPartialArgs);

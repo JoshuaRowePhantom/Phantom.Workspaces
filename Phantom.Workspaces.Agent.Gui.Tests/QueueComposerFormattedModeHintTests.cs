@@ -1,10 +1,9 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class QueueComposerFormattedModeHintTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -16,7 +15,7 @@ public sealed class QueueComposerFormattedModeHintTests
         }
         """);
 
-    [AvaloniaFact]
+    [Fact]
     public async Task FormattedModeHint_DefaultComposer_WhenNotFormattedMode_ReturnsNull()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -32,7 +31,7 @@ public sealed class QueueComposerFormattedModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task FormattedModeHint_DefaultComposer_WhenFormattedMode_ReturnsHintText()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -49,7 +48,7 @@ public sealed class QueueComposerFormattedModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task FormattedModeHint_NonDefaultComposer_WhenFormattedMode_ReturnsNull()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -67,7 +66,7 @@ public sealed class QueueComposerFormattedModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task IsFormattedMode_WhenChanged_RaisesFormattedModeHintPropertyChanged()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -87,7 +86,7 @@ public sealed class QueueComposerFormattedModeHintTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task PlaceholderText_DefaultComposer_WhenFormattedMode_IsSimplified()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
