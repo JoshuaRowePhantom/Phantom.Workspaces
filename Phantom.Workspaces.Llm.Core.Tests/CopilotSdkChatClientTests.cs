@@ -218,6 +218,93 @@ public sealed class CopilotSdkChatClientTests
         Assert.True(firstSubscription.Disposed, "The first subscription must be disposed when SendAsync throws IOException.");
     }
 
+    [Fact]
+    public async Task RunStreamingTurn_WhenImmediateItemEnqueuedDuringLiveTurn_FiresSteeringMessageForwarded()
+    {
+        // Regression coverage for issue #320 (test gap from issue #17 fix):
+        // When an Immediate-immediacy AgentInputItem is enqueued into the queueManager while a
+        // streaming turn is live, SteeringMessageForwarded must fire with the correct ChatMessage.
+        var queueManager = new AgentInputQueueManager();
+        using var client = new CopilotSdkChatClient(
+            "gpt-5",
+            "GitHub Copilot (gpt-5)",
+            gitHubToken: null,
+            loggerFactory: null,
+            queueManager: queueManager);
+
+        ChatMessage? forwarded = null;
+        client.SteeringMessageForwarded += msg => forwarded = msg;
+
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        var subscription = new FlagDisposable();
+
+        // Signals the test thread once BeginTurnAsync has subscribed to QueueStateChanged.
+        var beginTurnCompletedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _)
+        {
+            // Mirror the production subscription from GetStreamingResponseAsync.BeginTurnAsync.
+            void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
+            {
+                if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
+                {
+                    return;
+                }
+
+                while (queueManager.TryDequeueNextImmediate(out var item))
+                {
+                    foreach (var message in item.Messages ?? [])
+                    {
+                        var text = string.Concat(
+                            message.Contents.OfType<TextContent>().Select(c => c.Text));
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            // SteeringMessageForwarded can only be raised from the declaring class;
+                            // invoke it via its backing field (consistent with other reflection use in this file).
+                            var handler = (Action<ChatMessage>?)typeof(CopilotSdkChatClient)
+                                .GetField("SteeringMessageForwarded", BindingFlags.Instance | BindingFlags.NonPublic)!
+                                .GetValue(client);
+                            handler?.Invoke(message);
+                        }
+                    }
+                }
+            }
+
+            queueManager.QueueStateChanged += OnQueueChanged;
+            beginTurnCompletedTcs.TrySetResult();
+
+            return Task.FromResult(new StreamingTurnContext(
+                channel.Reader,
+                subscription,
+                _ => Task.CompletedTask,
+                () => Task.CompletedTask,
+                () => Task.CompletedTask));
+        }
+
+        var turnTask = Task.Run(async () =>
+        {
+            await foreach (var _ in client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None))
+            {
+            }
+        });
+
+        // Wait for BeginTurnAsync to subscribe before enqueuing (30 s is a deadlock failsafe).
+        await beginTurnCompletedTcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var steeringMessage = new ChatMessage(ChatRole.User, "steer the agent");
+        queueManager.Enqueue(
+            queueManager.ImmediateQueue,
+            [new AgentInputItem { Messages = [steeringMessage] }]);
+
+        // Complete the turn so the task finishes cleanly.
+        channel.Writer.Complete();
+        await turnTask.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.NotNull(forwarded);
+        Assert.Equal("steer the agent", forwarded.Text);
+        Assert.True(subscription.Disposed);
+    }
+
     private sealed class FlagDisposable : IDisposable
     {
         public bool Disposed { get; private set; }
