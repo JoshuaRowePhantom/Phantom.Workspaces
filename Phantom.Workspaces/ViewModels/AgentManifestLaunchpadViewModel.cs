@@ -18,6 +18,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler;
     private readonly MainWindowViewModel mainWindowViewModel;
+    private readonly IReadOnlyDictionary<string, string>? initialParameterValues;
     private bool canStart;
 
     public SubscribedEntityViewModel ManifestEntity { get; }
@@ -37,12 +38,14 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         SubscribedEntityViewModel manifestEntity,
         AgentSessionShortcutContext agentSessionShortcutContext,
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,
-        MainWindowViewModel mainWindowViewModel)
+        MainWindowViewModel mainWindowViewModel,
+        IReadOnlyDictionary<string, string>? initialParameterValues = null)
     {
         this.ManifestEntity = manifestEntity;
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.openAgentSessionShortcutHandler = openAgentSessionShortcutHandler;
         this.mainWindowViewModel = mainWindowViewModel;
+        this.initialParameterValues = initialParameterValues;
 
         this.StartSessionCommand = new RelayCommand(
             async _ => await this.StartSessionAsync(),
@@ -82,15 +85,21 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
 
         foreach (var param in parameters)
         {
+            var paramName = param.Name ?? string.Empty;
             var row = new AgentManifestParameterRowViewModel
             {
-                Name = param.Name ?? string.Empty,
-                DisplayName = param.Name ?? string.Empty,
+                Name = paramName,
+                DisplayName = paramName,
                 Description = param.Description ?? string.Empty,
                 IsRequired = param.Required == true,
             };
 
-            if (param.Default is string defaultStr)
+            if (this.initialParameterValues is not null
+                && this.initialParameterValues.TryGetValue(paramName, out var initialValue))
+            {
+                row.Value = initialValue;
+            }
+            else if (param.Default is string defaultStr)
             {
                 row.Value = defaultStr;
             }

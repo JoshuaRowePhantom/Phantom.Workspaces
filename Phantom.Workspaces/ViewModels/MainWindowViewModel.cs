@@ -50,6 +50,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly ShortcutManager shortcutManager = new();
     private EntityClickShortcutHandler? entityClickShortcutHandler;
     private OpenAgentSessionShortcutHandler? openAgentSessionShortcutHandler;
+    private readonly Llm.Trust.ReverseExecutionRegistry reverseExecutionRegistry = new();
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -106,12 +107,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride);
-        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext);
+        var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
+        this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, trustedExecutorSelector);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
+        this.shortcutManager.AddShortcutHandler(new StartAgentSessionFromEntityShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
-        this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new StartShellFromEntityShortcutHandler(trustedExecutorSelector));
+        this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
@@ -552,7 +556,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var reverseExecutionRegistry = new Llm.Trust.ReverseExecutionRegistry();
+        var reverseExecutionRegistry = this.reverseExecutionRegistry;
         this.webHost = new WorkspacesWebHost(reverseExecutionRegistry);
         this.ConnectionStatus = new ConnectionStatusViewModel(
             reverseExecutionRegistry,

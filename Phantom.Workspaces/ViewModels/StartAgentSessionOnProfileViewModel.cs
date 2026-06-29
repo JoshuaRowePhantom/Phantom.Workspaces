@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
@@ -17,7 +18,9 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
     private readonly OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler;
     private readonly MainWindowViewModel mainWindowViewModel;
     private readonly SubscribedEntityViewModel profileEntity;
-    private AgentDefinitionItem? selectedAgentDefinition;
+    private readonly EntityId? preSelectedEntityId;
+    private readonly IReadOnlyDictionary<string, string>? initialParameterValues;
+    private AgentSourceItem? selectedAgentSource;
     private bool isCreatingSession;
 
     public StartAgentSessionOnProfileViewModel(
@@ -25,25 +28,31 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         AgentSessionShortcutContext agentSessionShortcutContext,
         OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler,
         MainWindowViewModel mainWindowViewModel,
-        SubscribedEntityViewModel profileEntity)
+        SubscribedEntityViewModel profileEntity,
+        EntityId? preSelectedEntityId = null,
+        IReadOnlyDictionary<string, string>? initialParameterValues = null)
     {
         this.tabService = tabService;
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.openAgentSessionShortcutHandler = openAgentSessionShortcutHandler;
         this.mainWindowViewModel = mainWindowViewModel;
         this.profileEntity = profileEntity;
+        this.preSelectedEntityId = preSelectedEntityId;
+        this.initialParameterValues = initialParameterValues;
         this.CreateSessionCommand = new RelayCommand(async _ => await this.CreateSessionAsync(), _ => this.CanCreateSession());
-        _ = this.LoadAgentDefinitionsAsync();
+        _ = this.LoadAgentSourcesAsync();
     }
 
-    public ObservableCollection<AgentDefinitionItem> AgentDefinitions { get; } = new();
+    public IReadOnlyDictionary<string, string>? InitialParameterValues => this.initialParameterValues;
 
-    public AgentDefinitionItem? SelectedAgentDefinition
+    public ObservableCollection<AgentSourceItem> AgentSources { get; } = new();
+
+    public AgentSourceItem? SelectedAgentSource
     {
-        get => this.selectedAgentDefinition;
+        get => this.selectedAgentSource;
         set
         {
-            if (this.SetProperty(ref this.selectedAgentDefinition, value))
+            if (this.SetProperty(ref this.selectedAgentSource, value))
             {
                 this.CreateSessionCommand.RaiseCanExecuteChanged();
             }
@@ -66,17 +75,27 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
 
     private bool CanCreateSession()
     {
-        return this.SelectedAgentDefinition is not null && !this.IsCreatingSession;
+        return this.SelectedAgentSource is not null && !this.IsCreatingSession;
     }
 
-    private async Task LoadAgentDefinitionsAsync()
+    private async Task LoadAgentSourcesAsync()
     {
         try
         {
+            var dataAccessLayer = this.mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
+
             var queryRequest = new QueryRequest
             {
                 Clauses =
                 [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier { Value = "agent-manifests" },
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet { Values = ["agent-manifest"] },
+                        },
+                    },
                     new TopLevelQueryClause
                     {
                         ClauseIdentifier = new QueryClauseIdentifier { Value = "agent-definitions" },
@@ -88,28 +107,46 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
                 ],
             };
 
-            var queryResult = await this.mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer.QueryAsync(queryRequest);
-            var agentDefinitionSnapshots = queryResult.Batches
+            var queryResult = await dataAccessLayer.QueryAsync(queryRequest);
+            var snapshotIds = queryResult.Batches
                 .SelectMany(batch => batch.Entities)
-                .ToList();
+                .Select(snapshot => snapshot.EntityId)
+                .Distinct()
+                .ToArray();
 
-            var agentDefinitionEntities = await this.mainWindowViewModel.EntityBroker.GetEntitiesAsync(
-                agentDefinitionSnapshots.Select(snapshot => snapshot.EntityId).ToArray());
+            var entities = await this.mainWindowViewModel.EntityBroker.GetEntitiesAsync(snapshotIds);
 
-            foreach (var entity in agentDefinitionEntities)
+            AgentSourceItem? preSelected = null;
+
+            foreach (var entity in entities)
             {
-                if (entity.Data is JsonElement entityData
-                    && entityData.TryGetProperty("definition", out var definitionElement))
+                if (entity.Data is not JsonElement entityData)
                 {
-                    var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
-                    var displayName = entity.DisplayName ?? "Unknown Agent";
-                    this.AgentDefinitions.Add(new AgentDefinitionItem
-                    {
-                        Entity = entity,
-                        Definition = agentDefinition,
-                        DisplayName = displayName,
-                    });
+                    continue;
                 }
+
+                if (!entityData.TryGetProperty("manifest", out _) && !entityData.TryGetProperty("definition", out _))
+                {
+                    continue;
+                }
+
+                var item = new AgentSourceItem
+                {
+                    Entity = entity,
+                    DisplayName = entity.DisplayName ?? "Unknown Agent",
+                };
+
+                this.AgentSources.Add(item);
+
+                if (this.preSelectedEntityId is { } id && entity.EntityId == id)
+                {
+                    preSelected = item;
+                }
+            }
+
+            if (preSelected is not null)
+            {
+                this.SelectedAgentSource = preSelected;
             }
         }
         catch (Exception)
@@ -120,7 +157,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
 
     private async Task CreateSessionAsync()
     {
-        if (this.SelectedAgentDefinition is null)
+        if (this.SelectedAgentSource is null)
         {
             return;
         }
@@ -128,38 +165,14 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         this.IsCreatingSession = true;
         try
         {
-            var agentDefinition = this.SelectedAgentDefinition.Definition;
-            var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(this.mainWindowViewModel);
-            
-            // Create agent chat
-            var agentChat = await AgentFactory.CreateAgentChatAsync(
-                new CreateAgentChatRequest
-                {
-                    AgentDefinition = agentDefinition,
-                    AgentServices = agentServices,
-                });
-
-            // Create agent session entity using the existing helper
-            var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-                this.mainWindowViewModel,
-                this.SelectedAgentDefinition.Entity,
-                agentChat.AgentSessionId);
-            
-            if (createdAgentSessionEntity is null)
+            if (this.SelectedAgentSource.IsManifest)
             {
-                // Dispose the agent chat if entity creation failed
-                await agentChat.DisposeAsync();
-                return;
+                await this.OpenManifestLaunchpadAsync(this.SelectedAgentSource.Entity);
             }
-
-            // Create the AgentSessionWorkspaceTabViewModel
-            var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(
-                this.mainWindowViewModel,
-                createdAgentSessionEntity,
-                agentChat);
-
-            // Replace this tab with the agent session tab
-            await this.tabService.ReplaceTabAsync(this, agentSessionTab);
+            else
+            {
+                await this.CreateDefinitionSessionAsync(this.SelectedAgentSource.Entity);
+            }
         }
         catch (Exception)
         {
@@ -171,10 +184,68 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         }
     }
 
-    public sealed class AgentDefinitionItem
+    private async Task OpenManifestLaunchpadAsync(SubscribedEntityViewModel manifestEntity)
+    {
+        var launchpadTab = new AgentManifestLaunchpadViewModel(
+            manifestEntity,
+            this.agentSessionShortcutContext,
+            this.openAgentSessionShortcutHandler,
+            this.mainWindowViewModel,
+            this.initialParameterValues)
+        {
+            Id = $"launchpad-{manifestEntity.EntityId}",
+            Title = manifestEntity.DisplayName,
+            DockRegion = this.DockRegion,
+            Entity = manifestEntity,
+            TabHeader = TabHeaderViewModel.WithIcon("rocket", manifestEntity.DisplayName),
+        };
+
+        await this.tabService.ReplaceTabAsync(this, launchpadTab);
+    }
+
+    private async Task CreateDefinitionSessionAsync(SubscribedEntityViewModel definitionEntity)
+    {
+        if (definitionEntity.Data is not JsonElement entityData
+            || !entityData.TryGetProperty("definition", out var definitionElement))
+        {
+            return;
+        }
+
+        var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(this.mainWindowViewModel);
+
+        var agentChat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                AgentServices = agentServices,
+            });
+
+        var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            this.mainWindowViewModel,
+            definitionEntity,
+            agentChat.AgentSessionId,
+            owningProfileEntityId: this.profileEntity.EntityId);
+
+        if (createdAgentSessionEntity is null)
+        {
+            await agentChat.DisposeAsync();
+            return;
+        }
+
+        var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(
+            this.mainWindowViewModel,
+            createdAgentSessionEntity,
+            agentChat);
+
+        await this.tabService.ReplaceTabAsync(this, agentSessionTab);
+    }
+
+    public sealed class AgentSourceItem
     {
         public required SubscribedEntityViewModel Entity { get; init; }
-        public required AgentDefinition Definition { get; init; }
         public required string DisplayName { get; init; }
+
+        public bool IsManifest => this.Entity.IsEntityType("agent-manifest");
     }
 }

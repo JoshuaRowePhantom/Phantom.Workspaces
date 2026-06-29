@@ -977,6 +977,80 @@ public sealed class SchemaPopulatorTests
             "environment did not round-trip");
     }
 
+    [Fact]
+    public async Task Populate_SeedsDefaultAgentManifestRelationshipForGitWorktreeEntityType()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var defaultRelationship = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .FirstOrDefault(entity =>
+                entity.TryGetProperty("entity-types", out var types)
+                && types.ValueKind == JsonValueKind.Array
+                && types.EnumerateArray().Any(t => t.GetString() == "default")
+                && entity.TryGetProperty("participants", out var participants)
+                && participants.TryGetProperty("applied-to", out var appliedTo)
+                && appliedTo.GetString() == "c7d8e9f0-a1b2-c3d4-e5f6-a7b8c9d0e1f2");
+
+        Assert.True(
+            defaultRelationship.ValueKind == JsonValueKind.Object,
+            "No default relationship entity found with applied-to == git-worktree entity-type id");
+        Assert.True(
+            defaultRelationship.TryGetProperty("participants", out var rel)
+            && rel.TryGetProperty("value", out var valueEl)
+            && string.Equals(valueEl.GetString(), "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0e", StringComparison.Ordinal),
+            "Default agent manifest for git-worktree entity-type is not github-copilot-agent-manifest");
+    }
+
+    [Fact]
+    public async Task Populate_SeedsDefaultAgentManifestRelationshipForGitEntityType()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        var defaultRelationship = exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .FirstOrDefault(entity =>
+                entity.TryGetProperty("entity-types", out var types)
+                && types.ValueKind == JsonValueKind.Array
+                && types.EnumerateArray().Any(t => t.GetString() == "default")
+                && entity.TryGetProperty("participants", out var participants)
+                && participants.TryGetProperty("applied-to", out var appliedTo)
+                && appliedTo.GetString() == "f5a6b7c8-d9e0-f1a2-b3c4-d5e6f7a8b9c0");
+
+        Assert.True(
+            defaultRelationship.ValueKind == JsonValueKind.Object,
+            "No default relationship entity found with applied-to == git entity-type id");
+        Assert.True(
+            defaultRelationship.TryGetProperty("participants", out var rel)
+            && rel.TryGetProperty("value", out var valueEl)
+            && string.Equals(valueEl.GetString(), "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0e", StringComparison.Ordinal),
+            "Default agent manifest for git entity-type is not github-copilot-agent-manifest");
+    }
+
     private static IDataAccessLayer CreateValidatedDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
     {
