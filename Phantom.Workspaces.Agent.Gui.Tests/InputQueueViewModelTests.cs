@@ -462,6 +462,68 @@ public sealed class InputQueueViewModelTests
         Assert.Null(type.GetProperty("Foreground"));
     }
 
+    [Fact]
+    public async Task SubmitToMostRecentQueue_AfterManualSubmitToExistingQueue_RoutesToManuallySubmittedQueue()
+    {
+        // Issue #302: Ctrl+Q should track which queue was most recently *used* (submitted to),
+        // not just which was most recently *created*.
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+
+        var q1 = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var q2 = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+
+        // Manually submit to q1 — q1 should now be the MRU even though q2 was created last.
+        viewModel.AppendToQueue(q1, "to q1");
+
+        viewModel.InputText = "ctrl-q target";
+        viewModel.SubmitToMostRecentQueue();
+
+        Assert.Equal(2, viewModel.Queues[1].Items.Count);
+        Assert.Empty(viewModel.Queues[2].Items);
+    }
+
+    [Fact]
+    public async Task SubmitToMostRecentQueue_AfterDeletingMruQueue_RoutesToNextMostRecentlyUsedQueue()
+    {
+        // Issue #302: after deleting the MRU queue, Ctrl+Q should route to the next most recently
+        // used surviving queue, not unconditionally to the default queue.
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+
+        var q1 = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        var q2 = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+
+        viewModel.AppendToQueue(q2, "to q2");
+        viewModel.AppendToQueue(q1, "to q1"); // q1 is now MRU
+
+        viewModel.RemoveInputQueue(q1);
+
+        viewModel.InputText = "after deletion";
+        viewModel.SubmitToMostRecentQueue();
+
+        // q2 is the only surviving non-default queue and should be the target.
+        // It already has "to q2" plus the newly routed "after deletion".
+        Assert.Equal(2, viewModel.Queues[1].Items.Count);
+        Assert.Equal("after deletion", viewModel.Queues[1].Items[1].Text);
+    }
+
+    [Fact]
+    public async Task SubmitToMostRecentQueue_WhenDefaultIsImmediate_AutoCreatesQueuedQueue()
+    {
+        // Issue #302 (additional behaviour): when the default queue is immediate and no non-default
+        // queue exists, Ctrl+Q should auto-create a queued queue and submit to it.
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.ImmediateInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "auto queued";
+
+        var submitted = viewModel.SubmitToMostRecentQueue();
+
+        Assert.True(submitted);
+        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.Empty(viewModel.InputText);
+    }
+
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
