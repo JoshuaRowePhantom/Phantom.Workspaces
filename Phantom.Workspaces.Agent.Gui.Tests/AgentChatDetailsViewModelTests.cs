@@ -1,14 +1,13 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class AgentChatDetailsViewModelTests
 {
-    [AvaloniaFact]
+    [Fact]
     public async Task IsReasoningVisible_Setter_UpdatesAgentState()
     {
         var chat = await CreateChatAsync();
@@ -23,7 +22,7 @@ public sealed class AgentChatDetailsViewModelTests
         Assert.True(details.IsReasoningVisible);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task IsReasoningVisible_ReflectsAgentToggle()
     {
         var chat = await CreateChatAsync();
@@ -36,7 +35,7 @@ public sealed class AgentChatDetailsViewModelTests
         Assert.True(details.IsReasoningVisible);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ModelMetadata_ExposesProviderModelAndConnectionTypeWithoutSecrets()
     {
         var chat = await CreateChatAsync(

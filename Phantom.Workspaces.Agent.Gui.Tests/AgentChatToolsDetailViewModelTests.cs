@@ -1,11 +1,10 @@
-using Phantom.Workspaces.Agent.Gui.ViewModels;
+﻿using Phantom.Workspaces.Agent.Gui.ViewModels;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class AgentChatToolsDetailViewModelTests
 {
-    [AvaloniaFact]
+    [Fact]
     public void SetRootItem_UsesClonedNodes_InsteadOfSharedNavigationInstances()
     {
         var detail = new AgentChatToolsDetailViewModel();
@@ -39,7 +38,7 @@ public sealed class AgentChatToolsDetailViewModelTests
         Assert.Equal(child.Id, renderedChild.Id);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void CloneNavigationItem_TopLevelItems_StartCollapsed()
     {
         var detail = new AgentChatToolsDetailViewModel();
@@ -56,7 +55,7 @@ public sealed class AgentChatToolsDetailViewModelTests
         Assert.False(renderedRoot.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void CloneNavigationItem_ChildItems_StartExpanded()
     {
         var detail = new AgentChatToolsDetailViewModel();

@@ -1,3 +1,4 @@
+﻿using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -20,7 +21,6 @@ using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
 namespace Phantom.Workspaces.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class MainWindowIntegrationTests
 {
     [AvaloniaFact(Timeout = 15_000)]
@@ -1158,6 +1158,24 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    private static Task WaitForLayoutAsync(Window window)
+    {
+        if (window.IsMeasureValid && window.IsArrangeValid)
+            return Task.CompletedTask;
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            if (!window.IsMeasureValid || !window.IsArrangeValid)
+                return;
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult();
+        };
+        window.LayoutUpdated += handler;
+        return tcs.Task;
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_CalledTwice_CurrentViewPopulationContainsEntitiesOnce()
     {
@@ -1268,7 +1286,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
@@ -1281,12 +1298,7 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        // Force layout passes: DockControl builds its visual tree during render ticks.
-        for (var i = 0; i < 10; i++)
-        {
-            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
-            Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-        }
+        await WaitForLayoutAsync(window);
 
         // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
         var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
@@ -1632,7 +1644,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1658,7 +1669,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1683,7 +1693,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1710,7 +1719,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Ctrl1_ActivatesFirstWorkspacePane()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1763,7 +1771,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_Ctrl2_ActivatesSecondWorkspacePane()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -1813,7 +1820,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlDigit_WithIndexOutOfRange_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2024,7 +2030,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2052,7 +2057,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2080,7 +2084,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF7_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
@@ -2113,7 +2116,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_CtrlF8_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
@@ -2143,7 +2145,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
     {
         // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
@@ -2187,7 +2188,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2202,9 +2202,7 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
-    [Trait("Category", "SlowLayout")]
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2282,7 +2280,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2309,7 +2306,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -2335,7 +2331,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    [Trait("Category", "SlowLayout")]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());

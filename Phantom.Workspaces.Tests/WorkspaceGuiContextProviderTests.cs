@@ -1,11 +1,10 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Avalonia.Headless.XUnit;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Microsoft.Agents.AI;
@@ -18,7 +17,6 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class WorkspaceGuiContextProviderTests
 {
     [AvaloniaFact(Timeout = 15_000)]

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -9,10 +9,9 @@ using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class ReviewWorktreeShortcutHandlerTests
 {
-    [AvaloniaFact]
+    [Fact]
     public void ShouldApplyTo_ReturnsTrueForReviewShortcutOnGitWorktreeEntity()
     {
         var handler = new ReviewWorktreeShortcutHandler();
@@ -22,7 +21,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         Assert.True(handler.ShouldApplyTo(vm, Shortcut.Review, entity));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void ShouldApplyTo_ReturnsFalseForOpenShortcutOnGitWorktreeEntity()
     {
         var handler = new ReviewWorktreeShortcutHandler();
@@ -32,7 +31,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         Assert.False(handler.ShouldApplyTo(vm, Shortcut.Open, entity));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public void ShouldApplyTo_ReturnsFalseForReviewShortcutOnOtherEntityType()
     {
         var handler = new ReviewWorktreeShortcutHandler();

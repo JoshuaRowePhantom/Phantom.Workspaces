@@ -1,4 +1,4 @@
-using AgentSchema;
+﻿using AgentSchema;
 using Avalonia.Input;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
@@ -8,7 +8,6 @@ using System.Collections.Generic;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class AgentChatInputQueueControlKeyTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -34,7 +33,7 @@ public sealed class AgentChatInputQueueControlKeyTests
                 AgentServices = agentServices,
             });
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HoldAllQueuesCommand_HoldsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -46,7 +45,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task UnholdAllQueuesCommand_UnholdsAllQueues()
     {
         await using var chat = await CreateChatAsync();
@@ -59,7 +58,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.All(chat.InputQueues, queue => Assert.False(queue.IsHeld));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ToggleHoldAllQueuesCommand_TogglesHoldState()
     {
         await using var chat = await CreateChatAsync();
@@ -71,7 +70,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.All(chat.InputQueues, queue => Assert.True(queue.IsHeld));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_CtrlShiftQ_WhenQueuesAreHeld_CreatesHeldQueue()
     {
         await using var chat = await CreateChatAsync();
@@ -87,7 +86,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Single(viewModel.Queues[1].Items);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Return_SubmitsToDefaultQueue()
     {
         await using var chat = await CreateChatAsync();
@@ -104,7 +103,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("hello from return", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_CtrlEnter_InNormalMode_SubmitsToCurrentQueue()
     {
         await using var chat = await CreateChatAsync();
@@ -122,7 +121,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("hello ctrl enter", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_CtrlEnter_InFormattedMode_Submits()
     {
         await using var chat = await CreateChatAsync();
@@ -139,7 +138,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(2, chat.History.Count);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_CtrlQ_WithEmptyComposer_ReturnsFalse()
     {
         await using var chat = await CreateChatAsync();
@@ -153,7 +152,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Empty(chat.History);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_CtrlQ_WithText_ReturnsTrue()
     {
         await using var chat = await CreateChatAsync();
@@ -205,7 +204,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Contains(nameof(viewModel.DefaultComposer.PlaceholderText), changedProperties);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Escape_WhenCompletionsVisible_DismissesCompletions()
     {
         await using var chat = await CreateChatAsync();
@@ -221,7 +220,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.False(composer.Completions.IsVisible);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Enter_WhenCompletionsVisible_DoesNotSubmit()
     {
         await using var chat = await CreateChatAsync();
@@ -237,7 +236,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Empty(chat.DefaultInputQueue.Items);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Tab_WhenCompletionsVisible_AndNothingSelected_SelectsFirst()
     {
         await using var chat = await CreateChatAsync();
@@ -256,7 +255,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.True(composer.Completions.IsVisible);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Tab_WhenItemSelected_AcceptsCompletionAndDismisses()
     {
         await using var chat = await CreateChatAsync();
@@ -310,7 +309,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(newText!.Length, newCaretIndex);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Down_WhenCompletionsVisible_SelectsNext()
     {
         await using var chat = await CreateChatAsync();
@@ -328,7 +327,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(0, composer.Completions.SelectedIndex);
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task HandleInputKey_Up_WhenCompletionsVisible_SelectsPrevious()
     {
         await using var chat = await CreateChatAsync();

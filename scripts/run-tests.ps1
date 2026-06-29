@@ -61,8 +61,6 @@ if ($Mode -eq 'fast')
 {
     $filterClauses += '(Category!=SlowGit)'
     $filterClauses += '(Category!=SlowDocker)'
-    # SlowLayout tests use window.Show() or ForceRenderTimerTick() which can hang in headless environments.
-    $filterClauses += '(Category!=SlowLayout)'
 }
 
 # WebView integration tests require a real desktop browser host (native WebView2) and are

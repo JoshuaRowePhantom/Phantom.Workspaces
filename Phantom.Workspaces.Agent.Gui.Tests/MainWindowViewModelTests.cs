@@ -1,5 +1,4 @@
-using AgentSchema;
-using Avalonia.Headless.XUnit;
+﻿using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
@@ -11,7 +10,6 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
-[Trait("Category", "SlowLayout")]
 public sealed class MainWindowViewModelTests
 {
     private static AgentDefinition CreateAgentDefinition()
@@ -29,7 +27,7 @@ public sealed class MainWindowViewModelTests
             }
             """);
 
-    [AvaloniaFact]
+    [Fact]
     public async Task Constructor_WithLoggingFlags_DoesNotThrow()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -44,7 +42,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task Constructor_WithSchemaPath_AppendsSchemaFileToDisplayName()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -61,7 +59,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ToggleReasoningVisibility_UpdatesAgentState()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -79,7 +77,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task ToggleReasoningVisibilityCommand_UpdatesAgentState()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -97,7 +95,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task RequestOpenLogWindowCommand_RaisesOpenLogWindowRequested()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -117,7 +115,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task CreateAsync_WithAgentSessionId_UsesRequestedSessionId()
     {
         var parseResult = new AgentDefinitionParseResult(
@@ -134,7 +132,7 @@ public sealed class MainWindowViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [Fact]
     public async Task CreateAsync_WithRestoredSession_LoadsPersistedMessagesIntoAgentHistory()
     {
         var sessionId = "gui-restored-history";
