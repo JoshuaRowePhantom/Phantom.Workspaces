@@ -8,9 +8,12 @@ public sealed class EntityCardViewResolver
         SubscribedEntityViewModel entity,
         string? requestedViewName = null)
     {
-        _ = entity;
-        return string.Equals(requestedViewName, RawViewName, System.StringComparison.Ordinal)
-            ? RawViewName
-            : RawViewName;
+        if (!string.Equals(requestedViewName, RawViewName, System.StringComparison.Ordinal)
+            && entity.IsEntityType("external"))
+        {
+            return "external";
+        }
+
+        return RawViewName;
     }
 }

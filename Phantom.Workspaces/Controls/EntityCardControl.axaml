@@ -103,7 +103,10 @@
                     </StackPanel>
                 </Grid>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
-                              Classes="workspace-field-editor-list" />
+                              Classes="workspace-field-editor-list"
+                              IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNull}}" />
+                <ContentControl Content="{Binding ExternalCard}"
+                                IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"
                          IsVisible="{Binding ShowRawJsonEditor}"
                          IsReadOnly="{Binding IsRawJsonReadOnly}"
