@@ -119,17 +119,17 @@ public sealed class RemoteTrustedExecutorTests
     }
 
     [AvaloniaFact]
-    public async Task RemoteTrustedExecutor_OpenStreamAsync_ThrowsNotImplemented()
+    public async Task RemoteTrustedExecutor_OpenStreamAsync_WrongInstance_Throws()
     {
         var executor = new RemoteTrustedExecutor("remote-a", "https://remote.example/");
         var request = new TrustedStreamRequest
         {
-            TargetClientInstance = "remote-a",
+            TargetClientInstance = "remote-b",
             StreamKind = "shell",
             OpenPayload = JsonDocument.Parse("{}").RootElement,
         };
 
-        await Assert.ThrowsAsync<NotImplementedException>(() => executor.OpenStreamAsync(request));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => executor.OpenStreamAsync(request));
     }
 
     private sealed class FakeHttpMessageHandler : HttpMessageHandler

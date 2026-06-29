@@ -55,5 +55,8 @@ public sealed class TrustedExecutorCompositionTests
             await System.Threading.Tasks.Task.CompletedTask;
             yield break;
         }
+
+        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 }

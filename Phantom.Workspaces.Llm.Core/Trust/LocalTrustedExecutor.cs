@@ -1,4 +1,7 @@
 using System.IO;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Llm.Shell;
 
 namespace Phantom.Workspaces.Llm.Trust;
@@ -38,6 +41,29 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
         ArgumentNullException.ThrowIfNull(kind);
         ArgumentNullException.ThrowIfNull(handler);
         _streamHandlers[kind] = handler;
+    }
+
+    /// <summary>
+    /// Runs the handler for <paramref name="streamKind"/> directly against the supplied
+    /// <paramref name="channel"/>, blocking until the handler completes (i.e. the stream lifetime).
+    /// This overload lets callers supply their own transport channel (e.g. a WebSocket channel)
+    /// without going through the <see cref="InMemoryStreamMessageChannelPair"/> indirection used by
+    /// <see cref="OpenStreamAsync"/>.
+    /// </summary>
+    public Task HandleStreamAsync(
+        string streamKind,
+        JsonElement openPayload,
+        IStreamMessageChannel channel,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(streamKind);
+        ArgumentNullException.ThrowIfNull(channel);
+
+        if (!_streamHandlers.TryGetValue(streamKind, out var handler))
+            throw new NotImplementedException(
+                $"No local handler is registered for stream kind '{streamKind}'.");
+
+        return handler.HandleAsync(openPayload, channel, ct);
     }
 
     /// <inheritdoc />

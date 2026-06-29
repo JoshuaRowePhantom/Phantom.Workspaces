@@ -40,6 +40,13 @@ public sealed class AgentRespondHandlerTests
                 yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
             }
         }
+
+        public Task HandleStreamAsync(
+            string streamKind,
+            string openPayloadJson,
+            Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
+            CancellationToken cancellationToken)
+            => Task.CompletedTask;
     }
 
     [Fact]

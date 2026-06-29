@@ -10,7 +10,8 @@ namespace Phantom.Workspaces.Llm.Trust;
 /// </summary>
 public sealed record ReverseFrame
 {
-    /// <summary>register (C→S), execute (S→C), update (C→S), complete (C→S), or cancel (either way).</summary>
+    /// <summary>register (C→S), execute (S→C), update (C→S), complete (C→S), cancel (either way),
+    /// open-stream (S→C), stream-data (both), or stream-close (both).</summary>
     public required string Type { get; init; }
 
     /// <summary>register: the claimed client instance id (a user-computer-profile entity id).</summary>
@@ -19,7 +20,7 @@ public sealed record ReverseFrame
     /// <summary>register: the agent definition names C will accept (optional allow-list).</summary>
     public IReadOnlyList<string>? AcceptedAgentDefinitionNames { get; init; }
 
-    /// <summary>execute/update/complete/cancel: correlates a turn across frames.</summary>
+    /// <summary>execute/update/complete/cancel/open-stream/stream-data/stream-close: correlates a turn or stream across frames.</summary>
     public string? CorrelationId { get; init; }
 
     /// <summary>execute: the agent request to run on C.</summary>
@@ -31,6 +32,18 @@ public sealed record ReverseFrame
     /// <summary>complete: a non-null error indicates the turn failed.</summary>
     public ReverseExecutionError? Error { get; init; }
 
+    /// <summary>open-stream: the stream kind (e.g. <c>"shell"</c>).</summary>
+    public string? StreamKind { get; init; }
+
+    /// <summary>open-stream: the kind-specific open payload, serialized as JSON.</summary>
+    public string? StreamOpenPayload { get; init; }
+
+    /// <summary>stream-data: the raw bytes of one stream frame payload.</summary>
+    public byte[]? StreamData { get; init; }
+
+    /// <summary>stream-data: the <see cref="Phantom.Workspaces.Llm.Shell.StreamFrameKind"/> byte (0=Data, 1=Control).</summary>
+    public byte? StreamFrameKindByte { get; init; }
+
     public static class Types
     {
         public const string Register = "register";
@@ -38,6 +51,15 @@ public sealed record ReverseFrame
         public const string Update = "update";
         public const string Complete = "complete";
         public const string Cancel = "cancel";
+
+        /// <summary>S→C: open a bidirectional byte stream on the connecting instance.</summary>
+        public const string OpenStream = "open-stream";
+
+        /// <summary>Both directions: relay one <see cref="Phantom.Workspaces.Llm.Shell.StreamFrame"/> over the reverse channel.</summary>
+        public const string StreamData = "stream-data";
+
+        /// <summary>Both directions: the byte stream is closed (no more data will follow for this correlation).</summary>
+        public const string StreamClose = "stream-close";
     }
 }
 

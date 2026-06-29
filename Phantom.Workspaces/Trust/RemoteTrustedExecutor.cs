@@ -89,6 +89,17 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
 
     /// <inheritdoc />
     public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
-        => throw new NotImplementedException(
-               "OpenStreamAsync over the remote HTTP tunnel is not yet implemented.");
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!this.CanExecute(request.TargetClientInstance))
+        {
+            throw new InvalidOperationException(
+                $"RemoteTrustedExecutor for '{this.clientInstance}' cannot open a stream on client instance "
+                + $"'{request.TargetClientInstance}'.");
+        }
+
+        var client = new WebRemoteStreamClient(this.endpoint, this.devTunnelAccessToken);
+        return client.OpenAsync(request, ct);
+    }
 }

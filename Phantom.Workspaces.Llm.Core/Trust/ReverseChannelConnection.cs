@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Shell;
 
 namespace Phantom.Workspaces.Llm.Trust;
 
@@ -19,6 +22,7 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
 {
     private readonly IReverseMessageChannel channel;
     private readonly ConcurrentDictionary<string, Turn> turns = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, StreamRelay> streams = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource closed = new();
     private readonly TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? readLoop;
@@ -84,6 +88,37 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
         }
     }
 
+    /// <inheritdoc />
+    public async Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var correlationId = Guid.NewGuid().ToString("N");
+        var relay = new StreamRelay(this.channel, correlationId);
+        this.streams[correlationId] = relay;
+
+        try
+        {
+            await this.channel.SendAsync(
+                new ReverseFrame
+                {
+                    Type = ReverseFrame.Types.OpenStream,
+                    CorrelationId = correlationId,
+                    StreamKind = request.StreamKind,
+                    StreamOpenPayload = JsonSerializer.Serialize(request.OpenPayload),
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            this.streams.TryRemove(correlationId, out _);
+            await relay.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        return new StreamMessageChannelStream(relay);
+    }
+
     private async Task ReadLoopAsync()
     {
         try
@@ -110,6 +145,20 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
                         && this.turns.TryGetValue(completeId, out var completeTurn):
                         completeTurn.Complete(frame.Error);
                         break;
+
+                    case ReverseFrame.Types.StreamData
+                        when frame.CorrelationId is { } dataId
+                        && this.streams.TryGetValue(dataId, out var dataRelay):
+                        dataRelay.Deliver(new StreamFrame(
+                            (StreamFrameKind)(frame.StreamFrameKindByte ?? 0),
+                            frame.StreamData ?? Array.Empty<byte>()));
+                        break;
+
+                    case ReverseFrame.Types.StreamClose
+                        when frame.CorrelationId is { } closeId
+                        && this.streams.TryRemove(closeId, out var closeRelay):
+                        closeRelay.CompleteInbound();
+                        break;
                 }
             }
         }
@@ -122,6 +171,12 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
             foreach (var turn in this.turns.Values)
             {
                 turn.Complete(new ReverseExecutionError("disconnected", "The reverse connection closed."));
+            }
+
+            // Close any open stream relays so callers see EOF.
+            foreach (var relay in this.streams.Values)
+            {
+                relay.CompleteInbound();
             }
 
             this.completion.TrySetResult();
@@ -178,6 +233,63 @@ public sealed class ReverseChannelConnection : IReverseConnection, IAsyncDisposa
             {
                 return null;
             }
+        }
+    }
+
+    /// <summary>
+    /// An <see cref="IStreamMessageChannel"/> that relays <see cref="StreamFrame"/>s over the reverse
+    /// channel as <c>stream-data</c> / <c>stream-close</c> <see cref="ReverseFrame"/>s. The server
+    /// registers one relay per open stream; the read loop delivers inbound frames to
+    /// <see cref="Deliver"/> and the caller uses <see cref="ReceiveAsync"/> to consume them.
+    /// </summary>
+    private sealed class StreamRelay : IStreamMessageChannel
+    {
+        private readonly IReverseMessageChannel reverseChannel;
+        private readonly string correlationId;
+        private readonly Channel<StreamFrame> inbound =
+            Channel.CreateUnbounded<StreamFrame>(new UnboundedChannelOptions { SingleReader = true });
+
+        public StreamRelay(IReverseMessageChannel reverseChannel, string correlationId)
+        {
+            this.reverseChannel = reverseChannel;
+            this.correlationId = correlationId;
+        }
+
+        /// <summary>Delivers an inbound frame received by the read loop.</summary>
+        public void Deliver(StreamFrame frame) => this.inbound.Writer.TryWrite(frame);
+
+        /// <summary>Signals that no more inbound frames will be delivered (stream closed by C).</summary>
+        public void CompleteInbound() => this.inbound.Writer.TryComplete();
+
+        public Task SendAsync(StreamFrame frame, CancellationToken cancellationToken)
+        {
+            return this.reverseChannel.SendAsync(
+                new ReverseFrame
+                {
+                    Type = ReverseFrame.Types.StreamData,
+                    CorrelationId = this.correlationId,
+                    StreamFrameKindByte = (byte)frame.Kind,
+                    StreamData = frame.Payload.ToArray(),
+                },
+                cancellationToken);
+        }
+
+        public async Task<StreamFrame?> ReceiveAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await this.inbound.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ChannelClosedException)
+            {
+                return null;
+            }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            this.inbound.Writer.TryComplete();
+            return ValueTask.CompletedTask;
         }
     }
 }

@@ -82,5 +82,12 @@ public sealed class ReverseExecutionClientHostTests
             await Task.CompletedTask;
             yield break;
         }
+
+        public Task HandleStreamAsync(
+            string streamKind,
+            string openPayloadJson,
+            Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
+            CancellationToken cancellationToken)
+            => Task.CompletedTask;
     }
 }

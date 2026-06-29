@@ -1,9 +1,12 @@
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Shell;
 
 namespace Phantom.Workspaces.Llm.Trust;
 
@@ -15,6 +18,14 @@ namespace Phantom.Workspaces.Llm.Trust;
 /// </summary>
 public sealed class LocalReverseExecutionHandler : IReverseExecutionHandler
 {
+    private readonly LocalTrustedExecutor localExecutor;
+
+    /// <summary>Creates a handler backed by the supplied executor (or a default one if <see langword="null"/>).</summary>
+    public LocalReverseExecutionHandler(LocalTrustedExecutor? localExecutor = null)
+    {
+        this.localExecutor = localExecutor ?? new LocalTrustedExecutor();
+    }
+
     /// <inheritdoc />
     public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
         RemoteAgentRequest request,
@@ -34,5 +45,20 @@ public sealed class LocalReverseExecutionHandler : IReverseExecutionHandler
         {
             yield return update;
         }
+    }
+
+    /// <inheritdoc />
+    public Task HandleStreamAsync(
+        string streamKind,
+        string openPayloadJson,
+        IStreamMessageChannel channel,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(streamKind);
+        ArgumentNullException.ThrowIfNull(openPayloadJson);
+        ArgumentNullException.ThrowIfNull(channel);
+
+        var openPayload = JsonDocument.Parse(openPayloadJson).RootElement;
+        return this.localExecutor.HandleStreamAsync(streamKind, openPayload, channel, cancellationToken);
     }
 }

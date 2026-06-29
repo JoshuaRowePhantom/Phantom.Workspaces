@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -38,6 +39,9 @@ public sealed class ReverseTrustedExecutionTests
                 yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
             }
         }
+
+        public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     [Fact]
@@ -114,7 +118,50 @@ public sealed class ReverseTrustedExecutionTests
     }
 
     [Fact]
-    public async Task ReverseTrustedExecutor_OpenStreamAsync_ThrowsNotImplemented()
+    public async Task ReverseTrustedExecutor_OpenStreamAsync_RelaysStreamThroughReverseChannel()
+    {
+        var pair = new InMemoryReverseMessageChannelPair();
+        var registry = new ReverseExecutionRegistry();
+        var connected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        registry.ConnectionsChanged += (_, _) =>
+        {
+            if (registry.IsConnected("computer-a")) connected.TrySetResult();
+        };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var acceptor = new ReverseConnectionAcceptor(registry);
+        _ = acceptor.AcceptAsync(pair.ServerEnd, cts.Token);
+
+        // Worker handler: echoes the open payload as a Data frame, then closes.
+        var workerHandler = new StreamEchoHandler();
+        var worker = new ReverseExecutionWorker(pair.ClientEnd, "computer-a", workerHandler);
+        _ = worker.RunAsync(cts.Token);
+
+        await connected.Task;
+
+        var executor = new ReverseTrustedExecutor(registry);
+        var request = new TrustedStreamRequest
+        {
+            TargetClientInstance = "computer-a",
+            StreamKind = "shell",
+            OpenPayload = System.Text.Json.JsonDocument.Parse("""{"echo":"hello"}""").RootElement,
+        };
+
+        var stream = await executor.OpenStreamAsync(request, cts.Token);
+        Assert.NotNull(stream);
+
+        var buffer = new byte[16];
+        var read = await stream.ReadAsync(buffer, cts.Token);
+        Assert.True(read > 0);
+        Assert.Equal("hello", System.Text.Encoding.UTF8.GetString(buffer, 0, read));
+
+        await stream.DisposeAsync();
+        cts.Cancel();
+    }
+
+    [Fact]
+    public async Task ReverseTrustedExecutor_OpenStreamAsync_Throws_WhenNotConnected()
     {
         var registry = new ReverseExecutionRegistry();
         var executor = new ReverseTrustedExecutor(registry);
@@ -125,6 +172,39 @@ public sealed class ReverseTrustedExecutionTests
             OpenPayload = System.Text.Json.JsonDocument.Parse("{}").RootElement,
         };
 
-        await Assert.ThrowsAsync<NotImplementedException>(() => executor.OpenStreamAsync(request));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => executor.OpenStreamAsync(request));
+    }
+
+    /// <summary>
+    /// A test <see cref="IReverseExecutionHandler"/> that, on a stream open, deserialises the
+    /// open payload, reads the <c>"echo"</c> field, sends its value as a Data frame, then closes.
+    /// </summary>
+    private sealed class StreamEchoHandler : IReverseExecutionHandler
+    {
+        public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
+            RemoteAgentRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            yield break;
+        }
+
+        public async Task HandleStreamAsync(
+            string streamKind,
+            string openPayloadJson,
+            Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
+            CancellationToken cancellationToken)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(openPayloadJson);
+            var echo = doc.RootElement.TryGetProperty("echo", out var v) ? v.GetString() ?? "" : "";
+            var bytes = System.Text.Encoding.UTF8.GetBytes(echo);
+
+            await channel.SendAsync(
+                new Phantom.Workspaces.Llm.Shell.StreamFrame(
+                    Phantom.Workspaces.Llm.Shell.StreamFrameKind.Data, bytes),
+                cancellationToken).ConfigureAwait(false);
+
+            await channel.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

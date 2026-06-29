@@ -64,6 +64,15 @@ public sealed class ReverseTrustedExecutor : ITrustedExecutor
 
     /// <inheritdoc />
     public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
-        => throw new NotImplementedException(
-               "OpenStreamAsync over the reverse tunnel is not yet implemented.");
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!this.registry.TryGetConnection(request.TargetClientInstance, out var connection))
+        {
+            throw new InvalidOperationException(
+                $"No reverse connection is available to open a stream on client instance '{request.TargetClientInstance}'.");
+        }
+
+        return connection.OpenStreamAsync(request, ct);
+    }
 }

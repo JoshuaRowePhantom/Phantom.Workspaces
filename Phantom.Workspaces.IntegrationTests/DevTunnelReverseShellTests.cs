@@ -214,5 +214,12 @@ public sealed class DevTunnelReverseShellTests : IClassFixture<InProcessDevTunne
                 yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
             }
         }
+
+        public Task HandleStreamAsync(
+            string streamKind,
+            string openPayloadJson,
+            Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
+            CancellationToken cancellationToken)
+            => Task.CompletedTask;
     }
 }

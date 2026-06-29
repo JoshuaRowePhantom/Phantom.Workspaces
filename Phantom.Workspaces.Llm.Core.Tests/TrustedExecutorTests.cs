@@ -171,6 +171,29 @@ public sealed class TrustedExecutorTests
     }
 
     [Fact]
+    public async Task LocalExecutor_HandleStreamAsync_UnknownKind_ThrowsNotImplemented()
+    {
+        var local = new LocalTrustedExecutor();
+        var pair = new InMemoryStreamMessageChannelPair();
+
+        Assert.Throws<NotImplementedException>(
+            () => local.HandleStreamAsync("unknown-kind", JsonDocument.Parse("{}").RootElement, pair.HostEnd).GetAwaiter().GetResult());
+    }
+
+    [Fact]
+    public async Task LocalExecutor_HandleStreamAsync_RegisteredHandler_InvokesHandler()
+    {
+        var local = new LocalTrustedExecutor();
+        var handler = new FakeLocalStreamHandler();
+        local.RegisterStreamHandler("shell", handler);
+
+        var pair = new InMemoryStreamMessageChannelPair();
+        await local.HandleStreamAsync("shell", JsonDocument.Parse("{}").RootElement, pair.HostEnd);
+
+        Assert.True(handler.WasInvoked);
+    }
+
+    [Fact]
     public async Task LocalExecutor_OpenStreamAsync_ShellKind_ReturnsStream()
     {
         var exitTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -41,6 +41,13 @@ public sealed class ReverseExecutionEndToEndTests
                 throw new InvalidOperationException("boom");
             }
         }
+
+        public Task HandleStreamAsync(
+            string streamKind,
+            string openPayloadJson,
+            Phantom.Workspaces.Llm.Shell.IStreamMessageChannel channel,
+            CancellationToken cancellationToken)
+            => Task.CompletedTask;
     }
 
     private static async Task<(ReverseExecutionRegistry Registry, IReverseConnection Connection, StubHandler Handler, CancellationTokenSource Cts)>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Microsoft.Extensions.AI;
@@ -29,6 +30,12 @@ public interface IReverseConnection
     /// <see cref="ChatResponseUpdate"/>s. Throws if the connection drops before the turn completes.
     /// </summary>
     IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(RemoteAgentRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a bidirectional byte stream on C and returns a duplex <see cref="System.IO.Stream"/>
+    /// that relays data over the reverse channel. Throws if the connection drops.
+    /// </summary>
+    Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken);
 }
 
 /// <summary>A point-in-time status of a connected instance, for the connection-status GUI.</summary>

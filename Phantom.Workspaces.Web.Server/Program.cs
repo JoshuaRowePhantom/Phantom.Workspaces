@@ -18,5 +18,6 @@ app.MapGet("/", () => $"Phantom.Workspaces.Web.Server ({typeof(WebServerMarker).
 app.MapWebDataAccessEndpoints();
 app.MapAgentEndpoints();
 app.MapReverseEndpoints(reverseExecutionRegistry);
+app.MapStreamEndpoints();
 
 app.Run();

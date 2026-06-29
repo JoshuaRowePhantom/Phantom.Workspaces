@@ -33,6 +33,9 @@ public sealed class ReverseExecutionRegistryTests
             await Task.Yield();
             yield return new ChatResponseUpdate(ChatRole.Assistant, "ok");
         }
+
+        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     [Fact]
