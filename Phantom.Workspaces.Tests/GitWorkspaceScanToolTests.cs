@@ -314,6 +314,71 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("rejected", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ExecuteAsync_FirstRun_ResultContentReportsAddedCount()
+    {
+        this.MakeRepo("project-a");
+        this.MakeRepo("project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new GitWorkspaceScanTool();
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("added: 2", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SecondRunSameRepos_ResultContentReportsUnchangedCount()
+    {
+        this.MakeRepo("project-a");
+        this.MakeRepo("project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new GitWorkspaceScanTool();
+        await tool.ExecuteAsync(this.Context(dataAccessLayer)); // first run
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer)); // second run — identical
+
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("unchanged: 2", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FirstRun_LogsAddedCount()
+    {
+        this.MakeRepo("project-a");
+        this.MakeRepo("project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var tool = new GitWorkspaceScanTool(logger: logger);
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("added", StringComparison.OrdinalIgnoreCase)
+            && e.Message.Contains("2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SecondRunSameRepos_LogsUnchangedCount()
+    {
+        this.MakeRepo("project-a");
+        this.MakeRepo("project-b");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var tool = new GitWorkspaceScanTool(logger: logger);
+        await tool.ExecuteAsync(this.Context(dataAccessLayer)); // first run
+
+        logger.Entries.Clear();
+        await tool.ExecuteAsync(this.Context(dataAccessLayer)); // second run — unchanged
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("unchanged", StringComparison.OrdinalIgnoreCase)
+            && e.Message.Contains("2", StringComparison.Ordinal));
+    }
+
     private static async Task<IDataAccessLayer> CreateProductionStyleDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
