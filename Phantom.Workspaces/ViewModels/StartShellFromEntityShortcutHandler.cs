@@ -22,10 +22,15 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
 {
+    private readonly ITrustedExecutorSelector? executorSelector;
     private readonly Func<string, string?, CancellationToken, Task<ITerminalSession>>? sessionOpener;
 
-    /// <summary>Production constructor.</summary>
-    public StartShellFromEntityShortcutHandler() { }
+    /// <summary>Production constructor: uses the supplied <see cref="ITrustedExecutorSelector"/> to route shell sessions to the correct executor.</summary>
+    public StartShellFromEntityShortcutHandler(ITrustedExecutorSelector executorSelector)
+    {
+        ArgumentNullException.ThrowIfNull(executorSelector);
+        this.executorSelector = executorSelector;
+    }
 
     /// <summary>Test constructor: injects a custom session-opener so no real PTY is spawned.</summary>
     internal StartShellFromEntityShortcutHandler(
@@ -207,14 +212,27 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
             OpenPayload = payloadDocument.RootElement.Clone(),
         };
 
-        return OpenLocalSessionAsync(request, ct);
+        return OpenStreamSessionAsync(request, targetClientInstance, ct);
     }
 
-    private static async Task<ITerminalSession> OpenLocalSessionAsync(
+    private Task<ITerminalSession> OpenStreamSessionAsync(
+        TrustedStreamRequest request,
+        string targetClientInstance,
+        CancellationToken ct)
+    {
+        var trustProfile = new TrustProfile
+        {
+            HostingWorkspacesClientInstances = [TrustProfile.WildcardClientInstance],
+        };
+        var executor = this.executorSelector!.SelectExecutor(trustProfile, targetClientInstance);
+        return OpenStreamSessionAsync(executor, request, ct);
+    }
+
+    private static async Task<ITerminalSession> OpenStreamSessionAsync(
+        ITrustedExecutor executor,
         TrustedStreamRequest request,
         CancellationToken ct)
     {
-        var executor = new LocalTrustedExecutor();
         var stream = await executor.OpenStreamAsync(request, ct);
         return new StreamTerminalSession(stream);
     }

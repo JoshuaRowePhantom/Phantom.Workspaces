@@ -91,7 +91,8 @@ public sealed class AgentSessionShortcutContext
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentDefinitionEntity,
         string agentSessionId,
-        IReadOnlyDictionary<string, string>? parameterValues = null)
+        IReadOnlyDictionary<string, string>? parameterValues = null,
+        EntityId? owningProfileEntityId = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var sessionObjectSimpleName = CreateSessionObjectSimpleName(
@@ -107,7 +108,8 @@ public sealed class AgentSessionShortcutContext
             agentDefinitionEntity.DisplayName,
             agentSessionId,
             agentSessionNames,
-            parameterValues);
+            parameterValues,
+            owningProfileEntityId);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {
@@ -180,7 +182,8 @@ public sealed class AgentSessionShortcutContext
         string agentDisplayName,
         string agentSessionId,
         IReadOnlyCollection<EntityName> agentSessionNames,
-        IReadOnlyDictionary<string, string>? parameterValues = null)
+        IReadOnlyDictionary<string, string>? parameterValues = null,
+        EntityId? owningProfileEntityId = null)
     {
         var entityId = new EntityId();
         var namesJson = string.Join(
@@ -190,6 +193,9 @@ public sealed class AgentSessionShortcutContext
         var parameterValuesPart = parameterValues is { Count: > 0 }
             ? $",\n  \"parameter-values\": {System.Text.Json.JsonSerializer.Serialize(parameterValues)}"
             : string.Empty;
+        var owningProfilePart = owningProfileEntityId is { } profileId && profileId != default
+            ? $",\n  \"owning-profile-entity-id\": \"{profileId}\""
+            : string.Empty;
         using var agentSessionDocument = JsonDocument.Parse(
             $$"""
             {
@@ -198,7 +204,7 @@ public sealed class AgentSessionShortcutContext
               "names": [{{namesJson}}],
               "display-name": { "default": "{{agentDisplayName}} session" },
               "agent-source-entity-id": "{{agentDefinitionEntityId}}",
-              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}
+              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}{{owningProfilePart}}
             }
             """);
         return agentSessionDocument.RootElement.Clone();

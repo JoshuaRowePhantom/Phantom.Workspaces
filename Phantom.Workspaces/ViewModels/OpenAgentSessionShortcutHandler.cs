@@ -14,17 +14,21 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.ViewModels;
 
 public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 {
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
+    private readonly ITrustedExecutorSelector trustedExecutorSelector;
 
     public OpenAgentSessionShortcutHandler(
-        AgentSessionShortcutContext agentSessionShortcutContext)
+        AgentSessionShortcutContext agentSessionShortcutContext,
+        ITrustedExecutorSelector trustedExecutorSelector)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
+        this.trustedExecutorSelector = trustedExecutorSelector;
     }
 
     public override bool ShouldApplyTo(
@@ -195,7 +199,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             return null;
         }
 
-        var agentChat = await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
+        var agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
         var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
 
         agent.ConfigureSlashCommands(
@@ -239,6 +243,52 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         }
 
         return (agent, loggerFactory);
+    }
+
+    private async Task<AgentChat> CreateAgentChatAsync(
+        CreateAgentChatRequest createAgentChatRequest,
+        JsonElement agentSessionEntityData,
+        MainWindowViewModel mainWindowViewModel)
+    {
+        if (createAgentChatRequest.AgentDefinition is not { } agentDefinition)
+        {
+            // Manifest-based sessions are always local — TrustedExecutionRequest requires AgentDefinition.
+            return await AgentFactory.CreateAgentChatAsync(createAgentChatRequest);
+        }
+
+        var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
+
+        var targetClientInstance = (owningProfileEntityId != default && owningProfileEntityId != localProfileEntityId)
+            ? owningProfileEntityId.ToString()
+            : TrustProfile.LocalClientInstance;
+
+        var trustProfile = TrustProfileComposer.Finalize(new TrustProfileDefinition
+        {
+            HostingWorkspacesClientInstances = [targetClientInstance],
+        });
+
+        var executor = this.trustedExecutorSelector.SelectExecutor(trustProfile, targetClientInstance);
+        return await executor.CreateAgentChatAsync(new TrustedExecutionRequest
+        {
+            AgentDefinition = agentDefinition,
+            TrustProfile = trustProfile,
+            TargetClientInstance = targetClientInstance,
+            AgentSessionId = createAgentChatRequest.AgentSessionId,
+            AgentServices = createAgentChatRequest.AgentServices,
+        });
+    }
+
+    private static EntityId ReadOwningProfileEntityId(JsonElement entityData)
+    {
+        if (entityData.TryGetProperty("owning-profile-entity-id", out var element)
+            && element.ValueKind == JsonValueKind.String
+            && Guid.TryParse(element.GetString(), out var guid))
+        {
+            return new EntityId(guid);
+        }
+
+        return default;
     }
 
     public AgentViewModel BuildAgentViewModelPublic(
