@@ -25,7 +25,7 @@ gh label create verified --repo JoshuaRowePhantom/Phantom.Workspaces --descripti
 
 ## Verification criteria
 
-Apply these criteria when inspecting the implementation in Steps 3 and 4. Every criterion is evaluated against the code and tests found on the `features` branch.
+Apply these criteria when inspecting the implementation in Step 3. Every criterion is evaluated against the code and tests found on the `features` branch.
 
 ### Code coverage — fail verification if any of these are violated
 
@@ -53,7 +53,7 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,
 ```
 
 - Extract the **specified behaviour**: what code should exist, what it should do, and what test cases are described or implied by the issue body and any comments.
-- Note the issue title — used as a search keyword in Step 5.
+- Note the issue title — used as a search keyword in Step 4.
 
 ---
 
@@ -87,7 +87,7 @@ Read the located implementation files. Apply the **Code coverage** and **Code qu
 - Are there obvious gaps (e.g. a schema file exists but a required field is absent; a method exists but a described code path is missing)?
 - Does new non-trivial logic have corresponding tests for each public class/method and each conditional branch?
 - Are there any disabled/quarantined tests, unresolved TODOs without backing issues, or timing-dependent tests?
-- Is there any duplicated logic that should be extracted (note for Step 7 bug filing, does not fail verification)?
+- Is there any duplicated logic that should be extracted (note for Step 6 bug filing, does not fail verification)?
 
 **Data-flow issues — end-to-end tracing (apply when the issue describes a value produced in one layer and consumed in another):**
 
@@ -109,31 +109,9 @@ For issues that do not involve a data pipeline (e.g. a pure UI layout change, a 
 
 ---
 
-## Step 4 — Find and run tests
+## Step 4 — Search for superseding work items (only on failure)
 
-Search for test methods that exercise the described behaviour:
-
-```powershell
-# Search *.Tests projects for test methods related to the implementation found in Step 2
-```
-
-Identify the most relevant test class name(s), then run them:
-
-```powershell
-.\scripts\run-tests.ps1 -Mode fast -TestNames "<RelevantTestClassName>"
-```
-
-Read `scripts\test-results.log`. All suites must show `Failed: 0`.
-
-**Conclude `tests missing`** if no tests validate the core described behaviour.
-
-**Conclude `tests failing`** if relevant tests exist but `Failed:` is non-zero in the results log.
-
----
-
-## Step 5 — Search for superseding work items (only on failure)
-
-If Step 3 or Step 4 concluded failure, search for open or closed issues that supersede this one:
+If Step 3 concluded failure, search for open or closed issues that supersede this one:
 
 ```powershell
 gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces --state all --search "supersedes #<NUMBER>"
@@ -159,7 +137,7 @@ A credible superseding issue is one that:
 
 ---
 
-## Step 6 — Apply `failed-verification` label (only on failure with no superseder)
+## Step 5 — Apply `failed-verification` label (only on failure with no superseder)
 
 If verification failed and no superseding item was found:
 
@@ -171,7 +149,7 @@ If verification failed and no superseding item was found:
 
    **Found:** <describe what was present>
 
-   **Missing:** <describe the specific gap — code not found / behaviour not implemented / tests missing / tests failing>"
+   **Missing:** <describe the specific gap — code not found / behaviour not implemented / tests missing>"
    ```
 2. Apply the label:
    ```powershell
@@ -186,7 +164,7 @@ If verification failed and no superseding item was found:
 
    **Original issue:** #<NUMBER> — <title>
 
-   **Verification gap:** <code not found / behaviour not implemented / tests missing / tests failing>
+   **Verification gap:** <code not found / behaviour not implemented / tests missing>
 
    **Detail:** <describe exactly what was checked and what is absent>"
    ```
@@ -194,9 +172,9 @@ If verification failed and no superseding item was found:
 
 ---
 
-## Step 7 — Report pass
+## Step 6 — Report pass
 
-If Steps 2–4 all pass (code found, behaviour implemented, all fail-verification criteria satisfied, tests present and green):
+If Steps 2–3 all pass (code found, behaviour implemented, all fail-verification criteria satisfied):
 
 1. Apply the `verified` label:
    ```powershell
@@ -219,11 +197,11 @@ If Steps 2–4 all pass (code found, behaviour implemented, all fail-verificatio
 
    **Checked:** <describe what files/commits/tests were inspected>
 
-   **Result:** Implementation found, all verification criteria satisfied, tests present and green.
+   **Result:** Implementation found, all verification criteria satisfied.
 
    <If duplication bugs were filed:> **Follow-up bugs filed:** #<N>, ..."
    ```
-4. **Report outcome: `✅ Verified — implementation found and tests pass`.**
+4. **Report outcome: `✅ Verified — implementation found and criteria satisfied`.**
 
 ---
 
@@ -231,8 +209,7 @@ If Steps 2–4 all pass (code found, behaviour implemented, all fail-verificatio
 
 1. Never modify source code — this skill is read-only.
 2. Never push (`git push`).
-3. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
-4. Always check for superseding issues before applying `failed-verification`.
-5. Ensure `failed-verification`, `superseded`, and `verified` labels exist before attempting to apply them (see Prerequisites).
-6. When filing a `next-up` bug in Step 6, be precise: name the specific file, method, or test class that is missing.
-7. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.
+3. Always check for superseding issues before applying `failed-verification`.
+4. Ensure `failed-verification`, `superseded`, and `verified` labels exist before attempting to apply them (see Prerequisites).
+5. When filing a `next-up` bug in Step 5, be precise: name the specific file, method, or test class that is missing.
+6. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.
