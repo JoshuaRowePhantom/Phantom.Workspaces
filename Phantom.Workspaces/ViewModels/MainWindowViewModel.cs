@@ -484,6 +484,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
+            new Tools.RunVsCodeTunnelTool(),
             new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
             new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);

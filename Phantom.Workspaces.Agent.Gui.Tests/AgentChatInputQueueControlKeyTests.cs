@@ -274,6 +274,41 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("/working-directory", composer.InputText);
     }
 
+    [AvaloniaFact]
+    public async Task HandleInputKey_AcceptingCompletion_SetsNewText()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(composer, Key.Tab, KeyModifiers.None, caretLine: 0, out var newText, out _);
+
+        Assert.Equal("/working-directory", newText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_AcceptingCompletion_MovesCursorToEnd()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(composer, Key.Tab, KeyModifiers.None, caretLine: 0, out var newText, out var newCaretIndex);
+
+        Assert.NotNull(newText);
+        Assert.Equal(newText!.Length, newCaretIndex);
+    }
+
     [Fact]
     public async Task HandleInputKey_Down_WhenCompletionsVisible_SelectsNext()
     {
