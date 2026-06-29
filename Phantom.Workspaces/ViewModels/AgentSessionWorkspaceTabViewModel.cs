@@ -27,15 +27,11 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     private bool wasRunning;
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
-    private readonly AgentRunningIndicatorTabHeaderItemViewModel agentRunningIndicator;
+    private readonly StatusItem tabStatus = new();
     private RunningAgentChatLease? lease;
 
     public AgentSessionWorkspaceTabViewModel()
     {
-        this.agentRunningIndicator = new AgentRunningIndicatorTabHeaderItemViewModel();
-        var header = new TabHeaderViewModel { Title = string.Empty };
-        header.Items.Add(this.agentRunningIndicator);
-        this.TabHeader = header;
     }
 
     public AgentTabState State
@@ -69,6 +65,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
 
+    public override IStatusItem TabStatus => this.tabStatus;
+
     public void RaiseAltKeyStateChanged(bool isAltHeld)
     {
         this.AltKeyStateChanged?.Invoke(this, isAltHeld);
@@ -92,7 +90,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
         agentViewModel.AltKeyStateChanged += this.OnAgentAltKeyStateChanged;
         agentViewModel.GoToTabAtIndexRequested += this.OnAgentGoToTabAtIndexRequested;
-        this.agentRunningIndicator.IsRunning = agentViewModel.IsChatRunning;
+        this.tabStatus.RunningStatus = agentViewModel.IsChatRunning ? RunningStatus.Running : RunningStatus.Idle;
         this.wasRunning = agentViewModel.IsChatRunning;
         this.State = AgentTabState.Ready;
     }
@@ -140,7 +138,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         }
 
         var isRunning = vm.IsChatRunning;
-        this.agentRunningIndicator.IsRunning = isRunning;
+        this.tabStatus.RunningStatus = isRunning ? RunningStatus.Running : RunningStatus.Idle;
 
         if (isRunning && !this.wasRunning)
         {

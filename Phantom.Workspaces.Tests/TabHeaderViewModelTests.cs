@@ -64,40 +64,40 @@ public sealed class TabHeaderViewModelTests
         Assert.True(raised);
     }
 
-    // ── AgentSessionWorkspaceTabViewModel – always has agent indicator ───────
+    // ── AgentSessionWorkspaceTabViewModel – TabStatus tracks running state ────
 
     [Fact]
-    public void AgentSessionTab_TabHeader_AlwaysContainsAgentRunningIndicator()
+    public void AgentSessionTab_TabStatus_IsNotNull()
     {
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
 
-        var indicator = tab.TabHeader!.Items
-            .OfType<AgentRunningIndicatorTabHeaderItemViewModel>()
-            .FirstOrDefault();
-
-        Assert.NotNull(indicator);
+        Assert.NotNull(tab.TabStatus);
     }
 
     [Fact]
-    public void AgentSessionTab_AgentRunningIndicator_IsNotRunning_Initially()
+    public void AgentSessionTab_TabStatus_IsIdle_Initially()
     {
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
 
-        var indicator = tab.TabHeader!.Items
-            .OfType<AgentRunningIndicatorTabHeaderItemViewModel>()
-            .Single();
-
-        Assert.False(indicator.IsRunning);
+        Assert.Equal(RunningStatus.Idle, tab.TabStatus!.RunningStatus);
     }
 
     [Fact]
-    public void AgentSessionTab_EffectiveTabHeader_ContainsAgentRunningIndicator()
+    public void AgentSessionTab_TabHeader_IsNull_ByDefault()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        Assert.Null(tab.TabHeader);
+    }
+
+    [Fact]
+    public void AgentSessionTab_EffectiveTabHeader_ContainsStatusIndicator()
     {
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
         var doc = new WorkspaceDocument(tab);
 
         var indicator = doc.EffectiveTabHeader.Items
-            .OfType<AgentRunningIndicatorTabHeaderItemViewModel>()
+            .OfType<StatusTabHeaderItemViewModel>()
             .FirstOrDefault();
 
         Assert.NotNull(indicator);
@@ -143,23 +143,23 @@ public sealed class TabHeaderViewModelTests
         Assert.DoesNotContain("!", doc.Title);
     }
 
-    // ── WorkspaceDocument – EffectiveTabHeader always contains the indicator ─
+    // ── WorkspaceDocument – EffectiveTabHeader always contains the status indicator ─
 
     [Fact]
-    public void WorkspaceDocument_EffectiveTabHeader_ContainsNotificationIndicatorItem()
+    public void WorkspaceDocument_EffectiveTabHeader_ContainsStatusIndicatorItem()
     {
         var tab = new EntityWorkspaceTabViewModel { Id = "t2", Title = "My Tab" };
         var doc = new WorkspaceDocument(tab);
 
         var indicator = doc.EffectiveTabHeader.Items
-            .OfType<NotificationIndicatorTabHeaderItemViewModel>()
+            .OfType<StatusTabHeaderItemViewModel>()
             .FirstOrDefault();
 
         Assert.NotNull(indicator);
     }
 
     [Fact]
-    public void WorkspaceDocument_HasUnreadNotification_SetToTrue_SetsHasUnreadOnIndicator()
+    public void WorkspaceDocument_HasUnreadNotification_SetToTrue_SetsErrorStatusOnStatusIndicator()
     {
         var tab = new EntityWorkspaceTabViewModel { Id = "t3", Title = "My Tab" };
         var doc = new WorkspaceDocument(tab);
@@ -167,13 +167,13 @@ public sealed class TabHeaderViewModelTests
         doc.HasUnreadNotification = true;
 
         var indicator = doc.EffectiveTabHeader.Items
-            .OfType<NotificationIndicatorTabHeaderItemViewModel>()
+            .OfType<StatusTabHeaderItemViewModel>()
             .Single();
-        Assert.True(indicator.HasUnread);
+        Assert.Equal(ErrorStatus.Error, indicator.Status.ErrorStatus);
     }
 
     [Fact]
-    public void WorkspaceDocument_HasUnreadNotification_SetToFalse_ClearsHasUnreadOnIndicator()
+    public void WorkspaceDocument_HasUnreadNotification_SetToFalse_ClearsErrorStatusOnStatusIndicator()
     {
         var tab = new EntityWorkspaceTabViewModel { Id = "t4", Title = "My Tab" };
         var doc = new WorkspaceDocument(tab);
@@ -182,9 +182,9 @@ public sealed class TabHeaderViewModelTests
         doc.HasUnreadNotification = false;
 
         var indicator = doc.EffectiveTabHeader.Items
-            .OfType<NotificationIndicatorTabHeaderItemViewModel>()
+            .OfType<StatusTabHeaderItemViewModel>()
             .Single();
-        Assert.False(indicator.HasUnread);
+        Assert.Equal(ErrorStatus.None, indicator.Status.ErrorStatus);
     }
 
     // ── WorkspaceDocument – icon items are preserved from TabHeader ──────────
