@@ -47,7 +47,7 @@
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.TabHeader.Icon.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
         <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Opacity" Value="0.4" />
     </Style>
 
     <Style Selector="TextBlock.agent-tab-header-brain.thinking">
