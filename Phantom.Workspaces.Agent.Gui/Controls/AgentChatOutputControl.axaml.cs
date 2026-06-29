@@ -224,10 +224,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             this.browser.EndBatch();
 
             // Scroll to bottom and enable auto-scroll after initial content load.
+            // If AutoScrollEnabled was already true the ChatOutputHtmlModel constructor
+            // already called ScrollToBottom(); we only need an explicit scroll when
+            // AutoScrollEnabled was false (in which case the constructor's scroll was
+            // suppressed by the guard in ScrollToBottom()).
+            bool wasAutoScrollDisabled = !vm.AutoScrollEnabled;
             this.suppressScrollOnEnable = true;
             vm.AutoScrollEnabled = true;
             this.suppressScrollOnEnable = false;
-            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+            if (wasAutoScrollDisabled)
+            {
+                this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+            }
         }
     }
 
