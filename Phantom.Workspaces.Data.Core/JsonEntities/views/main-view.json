@@ -52,6 +52,13 @@
     {
       "view-entity-id": [
         "views",
+        "git-workspaces"
+      ],
+      "disposition": "expanded"
+    },
+    {
+      "view-entity-id": [
+        "views",
         "tools"
       ],
       "disposition": "expanded"

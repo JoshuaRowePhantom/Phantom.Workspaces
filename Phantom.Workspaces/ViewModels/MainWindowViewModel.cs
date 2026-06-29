@@ -3194,6 +3194,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (e.Dockable is WorkspaceDocument doc)
         {
             this.notificationService.MarkRead(doc.Id);
+            Dispatcher.UIThread.Post(
+                () => doc.TabViewModel.RequestFocusPrimaryControl(),
+                Avalonia.Threading.DispatcherPriority.Input);
         }
     }
 

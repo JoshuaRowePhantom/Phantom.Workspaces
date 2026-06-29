@@ -76,6 +76,28 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task InMemoryRepository_SeedsMainViewWithGitWorkspacesSubView()
+    {
+        var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
+        var snapshots = await repository.ExportEntitySnapshotsAsync();
+        var mainViewSnapshot = Assert.Single(
+            snapshots,
+            snapshot => ReadEntityNames(snapshot.Value.Data).Any(
+                static entityName => entityName.Components.Length == 2
+                    && string.Equals(entityName.Components[0], "views", StringComparison.Ordinal)
+                    && string.Equals(entityName.Components[1], "main", StringComparison.Ordinal)));
+        var data = mainViewSnapshot.Value.Data;
+        Assert.True(data.HasValue);
+        Assert.True(data!.Value.TryGetProperty("sub-views", out var subViews));
+        Assert.Contains(subViews.EnumerateArray(), subView =>
+            subView.TryGetProperty("view-entity-id", out var id)
+            && id.ValueKind == JsonValueKind.Array
+            && id.GetArrayLength() == 2
+            && id[0].GetString() == "views"
+            && id[1].GetString() == "git-workspaces");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void MainWindowViewModel_ThemeSelectionIsDataDriven()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());

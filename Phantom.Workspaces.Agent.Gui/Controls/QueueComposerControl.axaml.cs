@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using System;
 using System.IO;
 using System.Reflection;
 
@@ -12,6 +13,8 @@ namespace Phantom.Workspaces.Agent.Gui.Controls;
 
 public partial class QueueComposerControl : UserControl
 {
+    private QueueComposerViewModel? subscribedViewModel;
+
     public QueueComposerControl()
     {
         this.InitializeComponent();
@@ -27,6 +30,26 @@ public partial class QueueComposerControl : UserControl
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
             handledEventsToo: true);
         DragDrop.AddDropHandler(this.InputBox, this.InputBox_Drop);
+        this.DataContextChanged += this.OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (this.subscribedViewModel is not null)
+        {
+            this.subscribedViewModel.FocusPrimaryControlRequested -= this.OnFocusPrimaryControlRequested;
+        }
+
+        this.subscribedViewModel = this.DataContext as QueueComposerViewModel;
+        if (this.subscribedViewModel is not null)
+        {
+            this.subscribedViewModel.FocusPrimaryControlRequested += this.OnFocusPrimaryControlRequested;
+        }
+    }
+
+    private void OnFocusPrimaryControlRequested(object? sender, EventArgs e)
+    {
+        this.InputBox.Focus();
     }
 
     private void InputBox_KeyDown(object? sender, KeyEventArgs e)
