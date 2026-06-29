@@ -41,7 +41,7 @@ public sealed class AgentChatStatusLineStylesTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void AgentTabHeaderBrain_DefaultOpacity_IsZero()
+    public void AgentTabHeaderBrain_DefaultOpacity_IsMuted()
     {
         var styles = LoadAgentChatStatusLineStyles();
 
@@ -55,7 +55,7 @@ public sealed class AgentChatStatusLineStylesTests
         host.Measure(new Size(1000, 1000));
         host.Arrange(new Rect(0, 0, 1000, 1000));
 
-        Assert.Equal(0.0, textBlock.Opacity);
+        Assert.Equal(0.4, textBlock.Opacity);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
