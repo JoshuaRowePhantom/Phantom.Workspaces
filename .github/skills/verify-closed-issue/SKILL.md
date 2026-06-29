@@ -11,14 +11,38 @@ Inspect the `features` branch to confirm that a closed GitHub issue has a correc
 
 ## Prerequisites — ensure labels exist
 
-Before running, confirm both labels exist in the repository. Create any that are missing:
+Before running, confirm all required labels exist in the repository. Create any that are missing:
 
 ```powershell
 gh label create failed-verification --repo JoshuaRowePhantom/Phantom.Workspaces --description "Bug failed automated verification" --color "d93f0b"
 gh label create superseded --repo JoshuaRowePhantom/Phantom.Workspaces --description "Issue superseded by a later work item" --color "cfd3d7"
+gh label create verified --repo JoshuaRowePhantom/Phantom.Workspaces --description "Issue implementation verified" --color "0e8a16"
 ```
 
 (These commands are idempotent — they fail silently if the label already exists.)
+
+---
+
+## Verification criteria
+
+Apply these criteria when inspecting the implementation in Steps 3 and 4. Every criterion is evaluated against the code and tests found on the `features` branch.
+
+### Code coverage — fail verification if any of these are violated
+
+- **Feature coverage:** Every feature described in the issue must be represented by code. If the issue describes a behaviour and no code in the repository implements that behaviour, the issue fails verification.
+- **Test coverage of described cases:** Every test described or implied in the issue must be written. If the issue lists specific test cases, each must exist as an actual test. If the issue describes conditional behaviour, each branch must be covered by a test.
+- **Test coverage of non-trivial logic:** Every public class and every public method must almost always have at least one test, except trivial record types, auto-properties, and pure accessors. Missing test coverage on non-trivial logic is a verification failure.
+- **Branch coverage:** Every conditional branch in new code should be represented by a test. Missing branch coverage on newly implemented logic is a verification failure.
+
+### Code quality — fail verification if any of these are present
+
+- **Disabled or quarantined tests:** No tests introduced as part of the implementation may be marked `[Skip]`, `xunit.skip`, commented out, or placed in a category that is excluded from the standard fast test run. Such tests indicate untested code.
+- **Unresolved TODOs:** No unresolved TODOs in new code unless each TODO is backed by a filed open issue. A TODO without a corresponding open issue is a verification failure. If TODOs exist and are backed by issues, note the issue numbers in the verification comment.
+- **Timing-dependent tests:** No tests that use `Task.Delay`, `Thread.Sleep`, fixed timeouts, or polling loops as their primary synchronization mechanism. Tests must succeed deterministically using event-driven or state-driven synchronization.
+
+### Code quality — file a bug but do not fail verification
+
+- **Code duplication:** If the implementation introduces duplicated logic that should be extracted into a shared helper, file a new bug to track the refactor but do not fail verification on this basis alone.
 
 ---
 
@@ -56,13 +80,32 @@ git --no-pager log features --grep="#<NUMBER>" --oneline
 
 ## Step 3 — Verify behaviour
 
-Read the located implementation files. Assess:
+Read the located implementation files. Apply the **Code coverage** and **Code quality** criteria from the [Verification criteria](#verification-criteria) section above. Assess:
 
-- Does it implement the behaviour described in the issue?
+- Does it implement every feature described in the issue?
 - Are key fields, logic branches, and edge cases present?
 - Are there obvious gaps (e.g. a schema file exists but a required field is absent; a method exists but a described code path is missing)?
+- Does new non-trivial logic have corresponding tests for each public class/method and each conditional branch?
+- Are there any disabled/quarantined tests, unresolved TODOs without backing issues, or timing-dependent tests?
+- Is there any duplicated logic that should be extracted (note for Step 7 bug filing, does not fail verification)?
+
+**Data-flow issues — end-to-end tracing (apply when the issue describes a value produced in one layer and consumed in another):**
+
+Determine whether the issue involves a data pipeline (e.g. a value set on a model object, written to storage, read back, and displayed). If it does, trace every link in the chain explicitly:
+
+1. **Produced** — identify where the value is set or created (e.g. where is `Timestamp` assigned on a message object?).
+2. **Persisted** — confirm the value is written to storage (database schema includes the field; serialisation code writes it).
+3. **Reloaded** — confirm the value is read back from storage and mapped onto the in-memory model.
+4. **Forwarded** — confirm the value is passed through every intermediate layer to the output/rendering layer.
+5. **Rendered** — confirm the rendering layer actually reads and uses the value (not just that rendering code exists).
+
+If any link in the chain is absent or disconnected, **conclude `behaviour not implemented`** — do not declare success because code that looks relevant happens to exist nearby.
+
+For issues that do not involve a data pipeline (e.g. a pure UI layout change, a refactor, an API surface addition with no storage), skip the data-flow trace and apply only the general assessment above.
 
 **Conclude `behaviour not implemented`** if significant described behaviour is absent.
+
+**Conclude `criteria violation`** if any fail-verification criterion from the Verification criteria section is triggered. List every violation found.
 
 ---
 
@@ -153,10 +196,34 @@ If verification failed and no superseding item was found:
 
 ## Step 7 — Report pass
 
-If Steps 2–4 all pass (code found, behaviour implemented, tests present and green):
+If Steps 2–4 all pass (code found, behaviour implemented, all fail-verification criteria satisfied, tests present and green):
 
-- Add no labels.
-- **Report outcome: `✅ Verified — implementation found and tests pass`.**
+1. Apply the `verified` label:
+   ```powershell
+   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "verified"
+   ```
+2. If any code-duplication instances were noted in Step 3, file a new bug for each:
+   ```powershell
+   gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
+     --title "Refactor: duplicated logic in <description>" `
+     --label "bug,next-up" `
+     --body "## Code duplication
+
+   **Found during verification of:** #<NUMBER>
+
+   **Detail:** <describe exactly which files/methods contain the duplicated logic and what should be extracted>"
+   ```
+3. Post a comment summarising what was verified and which follow-up bugs were filed (if any):
+   ```powershell
+   gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Verification passed
+
+   **Checked:** <describe what files/commits/tests were inspected>
+
+   **Result:** Implementation found, all verification criteria satisfied, tests present and green.
+
+   <If duplication bugs were filed:> **Follow-up bugs filed:** #<N>, ..."
+   ```
+4. **Report outcome: `✅ Verified — implementation found and tests pass`.**
 
 ---
 
@@ -166,6 +233,6 @@ If Steps 2–4 all pass (code found, behaviour implemented, tests present and gr
 2. Never push (`git push`).
 3. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
 4. Always check for superseding issues before applying `failed-verification`.
-5. Ensure `failed-verification` and `superseded` labels exist before attempting to apply them (see Prerequisites).
+5. Ensure `failed-verification`, `superseded`, and `verified` labels exist before attempting to apply them (see Prerequisites).
 6. When filing a `next-up` bug in Step 6, be precise: name the specific file, method, or test class that is missing.
 7. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.
