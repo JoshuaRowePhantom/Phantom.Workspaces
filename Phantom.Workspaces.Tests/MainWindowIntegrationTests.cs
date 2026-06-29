@@ -2460,6 +2460,93 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceBId = new EntityId("b1190319-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceBId,
+            """
+            {
+              "entity-id": "b1190319-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-b"]],
+              "display-name": { "default": "Notif Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        // Select pane B and open a tab there (no WorkspaceId hint in TabDescriptor)
+        var paneB = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabInPaneB = new AgentSessionWorkspaceTabViewModel { Id = "notif-cross-pane-tab", Title = "Tab in Pane B" };
+        await viewModel.OpenTabAsync(tabInPaneB);
+
+        // Switch back to pane A so the notification for tabInPaneB will be unread
+        var paneA = viewModel.WorkspacePanes.First(p => !string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-cross-pane-tab" },
+            "Tab in Pane B", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        viewModel.NavigateNextNotificationCommand.Execute(null);
+
+        Assert.Same(paneB, viewModel.SelectedWorkspacePane);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPaneWithWorkspaceIdHint_SwitchesWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceBId = new EntityId("b1190319-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceBId,
+            """
+            {
+              "entity-id": "b1190319-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-b2"]],
+              "display-name": { "default": "Notif Pane B2" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        // Select pane B and open a tab there
+        var paneB = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabInPaneB = new AgentSessionWorkspaceTabViewModel { Id = "notif-cross-pane-tab-hint", Title = "Tab in Pane B" };
+        await viewModel.OpenTabAsync(tabInPaneB);
+
+        // Switch back to pane A so the notification for tabInPaneB will be unread
+        var paneA = viewModel.WorkspacePanes.First(p => !string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        // Notify with WorkspaceId hint pointing to pane B
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-cross-pane-tab-hint", WorkspaceId = workspaceBId.ToString() },
+            "Tab in Pane B", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+
+        viewModel.NavigateNextNotificationCommand.Execute(null);
+
+        Assert.Same(paneB, viewModel.SelectedWorkspacePane);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
