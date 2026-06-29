@@ -44,14 +44,10 @@
                                             BorderThickness="0"
                                             Padding="4">
                                         <StackPanel Orientation="Horizontal" Spacing="2">
-                                            <!-- Bell slot — always present, visible only when running -->
+                                            <!-- Bell slot — always present, animated as running-indicator when running -->
                                             <Border Width="20" Height="20" VerticalAlignment="Center">
-                                                <TextBlock Text="🔔"
-                                                           Classes.notification-bell-ringing="{Binding IsRunning}"
-                                                           FontSize="10"
-                                                           VerticalAlignment="Center"
-                                                           HorizontalAlignment="Center"
-                                                           IsVisible="{Binding IsRunning}" />
+                                                <ProgressBar Classes="running-indicator"
+                                                             IsIndeterminate="{Binding IsRunning}" />
                                             </Border>
                                             <!-- Exclamation slot — always present, visible only when interesting -->
                                             <Border Width="20" Height="20" VerticalAlignment="Center">

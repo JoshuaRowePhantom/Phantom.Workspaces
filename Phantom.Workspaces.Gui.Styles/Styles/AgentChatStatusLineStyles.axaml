@@ -28,19 +28,6 @@
 
     <Style Selector="TextBlock.agent-chat-status-line-brain.thinking">
         <Setter Property="Opacity" Value="1" />
-        <Style.Animations>
-            <Animation IterationCount="INFINITE"
-                       Duration="0:0:1"
-                       PlaybackDirection="Alternate"
-                       Easing="SineEaseInOut">
-                <KeyFrame Cue="0%">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-                <KeyFrame Cue="100%">
-                    <Setter Property="Opacity" Value="0.4" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.agent-tab-header-brain">
@@ -52,19 +39,6 @@
 
     <Style Selector="TextBlock.agent-tab-header-brain.thinking">
         <Setter Property="Opacity" Value="1" />
-        <Style.Animations>
-            <Animation IterationCount="INFINITE"
-                       Duration="0:0:1"
-                       PlaybackDirection="Alternate"
-                       Easing="SineEaseInOut">
-                <KeyFrame Cue="0%">
-                    <Setter Property="Opacity" Value="1" />
-                </KeyFrame>
-                <KeyFrame Cue="100%">
-                    <Setter Property="Opacity" Value="0.4" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.agent-chat-status-line-value">
