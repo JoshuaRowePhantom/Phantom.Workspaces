@@ -54,4 +54,18 @@ public sealed class DynamicRemoteTrustedExecutor : ITrustedExecutor
     public Task<Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken ct = default)
         => throw new NotImplementedException(
                "OpenStreamAsync over the remote HTTP tunnel is not yet implemented.");
+
+    /// <inheritdoc />
+    public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!this.registry.TryGetExecutor(request.TargetClientInstance, out var executor))
+        {
+            throw new InvalidOperationException(
+                $"No remote executor is registered for client instance '{request.TargetClientInstance}'.");
+        }
+
+        return executor.RunToolAsync(request, cancellationToken);
+    }
 }

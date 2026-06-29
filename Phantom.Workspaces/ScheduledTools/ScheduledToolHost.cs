@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.ScheduledTools;
@@ -23,6 +24,7 @@ public sealed class ScheduledToolHost
     private readonly ScheduledToolRegistry registry;
     private readonly ToolExecutionResultWriter resultWriter;
     private readonly TimeProvider timeProvider;
+    private readonly IReadOnlyList<ITrustedExecutor> executors;
     private readonly HashSet<EntityId> runningRelationships = new();
     private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
     private readonly Dictionary<EntityId, CancellationTokenSource> runningCancellations = new();
@@ -32,12 +34,14 @@ public sealed class ScheduledToolHost
         IDataAccessLayer dataAccessLayer,
         ScheduledToolRegistry registry,
         ToolExecutionResultWriter? resultWriter = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IReadOnlyList<ITrustedExecutor>? executors = null)
     {
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.resultWriter = resultWriter ?? new ToolExecutionResultWriter(dataAccessLayer, this.timeProvider);
+        this.executors = executors ?? [];
     }
 
     /// <summary>Raised whenever the set of currently-running scheduled tools changes.</summary>
@@ -258,25 +262,47 @@ public sealed class ScheduledToolHost
             return false;
         }
 
-        if (!this.registry.TryGetTool(toolType, out var tool))
-        {
-            return false;
-        }
-
         var executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, executionCancellation.Token).ConfigureAwait(false);
-        if (executionContext is null)
-        {
-            executionCancellation.Dispose();
-            return false;
-        }
-
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
         this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents, executionCancellation);
         try
         {
-            var result = await tool.ExecuteAsync(executionContext).ConfigureAwait(false);
+            // Route via a registered executor when one can handle the target client instance (e.g.
+            // a reverse-tunnel or forward-HTTP executor for a remote machine).
+            var targetInstanceId = hostEntityId.ToString();
+            foreach (var executor in this.executors)
+            {
+                if (executor.CanExecute(targetInstanceId))
+                {
+                    await executor.RunToolAsync(
+                        new TrustedToolRequest
+                        {
+                            ToolTypeName = toolType,
+                            ToolEntityId = relationship.ToolEntityId.ToString(),
+                            TargetClientInstance = targetInstanceId,
+                        },
+                        executionCancellation.Token).ConfigureAwait(false);
 
+                    await this.resultWriter.CompleteAsync(handle, success: true, content: null, cancellationToken).ConfigureAwait(false);
+                    return true;
+                }
+            }
+
+            // No executor matched — run the tool locally.
+            if (!this.registry.TryGetTool(toolType, out var tool))
+            {
+                executionCancellation.Dispose();
+                return false;
+            }
+
+            var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, executionCancellation.Token).ConfigureAwait(false);
+            if (executionContext is null)
+            {
+                executionCancellation.Dispose();
+                return false;
+            }
+
+            var result = await tool!.ExecuteAsync(executionContext).ConfigureAwait(false);
             await this.resultWriter.CompleteAsync(handle, success: result.IsSuccess, content: result.ResultContent ?? result.ErrorMessage, cancellationToken).ConfigureAwait(false);
             return true;
         }

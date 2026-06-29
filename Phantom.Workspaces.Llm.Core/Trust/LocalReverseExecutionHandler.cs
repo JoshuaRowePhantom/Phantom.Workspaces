@@ -61,4 +61,13 @@ public sealed class LocalReverseExecutionHandler : IReverseExecutionHandler
         var openPayload = JsonDocument.Parse(openPayloadJson).RootElement;
         return this.localExecutor.HandleStreamAsync(streamKind, openPayload, channel, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return this.localExecutor.RunToolAsync(
+            request with { TargetClientInstance = TrustProfile.LocalClientInstance },
+            cancellationToken);
+    }
 }

@@ -162,6 +162,9 @@ public sealed class RemoteExecutionRegistryTests
         public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
 
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
         public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
             RemoteAgentRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -184,6 +187,9 @@ public sealed class RemoteExecutionRegistryTests
         public int InFlightCount => 0;
 
         public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
             => throw new NotSupportedException();
 
         public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(

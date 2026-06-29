@@ -42,6 +42,12 @@ public interface IReverseConnection
     /// that relays data over the reverse channel. Throws if the connection drops.
     /// </summary>
     Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sends a run-tool request to C and awaits its completion. Throws if the handler on C fails
+    /// or the connection drops before the tool completes.
+    /// </summary>
+    Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken);
 }
 
 /// <summary>A point-in-time status of a connected instance, for the connection-status GUI.</summary>
