@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Data;
@@ -286,6 +287,73 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
             && e.Message.Contains("2", StringComparison.Ordinal)
             && e.Message.Contains(this.scanRoot, StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task Run_CreatesGitEntities_AgainstFullDalStack()
+    {
+        var repo = this.MakeRepo("project-a");
+        var dataAccessLayer = await CreateProductionStyleDataAccessLayerAsync();
+
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        Assert.Equal(repo, single.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task Run_WhenAllEntitiesFailValidation_LogsWarning()
+    {
+        this.MakeRepo("project-a");
+        var logger = new TestLogger<GitWorkspaceScanTool>();
+        var tool = new GitWorkspaceScanTool(logger: logger);
+        var dataAccessLayer = new AlwaysFailingDataAccessLayer();
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning && e.Message.Contains("rejected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static async Task<IDataAccessLayer> CreateProductionStyleDataAccessLayerAsync()
+    {
+        var underlying = new InMemoryDataAccessLayer();
+        var dal = new ReferentialIntegrityDataAccessLayer(underlying);
+        var errors = await new SchemaPopulator(dal).Populate();
+        Assert.Empty(errors);
+        return dal;
+    }
+}
+
+internal sealed class AlwaysFailingDataAccessLayer : IDataAccessLayer
+{
+    public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+    {
+        var results = request.Changes.Select(change => new EntityUpdateResult
+        {
+            UpdateState = UpdateState.Failed,
+            RequestedEntityId = change.EntityId ?? default,
+            ResultingEntityId = change.EntityId ?? default,
+            ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+            Errors = [],
+        }).ToArray();
+        return Task.FromResult(new UpdateResult { EntityResults = results });
+    }
+
+    public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new GetResult { Batches = [] });
+
+    public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new QueryResult { Batches = [] });
+
+    public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new GetHistoryResult { History = [] });
+
+    [Obsolete]
+    public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(new GetChangedEntitiesResult { Entities = [] });
 }
 
 internal sealed class TestLogger<T> : ILogger<T>

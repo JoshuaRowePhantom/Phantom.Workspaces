@@ -104,13 +104,23 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
         if (changes.Count > 0)
         {
-            await context.DataAccessLayer.UpdateAsync(
+            var updateResult = await context.DataAccessLayer.UpdateAsync(
                 new UpdateRequest
                 {
                     UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Scan for Git repositories." } },
                     Changes = changes,
                 },
                 context.CancellationToken).ConfigureAwait(false);
+
+            var failedCount = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Failed);
+            if (failedCount > 0)
+            {
+                this.logger.LogWarning(
+                    "Git workspace scan: {Failed}/{Total} entity writes were rejected by the DAL.",
+                    failedCount,
+                    changes.Count);
+            }
+
             this.logger.LogInformation(
                 "Git workspace scan: wrote {Count} git {Entity} across {Roots} root(s) [{RootsDescription}].",
                 repositoriesFound,
