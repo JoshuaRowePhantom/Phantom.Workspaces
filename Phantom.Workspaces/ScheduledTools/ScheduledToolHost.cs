@@ -52,6 +52,10 @@ public sealed class ScheduledToolHost
         }
     }
 
+    /// <summary>Returns true if a tool with the given <paramref name="toolType"/> is registered in this host's registry.</summary>
+    public bool TryGetTool(string toolType, out IWorkspaceTool? tool)
+        => this.registry.TryGetTool(toolType, out tool!);
+
     /// <summary>
     /// Evaluates all tool-relationships targeting the host and runs the tools whose schedules are
     /// due. Returns the number of tools that ran.
