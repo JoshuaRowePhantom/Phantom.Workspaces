@@ -195,6 +195,50 @@ public sealed class SharedStylesTests
         _ = Assert.IsType<Thickness>(padding);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SharedStyles_QueueStatusStyles_DoNotReferenceSubmitStatusOption()
+    {
+        // Issue #253: SubmitStatusOption no longer exists on any ViewModel.
+        // The queue-status-pill.dynamic, queue-status-label, and queue-status-caret
+        // styles must not bind to it.
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Styles",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.DoesNotContain("SubmitStatusOption", content, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SharedStyles_QueueImmediacyOptionPill_UsesThemeResourceForBackground()
+    {
+        // Issue #253: queue-immediacy-option-pill must use DynamicResource for Background
+        // and BorderBrush, not ReflectionBinding to per-state color properties.
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Styles",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        var pillStyleStart = content.IndexOf(
+            "queue-immediacy-option-pill",
+            StringComparison.Ordinal);
+        Assert.True(pillStyleStart >= 0, "queue-immediacy-option-pill selector must exist.");
+
+        var pillStyleEnd = content.IndexOf("</Style>", pillStyleStart, StringComparison.Ordinal);
+        Assert.True(pillStyleEnd > pillStyleStart, "queue-immediacy-option-pill style must be closed.");
+
+        var pillBlock = content[pillStyleStart..pillStyleEnd];
+        Assert.DoesNotContain("ReflectionBinding Background", pillBlock, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReflectionBinding BorderBrush", pillBlock, StringComparison.Ordinal);
+        Assert.Contains("DynamicResource", pillBlock, StringComparison.Ordinal);
+    }
+
     private static DirectoryInfo FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
