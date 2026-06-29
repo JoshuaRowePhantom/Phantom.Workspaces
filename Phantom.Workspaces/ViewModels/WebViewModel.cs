@@ -138,10 +138,22 @@ public class WebViewModel : WorkspaceTabViewModel
     }
 
     public event EventHandler<NavigationDirection>? NavigationRequested;
+    public event EventHandler<int>? GoToTabAtIndexRequested;
+    public event EventHandler<bool>? AltKeyStateChanged;
 
     private void RaiseNavigationRequested(NavigationDirection direction)
     {
         this.NavigationRequested?.Invoke(this, direction);
+    }
+
+    public void RaiseGoToTabAtIndex(int index)
+    {
+        this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
+    public void RaiseAltKeyStateChanged(bool isAltHeld)
+    {
+        this.AltKeyStateChanged?.Invoke(this, isAltHeld);
     }
 
     public void RaiseCloseTab()

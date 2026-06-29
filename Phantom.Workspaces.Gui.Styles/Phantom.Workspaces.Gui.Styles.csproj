@@ -8,4 +8,7 @@
     <PackageReference Include="Avalonia.Controls.WebView" />
     <PackageReference Include="Dock.Avalonia" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Phantom.Workspaces.Gui.Styles.Tests" />
+  </ItemGroup>
 </Project>

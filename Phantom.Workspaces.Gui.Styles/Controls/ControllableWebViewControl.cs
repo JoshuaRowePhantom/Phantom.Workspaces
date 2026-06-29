@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Gui.Styles.Controls;
 /// <see cref="JavaScriptMessageReceived"/>). Consumers (for example the chat-output renderer) drive
 /// the page through this bridge instead of re-implementing their own JavaScript plumbing.
 /// </summary>
-public class ControllableWebViewControl : NativeWebView, IControllableBrowser
+public class ControllableWebViewControl : AcceleratorAwareWebView, IControllableBrowser
 {
     /// <summary>The JavaScript global the host invokes to deliver messages into the page.</summary>
     public const string HostBridgeObjectName = "hostBridge";

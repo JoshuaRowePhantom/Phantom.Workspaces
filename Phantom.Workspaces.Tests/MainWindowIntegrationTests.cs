@@ -2657,6 +2657,76 @@ public sealed class MainWindowIntegrationTests
         window.Close();
     }
 
+    // ── WebViewModel and AgentSessionTab accelerator-key wiring ─────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_WebViewModel_AltKeyStateChanged_SetsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var webVm = new WebViewModel("https://example.com") { Id = "wv-alt-held", Title = "Tab" };
+        await viewModel.OpenTabAsync(webVm);
+
+        webVm.RaiseAltKeyStateChanged(true);
+
+        Assert.True(viewModel.IsAltHeld);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_WebViewModel_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "wv-goto-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "wv-goto-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "wv-goto-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        tabC.RaiseGoToTabAtIndex(0);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("wv-goto-a", documentDock!.ActiveDockable?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_AgentSessionTab_AltKeyStateChanged_SetsIsAltHeld()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "agent-alt-held", Title = "Agent" };
+        await viewModel.OpenTabAsync(agentTab);
+
+        agentTab.RaiseAltKeyStateChanged(true);
+
+        Assert.True(viewModel.IsAltHeld);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_AgentSessionTab_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "agent-goto-a", Title = "Agent A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "agent-goto-b", Title = "Agent B" };
+        var tabC = new AgentSessionWorkspaceTabViewModel { Id = "agent-goto-c", Title = "Agent C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        tabC.RaiseGoToTabAtIndex(0);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("agent-goto-a", documentDock!.ActiveDockable?.Id);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_ShowsRelatedEntityNestedUnderWorkspace()
     {

@@ -67,6 +67,19 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
+    public event EventHandler<bool>? AltKeyStateChanged;
+    public event EventHandler<int>? GoToTabAtIndexRequested;
+
+    public void RaiseAltKeyStateChanged(bool isAltHeld)
+    {
+        this.AltKeyStateChanged?.Invoke(this, isAltHeld);
+    }
+
+    public void RaiseGoToTabAtIndex(int index)
+    {
+        this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
     public string AgentSessionId
     {
         get => this.agentSessionId;

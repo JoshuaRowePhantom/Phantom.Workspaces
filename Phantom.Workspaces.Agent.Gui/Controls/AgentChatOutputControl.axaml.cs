@@ -74,6 +74,25 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.BrowserHost.Child = browserControl;
         this.ActualThemeVariantChanged += (_, _) =>
             this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+
+        // Forward WebView2 accelerator-key events (e.g. Alt, Alt+1–0) to the bound AgentViewModel
+        // so the MainWindow can update IsAltHeld and route GoToTabAtIndex commands even when focus
+        // is inside the embedded browser.
+        if (browserControl is AcceleratorAwareWebView acceleratorWebView)
+        {
+            acceleratorWebView.AltKeyStateChanged += this.OnBrowserAltKeyStateChanged;
+            acceleratorWebView.GoToTabAtIndexRequested += this.OnBrowserGoToTabAtIndexRequested;
+        }
+    }
+
+    private void OnBrowserAltKeyStateChanged(object? sender, bool isAltHeld)
+    {
+        this.subscribedViewModel?.RaiseAltKeyStateChanged(isAltHeld);
+    }
+
+    private void OnBrowserGoToTabAtIndexRequested(object? sender, int index)
+    {
+        this.subscribedViewModel?.RaiseGoToTabAtIndex(index);
     }
 
     public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
