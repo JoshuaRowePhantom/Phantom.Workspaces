@@ -302,7 +302,7 @@ public sealed class TabHeaderViewModelTests
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void AgentRunningIndicatorDataTemplate_TextBlock_UsesAgentTabHeaderBrainClass()
+    public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesRunningIndicatorClass()
     {
         var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
         var templates = new WorkspaceDataTemplates();
@@ -310,8 +310,7 @@ public sealed class TabHeaderViewModelTests
 
         var control = matchingTemplate.Build(viewModel);
 
-        var textBlock = Assert.IsType<TextBlock>(control);
-        Assert.Contains("agent-tab-header-brain", textBlock.Classes);
-        Assert.DoesNotContain("agent-chat-status-line-brain", textBlock.Classes);
+        var progressBar = Assert.IsType<ProgressBar>(control);
+        Assert.Contains("running-indicator", progressBar.Classes);
     }
 }

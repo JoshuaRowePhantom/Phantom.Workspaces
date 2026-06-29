@@ -300,4 +300,29 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.DoesNotContain($"data-details-target=\"{message}\"", html, StringComparison.Ordinal);
         Assert.Contains("data-details-target=\"{", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RenderToolCallPair_WithCallJson_ChatToolCallDetailsHasOpenAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        Assert.Contains("<details class=\"chat-tool-call\" open>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithResultJson_ChatToolResultDetailsHasOpenAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        Assert.Contains("<details class=\"chat-tool-result\" open>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_ChatToolGroupItem_DoesNotHaveOpenAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        Assert.DoesNotContain("<details class=\"chat-content chat-tool-group-item\" id=\"c0\" open>", html, StringComparison.Ordinal);
+        Assert.Contains("<details class=\"chat-content chat-tool-group-item\"", html, StringComparison.Ordinal);
+    }
 }
