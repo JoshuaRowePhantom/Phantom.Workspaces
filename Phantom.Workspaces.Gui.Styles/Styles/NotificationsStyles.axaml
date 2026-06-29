@@ -38,19 +38,6 @@
         <Setter Property="RenderTransform">
             <RotateTransform Angle="0" />
         </Setter>
-        <Style.Animations>
-            <Animation IterationCount="INFINITE"
-                       Duration="0:0:0.5"
-                       PlaybackDirection="Alternate"
-                       Easing="SineEaseInOut">
-                <KeyFrame Cue="0%">
-                    <Setter Property="RotateTransform.Angle" Value="-18" />
-                </KeyFrame>
-                <KeyFrame Cue="100%">
-                    <Setter Property="RotateTransform.Angle" Value="18" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.scheduled-tool-running">
@@ -58,18 +45,17 @@
         <Setter Property="RenderTransform">
             <RotateTransform Angle="0" />
         </Setter>
-        <Style.Animations>
-            <Animation IterationCount="INFINITE"
-                       Duration="0:0:0.5"
-                       PlaybackDirection="Alternate"
-                       Easing="SineEaseInOut">
-                <KeyFrame Cue="0%">
-                    <Setter Property="RotateTransform.Angle" Value="-18" />
-                </KeyFrame>
-                <KeyFrame Cue="100%">
-                    <Setter Property="RotateTransform.Angle" Value="18" />
-                </KeyFrame>
-            </Animation>
-        </Style.Animations>
+    </Style>
+
+    <!-- notification-indicator: replaces emoji badge TextBlocks that show unread/active state.
+         Value=0 → empty bar (invisible); Value=100 → full Gold bar (visible). -->
+    <Style Selector="ProgressBar.notification-indicator">
+        <Setter Property="Height" Value="3" />
+        <Setter Property="Width" Value="12" />
+        <Setter Property="Maximum" Value="100" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Notifications.Badge.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
 </Styles>
