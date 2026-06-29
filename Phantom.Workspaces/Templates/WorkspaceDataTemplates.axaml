@@ -539,6 +539,10 @@
                    Classes.thinking="{Binding IsRunning}" />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
+        <entityControls:StatusControl Item="{Binding Status}" />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:TabHeaderViewModel">
         <Grid>
             <StackPanel Orientation="Horizontal" Spacing="4">
@@ -563,6 +567,9 @@
                                        Foreground="Red"
                                        FontWeight="Bold"
                                        Opacity="{Binding HasUnread, Converter={x:Static converters:BoolToOpacityConverter.Instance}}" />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
+                            <entityControls:StatusControl Item="{Binding Status}" />
                         </DataTemplate>
                     </ItemsControl.DataTemplates>
                 </ItemsControl>

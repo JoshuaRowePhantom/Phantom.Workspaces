@@ -148,6 +148,29 @@ public sealed class QueueComposerInputHistoryTests
     }
 
     [Fact]
+    public async Task HandleInputKey_Up_WithCaretOnVisualLine_InNormalMode_DoesNotNavigateHistory()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first message";
+        composer.Submit();
+        composer.InputText = string.Empty;
+
+        // caretLine: 1 represents the caret being on visual line 1 (above the first),
+        // as InputBox_KeyDown will compute when the text is visually wrapped in normal mode.
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Up, KeyModifiers.None, caretLine: 1, out var newText, out _);
+
+        Assert.False(handled);
+        Assert.Null(newText);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
     public async Task HandleInputKey_Up_WhenCompletionsVisible_DoesNotNavigateHistory()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(

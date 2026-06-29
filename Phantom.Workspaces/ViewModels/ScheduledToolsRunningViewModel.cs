@@ -54,7 +54,6 @@ public sealed class RunSummaryViewModel
 /// </summary>
 public sealed class ToolRowViewModel : ViewModelBase
 {
-    private bool isRunning;
     private string? lastRunStatus;
     private bool isExpanded;
     private readonly Func<CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadRecentRuns;
@@ -76,11 +75,21 @@ public sealed class ToolRowViewModel : ViewModelBase
     /// <summary>A display label for the host the tool targets.</summary>
     public string Host { get; }
 
+    public StatusItem Status { get; } = new();
+
     /// <summary>Whether the tool is currently executing an in-flight run.</summary>
     public bool IsRunning
     {
-        get => this.isRunning;
-        set => this.SetProperty(ref this.isRunning, value);
+        get => this.Status.RunningStatus == RunningStatus.Running;
+        set
+        {
+            var newStatus = value ? RunningStatus.Running : RunningStatus.Idle;
+            if (this.Status.RunningStatus != newStatus)
+            {
+                this.Status.RunningStatus = newStatus;
+                this.RaisePropertyChanged();
+            }
+        }
     }
 
     /// <summary>The status of the most-recent completed run, or null if no runs exist.</summary>
@@ -91,13 +100,19 @@ public sealed class ToolRowViewModel : ViewModelBase
         {
             if (this.SetProperty(ref this.lastRunStatus, value))
             {
+                this.Status.ErrorStatus = value switch
+                {
+                    "succeeded" => ErrorStatus.Successful,
+                    "failed" => ErrorStatus.Error,
+                    _ => ErrorStatus.None,
+                };
                 this.RaisePropertyChanged(nameof(this.HasFailure));
             }
         }
     }
 
     /// <summary>True when the most-recent run failed.</summary>
-    public bool HasFailure => this.lastRunStatus == "failed";
+    public bool HasFailure => this.Status.ErrorStatus == ErrorStatus.Error;
 
     /// <summary>Toggles <see cref="IsExpanded"/> and loads recent runs when expanding.</summary>
     public RelayCommand ExpandCommand { get; }

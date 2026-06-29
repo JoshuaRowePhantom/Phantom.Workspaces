@@ -45,4 +45,10 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     public string DockRegion { get; init; } = "full";
 
     public SubscribedEntityViewModel? Entity { get; init; }
+
+    /// <summary>
+    /// The status item for this tab, or null if the tab has no meaningful running/error state.
+    /// Overridden by tab types that run background work (e.g. agent sessions).
+    /// </summary>
+    public virtual IStatusItem? TabStatus => null;
 }
