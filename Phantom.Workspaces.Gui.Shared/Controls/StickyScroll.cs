@@ -6,7 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 
-namespace Phantom.Workspaces.Gui.Styles.Controls;
+namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 public static class StickyScroll
 {

@@ -7,7 +7,7 @@ using Avalonia.Styling;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
-namespace Phantom.Workspaces.Gui.Styles.Tests;
+namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class SharedStylesTests
 {
@@ -129,7 +129,7 @@ public sealed class SharedStylesTests
         var repositoryRoot = FindRepositoryRoot();
         var stylesPath = Path.Combine(
             repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
+            "Phantom.Workspaces.Gui.Shared",
             "Styles",
             "SharedStyles.axaml");
         var stylesContent = File.ReadAllText(stylesPath);
@@ -204,7 +204,7 @@ public sealed class SharedStylesTests
         var repositoryRoot = FindRepositoryRoot();
         var stylesPath = Path.Combine(
             repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
+            "Phantom.Workspaces.Gui.Shared",
             "Styles",
             "SharedStyles.axaml");
         var content = File.ReadAllText(stylesPath);
@@ -220,7 +220,7 @@ public sealed class SharedStylesTests
         var repositoryRoot = FindRepositoryRoot();
         var stylesPath = Path.Combine(
             repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
+            "Phantom.Workspaces.Gui.Shared",
             "Styles",
             "SharedStyles.axaml");
         var content = File.ReadAllText(stylesPath);
@@ -257,16 +257,16 @@ public sealed class SharedStylesTests
 
     private static Avalonia.Styling.Styles LoadSharedStyles()
     {
-        var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml");
-        var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
+        var source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml");
+        var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Shared/");
         var loaded = AvaloniaXamlLoader.Load(source, baseUri);
         return Assert.IsType<Avalonia.Styling.Styles>(loaded);
     }
 
     private static Avalonia.Styling.Styles LoadAgentChatStatusLineStyles()
     {
-        var source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/AgentChatStatusLineStyles.axaml");
-        var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Styles/");
+        var source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/AgentChatStatusLineStyles.axaml");
+        var baseUri = new Uri("avares://Phantom.Workspaces.Gui.Shared/");
         var loaded = AvaloniaXamlLoader.Load(source, baseUri);
         return Assert.IsType<Avalonia.Styling.Styles>(loaded);
     }

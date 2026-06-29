@@ -7,11 +7,12 @@
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Controls.WebView" />
     <PackageReference Include="Dock.Avalonia" />
+    <PackageReference Include="VtNetCore" />
   </ItemGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\brain.ico" />
   </ItemGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Phantom.Workspaces.Gui.Styles.Tests" />
+    <InternalsVisibleTo Include="Phantom.Workspaces.Gui.Shared.Tests" />
   </ItemGroup>
 </Project>

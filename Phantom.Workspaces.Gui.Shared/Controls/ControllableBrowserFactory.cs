@@ -1,7 +1,7 @@
 using System;
 using Avalonia.Controls;
 
-namespace Phantom.Workspaces.Gui.Styles.Controls;
+namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 /// <summary>
 /// Creates the browser surface used by chat output. Defaults to a real
