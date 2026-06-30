@@ -14,14 +14,12 @@ public sealed class RemoteAccessSettingsViewModelTests
             TunnelName = "old-name",
             HostedPorts = [5280, 5281],
             AccessMode = DevTunnelAccessMode.Private,
-            AccessTokenSource = null,
         };
 
         var viewModel = new RemoteAccessSettingsViewModel(new RemoteHostingSettings(), existing)
         {
             TunnelName = "new-name",
-            DevTunnelAccessMode = DevTunnelAccessMode.Token,
-            DevTunnelAccessTokenSource = "DEVTUNNEL_TOKEN",
+            DevTunnelAccessMode = DevTunnelAccessMode.Anonymous,
         };
 
         var projected = viewModel.ToDevTunnelConfiguration(existing);
@@ -32,8 +30,31 @@ public sealed class RemoteAccessSettingsViewModelTests
 
         // Updated from the editable view-model state.
         Assert.Equal("new-name", projected.TunnelName);
-        Assert.Equal(DevTunnelAccessMode.Token, projected.AccessMode);
-        Assert.Equal("DEVTUNNEL_TOKEN", projected.AccessTokenSource);
+        Assert.Equal(DevTunnelAccessMode.Anonymous, projected.AccessMode);
+    }
+
+    [AvaloniaFact]
+    public void LegacyTokenMode_MigratedToPrivate_InConstructor()
+    {
+        // A DevTunnelConfiguration loaded from an old config file may have AccessMode=Token (1).
+        // The view model must convert this to Private so the UI shows the correct mode.
+#pragma warning disable CS0618 // Token is obsolete
+        var existing = new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Token };
+#pragma warning restore CS0618
+        var viewModel = new RemoteAccessSettingsViewModel(new RemoteHostingSettings(), existing);
+
+        Assert.Equal(DevTunnelAccessMode.Private, viewModel.DevTunnelAccessMode);
+    }
+
+    [AvaloniaFact]
+    public void AvailableAccessModes_DoesNotIncludeTokenMode()
+    {
+        // Token mode is retired and must not be offered to new users.
+        Assert.DoesNotContain(
+#pragma warning disable CS0618
+            DevTunnelAccessMode.Token,
+#pragma warning restore CS0618
+            RemoteAccessSettingsViewModel.AvailableAccessModes);
     }
 
     [AvaloniaFact]
@@ -63,22 +84,6 @@ public sealed class RemoteAccessSettingsViewModelTests
             new DevTunnelConfiguration());
 
         Assert.True(viewModel.AcceptReverseExecution);
-    }
-
-    [AvaloniaFact]
-    public void IsAccessTokenSourceVisible_OnlyForTokenMode()
-    {
-        var viewModel = new RemoteAccessSettingsViewModel
-        {
-            DevTunnelAccessMode = DevTunnelAccessMode.Private,
-        };
-        Assert.False(viewModel.IsAccessTokenSourceVisible);
-
-        viewModel.DevTunnelAccessMode = DevTunnelAccessMode.Token;
-        Assert.True(viewModel.IsAccessTokenSourceVisible);
-
-        viewModel.DevTunnelAccessMode = DevTunnelAccessMode.Anonymous;
-        Assert.False(viewModel.IsAccessTokenSourceVisible);
     }
 
     [AvaloniaFact]

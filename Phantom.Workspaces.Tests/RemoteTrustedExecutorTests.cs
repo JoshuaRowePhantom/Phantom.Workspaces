@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -13,6 +15,10 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class RemoteTrustedExecutorTests
 {
+    // AIJsonUtilities.DefaultOptions uses WriteIndented = true; NDJSON requires compact (single-line) JSON.
+    private static readonly System.Text.Json.JsonSerializerOptions CompactAiOptions =
+        new System.Text.Json.JsonSerializerOptions(AIJsonUtilities.DefaultOptions) { WriteIndented = false };
+
     [AvaloniaFact]
     public void Constructor_LocalInstance_Throws()
     {
@@ -130,6 +136,99 @@ public sealed class RemoteTrustedExecutorTests
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => executor.OpenStreamAsync(request));
+    }
+
+    [AvaloniaFact]
+    public async Task RemoteAgentChatClient_PostsToAgentChatTurnEndpoint_StreamsNdjsonResponse()
+    {
+        var update1 = new ChatResponseUpdate(ChatRole.Assistant, "hello");
+        var update2 = new ChatResponseUpdate(ChatRole.Assistant, " world");
+        var ndjson = JsonSerializer.Serialize(update1, CompactAiOptions) + "\n"
+                   + JsonSerializer.Serialize(update2, CompactAiOptions) + "\n";
+
+        string? requestedPath = null;
+        var handler = new FakeHttpMessageHandler((request, _) =>
+        {
+            requestedPath = request.RequestUri?.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ndjson, Encoding.UTF8, "application/x-ndjson"),
+            };
+        });
+
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
+        using var client = new RemoteAgentChatClient(
+            "https://remote.example/",
+            "{\"kind\":\"prompt\",\"name\":\"a\"}",
+            "session-42",
+            httpClient: httpClient);
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
+        {
+            updates.Add(u);
+        }
+
+        Assert.Equal("/agent/chat/session-42/turn", requestedPath);
+        Assert.Equal(2, updates.Count);
+        Assert.Equal("hello world", string.Concat(updates.Select(static u => u.Text)));
+    }
+
+    [AvaloniaFact]
+    public async Task RemoteAgentChatClient_NonSuccessStatus_Throws()
+    {
+        var handler = new FakeHttpMessageHandler((_, _) =>
+            new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent("boom"),
+            });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
+        using var client = new RemoteAgentChatClient(
+            "https://remote.example/",
+            "{\"kind\":\"prompt\",\"name\":\"a\"}",
+            "session-x",
+            httpClient: httpClient);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+        Assert.Contains("500", exception.Message, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public async Task RemoteTrustedExecutor_CreateAgentChat_SendsToAgentChatTurnEndpoint()
+    {
+        var update = new ChatResponseUpdate(ChatRole.Assistant, "remote-reply");
+        var ndjson = JsonSerializer.Serialize(update, CompactAiOptions) + "\n";
+
+        string? requestedPath = null;
+        var handler = new FakeHttpMessageHandler((request, _) =>
+        {
+            requestedPath = request.RequestUri?.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ndjson, Encoding.UTF8, "application/x-ndjson"),
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
+        var executor = new RemoteTrustedExecutor("remote-a", "https://remote.example/", httpClient: httpClient);
+
+        await using var chat = await executor.CreateAgentChatAsync(new TrustedExecutionRequest
+        {
+            AgentDefinition = AgentSchema.AgentDefinition.FromJson(
+                """{ "kind":"prompt","name":"x","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[] }"""),
+            TrustProfile = new TrustProfile { HostingWorkspacesClientInstances = ["remote-a"] },
+            TargetClientInstance = "remote-a",
+            AgentSessionId = "session-99",
+        });
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")]))
+        {
+            updates.Add(u);
+        }
+
+        Assert.Equal("/agent/chat/session-99/turn", requestedPath);
+        Assert.NotEmpty(updates);
     }
 
     private sealed class FakeHttpMessageHandler : HttpMessageHandler

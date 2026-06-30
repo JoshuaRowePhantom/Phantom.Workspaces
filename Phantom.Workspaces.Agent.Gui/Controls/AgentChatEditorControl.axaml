@@ -178,6 +178,10 @@
                                 </MultiBinding>
                             </TextBlock.Text>
                         </TextBlock>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   VerticalAlignment="Center"
+                                   IsVisible="{Binding StatusLine.HasWarnings}"/>
                         <TextBlock Classes="agent-chat-status-line-label"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasWarnings}">

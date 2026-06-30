@@ -12,7 +12,6 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     private string listenUrl;
     private bool acceptReverseExecution;
     private DevTunnelAccessMode devTunnelAccessMode;
-    private string? devTunnelAccessTokenSource;
     private string? tunnelName;
     private string? userComputerProfileOverride;
 
@@ -33,8 +32,12 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         this.hostingEnabled = remoteHosting.Enabled;
         this.listenUrl = remoteHosting.ListenUrl;
         this.acceptReverseExecution = remoteHosting.AcceptReverseExecution;
-        this.devTunnelAccessMode = devTunnel.AccessMode;
-        this.devTunnelAccessTokenSource = devTunnel.AccessTokenSource;
+        // Persist legacy Token configs as Private — Token is retired; connect tokens are automatic.
+#pragma warning disable CS0618 // Token is obsolete
+        this.devTunnelAccessMode = devTunnel.AccessMode == DevTunnelAccessMode.Token
+#pragma warning restore CS0618
+            ? DevTunnelAccessMode.Private
+            : devTunnel.AccessMode;
         this.tunnelName = devTunnel.TunnelName;
         this.userComputerProfileOverride = userComputerProfileOverride;
     }
@@ -43,7 +46,6 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     public static DevTunnelAccessMode[] AvailableAccessModes { get; } =
     [
         DevTunnelAccessMode.Private,
-        DevTunnelAccessMode.Token,
         DevTunnelAccessMode.Anonymous,
     ];
 
@@ -78,13 +80,6 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         set => this.SetValidatedProperty(ref this.devTunnelAccessMode, value);
     }
 
-    /// <summary>Source name for the dev tunnel access token (never the raw token).</summary>
-    public string? DevTunnelAccessTokenSource
-    {
-        get => this.devTunnelAccessTokenSource;
-        set => this.SetValidatedProperty(ref this.devTunnelAccessTokenSource, value);
-    }
-
     /// <summary>Friendly tunnel name.</summary>
     public string? TunnelName
     {
@@ -109,25 +104,12 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     /// </summary>
     public bool IsAnonymousAccessWarningVisible => this.DevTunnelAccessMode == DevTunnelAccessMode.Anonymous;
 
-    /// <summary>
-    /// Whether the dev tunnel access-token-source field should be shown. Only Token mode uses a
-    /// pre-shared token; Private (identity) and Anonymous modes do not.
-    /// </summary>
-    public bool IsAccessTokenSourceVisible => this.DevTunnelAccessMode == DevTunnelAccessMode.Token;
-
     /// <summary>Whether the current settings are valid.</summary>
     public bool IsValid
     {
         get
         {
             if (this.HostingEnabled && !Uri.TryCreate(this.ListenUrl, UriKind.Absolute, out _))
-            {
-                return false;
-            }
-
-            // Token-based tunnel access requires a token source (not the raw token).
-            if (this.DevTunnelAccessMode == DevTunnelAccessMode.Token
-                && string.IsNullOrWhiteSpace(this.DevTunnelAccessTokenSource))
             {
                 return false;
             }
@@ -149,7 +131,6 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     {
         TunnelName = this.TunnelName,
         AccessMode = this.DevTunnelAccessMode,
-        AccessTokenSource = this.DevTunnelAccessTokenSource,
     };
 
     private void SetValidatedProperty<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)
@@ -158,7 +139,6 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.IsValid));
             this.RaisePropertyChanged(nameof(this.IsAnonymousAccessWarningVisible));
-            this.RaisePropertyChanged(nameof(this.IsAccessTokenSourceVisible));
         }
     }
 }

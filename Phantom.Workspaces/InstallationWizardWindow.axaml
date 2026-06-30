@@ -64,11 +64,6 @@
                               SelectedItem="{Binding RemoteAccess.DevTunnelAccessMode}" />
                 </StackPanel>
 
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Dev tunnel access-token source (env var name)" />
-                    <TextBox PlaceholderText="DEVTUNNEL_TOKEN" Text="{Binding RemoteAccess.DevTunnelAccessTokenSource}" />
-                </StackPanel>
-
                 <TextBlock Text="Warning: anonymous tunnel access exposes workspace data without authentication."
                            Foreground="#B00020"
                            TextWrapping="Wrap"
