@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -8,18 +9,50 @@ namespace Phantom.Workspaces.ViewModels;
 public class WorkspacePaneDocument : Document
 {
     private readonly TabHeaderViewModel cachedTabHeader;
+    private readonly AgentRunningIndicatorTabHeaderItemViewModel runningIndicator;
+    private readonly NotificationIndicatorTabHeaderItemViewModel notificationIndicator;
 
     public WorkspacePaneDocument(WorkspacePaneViewModel workspacePane)
     {
         this.WorkspacePane = workspacePane;
         this.cachedTabHeader = new TabHeaderViewModel { Title = workspacePane.Title };
+
+        this.runningIndicator = new AgentRunningIndicatorTabHeaderItemViewModel
+        {
+            IsRunning = workspacePane.AnyTabIsRunning,
+        };
+        this.notificationIndicator = new NotificationIndicatorTabHeaderItemViewModel
+        {
+            HasUnread = workspacePane.AnyTabHasUnreadNotification,
+        };
+        this.cachedTabHeader.Items.Add(this.runningIndicator);
+        this.cachedTabHeader.Items.Add(this.notificationIndicator);
+
+        workspacePane.PropertyChanged += this.OnWorkspacePanePropertyChanged;
+    }
+
+    private void OnWorkspacePanePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(WorkspacePaneViewModel.Title), StringComparison.Ordinal))
+        {
+            this.cachedTabHeader.Title = this.WorkspacePane.Title;
+            this.Title = this.WorkspacePane.Title;
+        }
+        else if (string.Equals(e.PropertyName, nameof(WorkspacePaneViewModel.AnyTabIsRunning), StringComparison.Ordinal))
+        {
+            this.runningIndicator.IsRunning = this.WorkspacePane.AnyTabIsRunning;
+        }
+        else if (string.Equals(e.PropertyName, nameof(WorkspacePaneViewModel.AnyTabHasUnreadNotification), StringComparison.Ordinal))
+        {
+            this.notificationIndicator.HasUnread = this.WorkspacePane.AnyTabHasUnreadNotification;
+        }
     }
 
     public WorkspacePaneViewModel WorkspacePane { get; }
 
     /// <summary>
-    /// Header model for this workspace-pane tab. Contains no items (title only),
-    /// ensuring the shared <see cref="TabHeaderViewModel"/> DataTemplate applies correctly.
+    /// Header model for this workspace-pane tab. Contains running and notification
+    /// indicator items that mirror the pane's aggregated tab state.
     /// </summary>
     public TabHeaderViewModel EffectiveTabHeader => this.cachedTabHeader;
 }

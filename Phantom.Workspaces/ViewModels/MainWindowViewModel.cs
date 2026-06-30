@@ -3256,11 +3256,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (pane.ContentLayout is null) continue;
             var documentDock = this.FindDocumentDock(pane.ContentLayout);
             if (documentDock?.VisibleDockables is null) continue;
+            var anyUnread = false;
             foreach (var dockable in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
             {
                 var hasUnread = notifications.Any(n => n.TabKey == dockable.Id && !n.IsRead);
                 dockable.HasUnreadNotification = hasUnread;
+                if (hasUnread) anyUnread = true;
             }
+            pane.AnyTabHasUnreadNotification = anyUnread;
         }
     }
 
