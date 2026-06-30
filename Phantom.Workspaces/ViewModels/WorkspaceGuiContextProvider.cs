@@ -12,6 +12,7 @@ using Dock.Model.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Serialization;
 using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 
@@ -24,6 +25,9 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public sealed class WorkspaceGuiContextProvider : AIContextProvider
 {
+    private static readonly EntityName WorkspaceGuiToolInstructionsEntityName =
+        new("documentation", "entity-workspace-gui-agent-tool-instructions");
+
     private readonly string stateKey = $"workspace-gui:{Guid.NewGuid():n}";
     private readonly WorkspaceGuiContext context;
 
@@ -35,14 +39,15 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
 
     public override IReadOnlyList<string> StateKeys => [this.stateKey];
 
-    protected override ValueTask<AIContext> ProvideAIContextAsync(
+    protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext invokingContext,
         CancellationToken cancellationToken)
     {
         _ = invokingContext;
-        _ = cancellationToken;
-        return new ValueTask<AIContext>(new AIContext
+        var instructions = await this.GetInstructionsAsync(cancellationToken);
+        return new AIContext
         {
+            Instructions = instructions,
             Tools =
             [
                 new WorkspaceListTool(this.context),
@@ -52,7 +57,26 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 new EntityInvokeShortcutTool(this.context),
                 new OpenTabTool(this.context),
             ],
-        });
+        };
+    }
+
+    private async Task<string?> GetInstructionsAsync(CancellationToken cancellationToken)
+    {
+        var entities = await this.context.MainWindowViewModel.EntityBroker.GetEntitiesAsync(
+            [new GetEntityRequest { EntityName = WorkspaceGuiToolInstructionsEntityName }],
+            cancellationToken);
+        return TryReadDefaultMarkdownText(entities.FirstOrDefault()?.Data);
+    }
+
+    private static string? TryReadDefaultMarkdownText(JsonElement? entityData)
+    {
+        if (entityData is not JsonElement entityDataElement
+            || NoteEntityDocument.Deserialize(entityDataElement) is not NoteEntityDocument noteEntityDocument)
+        {
+            return null;
+        }
+
+        return noteEntityDocument.GetPreferredMarkdownText();
     }
 
     private sealed class WorkspaceListTool : AIFunction
