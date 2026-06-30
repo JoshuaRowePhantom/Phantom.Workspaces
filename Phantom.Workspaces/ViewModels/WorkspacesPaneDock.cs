@@ -1,4 +1,4 @@
-using Dock.Model.Mvvm.Controls;
+using Dock.Model.Avalonia.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
 
