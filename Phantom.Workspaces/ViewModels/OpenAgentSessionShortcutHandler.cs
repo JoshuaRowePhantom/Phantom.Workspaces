@@ -136,7 +136,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         AgentChat agentChat)
     {
         var loggerFactory = new ObservableLoggerFactory();
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
         var tab = new AgentSessionWorkspaceTabViewModel
         {
             Id = agentSessionEntity.EntityId.ToString(),
@@ -225,7 +225,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
         }
 
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName);
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
 
         agent.ConfigureSlashCommands(
             () => new SlashCommandContext
@@ -320,16 +320,18 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         MainWindowViewModel mainWindowViewModel,
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
-        string title)
+        string title,
+        string agentSessionTabId)
     {
-        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title);
+        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title, agentSessionTabId);
     }
 
     private static AgentViewModel BuildAgentViewModel(
         MainWindowViewModel mainWindowViewModel,
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
-        string title)
+        string title,
+        string agentSessionTabId)
     {
         return new AgentViewModel(agentChat, title, loggerFactory)
         {
@@ -338,7 +340,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 {
                     Id = $"web-{url}",
                     Title = url,
-                }),
+                },
+                insertAfterTabId: agentSessionTabId,
+                workspacePaneId: mainWindowViewModel.FindWorkspacePaneIdForTab(agentSessionTabId)),
         };
     }
 

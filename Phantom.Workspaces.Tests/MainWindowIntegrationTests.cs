@@ -1752,6 +1752,254 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlHandler_WhenAgentChatIsInNonSelectedPane_OpensTabInAgentChatPane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("url00001-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("url00001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "url00001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-handler-pane-a"]],
+              "display-name": { "default": "URL Handler Pane A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "url00001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-handler-pane-b"]],
+              "display-name": { "default": "URL Handler Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceIdA.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceIdB.ToString());
+
+        // Open agent session in pane A
+        var paneAIndex = viewModel.WorkspacePanes.IndexOf(paneA);
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
+
+        var agentDefinitionId = new EntityId("url00001-0000-4000-8000-000000000003");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "url00001-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "url-nonselected-echo"]],
+              "display-name": { "default": "URL Nonselected Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "url-nonselected-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.NotNull(agentTab.Agent);
+
+        // Switch to pane B so agent chat pane is NOT selected
+        var paneBIndex = viewModel.WorkspacePanes.IndexOf(paneB);
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
+        Assert.Equal(paneB, viewModel.SelectedWorkspacePane);
+
+        // Invoke the URL handler — should open in pane A, not pane B
+        const string testUrl = "https://url-nonselected.example.com";
+        agentTab.Agent!.OpenUrlHandler!.Invoke(testUrl);
+
+        var paneBDock = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(paneBDock);
+        var paneADock = FindDocumentDockIn(paneA.ContentLayout!);
+        Assert.NotNull(paneADock);
+
+        await WaitForWorkspaceTabAsync(paneADock!, $"web-{testUrl}");
+
+        // New tab must appear in pane A
+        Assert.Contains(
+            paneADock!.VisibleDockables!.OfType<WorkspaceDocument>(),
+            doc => doc.Id == $"web-{testUrl}");
+
+        // New tab must NOT appear in pane B
+        Assert.DoesNotContain(
+            paneBDock!.VisibleDockables?.OfType<WorkspaceDocument>() ?? [],
+            doc => doc.Id == $"web-{testUrl}");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlHandler_WhenAgentChatIsInSelectedPane_OpensTabInSamePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("url00002-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("url00002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "url00002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-selected-pane-a"]],
+              "display-name": { "default": "URL Selected Pane A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "url00002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-selected-pane-b"]],
+              "display-name": { "default": "URL Selected Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceIdA.ToString());
+        var paneAIndex = viewModel.WorkspacePanes.IndexOf(paneA);
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
+        Assert.Equal(paneA, viewModel.SelectedWorkspacePane);
+
+        var agentDefinitionId = new EntityId("url00002-0000-4000-8000-000000000003");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "url00002-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "url-selected-echo"]],
+              "display-name": { "default": "URL Selected Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "url-selected-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.NotNull(agentTab.Agent);
+
+        // Pane A is selected — invoke handler while it IS selected
+        Assert.Equal(paneA, viewModel.SelectedWorkspacePane);
+
+        const string testUrl = "https://url-selected.example.com";
+        agentTab.Agent!.OpenUrlHandler!.Invoke(testUrl);
+
+        var paneADock = FindDocumentDockIn(paneA.ContentLayout!);
+        Assert.NotNull(paneADock);
+        await WaitForWorkspaceTabAsync(paneADock!, $"web-{testUrl}");
+
+        Assert.Contains(
+            paneADock!.VisibleDockables!.OfType<WorkspaceDocument>(),
+            doc => doc.Id == $"web-{testUrl}");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlHandler_InsertsNewTabAfterAgentSessionTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionId = new EntityId("url00003-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "url00003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "url-insert-echo"]],
+              "display-name": { "default": "URL Insert Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "url-insert-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // Open agent session tab
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.NotNull(agentTab.Agent);
+
+        // Open another tab after the agent session tab
+        var otherTab = new WebViewModel("https://other.example.com") { Id = "url-insert-other", Title = "Other" };
+        await viewModel.OpenTabAsync(otherTab);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var agentTabIndex = documentDock!.VisibleDockables!
+            .Select((d, i) => (d, i))
+            .First(x => x.d.Id == agentTab.Id).i;
+
+        // Invoke the URL handler — new tab should be inserted right after the agent session tab
+        const string testUrl = "https://url-insert.example.com";
+        agentTab.Agent!.OpenUrlHandler!.Invoke(testUrl);
+
+        await WaitForWorkspaceTabAsync(documentDock!, $"web-{testUrl}");
+
+        var webTabIndex = documentDock!.VisibleDockables!
+            .Select((d, i) => (d, i))
+            .First(x => x.d.Id == $"web-{testUrl}").i;
+
+        Assert.Equal(agentTabIndex + 1, webTabIndex);
+    }
+
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
 
@@ -3612,7 +3860,8 @@ public sealed class MainWindowIntegrationTests
               "entity-id": "{{childId}}",
               "entity-types": ["entity", "note"],
               "names": [["notes", "expand-affordance-child"]],
-              "display-name": { "default": "Expand Affordance Child" }
+              "display-name": { "default": "Expand Affordance Child" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "" } }
             }
             """);
 
@@ -3680,7 +3929,8 @@ public sealed class MainWindowIntegrationTests
               "entity-id": "{{childId}}",
               "entity-types": ["entity", "note"],
               "names": [["notes", "toggle-expand-child"]],
-              "display-name": { "default": "Toggle Expand Child" }
+              "display-name": { "default": "Toggle Expand Child" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "" } }
             }
             """);
 
