@@ -79,6 +79,11 @@ public class WorkspaceDocument : Document
             if (this.hasUnreadNotification == value) return;
             this.hasUnreadNotification = value;
             this.statusIndicator.Status.ErrorStatus = value ? ErrorStatus.Error : ErrorStatus.None;
+            var notificationIndicator = this.cachedTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().FirstOrDefault();
+            if (notificationIndicator is not null)
+            {
+                notificationIndicator.HasUnread = value;
+            }
         }
     }
 
