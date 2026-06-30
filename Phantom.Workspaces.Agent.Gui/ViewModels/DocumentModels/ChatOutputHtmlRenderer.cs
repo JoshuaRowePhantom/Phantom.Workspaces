@@ -123,7 +123,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append(">");
         builder.Append("<summary class=\"chat-collapsible-summary\">tool ").Append(callSummary).Append("</summary>");
 
-        builder.Append("<details class=\"chat-tool-call\">");
+        builder.Append("<details class=\"chat-tool-call\" open>");
         builder.Append("<summary class=\"chat-collapsible-summary\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
@@ -135,7 +135,7 @@ internal static class ChatOutputHtmlRenderer
         if (resultJson is not null)
         {
             var resultSummary = FirstLine(resultJson);
-            builder.Append("<details class=\"chat-tool-result\">");
+            builder.Append("<details class=\"chat-tool-result\" open>");
             builder.Append("<summary class=\"chat-collapsible-summary\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
@@ -296,7 +296,9 @@ internal static class ChatOutputHtmlRenderer
                     }
                 }
 
-                return RenderCollapsible(contentId, "chat-tool", $"tool call: {call.Name}", PrettyJson(call.Arguments), SerializeContentJson(call));
+                var description = call.Arguments is not null && call.Arguments.TryGetValue("description", out var descObj) ? descObj as string : null;
+                var label = string.IsNullOrEmpty(description) ? $"tool call: {call.Name}" : $"tool call: {call.Name}: {description}";
+                return RenderCollapsible(contentId, "chat-tool", label, PrettyJson(call.Arguments), SerializeContentJson(call));
             }
 
             case FunctionResultContent result:

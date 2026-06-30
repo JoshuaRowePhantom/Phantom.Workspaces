@@ -5,7 +5,7 @@
                xmlns:templates="using:Phantom.Workspaces.Templates"
                xmlns:agentControls="using:Phantom.Workspaces.Agent.Gui.Controls"
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
-               xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
+               xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
         <StackPanel Classes="workspace-entity-node-root">
@@ -159,10 +159,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:ShellTabViewModel">
-        <TextBlock Text="{Binding Title}"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Center"
-                   Classes="muted" />
+        <controls:TerminalControl Session="{Binding TerminalSession}" />
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
@@ -534,9 +531,8 @@
     <!-- Tab header item templates (top-level so they are individually testable and visible to the full
          template-resolution chain inside ItemsControl) -->
     <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <TextBlock Text="🧠"
-                   Classes="agent-tab-header-brain"
-                   Classes.thinking="{Binding IsRunning}" />
+        <ProgressBar Classes="running-indicator"
+                     IsIndeterminate="{Binding IsRunning}" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
@@ -561,12 +557,14 @@
                         <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
                             <TextBlock Text="{Binding Icon}" />
                         </DataTemplate>
+                        <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+                            <ProgressBar Classes="running-indicator"
+                                         IsIndeterminate="{Binding IsRunning}" />
+                        </DataTemplate>
                         <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-                            <!-- Always occupies space; opacity hides it when there is no unread notification -->
-                            <TextBlock Text="❗"
-                                       Foreground="Red"
-                                       FontWeight="Bold"
-                                       Opacity="{Binding HasUnread, Converter={x:Static converters:BoolToOpacityConverter.Instance}}" />
+                            <!-- Always occupies space; empty bar hides it when there is no unread notification -->
+                            <ProgressBar Classes="notification-indicator"
+                                         Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
                         </DataTemplate>
                         <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
                             <entityControls:StatusControl Item="{Binding Status}" />

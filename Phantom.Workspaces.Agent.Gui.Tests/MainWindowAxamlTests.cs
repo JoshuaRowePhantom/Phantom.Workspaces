@@ -1,4 +1,4 @@
-﻿using System.Linq;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -216,7 +216,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Classes.thinking=\"{Binding StatusLine.IsThinking}\"",
+            "IsIndeterminate=\"{Binding StatusLine.IsThinking}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -543,7 +543,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
 
         Assert.Contains(
-            "avares://Phantom.Workspaces.Gui.Styles/Assets/brain.ico",
+            "avares://Phantom.Workspaces.Gui.Shared/Assets/brain.ico",
             mainWindowContent,
             StringComparison.Ordinal);
     }
@@ -555,7 +555,7 @@ public sealed class MainWindowAxamlTests
         var repositoryRoot = FindRepositoryRoot();
         var icoPath = Path.Combine(
             repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
+            "Phantom.Workspaces.Gui.Shared",
             "Assets",
             "brain.ico");
 
@@ -567,7 +567,7 @@ public sealed class MainWindowAxamlTests
     {
         // Issue #327: brain.ico must be declared as an AvaloniaResource so it is accessible
         // via the avares:// URI scheme at runtime.
-        var csprojContent = ReadGuiStylesFile("Phantom.Workspaces.Gui.Styles.csproj");
+        var csprojContent = ReadGuiStylesFile("Phantom.Workspaces.Gui.Shared.csproj");
 
         Assert.Contains(
             "AvaloniaResource",
@@ -606,7 +606,7 @@ public sealed class MainWindowAxamlTests
         var repositoryRoot = FindRepositoryRoot();
         var filePath = Path.Combine(
             repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
+            "Phantom.Workspaces.Gui.Shared",
             "Styles",
             "SharedStyles.axaml");
 
@@ -618,7 +618,7 @@ public sealed class MainWindowAxamlTests
         var repositoryRoot = FindRepositoryRoot();
         var filePath = Path.Combine(
             repositoryRoot.FullName,
-            "Phantom.Workspaces.Gui.Styles",
+            "Phantom.Workspaces.Gui.Shared",
             relativePath);
 
         return File.ReadAllText(filePath);

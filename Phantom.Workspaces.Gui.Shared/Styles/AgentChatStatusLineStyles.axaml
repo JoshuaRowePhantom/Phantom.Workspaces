@@ -1,0 +1,128 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.ThinkingBrain.Foreground">#E86090</SolidColorBrush>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.Label.Foreground">#B3B3B3</SolidColorBrush>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.Value.Foreground">#5EA0FF</SolidColorBrush>
+        <SolidColorBrush x:Key="AgentChat.StatusLine.Separator.Foreground">#4A4A4A</SolidColorBrush>
+        <x:Double x:Key="AgentChat.StatusLine.FontSize">12</x:Double>
+        <Thickness x:Key="AgentChat.StatusLine.Padding">12,8,12,8</Thickness>
+        <x:Double x:Key="AgentChat.TabHeader.Icon.FontSize">13</x:Double>
+    </Styles.Resources>
+
+    <Style Selector="Border.agent-chat-status-line">
+        <Setter Property="Padding" Value="{DynamicResource AgentChat.StatusLine.Padding}" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-brain">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-brain.idle">
+        <Setter Property="Opacity" Value="0.25" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-brain.thinking">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-tab-header-brain">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.TabHeader.Icon.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0.25" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-tab-header-brain.thinking">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-value">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Value.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-label">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Label.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-separator">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Separator.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="8,0,8,0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" Easing="LinearEasing" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-separator.scroll-locked">
+        <Setter Property="Opacity" Value="0.15" />
+    </Style>
+
+    <Style Selector="Button.agent-chat-status-line-reasoning-toggle">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-brain-glyph">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-bug">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+
+    <Style Selector="TextBlock.agent-chat-status-line-cancel-overlay">
+        <Setter Property="Foreground" Value="#CC3030" />
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="Button.agent-chat-status-line-reasoning-toggle:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <Style Selector="CheckBox.agent-chat-autoscroll-toggle">
+        <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Label.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="4,0,0,0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Opacity" Value="1.0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" Easing="LinearEasing" />
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <Style Selector="CheckBox.agent-chat-autoscroll-toggle.scroll-locked">
+        <Setter Property="Opacity" Value="0.15" />
+    </Style>
+
+    <Style Selector="CheckBox.agent-chat-autoscroll-toggle /template/ Border#NormalRectangle">
+        <Setter Property="Width" Value="10" />
+        <Setter Property="Height" Value="10" />
+        <Setter Property="CornerRadius" Value="2" />
+    </Style>
+</Styles>

@@ -1,4 +1,8 @@
 using System;
+using System.IO.Pipelines;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -80,7 +84,71 @@ public sealed class ReverseExecutionClientHost
         return new ReverseExecutionClientHost(clientInstanceId, handler, CreateChannelAsync);
     }
 
-    /// <summary>Connects and runs reverse execution, reconnecting with backoff until cancelled.</summary>
+    /// <summary>
+    /// Builds a production host that connects to a connected-to instance's <c>/reverse/connect-http</c>
+    /// HTTP streaming endpoint derived from its base HTTP(S) endpoint. HTTP/2 is required for
+    /// bidirectional streaming; the connection fails (and retries with backoff) if the server does not
+    /// support HTTP/2.
+    /// </summary>
+    /// <param name="baseEndpoint">The base HTTP(S) endpoint of the connected-to instance.</param>
+    /// <param name="clientInstanceId">The client's user-computer-profile entity id.</param>
+    /// <param name="handler">The local handler that executes agent requests from the server.</param>
+    /// <param name="authToken">Optional Bearer token added to outgoing requests (e.g. a dev-tunnel access token).</param>
+    /// <param name="httpMessageHandler">Optional <see cref="HttpMessageHandler"/> override; used in tests to route via an in-memory server.</param>
+    public static ReverseExecutionClientHost ForEndpointHttp(
+        string baseEndpoint,
+        string clientInstanceId,
+        IReverseExecutionHandler handler,
+        string? authToken = null,
+        HttpMessageHandler? httpMessageHandler = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseEndpoint);
+        var connectUri = BuildConnectHttpUri(baseEndpoint);
+
+        async Task<IReverseMessageChannel> CreateChannelAsync(CancellationToken cancellationToken)
+        {
+            var outboundPipe = new Pipe();
+
+            var httpClient = httpMessageHandler is null
+                ? new HttpClient()
+                : new HttpClient(httpMessageHandler, disposeHandler: false);
+
+            if (authToken is not null)
+            {
+                httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authToken);
+            }
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, connectUri)
+                {
+                    Content = new PipeReaderContent(outboundPipe.Reader),
+                    Version = HttpVersion.Version20,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+                };
+
+                var response = await httpClient.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+
+                var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                var inboundReader = PipeReader.Create(responseStream);
+
+                return new HttpReverseMessageChannel(
+                    inboundReader,
+                    outboundPipe.Writer,
+                    owned: new OwningGroup(httpClient, response));
+            }
+            catch
+            {
+                httpClient.Dispose();
+                throw;
+            }
+        }
+
+        return new ReverseExecutionClientHost(clientInstanceId, handler, CreateChannelAsync);
+    }
+
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         var attempt = 0;
@@ -151,10 +219,59 @@ public sealed class ReverseExecutionClientHost
         return new UriBuilder(baseUri) { Scheme = scheme, Path = "/reverse/connect" }.Uri;
     }
 
+    private static Uri BuildConnectHttpUri(string baseEndpoint)
+    {
+        if (!Uri.TryCreate(baseEndpoint, UriKind.Absolute, out var baseUri))
+        {
+            throw new InvalidOperationException($"Reverse host endpoint is not a valid absolute URI: {baseEndpoint}");
+        }
+
+        return new UriBuilder(baseUri) { Path = "/reverse/connect-http" }.Uri;
+    }
+
     private static async Task DefaultBackoffDelay(int attempt, CancellationToken cancellationToken)
     {
         // Exponential backoff capped at a 2-minute poll interval.
         var seconds = Math.Min(120, Math.Pow(2, Math.Min(attempt, 7)));
         await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// An <see cref="HttpContent"/> implementation that streams data from a <see cref="PipeReader"/>
+    /// as the HTTP request body. The request body remains open until the pipe is completed.
+    /// </summary>
+    private sealed class PipeReaderContent : HttpContent
+    {
+        private readonly PipeReader pipeReader;
+
+        public PipeReaderContent(PipeReader pipeReader) => this.pipeReader = pipeReader;
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => this.pipeReader.CopyToAsync(stream);
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken)
+            => this.pipeReader.CopyToAsync(stream, cancellationToken);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
+        }
+    }
+
+    /// <summary>Groups multiple <see cref="IDisposable"/>s so they are disposed together.</summary>
+    private sealed class OwningGroup : IDisposable
+    {
+        private readonly IDisposable[] owned;
+
+        public OwningGroup(params IDisposable[] owned) => this.owned = owned;
+
+        public void Dispose()
+        {
+            foreach (var item in this.owned)
+            {
+                item.Dispose();
+            }
+        }
     }
 }

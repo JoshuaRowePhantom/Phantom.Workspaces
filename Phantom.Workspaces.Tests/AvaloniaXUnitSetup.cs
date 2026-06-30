@@ -15,7 +15,7 @@ public static class AvaloniaTestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp()
     {
-        Phantom.Workspaces.Gui.Styles.Controls.ControllableBrowserFactory.Create = static () => new HeadlessControllableBrowser();
+        Phantom.Workspaces.Gui.Shared.Controls.ControllableBrowserFactory.Create = static () => new HeadlessControllableBrowser();
         return AppBuilder.Configure<TestApplication>()
             .UseHeadless(
                 new AvaloniaHeadlessPlatformOptions
@@ -32,11 +32,11 @@ public static class AvaloniaTestAppBuilder
             Styles.Add(new DockFluentTheme());
             Styles.Add(new StyleInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
             {
-                Source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/SharedStyles.axaml")
+                Source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml")
             });
             Styles.Add(new StyleInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
             {
-                Source = new Uri("avares://Phantom.Workspaces.Gui.Styles/Styles/NotificationsStyles.axaml")
+                Source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/NotificationsStyles.axaml")
             });
 
             foreach (var template in new WorkspaceDataTemplates())

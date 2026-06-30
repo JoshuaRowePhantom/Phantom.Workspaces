@@ -38,11 +38,9 @@
                         Classes="agent-chat-status-line"
                         IsVisible="{Binding StatusLine.HasVisibleContent}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Classes="agent-chat-status-line-brain"
-                                   FontFamily="Segoe UI Emoji"
-                                   Text="🧠"
-                                   VerticalAlignment="Center"
-                                   Classes.thinking="{Binding StatusLine.IsThinking}"/>
+                        <ProgressBar Classes="running-indicator"
+                                     VerticalAlignment="Center"
+                                     IsIndeterminate="{Binding StatusLine.IsThinking}"/>
                         <TextBlock Classes="agent-chat-status-line-value"
                                    Text="{Binding StatusLine.ModelDisplay}"
                                    VerticalAlignment="Center"
@@ -172,6 +170,48 @@
                            Classes="muted"
                            TextWrapping="Wrap"/>
             </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:AgentChatDiagnosticsDetailViewModel">
+            <DockPanel>
+                <Border DockPanel.Dock="Bottom"
+                        Classes="agent-chat-status-line"
+                        IsVisible="{Binding StatusLine.HasVisibleContent}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🐛"
+                                   Classes="agent-chat-status-line-bug"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Classes="agent-chat-status-line-value"
+                                   VerticalAlignment="Center"
+                                   IsVisible="{Binding StatusLine.HasErrors}">
+                            <TextBlock.Text>
+                                <MultiBinding StringFormat="{}{0} error(s)">
+                                    <Binding Path="StatusLine.ErrorCount"/>
+                                </MultiBinding>
+                            </TextBlock.Text>
+                        </TextBlock>
+                        <TextBlock Classes="agent-chat-status-line-separator"
+                                   Text="•"
+                                   VerticalAlignment="Center"
+                                   IsVisible="{Binding StatusLine.HasWarnings}"/>
+                        <TextBlock Classes="agent-chat-status-line-label"
+                                   VerticalAlignment="Center"
+                                   IsVisible="{Binding StatusLine.HasWarnings}">
+                            <TextBlock.Text>
+                                <MultiBinding StringFormat="{}{0} warning(s)">
+                                    <Binding Path="StatusLine.WarningCount"/>
+                                </MultiBinding>
+                            </TextBlock.Text>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+                <StackPanel Spacing="8" Margin="12">
+                    <TextBlock Text="Diagnostics"
+                               Classes="agent-section-title"/>
+                    <TextBlock Text="No diagnostic events recorded."
+                               Classes="muted"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </DockPanel>
         </DataTemplate>
     </UserControl.DataTemplates>
 
