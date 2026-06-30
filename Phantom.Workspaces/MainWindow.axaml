@@ -127,11 +127,6 @@
                     </Panel>
 
                     <Button Classes="settings-gear"
-                            Content="⌥"
-                            ToolTip.Tip="Git Workspaces"
-                            Click="OnOpenGitWorkspacesClicked" />
-
-                    <Button Classes="settings-gear"
                             Content="⚙"
                             ToolTip.Tip="Settings"
                             Click="OnOpenSettingsClicked" />
