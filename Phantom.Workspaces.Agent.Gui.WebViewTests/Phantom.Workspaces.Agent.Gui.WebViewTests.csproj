@@ -20,6 +20,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
-    <ProjectReference Include="..\Phantom.Workspaces.Gui.Styles\Phantom.Workspaces.Gui.Styles.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Gui.Shared\Phantom.Workspaces.Gui.Shared.csproj" />
   </ItemGroup>
 </Project>

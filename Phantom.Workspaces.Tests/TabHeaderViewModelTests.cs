@@ -1,13 +1,18 @@
 using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
+using AgentSchema;
+using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
+using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -312,5 +317,141 @@ public sealed class TabHeaderViewModelTests
 
         var progressBar = Assert.IsType<ProgressBar>(control);
         Assert.Contains("running-indicator", progressBar.Classes);
+    }
+
+    // ── AgentSessionWorkspaceTabViewModel – SetReady wires tab header indicators
+
+    [Fact]
+    public async Task AgentSessionTab_SetReady_SetsTabHeader()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        Assert.NotNull(tab.TabHeader);
+    }
+
+    [Fact]
+    public async Task AgentSessionTab_SetReady_TabHeaderContainsAgentRunningIndicator()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        var indicator = tab.TabHeader!.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().FirstOrDefault();
+        Assert.NotNull(indicator);
+    }
+
+    [Fact]
+    public async Task AgentSessionTab_SetReady_TabHeaderContainsNotificationIndicator()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        var indicator = tab.TabHeader!.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().FirstOrDefault();
+        Assert.NotNull(indicator);
+    }
+
+    [Fact]
+    public async Task AgentSessionTab_SetReady_RunningIndicator_InitiallyNotRunning()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        var indicator = tab.TabHeader!.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        Assert.False(indicator.IsRunning);
+    }
+
+    [Fact]
+    public async Task AgentSessionTab_SetReady_EffectiveTabHeaderContainsRunningAndNotificationIndicators()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+        var doc = new WorkspaceDocument(tab);
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        Assert.Contains(doc.EffectiveTabHeader.Items, i => i is AgentRunningIndicatorTabHeaderItemViewModel);
+        Assert.Contains(doc.EffectiveTabHeader.Items, i => i is NotificationIndicatorTabHeaderItemViewModel);
+    }
+
+    // ── WorkspaceDocument – NotificationIndicatorTabHeaderItemViewModel.HasUnread tracks HasUnreadNotification
+
+    [Fact]
+    public async Task WorkspaceDocument_HasUnreadNotification_SetToTrue_SetsHasUnreadOnNotificationIndicator()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+        var doc = new WorkspaceDocument(tab);
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        doc.HasUnreadNotification = true;
+
+        var indicator = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+        Assert.True(indicator.HasUnread);
+    }
+
+    [Fact]
+    public async Task WorkspaceDocument_HasUnreadNotification_SetToFalse_ClearsHasUnreadOnNotificationIndicator()
+    {
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "t", Title = "Test" };
+        var doc = new WorkspaceDocument(tab);
+
+        await using var agentChat = await CreateMinimalEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        doc.HasUnreadNotification = true;
+        doc.HasUnreadNotification = false;
+
+        var indicator = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+        Assert.False(indicator.HasUnread);
+    }
+
+    private static async Task<AgentChat> CreateMinimalEchoAgentChatAsync()
+    {
+        const string EchoAgentDefinitionJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """;
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentDefinitionJson);
+        return await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+        });
     }
 }

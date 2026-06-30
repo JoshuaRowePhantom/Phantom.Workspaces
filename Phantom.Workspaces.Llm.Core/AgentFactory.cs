@@ -515,7 +515,8 @@ public static class AgentFactory
             displayName,
             gitHubToken,
             services?.LoggerFactory,
-            queueManager: queueManager);
+            queueManager: queueManager,
+            modelOptions: model.Options);
 
         return (client, displayName);
     }

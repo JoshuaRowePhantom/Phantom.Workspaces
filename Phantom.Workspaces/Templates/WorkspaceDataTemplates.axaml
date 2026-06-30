@@ -5,7 +5,7 @@
                xmlns:templates="using:Phantom.Workspaces.Templates"
                xmlns:agentControls="using:Phantom.Workspaces.Agent.Gui.Controls"
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
-               xmlns:controls="using:Phantom.Workspaces.Gui.Styles.Controls"
+               xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <DataTemplate DataType="vm:EntityListNodeViewModel">
         <StackPanel Classes="workspace-entity-node-root">
@@ -159,10 +159,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:ShellTabViewModel">
-        <TextBlock Text="{Binding Title}"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Center"
-                   Classes="muted" />
+        <controls:TerminalControl Session="{Binding TerminalSession}" />
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
@@ -559,6 +556,10 @@
                         </DataTemplate>
                         <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
                             <TextBlock Text="{Binding Icon}" />
+                        </DataTemplate>
+                        <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+                            <ProgressBar Classes="running-indicator"
+                                         IsIndeterminate="{Binding IsRunning}" />
                         </DataTemplate>
                         <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
                             <!-- Always occupies space; empty bar hides it when there is no unread notification -->

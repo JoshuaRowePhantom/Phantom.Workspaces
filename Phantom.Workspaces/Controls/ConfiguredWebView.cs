@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Phantom.Workspaces.Configuration;
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Controls;
