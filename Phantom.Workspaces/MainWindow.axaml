@@ -79,7 +79,7 @@
                     <Button Classes="settings-gear"
                             ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
                             Click="OnOpenScheduledTasksClicked">
-                        <ProgressBar Classes="scheduled-tools-indicator"
+                        <ProgressBar Classes="glyph-indicator vibrating-alarm-clock"
                                      IsIndeterminate="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}"
                                      Classes.failed="{Binding ScheduledToolsRunning.HasFailure, FallbackValue=False}"
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
@@ -90,12 +90,8 @@
                                 Classes="settings-gear"
                                 ToolTip.Tip="Running agents"
                                 Command="{Binding RunningAgentBrain.ToggleOpenCommand}">
-                            <TextBlock Classes="agent-chat-status-line-brain"
-                                       Classes.thinking="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False}"
-                                       Classes.idle="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False, Converter={x:Static BoolConverters.Not}}"
-                                       Text="🧠"
-                                       FontSize="14"
-                                       Margin="0" />
+                            <ProgressBar Classes="glyph-indicator pulsating-brain"
+                                         IsIndeterminate="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False}" />
                         </Button>
                         <Popup IsOpen="{Binding RunningAgentBrain.IsOpen, Mode=TwoWay}"
                                PlacementTarget="{Binding #RunningAgentBrainButton}"
@@ -110,7 +106,7 @@
                                 Classes="settings-gear"
                                 ToolTip.Tip="Notifications"
                                 Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
-                            <ProgressBar Classes="notifications-indicator"
+                            <ProgressBar Classes="glyph-indicator swinging-bell"
                                          IsIndeterminate="{Binding NotificationsViewModel.HasActiveRun}" />
                         </Button>
                         <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"

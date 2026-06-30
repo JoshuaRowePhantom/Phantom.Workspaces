@@ -731,45 +731,102 @@
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
     </Style>
 
-    <!-- scheduled-tools-indicator: the ⏱/⏸ clock button in the status bar.
-         Idle: clock glyph (⏱) at full opacity.
-         :indeterminate (running): same glyph, Avalonia IsIndeterminate state active.
-         .paused: pause glyph (⏸) with dimmed opacity.
-         .failed: clock glyph with error foreground.
-         PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
-    <Style Selector="ProgressBar.scheduled-tools-indicator">
+    <!-- glyph-indicator: shared base style for emoji glyph ProgressBars used as toolbar and tab-header
+         indicators. Fixes Avalonia Fluent's unconstrained ProgressBar default sizing. -->
+    <Style Selector="ProgressBar.glyph-indicator">
+        <Setter Property="Width" Value="22" />
+        <Setter Property="Height" Value="22" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- pulsating-brain: 🧠 opacity 0.25 idle → sine-wave 1.0↔0.4 when :indeterminate -->
+    <Style Selector="ProgressBar.glyph-indicator.pulsating-brain">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock x:Name="Glyph" Text="🧠" FontSize="14" Opacity="0.25"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.glyph-indicator.pulsating-brain:indeterminate /template/ TextBlock#Glyph">
+        <Style.Animations>
+            <Animation Duration="0:0:1" IterationCount="INFINITE" PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0" /></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.4" /></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- vibrating-alarm-clock: ⏰ static idle → rapid wobble when :indeterminate -->
+    <Style Selector="ProgressBar.glyph-indicator.vibrating-alarm-clock">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
         <Setter Property="Template">
             <ControlTemplate>
                 <Panel>
                     <Border x:Name="PART_Indicator" IsVisible="False" />
-                    <TextBlock Text="⏱"
-                               FontSize="14"
-                               Foreground="{TemplateBinding Foreground}"
-                               VerticalAlignment="Center"
-                               HorizontalAlignment="Center" />
+                    <TextBlock x:Name="Glyph" Text="⏰" FontSize="14"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               RenderTransformOrigin="0.5,0.5">
+                        <TextBlock.RenderTransform><RotateTransform /></TextBlock.RenderTransform>
+                    </TextBlock>
                 </Panel>
             </ControlTemplate>
         </Setter>
     </Style>
-    <Style Selector="ProgressBar.scheduled-tools-indicator.paused">
+    <Style Selector="ProgressBar.glyph-indicator.vibrating-alarm-clock:indeterminate /template/ TextBlock#Glyph">
+        <Style.Animations>
+            <Animation Duration="0:0:0.15" IterationCount="INFINITE" PlaybackDirection="Alternate">
+                <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="-15" /></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="15" /></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="ProgressBar.glyph-indicator.vibrating-alarm-clock.paused">
         <Setter Property="Opacity" Value="0.55" />
         <Setter Property="Template">
             <ControlTemplate>
                 <Panel>
                     <Border x:Name="PART_Indicator" IsVisible="False" />
-                    <TextBlock Text="⏸"
-                               FontSize="14"
-                               Foreground="{TemplateBinding Foreground}"
-                               VerticalAlignment="Center"
-                               HorizontalAlignment="Center" />
+                    <TextBlock x:Name="Glyph" Text="⏸" FontSize="14"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Panel>
             </ControlTemplate>
         </Setter>
     </Style>
-    <Style Selector="ProgressBar.scheduled-tools-indicator.failed">
+    <Style Selector="ProgressBar.glyph-indicator.vibrating-alarm-clock.failed">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+    </Style>
+
+    <!-- swinging-bell: 🔔 static idle → pendulum from top-centre when :indeterminate -->
+    <Style Selector="ProgressBar.glyph-indicator.swinging-bell">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock x:Name="Glyph" Text="🔔" FontSize="14"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               RenderTransformOrigin="0.5,0.0">
+                        <TextBlock.RenderTransform><RotateTransform /></TextBlock.RenderTransform>
+                    </TextBlock>
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.glyph-indicator.swinging-bell:indeterminate /template/ TextBlock#Glyph">
+        <Style.Animations>
+            <Animation Duration="0:0:0.5" IterationCount="INFINITE" PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="-20" /></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="20" /></KeyFrame>
+            </Animation>
+        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.terminal-mono">
