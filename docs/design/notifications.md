@@ -33,7 +33,7 @@ public sealed record NotificationEntry
 
     /// <summary>
     /// When true, this tab's notifications are silently auto-read and never trigger the
-    /// auto-show overlay. Persisted per-tab in the user-computer-profile entity.
+    /// auto-show overlay. Snooze state is in-memory only and resets on restart.
     /// </summary>
     public required bool IsSnoozed { get; init; }
 }
@@ -156,9 +156,6 @@ Clicking the **zzz** icon on a notification entry:
 4. A snoozed tab displays a small "zzz" badge on its notification list entry; clicking zzz
    again un-snoozes.
 
-Snooze state is persisted per tab key in the `user-computer-profile` entity under a
-`snoozed-notification-tabs` string array field.
-
 ## Read / unread rules
 
 | Event | Result |
@@ -254,14 +251,10 @@ In `Phantom.Workspaces`:
 - `MainWindow.axaml` — add bell toggle button (Grid.Column 5) and `NotificationsOverlayControl`; add F7/F8 key bindings; update Dock tab item template for yellow border
 - `ViewModels/MainWindowViewModel.cs` — implement `IActiveTabProvider`; add `NotificationsViewModel`, `NavigateNextNotificationCommand`, `NavigatePreviousNotificationCommand`; call `MarkRead` on every tab activation
 
-In `Phantom.Workspaces.Data.Core`:
-
-- `JsonSchemas/user-computer-profile.json` — add `snoozed-notification-tabs` string array field
-
 ## Non-goals
 
-1. Persisting notification history across app restarts (notifications are in-memory only;
-   snooze state is persisted).
+1. Persisting notification history across app restarts (notifications and snooze state are
+   in-memory only and reset on restart).
 2. System tray / OS-level notifications.
 3. Sound or vibration feedback.
 4. Notifications from sources other than in-process code (no push/webhook model in scope).
