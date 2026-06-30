@@ -298,6 +298,26 @@
     .chat-content-row:hover .details-gutter-btn { opacity: 0.6; }
     .details-gutter-btn:hover { opacity: 1; }
 
+    /* inspect-gutter component ---------------------------------------------- */
+
+    .inspect-gutter-btn {
+      position: absolute;
+      right: -2.2em;
+      top: 1.7em;
+      opacity: 0.3;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font-size: inherit;
+      font-family: inherit;
+      padding: 0;
+    }
+
+    .chat-content-row:hover .inspect-gutter-btn { opacity: 0.6; }
+    .inspect-gutter-btn:hover { opacity: 1; }
+
     #raw-details-dialog {
       position: fixed;
       top: 10%;
@@ -506,6 +526,62 @@
     })();
   </script>
   <script>
+    /* inspect-gutter.js — right-gutter inspect button component.
+     * Call InspectGutter.init(root) to wire up all [data-inspect-target] elements inside root.
+     * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
+     * Clicking the button posts an "inspect" message to the C# bridge with the element id and
+     * its serialised JSON payload (read from the co-located data-details-target attribute).
+     */
+    var InspectGutter = (function () {
+      "use strict";
+
+      function postToHost(message) {
+        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+          window.chrome.webview.postMessage(JSON.stringify(message));
+        }
+      }
+
+      function init(root) {
+        root.querySelectorAll("[data-inspect-target]").forEach(attach);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-inspect-target")) { attach(node); }
+              node.querySelectorAll("[data-inspect-target]").forEach(attach);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      function attach(el) {
+        if (el._inspectGutterAttached) { return; }
+        el._inspectGutterAttached = true;
+        el.classList.add("chat-content-row");
+
+        var btn = document.createElement("button");
+        btn.className = "inspect-gutter-btn";
+        btn.setAttribute("aria-label", "Open in inspector");
+        btn.setAttribute("aria-hidden", "true");
+        btn.textContent = "\u24d8"; /* ⓘ */
+
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          postToHost({
+            type: "inspect",
+            contentId: el.id,
+            contentJson: el.getAttribute("data-details-target") || ""
+          });
+        });
+
+        el.insertBefore(btn, el.firstChild);
+      }
+
+      return { init: init };
+    })();
+  </script>
+  <script>
     (function () {
       "use strict";
 
@@ -599,6 +675,7 @@
       // Initialise gutter components once the host bridge is wired up.
       CopyGutter.init(document);
       DetailsGutter.init(document);
+      InspectGutter.init(document);
       TimestampFormatter.init(document);
     })();
   </script>

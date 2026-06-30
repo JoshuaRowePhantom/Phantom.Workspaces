@@ -76,4 +76,106 @@ public sealed class NavigationStackTests
         service.GoBack(out var prev);
         Assert.Equal(Entry("tab-a"), prev);
     }
+
+    [Fact]
+    public void GoBackSkipping_OpenTab_ReturnsImmediately()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        service.Push(Entry("tab-c"));
+
+        var result = service.GoBackSkipping(_ => true, out var entry);
+
+        Assert.True(result);
+        Assert.Equal(Entry("tab-b"), entry);
+    }
+
+    [Fact]
+    public void GoBackSkipping_ClosedTab_SkipsToNextOpenEntry()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b")); // closed
+        service.Push(Entry("tab-c")); // current
+
+        var result = service.GoBackSkipping(e => e.TabId != "tab-b", out var entry);
+
+        Assert.True(result);
+        Assert.Equal(Entry("tab-a"), entry);
+    }
+
+    [Fact]
+    public void GoBackSkipping_MultipleConsecutiveClosedTabs_SkipsAll()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b")); // closed
+        service.Push(Entry("tab-c")); // closed
+        service.Push(Entry("tab-d")); // current
+
+        var result = service.GoBackSkipping(e => e.TabId == "tab-a", out var entry);
+
+        Assert.True(result);
+        Assert.Equal(Entry("tab-a"), entry);
+    }
+
+    [Fact]
+    public void GoBackSkipping_AllClosed_ReturnsFalse()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a")); // closed
+        service.Push(Entry("tab-b")); // current
+
+        var result = service.GoBackSkipping(_ => false, out var entry);
+
+        Assert.False(result);
+        Assert.Null(entry);
+    }
+
+    [Fact]
+    public void GoForwardSkipping_OpenTab_ReturnsImmediately()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        service.Push(Entry("tab-c"));
+        service.GoBack(out _);
+        service.GoBack(out _); // currentIndex = 0 (tab-a)
+
+        var result = service.GoForwardSkipping(_ => true, out var entry);
+
+        Assert.True(result);
+        Assert.Equal(Entry("tab-b"), entry);
+    }
+
+    [Fact]
+    public void GoForwardSkipping_ClosedTab_SkipsToNextOpenEntry()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b")); // closed
+        service.Push(Entry("tab-c")); // open
+        service.GoBack(out _);
+        service.GoBack(out _); // currentIndex = 0 (tab-a)
+
+        var result = service.GoForwardSkipping(e => e.TabId != "tab-b", out var entry);
+
+        Assert.True(result);
+        Assert.Equal(Entry("tab-c"), entry);
+    }
+
+    [Fact]
+    public void GoForwardSkipping_AllClosed_ReturnsFalse()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b")); // closed
+        service.GoBack(out _); // currentIndex = 0 (tab-a)
+
+        var result = service.GoForwardSkipping(_ => false, out var entry);
+
+        Assert.False(result);
+        Assert.Null(entry);
+    }
 }
