@@ -212,14 +212,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.RunSlashCommandAsync(contextFactory, text);
 
         var rootHandler = new RootSlashCommandCompletionsHandler(this.agentChat.SlashCommands);
-        this.InputQueue.DefaultComposer.SlashCompletionsProviderAsync = (commandName, partialInput, ct) =>
+        this.InputQueue.DefaultComposer.SlashCompletionsProviderAsync = async (commandName, partialInput, ct) =>
         {
             if (string.IsNullOrEmpty(commandName))
             {
                 // Root case: user is still typing the command name (no space yet).
                 // partialInput is the partial command name (or empty string for just "/").
-                return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(
-                    rootHandler.GetCompletions(partialInput));
+                return rootHandler.GetCompletions(partialInput);
             }
 
             var handler = this.agentChat.SlashCommands.Commands.FirstOrDefault(
@@ -227,12 +226,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
             if (handler is null)
             {
-                return Task.FromResult<IReadOnlyList<SlashCommandCompletion>>(
-                    Array.Empty<SlashCommandCompletion>());
+                return Array.Empty<SlashCommandCompletion>();
             }
 
             var context = contextFactory();
-            return handler.GetCompletionsAsync(context, partialInput, ct);
+            var completions = await handler.GetCompletionsAsync(context, partialInput, ct);
+            return completions
+                .OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         };
 
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
