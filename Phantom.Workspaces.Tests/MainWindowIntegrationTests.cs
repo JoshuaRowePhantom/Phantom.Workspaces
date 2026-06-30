@@ -592,11 +592,9 @@ public sealed class MainWindowIntegrationTests
         var workspacePane = await task!;
         Assert.NotNull(workspacePane);
         
-        // With Dock integration, regions are synthetic (created via SyncSelectedWorkspacePaneFromDock)
-        // When workspace has no regions in JSON, we create a default tab for the workspace entity
-        // The synthetic region should exist after the tab is added
-        Assert.NotNull(workspacePane!.SelectedRegion);
-        Assert.Single(workspacePane.SelectedRegion!.Tabs);
+        // When workspace has no regions in JSON, we create a default tab for the workspace entity.
+        // pane.Tabs is now the source of truth — confirm the single default tab was added.
+        Assert.Single(workspacePane!.Tabs);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -636,8 +634,7 @@ public sealed class MainWindowIntegrationTests
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
 
         Assert.True(handled);
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(selectedRegion.SelectedTab);
+        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
         Assert.Same(agentDefinitionEntity, launchpadTab.ManifestEntity);
         Assert.True(launchpadTab.CanStart);
     }
@@ -681,10 +678,9 @@ public sealed class MainWindowIntegrationTests
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
 
         Assert.True(handled);
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(selectedRegion.SelectedTab);
-        Assert.Same(agentManifestEntity, launchpadTab.ManifestEntity);
-        Assert.True(launchpadTab.CanStart);
+        var launchpadTab2 = Assert.IsType<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        Assert.Same(agentManifestEntity, launchpadTab2.ManifestEntity);
+        Assert.True(launchpadTab2.CanStart);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -728,9 +724,8 @@ public sealed class MainWindowIntegrationTests
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
 
         Assert.True(handled);
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var launchpadTab = Assert.IsType<AgentManifestLaunchpadViewModel>(selectedRegion.SelectedTab);
-        Assert.Same(agentDefinitionEntity, launchpadTab.ManifestEntity);
+        var launchpadTab3 = Assert.IsType<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        Assert.Same(agentDefinitionEntity, launchpadTab3.ManifestEntity);
 
         // Create an agent session directly (equivalent to the launchpad's Start Session) to verify tool mapping.
         var agentSessionId = Guid.NewGuid().ToString("n");
@@ -738,8 +733,7 @@ public sealed class MainWindowIntegrationTests
             viewModel, agentDefinitionEntity, agentSessionId);
         Assert.NotNull(createdAgentSession);
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, createdAgentSession!);
-        var sessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        var sessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(sessionTab);
         Assert.NotNull(sessionTab.Agent);
         Assert.Contains(sessionTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
@@ -833,9 +827,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(workspacePane);
 
         // The tab must be an AgentSessionWorkspaceTabViewModel, not a plain entity view.
-        var tabs = workspacePane.SelectedRegion?.Tabs;
-        Assert.NotNull(tabs);
-        var restoredTab = Assert.Single(tabs!);
+        var restoredTab = Assert.Single(workspacePane.Tabs);
         var agentSessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(restoredTab);
         Assert.Equal("restored-tab-1", agentSessionTab.Id);
         Assert.Equal("My Restored Session", agentSessionTab.Title);
@@ -947,9 +939,7 @@ public sealed class MainWindowIntegrationTests
 
         // With the new loading-tab design, TryCreateAgentSessionTabForRestoreAsync always returns
         // a loading tab (which transitions to Failed state asynchronously when data is missing).
-        var tabs = workspacePane.SelectedRegion?.Tabs;
-        Assert.NotNull(tabs);
-        var agentTab = Assert.Single(tabs!);
+        var agentTab = Assert.Single(workspacePane.Tabs);
         Assert.IsType<AgentSessionWorkspaceTabViewModel>(agentTab);
     }
 
@@ -1241,7 +1231,7 @@ public sealed class MainWindowIntegrationTests
         var visibleIds = paneBDock?.VisibleDockables is not null
             ? string.Join(", ", paneBDock.VisibleDockables.Select(d => d.Id))
             : "(null)";
-        var selectedTabId = viewModel.WorkspacePanes[1].SelectedRegion?.SelectedTab?.Id ?? "(null)";
+        var selectedTabId = viewModel.WorkspacePanes[1].SelectedTab?.Id ?? "(null)";
 
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
 
@@ -1560,8 +1550,7 @@ public sealed class MainWindowIntegrationTests
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
         Assert.Equal(AgentTabState.Ready, agentTab.State);
     }
@@ -1606,10 +1595,9 @@ public sealed class MainWindowIntegrationTests
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
-        await WaitForAgentReadyAsync(agentTab);
-        Assert.Equal(AgentTabState.Ready, agentTab.State);
+        var agentTab2 = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab2);
+        Assert.Equal(AgentTabState.Ready, agentTab2.State);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -1656,10 +1644,9 @@ public sealed class MainWindowIntegrationTests
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
-        await WaitForAgentReadyAsync(agentTab);
-        Assert.Equal(AgentTabState.Failed, agentTab.State);
+        var agentTab3 = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab3);
+        Assert.Equal(AgentTabState.Failed, agentTab3.State);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -1697,8 +1684,7 @@ public sealed class MainWindowIntegrationTests
 
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(selectedRegion.SelectedTab);
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
         Assert.Equal(agentSessionEntity!.EntityId.ToString(), tab.Id);
     }
 
@@ -1812,14 +1798,14 @@ public sealed class MainWindowIntegrationTests
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabA = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
 
         // Open in pane B
         var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
 
         await WaitForAgentReadyAsync(tabA);
         await WaitForAgentReadyAsync(tabB);
@@ -1899,7 +1885,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
         Assert.NotNull(agentTab.Agent);
 
@@ -1996,7 +1982,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
         Assert.NotNull(agentTab.Agent);
 
@@ -2051,7 +2037,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
         Assert.NotNull(agentTab.Agent);
 
@@ -3605,8 +3591,7 @@ public sealed class MainWindowIntegrationTests
 
         Assert.True(handledByTunnel);
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        Assert.Equal(2, selectedRegion.Tabs!.Count);
+        Assert.Equal(2, viewModel.SelectedWorkspacePane.Tabs.Count);
 
         window.Close();
     }
@@ -3626,8 +3611,7 @@ public sealed class MainWindowIntegrationTests
 
         window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        Assert.Single(selectedRegion.Tabs!);
+        Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
 
         window.Close();
     }
@@ -4380,14 +4364,14 @@ public sealed class MainWindowIntegrationTests
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabA = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
 
         // Open in pane B
         var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
 
         await WaitForAgentReadyAsync(tabA);
         await WaitForAgentReadyAsync(tabB);
@@ -4467,14 +4451,14 @@ public sealed class MainWindowIntegrationTests
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabA = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
 
         // Open in pane B
         var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
 
         await WaitForAgentReadyAsync(tabA);
         await WaitForAgentReadyAsync(tabB);
@@ -4559,7 +4543,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
 
         Assert.True(brain.IsAnyRunning);
@@ -4621,7 +4605,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
 
         brain!.Refresh();
@@ -4671,7 +4655,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
 
         brain!.Refresh();
@@ -4752,7 +4736,7 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+            viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
 
         brain!.Refresh();
