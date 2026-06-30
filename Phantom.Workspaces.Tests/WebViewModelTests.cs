@@ -93,6 +93,20 @@ public sealed class WebViewModelTests
         Assert.Equal("https://example.com", vm.AddressBarUrl);
     }
 
+    [Fact]
+    public void HomeUrlTooltip_WithHomeUrl_ReturnsGoToHomePageFollowedByUrl()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-tooltip-1", Title = "T" };
+        Assert.Equal("Go to home page\nhttps://example.com", vm.HomeUrlTooltip);
+    }
+
+    [Fact]
+    public void HomeUrlTooltip_WithoutHomeUrl_ReturnsGoToHomePage()
+    {
+        var vm = new WebViewModel(string.Empty) { Id = "home-tooltip-2", Title = "T" };
+        Assert.Equal("Go to home page", vm.HomeUrlTooltip);
+    }
+
     // --- SetPageTitle / titleFixed ---
 
     [Fact]

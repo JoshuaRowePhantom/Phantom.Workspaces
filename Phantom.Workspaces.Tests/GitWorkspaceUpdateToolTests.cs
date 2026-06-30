@@ -152,4 +152,36 @@ public sealed class GitWorkspaceUpdateToolTests
         Assert.NotNull(result.ResultContent);
         Assert.Contains("skipped: 1", result.ResultContent, StringComparison.OrdinalIgnoreCase);
     }
+    [Fact]
+    public async Task ExecuteAsync_WhenGitWorktreeEntity_ResultContentReportsChanged()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var entityId = new EntityId(Guid.NewGuid());
+        var json = $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "git-worktree"],
+              "names": [["git-worktrees", "/repo/path"]],
+              "display-name": {"default": "repo"},
+              "path": "/repo/path"
+            }
+            """;
+        await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes = [new EntityChange
+            {
+                EntityChangeMode = EntityChangeMode.Replace,
+                Data = JsonDocument.Parse(json).RootElement.Clone(),
+            }],
+        }, TestContext.Current.CancellationToken);
+        Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
+            new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" };
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+
+        var result = await tool.ExecuteAsync(Context(dataAccessLayer));
+
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("changed: 1", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
 }

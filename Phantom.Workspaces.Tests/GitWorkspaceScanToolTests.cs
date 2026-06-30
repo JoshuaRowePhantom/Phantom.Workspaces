@@ -57,8 +57,8 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
             [
                 new TopLevelQueryClause
                 {
-                    ClauseIdentifier = new QueryClauseIdentifier("git"),
-                    Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["git"]) },
+                    ClauseIdentifier = new QueryClauseIdentifier("git-worktree"),
+                    Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["git-worktree"]) },
                 },
             ],
         });
@@ -379,6 +379,86 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
             && e.Message.Contains("2", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Run_CreatesGitWorktreeEntityType()
+    {
+        this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        var entityTypes = single.GetProperty("entity-types").EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Contains("git-worktree", entityTypes);
+        Assert.DoesNotContain("git", entityTypes);
+    }
+
+    [Fact]
+    public async Task Run_SetsNamesToGitWorktreesNamespace()
+    {
+        var repo = this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        var firstNameArray = single.GetProperty("names").EnumerateArray().First();
+        var components = firstNameArray.EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Equal("git-worktrees", components[0]);
+        Assert.Equal(repo, components[1]);
+    }
+
+    [Fact]
+    public async Task Run_WhenProfileHasComputerUserProfilesName_IncludesProfileNameEntry()
+    {
+        this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = this.ContextWithProfile(dataAccessLayer, ["computer-user-profiles", "users", "test-user", "computers", "test-computer"]);
+
+        await new GitWorkspaceScanTool().ExecuteAsync(context);
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        var allNameArrays = single.GetProperty("names").EnumerateArray().ToArray();
+        var profileEntry = allNameArrays.FirstOrDefault(n =>
+            n.EnumerateArray().First().GetString() == "computer-user-profiles");
+        Assert.True(profileEntry.ValueKind == System.Text.Json.JsonValueKind.Array, "Expected a profile name entry");
+        var components = profileEntry.EnumerateArray().Select(e => e.GetString()).ToArray();
+        Assert.Equal(new[] { "computer-user-profiles", "users", "test-user", "computers", "test-computer" }, components!);
+    }
+
+    [Fact]
+    public async Task Run_WhenProfileHasNoComputerUserProfilesName_OmitsProfileNameEntry()
+    {
+        this.MakeRepo("project-a");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        // Default context has a placeholder profile with name ["placeholder"] -- not computer-user-profiles
+
+        await new GitWorkspaceScanTool().ExecuteAsync(this.Context(dataAccessLayer));
+
+        var entities = await GitEntitiesAsync(dataAccessLayer);
+        var single = Assert.Single(entities);
+        var allNameArrays = single.GetProperty("names").EnumerateArray().ToArray();
+        Assert.Single(allNameArrays); // only the primary git-worktrees name
+    }
+
+    private WorkspaceToolExecutionContext ContextWithProfile(IDataAccessLayer dataAccessLayer, string[] profileNameComponents)
+    {
+        var namesJson = string.Join(", ", profileNameComponents.Select(c => JsonSerializer.Serialize(c)));
+        var profileJson = $$"""
+            {
+              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-types": ["entity", "user-computer-profile"],
+              "names": [[{{namesJson}}]]
+            }
+            """;
+        var profileSnapshot = WorkspaceToolExecutionContextTestFactory.CreateSnapshot(profileJson);
+        var toolJson = $$"""{ "entity-types": ["entity", "tool"], "tool-type": "git-workspace-scan", "scan-root": {{JsonSerializer.Serialize(this.scanRoot)}} }""";
+        return WorkspaceToolExecutionContextTestFactory.Create(dataAccessLayer, toolJson, profileSnapshot);
+    }
+
     private static async Task<IDataAccessLayer> CreateProductionStyleDataAccessLayerAsync()
     {
         var underlying = new InMemoryDataAccessLayer();
@@ -441,3 +521,5 @@ internal sealed class TestLogger<T> : ILogger<T>
         this.Entries.Add(new LogEntry(logLevel, exception, formatter(state, exception)));
     }
 }
+
+

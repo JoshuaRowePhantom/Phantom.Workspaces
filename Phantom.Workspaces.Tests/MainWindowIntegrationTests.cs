@@ -263,6 +263,85 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateTabFromEntityAsync_ExternalEntityNonDefaultUrlKey_SetsTitleToUrlKeyAndFixesTitle()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // External entity with a non-default URL key only — no "default" key present
+        var externalEntityId = new EntityId("ff402001-ff40-4ff4-8ff4-ff4002000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            externalEntityId,
+            """
+            {
+              "entity-id": "ff402001-ff40-4ff4-8ff4-ff4002000001",
+              "entity-types": ["entity", "external"],
+              "names": [["tests", "externals", "non-default-url-key"]],
+              "display-name": { "default": "Non-Default URL Entity" },
+              "urls": { "docs": "https://docs.example.com" }
+            }
+            """);
+
+        // Workspace tab with no explicit title — title must be derived from the URL key
+        var workspaceId = new EntityId("ff402002-ff40-4ff4-8ff4-ff4002000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "ff402002-ff40-4ff4-8ff4-ff4002000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "non-default-url-key"]],
+              "display-name": { "default": "Non-Default URL Key Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "non-default-url-tab-1",
+                      "kind": "entity",
+                      "dock": "full",
+                      "content": {
+                        "target-entity-name": ["tests", "externals", "non-default-url-key"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "non-default-url-tab-1");
+
+        var tabDoc = contentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .FirstOrDefault(d => d.Id == "non-default-url-tab-1");
+        Assert.NotNull(tabDoc);
+        var webVm = Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
+
+        // Title must be the URL key, not the entity display name
+        Assert.Equal("docs", webVm.Title);
+
+        // titleFixed must be true: SetPageTitle should NOT update the tab title
+        webVm.SetPageTitle("Page Title From Browser");
+        Assert.Equal("docs", webVm.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_CloseWhileTabsLoading_DoesNotCrash()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
