@@ -18,9 +18,13 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     private static readonly string[] EntitySchemaNameComponents = { JsonSchemasNamePrefix, "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json" };
     private static readonly string EntitySchemaName = JsonSerializer.Serialize(EntitySchemaNameComponents);
     private const string Draft202012MetaSchema = "https://json-schema.org/draft/2020-12/schema";
+    private const string EntityTypeType = "entity-type";
+    private const string EntityTypesNamePrefix = "entity-types";
+    private static readonly IReadOnlySet<string> EmptyEntityTypeNames = new HashSet<string>(StringComparer.Ordinal);
 
     private SchemaRegistry? _cachedSchemaRegistry;
     private IReadOnlyDictionary<string, JsonElement>? _cachedSchemaEntitiesById;
+    private IReadOnlySet<string>? _cachedRegisteredEntityTypeNames;
 
     public SchemaValidatingDataAccessLayer(
         IDataAccessLayer underlyingDataAccessLayer)
@@ -62,15 +66,35 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
             schemaAccessor = accessor;
         }
 
+        this.EnsureEntityTypeNamesCached();
+        var requestEntityTypeNames = GetEntityTypeNamesFromRequest(request);
+
         foreach (var change in request.Changes)
         {
+            var entityId = change.EntityId ?? this.GetEntityId(change.Data);
+
+            var discriminatorErrors = this.ValidateEntityTypeDiscriminators(
+                change, _cachedRegisteredEntityTypeNames, requestEntityTypeNames);
+            if (discriminatorErrors.Count > 0)
+            {
+                validationResults.Add(
+                    new EntityUpdateResult
+                    {
+                        UpdateState = UpdateState.Failed,
+                        RequestedEntityId = entityId ?? default,
+                        ResultingEntityId = entityId ?? default,
+                        ConcurrencyMatchState = ConcurrencyMatchState.NotMatched,
+                        Errors = discriminatorErrors,
+                    });
+                continue;
+            }
+
             var validationErrors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken).ConfigureAwait(false);
             if (validationErrors.Count == 0)
             {
                 continue;
             }
 
-            var entityId = change.EntityId ?? this.GetEntityId(change.Data);
             validationResults.Add(
                 new EntityUpdateResult
                 {
@@ -95,6 +119,7 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         {
             _cachedSchemaRegistry = null;
             _cachedSchemaEntitiesById = null;
+            _cachedRegisteredEntityTypeNames = null;
         }
 
         return result;
@@ -116,11 +141,20 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
                 Changes = Array.Empty<EntityChange>(),
             });
         var schemaRegistry = await this.BuildSchemaRegistryAsync(schemaAccessor, cancellationToken).ConfigureAwait(false);
+        this.EnsureEntityTypeNamesCached();
         var change = new EntityChange
         {
             Data = entityData,
             EntityChangeMode = EntityChangeMode.Replace,
         };
+
+        var discriminatorErrors = this.ValidateEntityTypeDiscriminators(
+            change, _cachedRegisteredEntityTypeNames, EmptyEntityTypeNames);
+        if (discriminatorErrors.Count > 0)
+        {
+            return discriminatorErrors.Select(static error => error.Message).ToArray();
+        }
+
         var errors = await this.ValidateChangeAsync(change, schemaAccessor, schemaRegistry, cancellationToken).ConfigureAwait(false);
         return errors.Select(static error => error.Message).ToArray();
     }
@@ -258,6 +292,11 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
     {
         var registry = await schemaAccessor.BuildSchemaRegistryAsync(cancellationToken).ConfigureAwait(false);
         _cachedSchemaRegistry = registry;
+        if (_cachedSchemaEntitiesById is null && schemaAccessor is SchemaAccessor concreteAccessor)
+        {
+            _cachedSchemaEntitiesById = concreteAccessor.SchemaEntitiesById;
+        }
+
         return registry;
     }
 
@@ -276,6 +315,103 @@ public class SchemaValidatingDataAccessLayer : BaseUpdateProcessingDataAccessLay
         }
 
         schemaEntitiesById[id] = schemaEntity;
+    }
+
+    private void EnsureEntityTypeNamesCached()
+    {
+        if (_cachedRegisteredEntityTypeNames is null && _cachedSchemaEntitiesById is { } schemaEntities)
+        {
+            _cachedRegisteredEntityTypeNames = BuildRegisteredEntityTypeNames(schemaEntities);
+        }
+    }
+
+    private static IReadOnlySet<string> BuildRegisteredEntityTypeNames(
+        IReadOnlyDictionary<string, JsonElement> schemaEntitiesById)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var schemaEntity in schemaEntitiesById.Values)
+        {
+            TryCollectEntityTypeDiscriminatorName(schemaEntity, names);
+        }
+
+        return names;
+    }
+
+    private static void TryCollectEntityTypeDiscriminatorName(
+        JsonElement entityData,
+        HashSet<string> names)
+    {
+        var doc = SchemaEntityDocument.Deserialize(entityData);
+        if (doc is null || doc.Names is null)
+        {
+            return;
+        }
+
+        if (!doc.GetExplicitEntityTypeNames().Contains(EntityTypeType))
+        {
+            return;
+        }
+
+        foreach (var nameComponents in doc.Names)
+        {
+            if (nameComponents is { Length: 2 }
+                && string.Equals(nameComponents[0], EntityTypesNamePrefix, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(nameComponents[1]))
+            {
+                names.Add(nameComponents[1]);
+                break;
+            }
+        }
+    }
+
+    private static IReadOnlySet<string> GetEntityTypeNamesFromRequest(UpdateRequest request)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var change in request.Changes)
+        {
+            if (change.Data is { ValueKind: JsonValueKind.Object } data)
+            {
+                TryCollectEntityTypeDiscriminatorName(data, names);
+            }
+        }
+
+        return names;
+    }
+
+    private IReadOnlyCollection<UpdateError> ValidateEntityTypeDiscriminators(
+        EntityChange change,
+        IReadOnlySet<string>? registeredEntityTypeNames,
+        IReadOnlySet<string> requestEntityTypeNames)
+    {
+        if (change.Data is not { ValueKind: JsonValueKind.Object } data)
+        {
+            return Array.Empty<UpdateError>();
+        }
+
+        var discriminators = this.GetExplicitEntityTypeNames(data);
+        if (discriminators.Count == 0)
+        {
+            return Array.Empty<UpdateError>();
+        }
+
+        List<UpdateError>? errors = null;
+        foreach (var discriminator in discriminators)
+        {
+            if (registeredEntityTypeNames?.Contains(discriminator) == true
+                || requestEntityTypeNames.Contains(discriminator))
+            {
+                continue;
+            }
+
+            errors ??= new List<UpdateError>();
+            errors.Add(new UpdateError
+            {
+                Message = $"Entity-type discriminator '{discriminator}' is not a registered entity type.",
+                RelatedEntityId = change.EntityId,
+            });
+        }
+
+        return (IReadOnlyCollection<UpdateError>?)errors ?? Array.Empty<UpdateError>();
     }
 
     private IReadOnlyCollection<string> GetDetailedValidationErrors(

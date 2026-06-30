@@ -102,7 +102,205 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
         var failedResult = result.EntityResults.Single();
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
-        Assert.Contains(failedResult.Errors, error => error.Message.Contains("could not be resolved", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("not a registered entity type", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("profile", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_IsRejected_WhenEntityUsesDiscriminatorWithSchemaButNoEntityTypeEntity()
+    {
+        // A json-schema entity whose name is ["entity-types","orphan-schema"] but that does NOT
+        // declare "entity-type" in its entity-types is NOT a registered entity type. An entity
+        // that lists "orphan-schema" as a discriminator must therefore be rejected.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var orphanSchemaEntityId = new EntityId("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        var entityId = new EntityId("b2c3d4e5-f6a7-8901-bcde-f01234567891");
+
+        await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add orphan json-schema (no entity-type in entity-types)"),
+                new[]
+                {
+                    CreateEntityChange(
+                        orphanSchemaEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{orphanSchemaEntityId}}",
+                              "entity-types": ["entity", "json-schema"],
+                              "names": [["entity-types", "orphan-schema"]],
+                              "schema": {
+                                "$id": "https://schemas.workspaces.phantom.to/tests/orphan.json",
+                                "type": "object",
+                                "properties": {
+                                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                                },
+                                "required": ["entity-types"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        var result = await RequireUpdateFailsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity claiming the orphan schema type"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": ["entity", "orphan-schema"],
+                              "names": [["orphan-schema-entity"]]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.True(result.EntityResults.Count == 1, UpdateResultDiagnostics.Describe(result));
+        var failedResult = result.EntityResults.Single();
+        Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("not a registered entity type", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("orphan-schema", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Update_Succeeds_WhenEntityTypeEntityAndEntityUsingItAreInSameRequest()
+    {
+        // Writing a new entity-type entity and an entity that uses that type in the same
+        // request must succeed; the discriminator is "in-flight" within the request.
+        var dataAccessLayer = await this.CreatePopulatedDataAccessLayerAsync();
+        var entityTypeEntityId = new EntityId("c3d4e5f6-a7b8-9012-cdef-012345678902");
+        var entityId = new EntityId("d4e5f6a7-b8c9-0123-defa-123456789013");
+        const string newTypeName = "inline-new-type";
+        const string newTypeSchemaName = "https://schemas.workspaces.phantom.to/tests/inline-new-type.json";
+
+        var result = await RequireUpdateSucceedsAsync(
+            dataAccessLayer,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Add entity-type entity and entity using it together"),
+                new[]
+                {
+                    CreateEntityChange(
+                        entityTypeEntityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityTypeEntityId}}",
+                              "entity-types": ["entity", "entity-type", "json-schema"],
+                              "names": [
+                                ["json-schemas", "{{newTypeSchemaName}}"],
+                                ["entity-types", "{{newTypeName}}"]
+                              ],
+                              "schema": {
+                                "$id": "{{newTypeSchemaName}}",
+                                "type": "object",
+                                "properties": {
+                                  "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                                },
+                                "required": ["entity-types"]
+                              }
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                    CreateEntityChange(
+                        entityId,
+                        null,
+                        JsonDocument.Parse(
+                            $$"""
+                            {
+                              "entity-id": "{{entityId}}",
+                              "entity-types": ["entity", "{{newTypeName}}"],
+                              "names": [["new-type-entity"]]
+                            }
+                            """).RootElement.Clone(),
+                        EntityChangeMode.Replace),
+                }));
+
+        Assert.Equal(2, result.EntityResults.Count);
+        Assert.DoesNotContain(result.EntityResults, r => r.UpdateState == UpdateState.Failed);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_BuildsEntityTypeNamesOnce_AcrossMultipleNonEntityTypeUpdates()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(inner)).Populate();
+        Assert.Empty(populationErrors);
+
+        var counter = new QueryCountingDataAccessLayer(inner);
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(counter);
+
+        var taskEntityId1 = new EntityId("e5f6a7b8-c9d0-1234-efab-234567890124");
+        var taskEntityId2 = new EntityId("e5f6a7b8-c9d0-1234-efab-234567890125");
+        var taskEntityId3 = new EntityId("e5f6a7b8-c9d0-1234-efab-234567890126");
+
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 1"), new[] { CreateTaskEntityChange(taskEntityId1) }));
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 2"), new[] { CreateTaskEntityChange(taskEntityId2) }));
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("write 3"), new[] { CreateTaskEntityChange(taskEntityId3) }));
+
+        // The json-schema query that also loads entity-type entities is only run once.
+        Assert.Equal(1, counter.JsonSchemaQueryCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_InvalidatesEntityTypeCache_WhenEntityTypeEntityIsWritten()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(inner)).Populate();
+        Assert.Empty(populationErrors);
+
+        var counter = new QueryCountingDataAccessLayer(inner);
+        var dataAccessLayer = new SchemaValidatingDataAccessLayer(counter);
+
+        var taskEntityId = new EntityId("f6a7b8c9-d0e1-2345-fabc-345678901235");
+        var entityTypeEntityId = new EntityId("f6a7b8c9-d0e1-2345-fabc-345678901236");
+        var taskEntityId2 = new EntityId("f6a7b8c9-d0e1-2345-fabc-345678901237");
+        const string invalidationTestSchemaName = "https://schemas.workspaces.phantom.to/tests/entity-type-cache-invalidation.json";
+
+        // First non-schema write: warms cache (count = 1)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("non-schema write"), new[] { CreateTaskEntityChange(taskEntityId) }));
+        Assert.Equal(1, counter.JsonSchemaQueryCount);
+
+        // Entity-type entity write: invalidates cache on success (count stays 1)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("entity-type write"), new[]
+        {
+            CreateEntityChange(
+                entityTypeEntityId,
+                null,
+                JsonDocument.Parse($$"""
+                {
+                  "entity-id": "{{entityTypeEntityId}}",
+                  "entity-types": ["entity", "entity-type", "json-schema"],
+                  "names": [
+                    ["json-schemas", "{{invalidationTestSchemaName}}"],
+                    ["entity-types", "invalidation-test-type"]
+                  ],
+                  "schema": {
+                    "$id": "{{invalidationTestSchemaName}}",
+                    "type": "object",
+                    "properties": {
+                      "entity-types": { "type": "array", "contains": { "const": "entity" } }
+                    },
+                    "required": ["entity-types"]
+                  }
+                }
+                """).RootElement.Clone(),
+                EntityChangeMode.Replace),
+        }));
+        Assert.Equal(1, counter.JsonSchemaQueryCount);
+
+        // Second non-schema write: cache was invalidated, rebuilds (count = 2)
+        await RequireUpdateSucceedsAsync(dataAccessLayer, CreateUpdateRequest(CreateUpdateMetadata("non-schema write 2"), new[] { CreateTaskEntityChange(taskEntityId2) }));
+        Assert.Equal(2, counter.JsonSchemaQueryCount);
     }
 
     [Fact]
