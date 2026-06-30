@@ -45,7 +45,7 @@ This tab is loaded from `documentation/getting-started.json` by `documentation/g
 |----------|--------|
 | Enter | Submit message (normal mode) |
 | Shift+Enter | Switch to formatted/multi-line mode |
-| Ctrl+Enter | Submit to a new queue (normal mode); submit message (formatted mode) |
+| Ctrl+Enter | Submit message (formatted mode only) |
 | Escape | Exit formatted mode |
 | Ctrl+Q | Submit to most recent queue |
 | Ctrl+Shift+Q | Submit to a new queue |
