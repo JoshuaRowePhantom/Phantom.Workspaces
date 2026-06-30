@@ -38,8 +38,13 @@ public interface IDevTunnelManagementClient
         string protocol,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Applies the access control matching <paramref name="accessMode"/> to the tunnel.</summary>
-    Task ApplyAccessModeAsync(
+    /// <summary>
+    /// Applies the access control matching <paramref name="accessMode"/> to the tunnel and returns
+    /// the connect-scope tunnel token for non-Anonymous modes (null for Anonymous mode). The token is
+    /// fetched from the Management API after the access-control update; it is short-lived and should
+    /// not be persisted.
+    /// </summary>
+    Task<string?> ApplyAccessModeAsync(
         string tunnelId,
         DevTunnelAccessMode accessMode,
         CancellationToken cancellationToken = default);
