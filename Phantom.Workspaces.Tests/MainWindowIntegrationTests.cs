@@ -2832,6 +2832,160 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_PushesNavigationEntry()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("38300003-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "38300003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-nav-a"]],
+              "display-name": { "default": "ADC Nav A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("38300003-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "38300003-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-nav-b"]],
+              "display-name": { "default": "ADC Nav B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane A.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "adc-nav-tab-a", Title = "ADC Nav Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        // Open a tab in pane B.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "adc-nav-tab-b", Title = "ADC Nav Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        // Switch back to pane A so pane A is selected.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+        // Simulate a mouse click on pane B's outer tab — should push a navigation entry for pane B's active tab.
+        var dockFactory = GetDockFactoryAs<IFactory>(viewModel);
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+        var pane2 = viewModel.WorkspacePanes[1];
+        var paneDoc2 = workspacesDock!.VisibleDockables!
+            .OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane == pane2);
+        dockFactory.SetActiveDockable(paneDoc2);
+        Assert.Equal(pane2, viewModel.SelectedWorkspacePane);
+
+        // NavigateBack should return to a state where pane A's tab is active.
+        var documentDockB = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDockB);
+        Assert.Equal("adc-nav-tab-b", documentDockB!.ActiveDockable?.Id);
+
+        viewModel.NavigateBackCommand.Execute(null);
+
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        var documentDockA = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDockA);
+        Assert.Equal("adc-nav-tab-a", documentDockA!.ActiveDockable?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_WhenNavigatingViaHistory_DoesNotPushExtraEntry()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("38300004-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "38300004-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-nav-guard-a"]],
+              "display-name": { "default": "ADC Nav Guard A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("38300004-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "38300004-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-nav-guard-b"]],
+              "display-name": { "default": "ADC Nav Guard B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane A and pane B.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "adc-nav-guard-tab-a", Title = "Guard Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "adc-nav-guard-tab-b", Title = "Guard Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        // Switch back to pane A.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+
+        // Simulate mouse click on pane B — pushes one navigation entry.
+        var dockFactory = GetDockFactoryAs<IFactory>(viewModel);
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+        var pane2 = viewModel.WorkspacePanes[1];
+        var paneDoc2 = workspacesDock!.VisibleDockables!
+            .OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane == pane2);
+        dockFactory.SetActiveDockable(paneDoc2);
+
+        // NavigateBack once — lands back on pane A's tab.
+        viewModel.NavigateBackCommand.Execute(null);
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        var documentDockAfterBack = GetDocumentDock(viewModel);
+        Assert.Equal("adc-nav-guard-tab-a", documentDockAfterBack?.ActiveDockable?.Id);
+
+        // NavigateBack again — should continue traversing history correctly to the entry
+        // before "pane A" (which is "pane B" from when tabB was first opened).
+        // If the navigatingViaHistory guard were absent and the dock had fired
+        // ActiveDockableChanged for the outer pane during the first NavigateBack, an
+        // extra entry would have been inserted — corrupting history traversal here.
+        viewModel.NavigateBackCommand.Execute(null);
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        Assert.Equal("adc-nav-guard-tab-b", GetDocumentDock(viewModel)?.ActiveDockable?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_WithShellTabActive_ActivatesFirstContentTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
