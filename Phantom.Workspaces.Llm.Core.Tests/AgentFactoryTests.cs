@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -482,6 +483,39 @@ public class AgentFactoryTests
         Assert.NotNull(client);
         Assert.IsType<CopilotSdkChatClient>(client);
         Assert.Equal("GitHub Copilot (gpt-5)", displayName);
+    }
+
+    [Fact]
+    public void CreateChatClient_GitHubCopilotProvider_PassesModelOptionsToCopilotClient()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-copilot-agent",
+              "model": {
+                "id": "gpt-5",
+                "provider": "github-copilot",
+                "apiType": "OpenAI",
+                "options": {
+                  "additionalProperties": {
+                    "working-directory": "/my/project"
+                  }
+                }
+              },
+              "tools": []
+            }
+            """);
+
+        var (client, _) = AgentFactory.CreateChatClient(agent);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(client);
+        var modelOptions = (ModelOptions?)typeof(CopilotSdkChatClient)
+            .GetField("modelOptions", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(copilotClient);
+
+        Assert.NotNull(modelOptions);
+        Assert.Equal("/my/project", modelOptions!.AdditionalProperties?["working-directory"]);
     }
 
     [Fact]

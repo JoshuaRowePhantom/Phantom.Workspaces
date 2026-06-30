@@ -71,6 +71,8 @@ Example in a manifest template:
 
 Used by Copilot manifests to supply the working directory for the CLI at session creation time. The Launchpad UI renders a directory-picker button for parameters whose `name` is `"working-directory"` and `kind` is `"string"`.
 
+Both `github-copilot-agent-manifest.json` and `workspaces-agent-manifest.json` declare this parameter. `CopilotSdkChatClient` reads it from `ModelOptions.AdditionalProperties["working-directory"]` (passed to the constructor) and forwards it to both `CopilotClientOptions.Cwd` (process level) and `SessionConfig.WorkingDirectory` / `ResumeSessionConfig.WorkingDirectory` (session level).
+
 Example manifest declaration:
 
 ```json

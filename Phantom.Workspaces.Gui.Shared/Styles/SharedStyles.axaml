@@ -1,0 +1,1016 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
+        x:CompileBindings="False">
+    <Styles.Resources>
+        <!-- Default theme fallbacks for apps that do not inject profile resources. -->
+        <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
+        <x:Double x:Key="Theme.FontSize.Base">13</x:Double>
+
+        <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#1E1E1E</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#2A2A2A</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#242424</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#343434</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBackground">#2A2A2A</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBorder">#5EA0FF</SolidColorBrush>
+
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.Background">#252525</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#3A3A3A</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#303030</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#505050</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#2A2A2A</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#5EA0FF</SolidColorBrush>
+
+        <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#2C2C2C</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Surface.Popup.Border">#3A3A3A</SolidColorBrush>
+
+        <SolidColorBrush x:Key="Theme.Class.normal.Foreground">#E6E6E6</SolidColorBrush>
+        <x:Double x:Key="Theme.Class.normal.Opacity">1</x:Double>
+        <x:Double x:Key="Theme.Class.normal.FontSize">13</x:Double>
+        <FontWeight x:Key="Theme.Class.normal.FontWeight">Normal</FontWeight>
+
+        <SolidColorBrush x:Key="Theme.Class.heading.Foreground">#E6E6E6</SolidColorBrush>
+        <x:Double x:Key="Theme.Class.heading.Opacity">1</x:Double>
+        <x:Double x:Key="Theme.Class.heading.FontSize">16</x:Double>
+        <FontWeight x:Key="Theme.Class.heading.FontWeight">Bold</FontWeight>
+
+        <SolidColorBrush x:Key="Theme.Class.section-title.Foreground">#E6E6E6</SolidColorBrush>
+        <x:Double x:Key="Theme.Class.section-title.Opacity">1</x:Double>
+        <x:Double x:Key="Theme.Class.section-title.FontSize">14</x:Double>
+        <FontWeight x:Key="Theme.Class.section-title.FontWeight">Bold</FontWeight>
+
+        <SolidColorBrush x:Key="Theme.Class.caption.Foreground">#E6E6E6</SolidColorBrush>
+        <x:Double x:Key="Theme.Class.caption.Opacity">1</x:Double>
+        <x:Double x:Key="Theme.Class.caption.FontSize">11</x:Double>
+        <FontWeight x:Key="Theme.Class.caption.FontWeight">Normal</FontWeight>
+
+        <SolidColorBrush x:Key="Theme.Class.muted.Foreground">#B3B3B3</SolidColorBrush>
+        <x:Double x:Key="Theme.Class.muted.Opacity">1</x:Double>
+        <x:Double x:Key="Theme.Class.muted.FontSize">13</x:Double>
+        <FontWeight x:Key="Theme.Class.muted.FontWeight">Normal</FontWeight>
+
+        <SolidColorBrush x:Key="Theme.Class.accent.Foreground">#5EA0FF</SolidColorBrush>
+        <x:Double x:Key="Theme.Class.accent.Opacity">1</x:Double>
+        <x:Double x:Key="Theme.Class.accent.FontSize">13</x:Double>
+        <FontWeight x:Key="Theme.Class.accent.FontWeight">Normal</FontWeight>
+
+        <!-- Status badge palette. Good is green, Bad is red; the six palette colors are distinct,
+             vibrant hues with no red or green, chosen so the single status foreground reads on all. -->
+        <SolidColorBrush x:Key="Theme.Status.Good">#2E7D32</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Bad">#C62828</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Foreground">#F5F5F5</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.0">#1565C0</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.1">#4527A0</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.2">#6A1B9A</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.3">#00838F</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.4">#FF8F00</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.Status.Palette.5">#455A64</SolidColorBrush>
+
+        <!-- Terminal control palette. Background is near-black; foreground is the default
+             text color; cursor is a prominent blue; status-bar background matches the surface. -->
+        <SolidColorBrush x:Key="Terminal.Background">#0D1117</SolidColorBrush>
+        <SolidColorBrush x:Key="Terminal.Foreground">#C9D1D9</SolidColorBrush>
+        <SolidColorBrush x:Key="Terminal.Cursor">#58A6FF</SolidColorBrush>
+        <SolidColorBrush x:Key="Terminal.SelectionBackground">#264F78</SolidColorBrush>
+    </Styles.Resources>
+    <Style Selector="TextBox.copyable-text">
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="InnerLeftContent">
+            <Template>
+                <Button Classes="copyable-text-button"
+                        Focusable="False" />
+            </Template>
+        </Setter>
+    </Style>
+    <Style Selector="TextBlock.heading">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.heading.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.heading.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.heading.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.heading.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.section-title">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.section-title.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.section-title.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.section-title.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.section-title.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.caption.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.caption.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.caption.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.muted.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.muted.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.muted.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.accent">
+        <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.accent.FontWeight}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.accent.Foreground}" />
+        <Setter Property="Opacity" Value="{DynamicResource Theme.Class.accent.Opacity}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.accent.FontSize}" />
+    </Style>
+
+    <Style Selector="Grid.entity-pane">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+    </Style>
+    <Style Selector="Grid.entity-pane:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
+    </Style>
+    <Style Selector="Border.entity-card">
+        <Setter Property="Padding" Value="10" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+    <Style Selector="Border.entity-card.selected">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="StackPanel.entity-card-tree-item">
+        <Setter Property="Spacing" Value="4" />
+        <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style Selector="StackPanel.entity-card-tree-item.detail">
+        <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+    <Style Selector="Border.entity-card.branch-header">
+        <Setter Property="CornerRadius" Value="6,6,0,0" />
+    </Style>
+    <Style Selector="Border.entity-card.leaf">
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="StackPanel.sticky-pinned > Border.entity-card">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+        <Setter Property="Opacity" Value="0.92" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.entity-card-expand-section">
+        <Setter Property="Margin" Value="0,-4,0,0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Border.entity-card-expand-section.branch-footer">
+        <Setter Property="CornerRadius" Value="0,0,6,6" />
+    </Style>
+    <Style Selector="Border.entity-card-expand-section:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+    <Style Selector="Border.interactive-row">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.12" />
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.12" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.interactive-row:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+
+    <Style Selector="Button.entity-card-expand-button">
+        <Setter Property="Padding" Value="0,2" />
+        <Setter Property="FontSize" Value="8" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <StackPanel Classes="entity-card-tree-item">
+                    <Border IsVisible="{Binding HasChildren}"
+                            Classes="entity-card branch-header">
+                        <ContentPresenter Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                    </Border>
+                    <Border IsVisible="{Binding NotHasChildren}"
+                            Classes="entity-card leaf">
+                        <ContentPresenter Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                    </Border>
+                    <Border IsVisible="{Binding HasChildren}"
+                            Classes="entity-card-expand-section branch-footer">
+                        <Button Classes="entity-card-expand-button"
+                                Content="▾"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Command="{Binding ToggleExpandCommand}" />
+                    </Border>
+                    <ItemsPresenter Margin="20,0,0,0"
+                                    IsVisible="{Binding IsExpanded}" />
+                </StackPanel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem:expanded Button.entity-card-expand-button">
+        <Setter Property="Content" Value="▴" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
+        <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
+    </Style>
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky Border.entity-card.branch-header">
+        <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
+    </Style>
+
+    <Style Selector="Border.window-header">
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="ListBox.top-view-list">
+        <Setter Property="Margin" Value="18,0" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
+    <Style Selector="Border.top-view-item">
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="Button.settings-gear">
+        <Setter Property="MinWidth" Value="34" />
+        <Setter Property="MinHeight" Value="34" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.pane-header">
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.workspace-region-card">
+        <Setter Property="Margin" Value="0,0,0,12" />
+        <Setter Property="Padding" Value="10" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs">
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs TabItem">
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="Margin" Value="0,0,2,0" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6,6,0,0" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs TabItem:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs TabItem:selected">
+        <Setter Property="Margin" Value="0,0,2,-1" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="TabControl.workspace-tabs /template/ ContentPresenter#PART_SelectedContentHost">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="Padding" Value="10" />
+    </Style>
+    <Style Selector="Button.workspace-tab-close-button">
+        <Setter Property="Width" Value="18" />
+        <Setter Property="Height" Value="18" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="Border.entity-badge">
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="Margin" Value="0,2,6,0" />
+    </Style>
+    <Style Selector="Border.status-badge">
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="Margin" Value="0,0,4,4" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.status-badge > TextBlock.status-badge-text">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Foreground}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="GridSplitter.main-splitter">
+        <Setter Property="Width" Value="6" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Border}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="ResizeDirection" Value="Columns" />
+        <Setter Property="ResizeBehavior" Value="PreviousAndNext" />
+        <Setter Property="ShowsPreview" Value="True" />
+    </Style>
+    <Style Selector="Grid.settings-root">
+        <Setter Property="Margin" Value="16" />
+    </Style>
+    <Style Selector="StackPanel.settings-main">
+        <Setter Property="Spacing" Value="14" />
+    </Style>
+    <Style Selector="StackPanel.settings-section">
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="StackPanel.settings-row">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="8" />
+    </Style>
+    <Style Selector="StackPanel.settings-actions">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
+    <Style Selector="Button.settings-close">
+        <Setter Property="MinWidth" Value="90" />
+    </Style>
+
+    <Style Selector="Button.queue-action-button">
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="10,4" />
+    </Style>
+    <Style Selector="UserControl.queue-composer-root">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.queue-status-picker-button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
+    <Style Selector="Button.queue-glyph-button">
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="MinWidth" Value="24" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Button.queue-danger-button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+    </Style>
+    <Style Selector="Button.queue-danger-button:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Class.accent.Foreground}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.accent.Foreground}" />
+    </Style>
+    <Style Selector="Button.queue-item-trigger">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Top" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Border.queue-status-pill">
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+    </Style>
+    <Style Selector="Border.queue-status-pill.dynamic">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Border.queue-immediacy-pill">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="Padding" Value="10,4" />
+    </Style>
+    <Style Selector="Border.queue-immediacy-option-pill">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+    </Style>
+    <Style Selector="Border.queue-item-card">
+        <Setter Property="Margin" Value="0,0,0,4" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="CornerRadius" Value="3" />
+    </Style>
+    <Style Selector="TextBlock.queue-immediacy-label">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.queue-immediacy-caret">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="UserControl.agent-chat-output-root">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+    </Style>
+    <Style Selector="Button.agent-image-preview-button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="UserControl.agent-chat-input-queue-root">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+    </Style>
+    <Style Selector="Border.agent-chat-input-queue-container">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityPane.Border}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Padding" Value="8,6" />
+    </Style>
+    <Style Selector="Border.queue-group-card">
+        <Setter Property="Margin" Value="0,0,0,8" />
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="TextBlock.queue-group-title">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBox.queue-entry-editor">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
+    </Style>
+    <Style Selector="TextBox.queue-text-editor">
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="MaxHeight" Value="200" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+    </Style>
+    <Style Selector="SelectableTextBlock.queue-entry-content">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="Border.queue-attachment-pill">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="4" />
+    </Style>
+    <Style Selector="Border.queue-attachment-preview">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="TextBlock.queue-attachment-label">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="Button.queue-preview-image-button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Button.queue-danger-pill">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="999" />
+    </Style>
+    <Style Selector="Window.main-window-root">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.FontSize.Base}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+    </Style>
+    <Style Selector="TextBlock.sticky-context-note">
+        <Setter Property="Margin" Value="0,6,0,0" />
+    </Style>
+    <Style Selector="ItemsControl.browser-entity-items">
+        <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+    <Style Selector="ItemsControl.workspace-visible-children">
+        <Setter Property="Margin" Value="22,0,0,0" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-node-root">
+        <Setter Property="Spacing" Value="4" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-node-root.workspace-entity-deleted">
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-card-content">
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-header-row">
+        <Setter Property="Orientation" Value="Vertical" />
+        <Setter Property="Spacing" Value="2" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-header-row > TextBlock">
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.workspace-entity-title">
+        <Setter Property="FontWeight" Value="Bold" />
+    </Style>
+    <Style Selector="StackPanel.workspace-entity-actions-row">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="4" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.workspace-edit-indicator-button">
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="4,0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.workspace-edit-action-button">
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="4,0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.workspace-validation-status">
+        <Setter Property="Margin" Value="0,4,0,0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.workspace-validation-status.workspace-validation-error">
+        <Setter Property="Foreground" Value="#D32F2F" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.workspace-entity-shortcut-button">
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button">
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="Margin" Value="0,0,4,4" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Background" Value="#40808080" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="#80808080" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button.workspace-entity-badge-active">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="#60406040" />
+        <Setter Property="BorderBrush" Value="#A0A060A0" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-entity-badge-button">
+        <Setter Property="Opacity" Value="0.6" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-entity-badge-button.workspace-entity-badge-active">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button:pointerover">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Background" Value="#60808080" />
+    </Style>
+    <Style Selector="Button.workspace-entity-badge-button.workspace-entity-badge-active:pointerover">
+        <Setter Property="Background" Value="#80606080" />
+    </Style>
+    <Style Selector="ItemsControl.workspace-field-editor-list">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="StackPanel.workspace-template-browser-root">
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="TextBlock.workspace-field-label">
+        <Setter Property="Margin" Value="0,4,8,0" />
+    </Style>
+    <Style Selector="TextBox.workspace-field-value">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.workspace-field-read-value">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Margin" Value="0,4,0,0" />
+    </Style>
+    <Style Selector="Expander.workspace-field-expander">
+        <Setter Property="IsExpanded" Value="False" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="ItemsControl.workspace-field-items">
+        <Setter Property="Margin" Value="8,4,0,0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="StackPanel.workspace-mime-content">
+        <Setter Property="Margin" Value="8,4,0,0" />
+        <Setter Property="Spacing" Value="6" />
+    </Style>
+    <Style Selector="TextBox.workspace-markdown-content">
+        <Setter Property="AcceptsReturn" Value="True" />
+        <Setter Property="MinHeight" Value="120" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-viewer">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-viewer /template/ ScrollViewer">
+        <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
+    </Style>
+    <Style Selector="Control.workspace-markdown-editor">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Control.workspace-json-schema-viewer">
+        <Setter Property="MinHeight" Value="180" />
+    </Style>
+    <Style Selector="TextBox.workspace-json-schema-editor">
+        <Setter Property="MinHeight" Value="180" />
+        <Setter Property="AcceptsReturn" Value="True" />
+    </Style>
+    <Style Selector="StackPanel.workspace-region-header-row">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="Spacing" Value="10" />
+    </Style>
+    <Style Selector="StackPanel.agent-editor-root">
+        <Setter Property="Margin" Value="12" />
+    </Style>
+    <Style Selector="StackPanel.agent-tool-node">
+        <Setter Property="Margin" Value="0,4,0,4" />
+    </Style>
+    <Style Selector="StackPanel.agent-tool-node-details">
+        <Setter Property="Margin" Value="24,0,0,0" />
+    </Style>
+    <Style Selector="SelectableTextBlock.agent-expand-content">
+        <Setter Property="Margin" Value="0,4,0,0" />
+    </Style>
+    <Style Selector="ProgressBar.agent-progress.top-gap">
+        <Setter Property="Margin" Value="0,6,0,0" />
+    </Style>
+    <Style Selector="ProgressBar.agent-progress.bottom-gap">
+        <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style Selector="ItemsControl.agent-content-block">
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+    <Style Selector="ItemsControl.agent-attachments-block">
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+    <Style Selector="Border.agent-running-item">
+        <Setter Property="Padding" Value="6,4" />
+    </Style>
+    <Style Selector="Button.queue-submit-button">
+        <Setter Property="Padding" Value="12,0" />
+    </Style>
+    <Style Selector="MenuItem.queue-immediacy-menu-item">
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="HeaderTemplate">
+            <DataTemplate>
+                <Border Classes="queue-immediacy-pill queue-immediacy-option-pill">
+                    <TextBlock Classes="queue-immediacy-label queue-immediacy-option-label"
+                               Text="{ReflectionBinding Label}" />
+                </Border>
+            </DataTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ItemsControl.queue-entry-attachments">
+        <Setter Property="Margin" Value="0,6,0,0" />
+    </Style>
+    <Style Selector="ProgressBar.agent-progress">
+        <Setter Property="Height" Value="2" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.accent.Foreground}" />
+    </Style>
+
+    <!-- running-indicator: replaces emoji TextBlock status glyphs for running/success/error state.
+         Idle (no modifier): hidden (opacity 0, preserves layout).
+         :indeterminate (running): visible with Avalonia built-in animation.
+         .succeeded: full green bar (Value=100 set by this style).
+         .failed: full red bar (Value=100 set by this style). -->
+    <Style Selector="ProgressBar.running-indicator">
+        <Setter Property="Height" Value="3" />
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Maximum" Value="100" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Opacity" Value="0" />
+    </Style>
+    <Style Selector="ProgressBar.running-indicator:indeterminate">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="ProgressBar.running-indicator.succeeded">
+        <Setter Property="Value" Value="100" />
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Good}" />
+    </Style>
+    <Style Selector="ProgressBar.running-indicator.failed">
+        <Setter Property="Value" Value="100" />
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+    </Style>
+
+    <!-- scheduled-tools-indicator: the ⏱/⏸ clock button in the status bar.
+         Idle: clock glyph (⏱) at full opacity.
+         :indeterminate (running): same glyph, Avalonia IsIndeterminate state active.
+         .paused: pause glyph (⏸) with dimmed opacity.
+         .failed: clock glyph with error foreground.
+         PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
+    <Style Selector="ProgressBar.scheduled-tools-indicator">
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏱"
+                               FontSize="14"
+                               Foreground="{TemplateBinding Foreground}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.scheduled-tools-indicator.paused">
+        <Setter Property="Opacity" Value="0.55" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏸"
+                               FontSize="14"
+                               Foreground="{TemplateBinding Foreground}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.scheduled-tools-indicator.failed">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+    </Style>
+
+    <Style Selector="TextBlock.terminal-mono">
+        <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
+    </Style>
+    <Style Selector="SelectableTextBlock.terminal-mono">
+        <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
+    </Style>
+    <Style Selector="TextBox.terminal-mono">
+        <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
+    </Style>
+    <Style Selector="SelectableTextBlock.terminal-content">
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.FontSize.Base}" />
+    </Style>
+    <Style Selector="SelectableTextBlock.terminal-detail">
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="SelectableTextBlock.terminal-error">
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="#FFB3B3" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.FontSize.Base}" />
+    </Style>
+    <Style Selector="TextBox.terminal-editor">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.FontSize.Base}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+    </Style>
+    <Style Selector="TextBlock.agent-meta-label">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.agent-role-label">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+    <Style Selector="TextBlock.agent-role-label.role-user">
+        <Setter Property="Foreground" Value="#6EC06E" />
+    </Style>
+    <Style Selector="TextBlock.agent-role-label.role-assistant">
+        <Setter Property="Foreground" Value="#6A9FD8" />
+    </Style>
+    <Style Selector="TextBlock.agent-role-label.role-system">
+        <Setter Property="Foreground" Value="#C29DFF" />
+    </Style>
+    <Style Selector="TextBlock.agent-role-label.role-tool">
+        <Setter Property="Foreground" Value="#E0A860" />
+    </Style>
+    <Style Selector="TextBlock.agent-role-label.role-developer">
+        <Setter Property="Foreground" Value="#7FC8A9" />
+    </Style>
+    <Style Selector="TextBlock.agent-reasoning-line">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="FontStyle" Value="Italic" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="Opacity" Value="0.8" />
+    </Style>
+    <Style Selector="TextBlock.agent-chip-label">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+    </Style>
+    <Style Selector="TextBlock.agent-body-text">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.FontSize.Base}" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+    </Style>
+    <Style Selector="SelectableTextBlock.agent-log-line">
+        <Setter Property="Margin" Value="0,1" />
+    </Style>
+    <Style Selector="CheckBox.agent-option-toggle">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+
+    <Style Selector="Border.agent-surface">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="12" />
+    </Style>
+    <Style Selector="Border.agent-surface.compact">
+        <Setter Property="Padding" Value="8" />
+    </Style>
+    <Style Selector="Border.agent-titlebar">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
+        <Setter Property="Padding" Value="12,6" />
+    </Style>
+    <Style Selector="TextBlock.agent-main-title">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.FontSize.Base}" />
+    </Style>
+    <Style Selector="Border.agent-pane">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+    </Style>
+    <Style Selector="TextBlock.agent-runtime-placeholder">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="Opacity" Value="0.6" />
+        <Setter Property="FontStyle" Value="Italic" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.agent-dialog-title">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.heading.FontSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="Margin" Value="0,0,0,12" />
+    </Style>
+    <Style Selector="TextBlock.agent-error-title">
+        <Setter Property="Foreground" Value="#E57373" />
+    </Style>
+    <Style Selector="Window.agent-window">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
+    </Style>
+    <Style Selector="DockPanel.agent-dialog-root">
+        <Setter Property="Margin" Value="16" />
+    </Style>
+    <Style Selector="DockPanel.agent-dialog-root.compact">
+        <Setter Property="Margin" Value="12" />
+    </Style>
+    <Style Selector="StackPanel.agent-dialog-actions">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="Margin" Value="0,12,0,0" />
+        <Setter Property="Spacing" Value="8" />
+    </Style>
+
+    <Style Selector="Border.agent-card">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="6" />
+    </Style>
+    <Style Selector="Border.agent-card.error">
+        <Setter Property="Background" Value="#3A1F1F" />
+        <Setter Property="BorderBrush" Value="#6B2A2A" />
+    </Style>
+    <Style Selector="Border.agent-row">
+        <Setter Property="Padding" Value="12,8" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityPane.Border}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.agent-running">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityPane.Border}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Padding" Value="8,6" />
+    </Style>
+    <Style Selector="Border.agent-chip">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="6" />
+    </Style>
+    <Style Selector="TextBlock.agent-section-title">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.agent-detail-label">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.agent-detail-value">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
+    </Style>
+    <Style Selector="Button.copyable-text-button">
+        <Setter Property="Content" Value="⧉" />
+        <Setter Property="ToolTip.Tip" Value="Copy value" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.15" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="StackPanel.copyable-text:pointerover Button.copyable-text-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Grid.copyable-text:pointerover Button.copyable-text-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="TextBox.copyable-text:pointerover Button.copyable-text-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.copyable-text-button:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+    </Style>
+    <Style Selector="Button.copyable-text-button:pressed">
+        <Setter Property="Foreground" Value="#6EC06E" />
+    </Style>
+    
+    <!-- Dock tab header binding -->
+    <Style Selector="DocumentTabStripItem">
+        <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
+    </Style>
+
+    <!-- Alt+N shortcut index badge on tab headers -->
+    <Style Selector="Border.alt-index-badge">
+        <Setter Property="Background" Value="{DynamicResource SystemAccentColor}" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="3,1" />
+        <Setter Property="Margin" Value="0,-2,-2,0" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="ZIndex" Value="10" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.1" Easing="LinearEasing" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.alt-index-badge.alt-held">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <Style Selector="Button.workspace-url-link">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.workspace-url-link:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+</Styles>

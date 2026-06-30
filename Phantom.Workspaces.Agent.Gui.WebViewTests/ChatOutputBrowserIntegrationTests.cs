@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Phantom.Workspaces.Agent.Gui.Controls;
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
