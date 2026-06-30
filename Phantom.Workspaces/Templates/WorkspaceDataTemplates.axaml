@@ -481,7 +481,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="running-indicator"
+        <ProgressBar Classes="running-indicator running-indicator-agent"
                      IsIndeterminate="{Binding IsRunning}" />
     </DataTemplate>
 
