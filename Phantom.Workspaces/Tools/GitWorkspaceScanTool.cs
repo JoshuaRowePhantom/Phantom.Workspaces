@@ -294,6 +294,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             writer.WriteStartArray();
             writer.WriteStringValue("entity");
             writer.WriteStringValue("git-worktree");
+            writer.WriteStringValue("filesystem-path");
             writer.WriteEndArray();
 
             writer.WritePropertyName("names");
