@@ -282,6 +282,69 @@ public sealed class DevTunnelManagementClientWrapperTests
     }
 
     [Fact]
+    public async Task LookupByNameAsync_PropagatesConnectTokenFromAccessTokens()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Tunnel
+                {
+                    TunnelId = "wanted", ClusterId = "usw2",
+                    Labels = [Marker, "my-tunnel"],
+                    Ports = [new TunnelPort { PortNumber = 5280 }],
+                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
+                },
+            ]);
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
+
+        Assert.Equal("tunnel-connect-token", result.ConnectToken);
+    }
+
+    [Fact]
+    public async Task LookupByNameAsync_WhenNoAccessTokens_ReturnsNullConnectToken()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Tunnel { TunnelId = "wanted", ClusterId = "usw2", Labels = [Marker, "my-tunnel"], Ports = [new TunnelPort { PortNumber = 5280 }] },
+            ]);
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
+
+        Assert.Null(result.ConnectToken);
+    }
+
+    [Fact]
+    public async Task DiscoverSingleAsync_PropagatesConnectTokenFromAccessTokens()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Tunnel
+                {
+                    TunnelId = "ours", ClusterId = "usw2",
+                    Labels = [Marker],
+                    Ports = [new TunnelPort { PortNumber = 5280 }],
+                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
+                },
+            ]);
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("tunnel-connect-token", result.ConnectToken);
+    }
+
+    [Fact]
     public async Task LookupByNameAsync_ReturnsTunnelMatchingNameLabel_AmongWorkspacesTunnels()
     {
         var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);

@@ -256,7 +256,13 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
         var forwardedPorts = (tunnel.Ports ?? [])
             .Select(port => (int)port.PortNumber)
             .ToArray();
-        return new DevTunnelLookupResult(tunnel.TunnelId ?? string.Empty, tunnel.ClusterId ?? string.Empty, forwardedPorts);
+        string? connectToken = null;
+        tunnel.AccessTokens?.TryGetValue(TunnelAccessScopes.Connect, out connectToken);
+        return new DevTunnelLookupResult(
+            tunnel.TunnelId ?? string.Empty,
+            tunnel.ClusterId ?? string.Empty,
+            forwardedPorts,
+            connectToken);
     }
 
     private static string[] BuildLabels(string? nameLabel)
