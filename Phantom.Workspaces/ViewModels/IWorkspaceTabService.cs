@@ -16,7 +16,11 @@ public interface IWorkspaceTabService
     /// If the id is not found the tab is appended at the end.
     /// </param>
     /// <param name="focus">Whether to activate and focus the tab. Defaults to <see langword="true"/>.</param>
-    Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true);
+    /// <param name="workspacePaneId">
+    /// When set, the tab is opened in the workspace pane with this id instead of the currently
+    /// selected pane. Falls back to the selected pane if no matching pane is found.
+    /// </param>
+    Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true, string? workspacePaneId = null);
 
     /// <summary>
     /// Replaces an existing workspace tab with a new one.
