@@ -82,11 +82,24 @@ public sealed class QueueComposerSlashCommandTests
         var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         var composer = inputQueue.DefaultComposer;
 
+        // Subscribe before Submit so we never miss the addition event.
+        // The processing loop (started in AgentChat.InitializeAsync) may dequeue the item immediately
+        // after it is enqueued, so asserting Items.Count after Submit is a race condition.
+        // Instead, capture the moment the item is added via the Changed event and await that signal.
+        var itemQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.DefaultInputQueue.Changed += (_, _) =>
+        {
+            if (chat.DefaultInputQueue.Items.Count > 0)
+            {
+                itemQueued.TrySetResult();
+            }
+        };
+
         // No interceptor set.
         composer.InputText = "/working-directory C:\\Foo";
         composer.Submit();
 
-        Assert.Single(chat.DefaultInputQueue.Items);
+        await itemQueued.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         inputQueue.Dispose();
     }
