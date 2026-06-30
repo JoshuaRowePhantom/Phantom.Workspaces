@@ -14,6 +14,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     private string title;
     private WorkspaceRegionViewModel? selectedRegion;
     private IRootDock? contentLayout;
+    private bool anyTabIsRunning;
+    private bool anyTabHasUnreadNotification;
 
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
@@ -26,6 +28,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         this.CloseCommand = closeCommand;
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.Regions.CollectionChanged += this.OnRegionsCollectionChanged;
+        this.PaneStatus.PropertyChanged += this.OnPaneStatusPropertyChanged;
     }
 
     public string Id { get; }
@@ -66,6 +69,26 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     /// </summary>
     public StatusItem PaneStatus { get; } = new();
 
+    /// <summary>
+    /// True if any tab in this pane has a running agent session.
+    /// Derived from <see cref="PaneStatus"/>.
+    /// </summary>
+    public bool AnyTabIsRunning
+    {
+        get => this.anyTabIsRunning;
+        private set => this.SetProperty(ref this.anyTabIsRunning, value);
+    }
+
+    /// <summary>
+    /// True if any tab in this pane has an unread notification.
+    /// Set by <see cref="MainWindowViewModel"/> during notification aggregation.
+    /// </summary>
+    public bool AnyTabHasUnreadNotification
+    {
+        get => this.anyTabHasUnreadNotification;
+        set => this.SetProperty(ref this.anyTabHasUnreadNotification, value);
+    }
+
     public void SetRegions(
         IEnumerable<WorkspaceRegionViewModel> regions)
     {
@@ -87,6 +110,16 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.DisplayName), StringComparison.Ordinal))
         {
             this.Title = this.Entity.DisplayName;
+        }
+    }
+
+    private void OnPaneStatusPropertyChanged(
+        object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (string.Equals(e.PropertyName, nameof(IStatusItem.RunningStatus), StringComparison.Ordinal))
+        {
+            this.AnyTabIsRunning = this.PaneStatus.RunningStatus == RunningStatus.Running;
         }
     }
 

@@ -3256,11 +3256,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (pane.ContentLayout is null) continue;
             var documentDock = this.FindDocumentDock(pane.ContentLayout);
             if (documentDock?.VisibleDockables is null) continue;
+            var anyUnread = false;
             foreach (var dockable in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
             {
                 var hasUnread = notifications.Any(n => n.TabKey == dockable.Id && !n.IsRead);
                 dockable.HasUnreadNotification = hasUnread;
+                if (hasUnread) anyUnread = true;
             }
+            pane.AnyTabHasUnreadNotification = anyUnread;
         }
     }
 
@@ -3268,7 +3271,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
         if (e.Dockable is WorkspacePaneDocument paneDoc)
+        {
             this.SelectedWorkspacePane = paneDoc.WorkspacePane;
+            if (!this.navigatingViaHistory)
+            {
+                var activeTabId = this.ActiveTabId;
+                if (activeTabId is not null)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(activeTabId, paneDoc.WorkspacePane.Id));
+                }
+            }
+        }
         else if (e.Dockable is WorkspaceDocument doc)
         {
             this.notificationService.MarkRead(doc.Id);

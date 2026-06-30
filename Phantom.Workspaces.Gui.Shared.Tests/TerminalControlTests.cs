@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
@@ -89,6 +90,35 @@ public sealed class TerminalControlTests
         Assert.True(line.Count >= 2);
         Assert.Equal('H', line[0].Char);
         Assert.Equal('i', line[1].Char);
+    }
+
+    // ── TerminalControl – key-down writes VT sequence to stream ──────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_KeyDown_WritesSequenceToStream()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Raise an Up-arrow key-down event. MemoryStream.WriteAsync completes synchronously.
+        var args = new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = Key.Up,
+            KeyModifiers = KeyModifiers.None,
+        };
+        control.RaiseEvent(args);
+
+        Assert.Equal(Encoding.UTF8.GetBytes("\x1b[A"), stream.ToArray());
     }
 
     // ── TerminalControl – resize callback ─────────────────────────────────────────────────────

@@ -30,6 +30,19 @@
         <ContentControl Content="{Binding TabViewModel}" />
     </DataTemplate>
 
+    <!-- WorkspacesPaneDock is our typed subclass of DocumentDock for workspace-level tabs.
+         Setting HeaderTemplate here enables custom tab header rendering with running
+         and notification indicators, mirroring the inner WorkspaceContentDock pattern. -->
+    <DataTemplate DataType="vm:WorkspacesPaneDock">
+        <dock:DocumentControl>
+            <dock:DocumentControl.HeaderTemplate>
+                <DataTemplate x:DataType="vm:WorkspacePaneDocument">
+                    <ContentControl Content="{Binding EffectiveTabHeader}" />
+                </DataTemplate>
+            </dock:DocumentControl.HeaderTemplate>
+        </dock:DocumentControl>
+    </DataTemplate>
+
     <!-- Workspace-level tab: shows the workspace's ContentLayout -->
     <DataTemplate DataType="vm:WorkspacePaneDocument">
         <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}"
