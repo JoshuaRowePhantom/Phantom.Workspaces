@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
 using Xunit;
 
@@ -177,6 +178,50 @@ public sealed class ReverseTrustedExecutionTests
         };
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => executor.OpenStreamAsync(request));
+    }
+
+    [Fact]
+    public async Task ReverseTrustedExecutor_CreateAgentChat_SetsNullPersistenceStore()
+    {
+        var registry = new ReverseExecutionRegistry();
+        var connection = new StreamingConnection("computer-a", "response");
+        registry.Register(connection);
+
+        var spyStore = new SpyAgentPersistenceStore();
+        var executor = new ReverseTrustedExecutor(registry);
+        await using var chat = await executor.CreateAgentChatAsync(new TrustedExecutionRequest
+        {
+            AgentDefinition = AgentSchema.AgentDefinition.FromJson(
+                """{ "kind": "prompt", "name": "x", "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }, "tools": [] }""")!,
+            TrustProfile = new TrustProfile { HostingWorkspacesClientInstances = ["computer-a"] },
+            TargetClientInstance = "computer-a",
+            AgentServices = new Phantom.Workspaces.Llm.AgentServices { AgentPersistenceStoreOverride = spyStore },
+        });
+
+        await foreach (var _ in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")]))
+        {
+        }
+
+        // NullAgentPersistenceStore.Instance must override the spy so StoreAsync is never called.
+        Assert.Equal(0, spyStore.StoreCallCount);
+    }
+
+    /// <summary>A persistence store spy that counts <see cref="StoreAsync"/> calls.</summary>
+    private sealed class SpyAgentPersistenceStore : IAgentPersistenceStore
+    {
+        public int StoreCallCount { get; private set; }
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            this.StoreCallCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<PersistedAgent?>(null);
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Array.Empty<ChatMessage>());
     }
 
     /// <summary>

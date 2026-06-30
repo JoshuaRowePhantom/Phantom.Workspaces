@@ -24,6 +24,7 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
     private readonly string clientInstance;
     private readonly string endpoint;
     private readonly string? devTunnelAccessToken;
+    private readonly HttpMessageHandler? httpMessageHandler;
 
     /// <summary>
     /// Creates a remote executor for a specific client instance and its host endpoint.
@@ -31,7 +32,12 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
     /// <param name="clientInstance">The remote client instance id this executor serves.</param>
     /// <param name="endpoint">Absolute base URL of the remote Phantom.Workspaces host.</param>
     /// <param name="devTunnelAccessToken">Optional dev tunnel access token for non-interactive access.</param>
-    public RemoteTrustedExecutor(string clientInstance, string endpoint, string? devTunnelAccessToken = null)
+    /// <param name="httpMessageHandler">Optional HTTP message handler (for testing).</param>
+    public RemoteTrustedExecutor(
+        string clientInstance,
+        string endpoint,
+        string? devTunnelAccessToken = null,
+        HttpMessageHandler? httpMessageHandler = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(clientInstance);
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -46,6 +52,7 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
         this.clientInstance = clientInstance;
         this.endpoint = endpoint;
         this.devTunnelAccessToken = devTunnelAccessToken;
+        this.httpMessageHandler = httpMessageHandler;
     }
 
     /// <summary>The remote client instance id this executor serves.</summary>
@@ -72,19 +79,30 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
                 + $"'{request.TargetClientInstance}'.");
         }
 
-        var remoteChatClient = new WebRemoteChatClient(
+        var sessionId = request.AgentSessionId ?? Guid.NewGuid().ToString("n");
+
+        HttpClient? testHttpClient = this.httpMessageHandler is not null
+            ? new HttpClient(this.httpMessageHandler) { BaseAddress = new Uri(this.endpoint) }
+            : null;
+
+        var remoteChatClient = new RemoteAgentChatClient(
             this.endpoint,
             request.AgentDefinition.ToJson(),
-            request.AgentSessionId,
-            this.devTunnelAccessToken);
+            sessionId,
+            this.devTunnelAccessToken,
+            testHttpClient);
 
         var baseServices = request.AgentServices ?? new AgentServices();
-        var services = baseServices with { ChatClientOverride = remoteChatClient };
+        var services = baseServices with
+        {
+            ChatClientOverride = remoteChatClient,
+            AgentPersistenceStoreOverride = NullAgentPersistenceStore.Instance,
+        };
 
         return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentDefinition = request.AgentDefinition,
-            AgentSessionId = request.AgentSessionId,
+            AgentSessionId = sessionId,
             AgentServices = services,
         });
     }

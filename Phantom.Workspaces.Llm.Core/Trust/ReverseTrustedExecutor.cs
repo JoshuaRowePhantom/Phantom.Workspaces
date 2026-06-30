@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm.Trust;
@@ -52,7 +53,11 @@ public sealed class ReverseTrustedExecutor : ITrustedExecutor
             request.AgentSessionId);
 
         var baseServices = request.AgentServices ?? new AgentServices();
-        var services = baseServices with { ChatClientOverride = reverseChatClient };
+        var services = baseServices with
+        {
+            ChatClientOverride = reverseChatClient,
+            AgentPersistenceStoreOverride = NullAgentPersistenceStore.Instance,
+        };
 
         return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
