@@ -27,9 +27,7 @@ public sealed class DevTunnelEndpointResolverTests
     public async Task ResolveAsync_PrivateMode_ReturnsNullToken()
     {
         var resolver = new DevTunnelEndpointResolver(
-            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280])),
-            accessTokenSource: "PW_TUNNEL_TOKEN",
-            tokenSourceResolver: _ => "should-not-be-used");
+            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280], ConnectToken: "irrelevant-token")));
 
         var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
@@ -37,23 +35,32 @@ public sealed class DevTunnelEndpointResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_TokenMode_ResolvesPreSharedTokenFromSource()
+    public async Task ResolveAsync_AnonymousMode_ReturnsNullToken()
     {
         var resolver = new DevTunnelEndpointResolver(
-            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280])),
-            accessTokenSource: "PW_TUNNEL_TOKEN",
-            tokenSourceResolver: sourceName => sourceName == "PW_TUNNEL_TOKEN" ? "secret-token" : null);
+            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280], ConnectToken: "irrelevant-token")));
 
-        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token, TestContext.Current.CancellationToken);
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Anonymous, TestContext.Current.CancellationToken);
 
-        Assert.Equal("secret-token", resolution.TunnelAuthToken);
+        Assert.Null(resolution.TunnelAuthToken);
     }
 
     [Fact]
-    public async Task ResolveAsync_TokenMode_WithoutSource_Throws()
+    public async Task ResolveAsync_TokenMode_UsesConnectTokenFromLookupResult()
     {
         var resolver = new DevTunnelEndpointResolver(
-            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280])));
+            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280], ConnectToken: "api-issued-connect-token")));
+
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token, TestContext.Current.CancellationToken);
+
+        Assert.Equal("api-issued-connect-token", resolution.TunnelAuthToken);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_TokenMode_WhenConnectTokenIsNull_Throws()
+    {
+        var resolver = new DevTunnelEndpointResolver(
+            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280], ConnectToken: null)));
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Token, TestContext.Current.CancellationToken));
