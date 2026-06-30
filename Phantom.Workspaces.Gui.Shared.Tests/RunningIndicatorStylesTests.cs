@@ -80,25 +80,6 @@ public sealed class RunningIndicatorStylesTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void RunningIndicator_WhenSucceeded_ValueIs100()
-    {
-        var styles = LoadSharedStyles();
-
-        var progressBar = new ProgressBar { IsIndeterminate = false };
-        progressBar.Classes.Add("running-indicator");
-        progressBar.Classes.Add("succeeded");
-
-        var host = new StackPanel();
-        host.Styles.Add(styles);
-        host.Children.Add(progressBar);
-
-        host.Measure(new Size(1000, 1000));
-        host.Arrange(new Rect(0, 0, 1000, 1000));
-
-        Assert.Equal(100.0, progressBar.Value);
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_WhenFailed_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -118,12 +99,104 @@ public sealed class RunningIndicatorStylesTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void RunningIndicator_WhenFailed_ValueIs100()
+    public void RunningIndicator_WhenIndeterminate_DoesNotThrow()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = true };
+        progressBar.Classes.Add("running-indicator");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningIndicatorAgent_WhenIndeterminate_DoesNotThrow()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = true };
+        progressBar.Classes.Add("running-indicator");
+        progressBar.Classes.Add("running-indicator-agent");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningIndicatorAgent_WhenIndeterminate_OpacityIsOne()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = true };
+        progressBar.Classes.Add("running-indicator");
+        progressBar.Classes.Add("running-indicator-agent");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(1.0, progressBar.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningIndicatorAgent_WhenIdle_OpacityIsZero()
     {
         var styles = LoadSharedStyles();
 
         var progressBar = new ProgressBar { IsIndeterminate = false };
         progressBar.Classes.Add("running-indicator");
+        progressBar.Classes.Add("running-indicator-agent");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.0, progressBar.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningIndicatorAgent_WhenSucceeded_OpacityIsOne()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = false };
+        progressBar.Classes.Add("running-indicator");
+        progressBar.Classes.Add("running-indicator-agent");
+        progressBar.Classes.Add("succeeded");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(1.0, progressBar.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void RunningIndicatorAgent_WhenFailed_OpacityIsOne()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = false };
+        progressBar.Classes.Add("running-indicator");
+        progressBar.Classes.Add("running-indicator-agent");
         progressBar.Classes.Add("failed");
 
         var host = new StackPanel();
@@ -133,7 +206,7 @@ public sealed class RunningIndicatorStylesTests
         host.Measure(new Size(1000, 1000));
         host.Arrange(new Rect(0, 0, 1000, 1000));
 
-        Assert.Equal(100.0, progressBar.Value);
+        Assert.Equal(1.0, progressBar.Opacity);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

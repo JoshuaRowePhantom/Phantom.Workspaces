@@ -12,11 +12,13 @@ public sealed class WebClientDataAccessLayer : IDataAccessLayer, IDisposable
 {
     private readonly HttpClient httpClient;
     private readonly bool ownsHttpClient;
+    private readonly Func<string?>? devTunnelAccessTokenResolver;
     private static readonly JsonSerializerOptions JsonSerializerOptions = WebDataAccessJsonSerialization.Options;
 
     public WebClientDataAccessLayer(
         string endpoint,
         string? devTunnelAccessToken = null,
+        Func<string?>? devTunnelAccessTokenResolver = null,
         HttpClient? httpClient = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -30,6 +32,7 @@ public sealed class WebClientDataAccessLayer : IDataAccessLayer, IDisposable
             BaseAddress = endpointUri,
         };
         this.ownsHttpClient = httpClient is null;
+        this.devTunnelAccessTokenResolver = devTunnelAccessTokenResolver;
 
         if (this.httpClient.BaseAddress is null)
         {
@@ -96,6 +99,36 @@ public sealed class WebClientDataAccessLayer : IDataAccessLayer, IDisposable
                 $"Web data access call to '{relativeUri}' timed out.",
                 statusCode: null,
                 exception);
+        }
+
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && this.devTunnelAccessTokenResolver is not null)
+        {
+            response.Dispose();
+            var freshToken = this.devTunnelAccessTokenResolver();
+            if (!string.IsNullOrWhiteSpace(freshToken))
+            {
+                this.httpClient.DefaultRequestHeaders.Remove("X-Tunnel-Authorization");
+                this.httpClient.DefaultRequestHeaders.Add("X-Tunnel-Authorization", $"tunnel {freshToken}");
+            }
+
+            try
+            {
+                response = await this.httpClient.PostAsJsonAsync(relativeUri, request, JsonSerializerOptions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException exception)
+            {
+                throw new WebDataAccessRequestException(
+                    $"Web data access call to '{relativeUri}' could not reach the server: {exception.Message}",
+                    exception.StatusCode,
+                    exception);
+            }
+            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new WebDataAccessRequestException(
+                    $"Web data access call to '{relativeUri}' timed out.",
+                    statusCode: null,
+                    exception);
+            }
         }
 
         using (response)
