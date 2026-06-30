@@ -557,6 +557,10 @@
                         <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
                             <TextBlock Text="{Binding Icon}" />
                         </DataTemplate>
+                        <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+                            <ProgressBar Classes="running-indicator"
+                                         IsIndeterminate="{Binding IsRunning}" />
+                        </DataTemplate>
                         <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
                             <!-- Always occupies space; empty bar hides it when there is no unread notification -->
                             <ProgressBar Classes="notification-indicator"
