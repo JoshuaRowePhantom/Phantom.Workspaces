@@ -169,8 +169,7 @@ public sealed class WebViewModelTests
         var handled = await handler.Handle(viewModel, Shortcut.Open, entity);
 
         Assert.True(handled);
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var webTab = Assert.IsType<WebViewModel>(selectedRegion.SelectedTab);
+        var webTab = Assert.IsType<WebViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
         Assert.Equal("My Entity", webTab.Title);
 
         // titleFixed = false: page title from browser should update Title
@@ -195,13 +194,12 @@ public sealed class WebViewModelTests
         var handled = await handler.Handle(viewModel, Shortcut.Open, entity);
 
         Assert.True(handled);
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var webTab = Assert.IsType<WebViewModel>(selectedRegion.SelectedTab);
-        Assert.Equal("Board", webTab.Title);
+        var webTab2 = Assert.IsType<WebViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        Assert.Equal("Board", webTab2.Title);
 
         // titleFixed = true: page title from browser must NOT update Title
-        webTab.SetPageTitle("Browser Page Title");
-        Assert.Equal("Board", webTab.Title);
+        webTab2.SetPageTitle("Browser Page Title");
+        Assert.Equal("Board", webTab2.Title);
     }
 
     // --- Workspace restore: explicit title from JSON wins and is pinned ---
@@ -252,9 +250,7 @@ public sealed class WebViewModelTests
             """;
 
         var workspacePane = await InvokeCreateWorkspacePaneAsync(viewModel, workspaceEntityId, workspaceJson);
-        var tabs = workspacePane.SelectedRegion?.Tabs;
-        Assert.NotNull(tabs);
-        var webTab = Assert.IsType<WebViewModel>(Assert.Single(tabs!));
+        var webTab = Assert.IsType<WebViewModel>(Assert.Single(workspacePane.Tabs));
 
         Assert.Equal("My Pinned Title", webTab.Title);
 
@@ -310,15 +306,13 @@ public sealed class WebViewModelTests
             """;
 
         var workspacePane = await InvokeCreateWorkspacePaneAsync(viewModel, workspaceEntityId, workspaceJson);
-        var tabs = workspacePane.SelectedRegion?.Tabs;
-        Assert.NotNull(tabs);
-        var webTab = Assert.IsType<WebViewModel>(Assert.Single(tabs!));
+        var webTab2 = Assert.IsType<WebViewModel>(Assert.Single(workspacePane.Tabs));
 
-        Assert.Equal("External Thing", webTab.Title);
+        Assert.Equal("External Thing", webTab2.Title);
 
         // titleFixed = false: browser can update the title
-        webTab.SetPageTitle("Browser Page Title");
-        Assert.Equal("Browser Page Title", webTab.Title);
+        webTab2.SetPageTitle("Browser Page Title");
+        Assert.Equal("Browser Page Title", webTab2.Title);
     }
 
     // --- Workspace restore: no explicit title + named key → key name, pinned ---
@@ -368,15 +362,13 @@ public sealed class WebViewModelTests
             """;
 
         var workspacePane = await InvokeCreateWorkspacePaneAsync(viewModel, workspaceEntityId, workspaceJson);
-        var tabs = workspacePane.SelectedRegion?.Tabs;
-        Assert.NotNull(tabs);
-        var webTab = Assert.IsType<WebViewModel>(Assert.Single(tabs!));
+        var webTab3 = Assert.IsType<WebViewModel>(Assert.Single(workspacePane.Tabs));
 
-        Assert.Equal("Repos", webTab.Title);
+        Assert.Equal("Repos", webTab3.Title);
 
         // titleFixed = true: browser cannot override
-        webTab.SetPageTitle("Browser Page Title");
-        Assert.Equal("Repos", webTab.Title);
+        webTab3.SetPageTitle("Browser Page Title");
+        Assert.Equal("Repos", webTab3.Title);
     }
 
     // --- DuplicateBrowserTabCommand ---
@@ -392,8 +384,7 @@ public sealed class WebViewModelTests
 
         await viewModel.DuplicateBrowserTabAsync();
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var tabs = selectedRegion.Tabs!.ToList();
+        var tabs = viewModel.SelectedWorkspacePane.Tabs.ToList();
         var duplicate = tabs
             .OfType<WebViewModel>()
             .FirstOrDefault(t => t.Id != "web-dup-1" && t.AddressBarUrl == "https://example.com");
@@ -417,10 +408,9 @@ public sealed class WebViewModelTests
 
         await viewModel.DuplicateBrowserTabAsync();
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var tabs = selectedRegion.Tabs!.ToList();
-        var indexA = tabs.FindIndex(t => t.Id == "web-dup-a");
-        var indexDup = tabs.FindIndex(t => t is WebViewModel wv && wv.Id != "web-dup-a" && wv.Id != "web-dup-b" && wv.AddressBarUrl == "https://a.example.com");
+        var tabs2 = viewModel.SelectedWorkspacePane.Tabs.ToList();
+        var indexA = tabs2.FindIndex(t => t.Id == "web-dup-a");
+        var indexDup = tabs2.FindIndex(t => t is WebViewModel wv && wv.Id != "web-dup-a" && wv.Id != "web-dup-b" && wv.AddressBarUrl == "https://a.example.com");
 
         Assert.True(indexA >= 0, "Source tab A should be present");
         Assert.True(indexDup >= 0, "Duplicate tab should be present");
@@ -437,14 +427,13 @@ public sealed class WebViewModelTests
         var entityTab = new EntityWorkspaceTabViewModel { Id = "entity-1", Title = "Entity" };
         await viewModel.OpenTabAsync(entityTab);
 
-        var tabCountBeforeDuplicate = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).Tabs.Count;
+        var tabCountBeforeDuplicate = viewModel.SelectedWorkspacePane.Tabs.Count;
 
         await viewModel.DuplicateBrowserTabAsync();
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var tabs = selectedRegion.Tabs!.ToList();
+        var tabs3 = viewModel.SelectedWorkspacePane.Tabs.ToList();
         // DuplicateBrowserTabAsync is a no-op for non-browser tabs; no new tab should have been inserted.
-        Assert.Equal(tabCountBeforeDuplicate, tabs.Count);
+        Assert.Equal(tabCountBeforeDuplicate, tabs3.Count);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -457,9 +446,7 @@ public sealed class WebViewModelTests
         await viewModel.DuplicateBrowserTabAsync();
 
         // No exception; workspace pane has no tabs.
-        var selectedRegion = viewModel.SelectedWorkspacePane.SelectedRegion;
-        var tabs = selectedRegion?.Tabs?.ToList() ?? [];
-        Assert.Empty(tabs);
+        Assert.Empty(viewModel.SelectedWorkspacePane.Tabs);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -473,9 +460,7 @@ public sealed class WebViewModelTests
 
         await viewModel.DuplicateBrowserTabAsync();
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var tabs = selectedRegion.Tabs!.ToList();
-        Assert.Single(tabs);
+        Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
     }
 
     // --- RaiseOpenNewWindow: new tab insertion position ---
@@ -499,11 +484,10 @@ public sealed class WebViewModelTests
         // Allow the async void to complete.
         await Task.Yield();
 
-        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
-        var tabs = selectedRegion.Tabs!.ToList();
+        var tabs4 = viewModel.SelectedWorkspacePane.Tabs.ToList();
 
-        var indexA = tabs.FindIndex(t => t.Id == "web-a");
-        var indexNew = tabs.FindIndex(t => t is WebViewModel wv && wv.AddressBarUrl == "https://new.example.com");
+        var indexA = tabs4.FindIndex(t => t.Id == "web-a");
+        var indexNew = tabs4.FindIndex(t => t is WebViewModel wv && wv.AddressBarUrl == "https://new.example.com");
 
         Assert.True(indexA >= 0, "Source tab A should be present");
         Assert.True(indexNew >= 0, "New tab should be present");

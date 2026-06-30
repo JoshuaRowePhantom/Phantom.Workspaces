@@ -13,10 +13,28 @@ public class WorkspaceDockFactory : Factory
 {
     private readonly MainWindowViewModel mainWindowViewModel;
 
+    /// <summary>
+    /// Registry mapping tab IDs to their dock documents. Allows business logic to find
+    /// a WorkspaceDocument from a tab ID without walking VisibleDockables.
+    /// </summary>
+    private readonly Dictionary<string, WorkspaceDocument> documentsByTabId = new(StringComparer.Ordinal);
+
     public WorkspaceDockFactory(MainWindowViewModel mainWindowViewModel)
     {
         this.mainWindowViewModel = mainWindowViewModel;
     }
+
+    /// <summary>
+    /// Returns the <see cref="WorkspaceDocument"/> registered for the given tab ID, or null if none.
+    /// </summary>
+    public WorkspaceDocument? GetDocumentForTab(string tabId)
+        => this.documentsByTabId.TryGetValue(tabId, out var doc) ? doc : null;
+
+    /// <summary>
+    /// Removes the document registration for the given tab ID (called when a document is closed).
+    /// </summary>
+    public void UnregisterDocument(string tabId)
+        => this.documentsByTabId.Remove(tabId);
 
     /// <summary>
     /// Creates the root layout with a DocumentDock for workspace-level tabs.
@@ -97,17 +115,19 @@ public class WorkspaceDockFactory : Factory
 
     public WorkspaceDocument CreateWorkspaceTabDocument(WorkspaceTabViewModel tabViewModel)
     {
-        return new WorkspaceDocument(tabViewModel)
+        var document = new WorkspaceDocument(tabViewModel)
         {
             Id = tabViewModel.Id,
             Title = tabViewModel.Title,
             CanClose = true,
         };
+        this.documentsByTabId[tabViewModel.Id] = document;
+        return document;
     }
 
     public void AddWorkspaceTab(IDocumentDock dock, WorkspaceTabViewModel tabViewModel, bool focus = true)
     {
-        var document = CreateWorkspaceTabDocument(tabViewModel);
+        var document = this.CreateWorkspaceTabDocument(tabViewModel);
         AddDockable(dock, document);
         if (focus)
         {

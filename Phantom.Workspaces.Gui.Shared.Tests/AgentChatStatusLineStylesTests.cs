@@ -120,6 +120,44 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.True(textBlock.Margin.Left > 0);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatAutoscrollToggle_WhenStyleApplied_HasNonZeroLeftMargin()
+    {
+        // Issue #512: agent-chat-autoscroll-toggle must carry its own left margin.
+        var styles = LoadAgentChatStatusLineStyles();
+
+        var checkBox = new CheckBox();
+        checkBox.Classes.Add("agent-chat-autoscroll-toggle");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(checkBox);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.True(checkBox.Margin.Left > 0);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatReasoningToggle_WhenStyleApplied_HasNonZeroLeftMargin()
+    {
+        // Issue #512: agent-chat-status-line-reasoning-toggle must carry its own left margin.
+        var styles = LoadAgentChatStatusLineStyles();
+
+        var button = new Button();
+        button.Classes.Add("agent-chat-status-line-reasoning-toggle");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(button);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.True(button.Margin.Left > 0);
+    }
+
     private static Avalonia.Styling.Styles LoadAgentChatStatusLineStyles()
     {
         var source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/AgentChatStatusLineStyles.axaml");

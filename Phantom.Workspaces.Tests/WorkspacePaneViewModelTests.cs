@@ -1,3 +1,4 @@
+using System;
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
@@ -9,67 +10,24 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacePaneViewModelTests
 {
-    [AvaloniaFact]
-    public void HasNoRegions_IsTrueWhenEmpty_AndFalseWhenRegionsExist()
+    // ── HasNoTabs / HasTabs ───────────────────────────────────────────────────
+
+    [Fact]
+    public void HasNoTabs_IsTrueWhenEmpty_AndFalseWhenTabsExist()
     {
         var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
 
-        Assert.True(pane.HasNoRegions);
-        Assert.False(pane.HasRegions);
+        Assert.Empty(pane.Tabs);
 
-        pane.SetRegions(
-        [
-            new WorkspaceRegionViewModel
-            {
-                Id = "editor-center",
-                Title = "Center",
-                DockRegion = "center",
-                RelativeSize = 1,
-            },
-        ]);
-
-        Assert.False(pane.HasNoRegions);
-        Assert.True(pane.HasRegions);
-    }
-
-    [AvaloniaFact]
-    public void CloseTabCommand_RemovesTab_AndSelectsNeighbor()
-    {
-        var firstTab = new EntityWorkspaceTabViewModel
+        var tab = new EntityWorkspaceTabViewModel
         {
-            Id = "first",
-            Title = "First",
+            Id = "tab-1",
+            Title = "Tab 1",
             Entity = CreateWorkspaceEntity(),
         };
-        var secondTab = new EntityWorkspaceTabViewModel
-        {
-            Id = "second",
-            Title = "Second",
-            Entity = CreateWorkspaceEntity(),
-        };
-        var thirdTab = new EntityWorkspaceTabViewModel
-        {
-            Id = "third",
-            Title = "Third",
-            Entity = CreateWorkspaceEntity(),
-        };
-        var region = new WorkspaceRegionViewModel
-        {
-            Id = "center",
-            Title = "Center",
-            DockRegion = "center",
-            RelativeSize = 1,
-        };
-        region.Tabs.Add(firstTab);
-        region.Tabs.Add(secondTab);
-        region.Tabs.Add(thirdTab);
-        region.SelectedTab = secondTab;
+        pane.Tabs.Add(tab);
 
-        region.CloseTabCommand.Execute(secondTab);
-
-        Assert.Equal(2, region.Tabs.Count);
-        Assert.DoesNotContain(secondTab, region.Tabs);
-        Assert.Same(thirdTab, region.SelectedTab);
+        Assert.Single(pane.Tabs);
     }
 
     [AvaloniaFact]
@@ -107,26 +65,40 @@ public sealed class WorkspacePaneViewModelTests
     }
 
     [Fact]
-    public void AnyTabIsRunning_TrueWhenPaneStatusIsRunning()
+    public void AnyTabIsRunning_TrueWhenTabWithRunningStatusAdded()
     {
         var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
-        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        var tab = new TestRunningTab("running-tab", tabStatus);
+
+        pane.Tabs.Add(tab);
+
         Assert.True(pane.AnyTabIsRunning);
     }
 
     [Fact]
-    public void AnyTabIsRunning_FalseWhenPaneStatusBecomesIdle()
+    public void AnyTabIsRunning_FalseWhenTabStatusBecomesIdle()
     {
         var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
-        pane.PaneStatus.RunningStatus = RunningStatus.Running;
-        pane.PaneStatus.RunningStatus = RunningStatus.Idle;
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        var tab = new TestRunningTab("running-tab", tabStatus);
+        pane.Tabs.Add(tab);
+
+        tabStatus.RunningStatus = RunningStatus.Idle;
+
         Assert.False(pane.AnyTabIsRunning);
     }
 
     [Fact]
-    public void AnyTabIsRunning_RaisesPropertyChanged_WhenPaneStatusRunningChanges()
+    public void AnyTabIsRunning_RaisesPropertyChanged_WhenTabStatusRunningChanges()
     {
         var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var tabStatus = new StatusItem();
+        var tab = new TestRunningTab("running-tab", tabStatus);
+        pane.Tabs.Add(tab);
+
         var raised = false;
         pane.PropertyChanged += (_, e) =>
         {
@@ -134,9 +106,23 @@ public sealed class WorkspacePaneViewModelTests
                 raised = true;
         };
 
-        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+        tabStatus.RunningStatus = RunningStatus.Running;
 
         Assert.True(raised);
+    }
+
+    [Fact]
+    public void AnyTabIsRunning_FalseAfterRunningTabIsRemoved()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        var tab = new TestRunningTab("running-tab", tabStatus);
+        pane.Tabs.Add(tab);
+
+        pane.Tabs.Remove(tab);
+
+        Assert.False(pane.AnyTabIsRunning);
     }
 
     // ── AnyTabHasUnreadNotification ───────────────────────────────────────────
@@ -202,7 +188,9 @@ public sealed class WorkspacePaneViewModelTests
         var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
         var doc = new WorkspacePaneDocument(pane);
 
-        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        pane.Tabs.Add(new TestRunningTab("running-tab", tabStatus));
 
         var indicator = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
         Assert.True(indicator.IsRunning);
@@ -250,5 +238,22 @@ public sealed class WorkspacePaneViewModelTests
                 Relationships = Array.Empty<EntitySnapshot>(),
             },
             deleteEntityAsync);
+    }
+
+    /// <summary>Test stub: a tab whose TabStatus is a settable StatusItem.</summary>
+    private sealed class TestRunningTab : WorkspaceTabViewModel
+    {
+        private readonly StatusItem statusItem;
+
+        [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
+        public TestRunningTab(string id, StatusItem statusItem)
+        {
+            this.Id = id;
+            this.Title = id;
+            this.DockRegion = "full";
+            this.statusItem = statusItem;
+        }
+
+        public override IStatusItem? TabStatus => this.statusItem;
     }
 }

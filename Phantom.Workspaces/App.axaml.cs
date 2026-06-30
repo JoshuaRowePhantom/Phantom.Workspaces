@@ -215,6 +215,7 @@ public partial class App : Application
                 var helpWindow = new HelpWindow();
                 desktop.MainWindow = helpWindow;
                 base.OnFrameworkInitializationCompleted();
+                UnhandledExceptionHandler.InstallDispatcherHandler();
                 helpWindow.Show();
                 return;
             }
@@ -224,6 +225,7 @@ public partial class App : Application
             desktop.MainWindow = loadingWindow;
 
             base.OnFrameworkInitializationCompleted();
+            UnhandledExceptionHandler.InstallDispatcherHandler();
 
             WireSingleInstanceActivation(desktop);
 
