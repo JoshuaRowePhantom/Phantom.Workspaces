@@ -2685,6 +2685,7 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
@@ -3000,6 +3001,7 @@ public sealed class MainWindowIntegrationTests
         // Shell tab is now active (last opened).
         var window = new MainWindow(viewModel);
         window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
@@ -3024,6 +3026,7 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
 
