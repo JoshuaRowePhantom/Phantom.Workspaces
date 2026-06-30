@@ -1,4 +1,4 @@
-﻿using Avalonia.Controls;
+using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -1760,12 +1760,12 @@ public sealed class MainWindowIntegrationTests
 
         var entityBroker = GetEntityBroker(viewModel);
 
-        var workspaceIdA = new EntityId("url00001-0000-4000-8000-000000000001");
-        var workspaceIdB = new EntityId("url00001-0000-4000-8000-000000000002");
+        var workspaceIdA = new EntityId("ab010001-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("ab010001-0000-4000-8000-000000000002");
         await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
             """
             {
-              "entity-id": "url00001-0000-4000-8000-000000000001",
+              "entity-id": "ab010001-0000-4000-8000-000000000001",
               "entity-types": ["entity", "workspace"],
               "names": [["tests", "workspaces", "url-handler-pane-a"]],
               "display-name": { "default": "URL Handler Pane A" },
@@ -1775,7 +1775,7 @@ public sealed class MainWindowIntegrationTests
         await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
             """
             {
-              "entity-id": "url00001-0000-4000-8000-000000000002",
+              "entity-id": "ab010001-0000-4000-8000-000000000002",
               "entity-types": ["entity", "workspace"],
               "names": [["tests", "workspaces", "url-handler-pane-b"]],
               "display-name": { "default": "URL Handler Pane B" },
@@ -1793,11 +1793,11 @@ public sealed class MainWindowIntegrationTests
         var paneAIndex = viewModel.WorkspacePanes.IndexOf(paneA);
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
 
-        var agentDefinitionId = new EntityId("url00001-0000-4000-8000-000000000003");
+        var agentDefinitionId = new EntityId("ab010001-0000-4000-8000-000000000003");
         var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
             """
             {
-              "entity-id": "url00001-0000-4000-8000-000000000003",
+              "entity-id": "ab010001-0000-4000-8000-000000000003",
               "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "url-nonselected-echo"]],
               "display-name": { "default": "URL Nonselected Echo" },
@@ -1859,12 +1859,12 @@ public sealed class MainWindowIntegrationTests
 
         var entityBroker = GetEntityBroker(viewModel);
 
-        var workspaceIdA = new EntityId("url00002-0000-4000-8000-000000000001");
-        var workspaceIdB = new EntityId("url00002-0000-4000-8000-000000000002");
+        var workspaceIdA = new EntityId("ab020002-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("ab020002-0000-4000-8000-000000000002");
         await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
             """
             {
-              "entity-id": "url00002-0000-4000-8000-000000000001",
+              "entity-id": "ab020002-0000-4000-8000-000000000001",
               "entity-types": ["entity", "workspace"],
               "names": [["tests", "workspaces", "url-selected-pane-a"]],
               "display-name": { "default": "URL Selected Pane A" },
@@ -1874,7 +1874,7 @@ public sealed class MainWindowIntegrationTests
         await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
             """
             {
-              "entity-id": "url00002-0000-4000-8000-000000000002",
+              "entity-id": "ab020002-0000-4000-8000-000000000002",
               "entity-types": ["entity", "workspace"],
               "names": [["tests", "workspaces", "url-selected-pane-b"]],
               "display-name": { "default": "URL Selected Pane B" },
@@ -1890,11 +1890,11 @@ public sealed class MainWindowIntegrationTests
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
         Assert.Equal(paneA, viewModel.SelectedWorkspacePane);
 
-        var agentDefinitionId = new EntityId("url00002-0000-4000-8000-000000000003");
+        var agentDefinitionId = new EntityId("ab020002-0000-4000-8000-000000000003");
         var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
             """
             {
-              "entity-id": "url00002-0000-4000-8000-000000000003",
+              "entity-id": "ab020002-0000-4000-8000-000000000003",
               "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "url-selected-echo"]],
               "display-name": { "default": "URL Selected Echo" },

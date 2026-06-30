@@ -33,11 +33,12 @@ see `.github/skills/shared/CODE-VERIFICATION.md`
 ## Step 1 — Read the issue
 
 ```powershell
-gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,body,comments
+gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,body,comments,stateReason
 ```
 
 - Extract the **specified behaviour**: what code should exist, what it should do, and what test cases are described or implied by the issue body and any comments.
 - Note the issue title — used as a search keyword in Step 4.
+- **Check `stateReason`.** If it is not `"completed"` (e.g. `"duplicate"` or `"not_planned"`), **stop immediately** — do not verify and do not apply any labels. Report: `Skipped — issue closed as <stateReason>, not as fixed.`
 
 ---
 
