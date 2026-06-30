@@ -9,6 +9,7 @@ using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
@@ -262,46 +263,57 @@ public sealed class TabHeaderViewModelTests
 
     // ── RefreshTabAltShortcutLabels ──────────────────────────────────────────
 
-    private static IDocumentDock CreateDockWithDocs(int count)
+    private static (WorkspacePaneViewModel pane, System.Collections.Generic.Dictionary<string, WorkspaceDocument> docs)
+        CreatePaneWithDocs(int count)
     {
-        var dock = new Dock.Model.Mvvm.Controls.DocumentDock();
-        dock.VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable>();
+        using var jsonDoc = System.Text.Json.JsonDocument.Parse(
+            """{"entity-id":"aaaaaaaa-0000-4000-8000-aaaaaaaaaaaa","entity-types":["entity","workspace"],"display-name":{"default":"Test"}}""");
+        var entity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId("aaaaaaaa-0000-4000-8000-aaaaaaaaaaaa"),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
+                Data = jsonDoc.RootElement.Clone(),
+                Relationships = System.Array.Empty<EntitySnapshot>(),
+            });
+
+        var pane = new WorkspacePaneViewModel(entity);
+        var docs = new System.Collections.Generic.Dictionary<string, WorkspaceDocument>(System.StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
             var tab = new EntityWorkspaceTabViewModel { Id = $"tab-{i}", Title = $"Tab {i}" };
-            dock.VisibleDockables.Add(new WorkspaceDocument(tab));
+            pane.Tabs.Add(tab);
+            docs[tab.Id] = new WorkspaceDocument(tab);
         }
-        return dock;
+        return (pane, docs);
     }
 
     [Fact]
     public void RefreshTabAltShortcutLabels_FirstDoc_GetsLabel1()
     {
-        var dock = CreateDockWithDocs(3);
-        MainWindowViewModel.RefreshTabAltShortcutLabels(dock);
+        var (pane, docs) = CreatePaneWithDocs(3);
+        MainWindowViewModel.RefreshTabAltShortcutLabels(pane, id => docs.TryGetValue(id, out var doc) ? doc : null);
 
-        var label = ((WorkspaceDocument)dock.VisibleDockables![0]).EffectiveTabHeader.AltShortcutLabel;
-        Assert.Equal("1", label);
+        Assert.Equal("1", docs["tab-0"].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [Fact]
     public void RefreshTabAltShortcutLabels_TenthDoc_GetsLabel0()
     {
-        var dock = CreateDockWithDocs(10);
-        MainWindowViewModel.RefreshTabAltShortcutLabels(dock);
+        var (pane, docs) = CreatePaneWithDocs(10);
+        MainWindowViewModel.RefreshTabAltShortcutLabels(pane, id => docs.TryGetValue(id, out var doc) ? doc : null);
 
-        var label = ((WorkspaceDocument)dock.VisibleDockables![9]).EffectiveTabHeader.AltShortcutLabel;
-        Assert.Equal("0", label);
+        Assert.Equal("0", docs["tab-9"].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [Fact]
     public void RefreshTabAltShortcutLabels_EleventhDoc_GetsNullLabel()
     {
-        var dock = CreateDockWithDocs(11);
-        MainWindowViewModel.RefreshTabAltShortcutLabels(dock);
+        var (pane, docs) = CreatePaneWithDocs(11);
+        MainWindowViewModel.RefreshTabAltShortcutLabels(pane, id => docs.TryGetValue(id, out var doc) ? doc : null);
 
-        var label = ((WorkspaceDocument)dock.VisibleDockables![10]).EffectiveTabHeader.AltShortcutLabel;
-        Assert.Null(label);
+        Assert.Null(docs["tab-10"].EffectiveTabHeader.AltShortcutLabel);
     }
 
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
