@@ -5,15 +5,16 @@ namespace Phantom.Workspaces.Services;
 public sealed class RunningAgentChatLease : IAsyncDisposable
 {
     private readonly RunningAgentChatTable table;
-    private readonly string sessionKey;
     private int disposed;
+
+    public string SessionKey { get; }
 
     public AgentChat AgentChat { get; }
 
     internal RunningAgentChatLease(RunningAgentChatTable table, string sessionKey, AgentChat agentChat)
     {
         this.table = table;
-        this.sessionKey = sessionKey;
+        this.SessionKey = sessionKey;
         this.AgentChat = agentChat;
     }
 
@@ -24,6 +25,6 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
             return;
         }
 
-        await this.table.ReleaseAsync(this.sessionKey, this);
+        await this.table.ReleaseAsync(this.SessionKey, this);
     }
 }

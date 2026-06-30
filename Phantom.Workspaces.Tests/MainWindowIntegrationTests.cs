@@ -4462,6 +4462,182 @@ public sealed class MainWindowIntegrationTests
         await probe2.DisposeAsync();
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentBrain_WithRunningAgentTab_IsAnyRunning()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var brain = viewModel.RunningAgentBrain;
+        Assert.NotNull(brain);
+        Assert.False(brain!.IsAnyRunning);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ab070001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab070001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "brain-test-echo"]],
+              "display-name": { "default": "Brain Test Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "brain-test-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), table);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+
+        Assert.True(brain.IsAnyRunning);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentBrain_WithRunningAgentTab_HasRowWithWorkspaceAndTabTitles()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var brain = viewModel.RunningAgentBrain;
+        Assert.NotNull(brain);
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceId = new EntityId("ab080001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "ab080001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "brain-popup-ws"]],
+              "display-name": { "default": "Brain Popup Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var agentDefinitionId = new EntityId("ab080002-0000-4000-8000-000000000002");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab080002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "brain-popup-echo"]],
+              "display-name": { "default": "Brain Popup Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "brain-popup-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var paneIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceId.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneIndex.ToString());
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), table);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+
+        brain!.Refresh();
+
+        var row = Assert.Single(brain.Rows);
+        Assert.Equal("Brain Popup Workspace", row.WorkspacePaneTitle);
+        Assert.Equal(agentSessionEntity!.DisplayName, row.TabTitle);
+        Assert.True(row.HasOpenTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentBrain_Activate_FocusesTab()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var brain = viewModel.RunningAgentBrain;
+        Assert.NotNull(brain);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ab090001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab090001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "brain-activate-echo"]],
+              "display-name": { "default": "Brain Activate Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "brain-activate-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), table);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+
+        brain!.Refresh();
+
+        var row = Assert.Single(brain.Rows);
+
+        // Open the popup, click the row
+        brain.IsOpen = true;
+        row.ActivateCommand.Execute(null);
+
+        // Popup should close after activation
+        Assert.False(brain.IsOpen);
+
+        // The tab should be active
+        var layout = viewModel.SelectedWorkspacePane.ContentLayout;
+        Assert.NotNull(layout);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var activeDoc = documentDock!.ActiveDockable as WorkspaceDocument;
+        Assert.NotNull(activeDoc);
+        Assert.Equal(agentTab.Id, activeDoc!.Id);
+    }
+
     private sealed class FakeShellSession : ITerminalSession
     {
         private readonly MemoryStream stream = new();

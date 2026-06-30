@@ -101,6 +101,23 @@ public sealed class RootSlashCommandCompletionsHandlerTests
         Assert.Equal("Help ", completions[0].CompletionText);
     }
 
+    [Fact]
+    public void GetCompletions_WithMixedCaseCommandNames_SortsAlphabeticallyIgnoringCase()
+    {
+        // "Alpha" (uppercase A) must not sort after "beta" and "Gamma" due to ASCII ordering.
+        // With Ordinal, uppercase sorts before lowercase: Alpha < Gamma < beta.
+        // With OrdinalIgnoreCase the order must be: Alpha < beta < Gamma.
+        var registry = MakeRegistry("beta", "Alpha", "Gamma");
+        var handler = new RootSlashCommandCompletionsHandler(registry);
+
+        var completions = handler.GetCompletions(string.Empty);
+
+        Assert.Equal(3, completions.Count);
+        Assert.Equal("Alpha ", completions[0].CompletionText);
+        Assert.Equal("beta ", completions[1].CompletionText);
+        Assert.Equal("Gamma ", completions[2].CompletionText);
+    }
+
     private sealed class FakeRegistry : ISlashCommandRegistry
     {
         private readonly List<ISlashCommandHandler> commands = [];

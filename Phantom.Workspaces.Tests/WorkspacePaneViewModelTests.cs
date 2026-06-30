@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
@@ -93,6 +95,138 @@ public sealed class WorkspacePaneViewModelTests
         await Task.Yield();
 
         Assert.Equal(1, deleteInvocations);
+    }
+
+    // ── AnyTabIsRunning ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void AnyTabIsRunning_DefaultIsFalse()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        Assert.False(pane.AnyTabIsRunning);
+    }
+
+    [Fact]
+    public void AnyTabIsRunning_TrueWhenPaneStatusIsRunning()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+        Assert.True(pane.AnyTabIsRunning);
+    }
+
+    [Fact]
+    public void AnyTabIsRunning_FalseWhenPaneStatusBecomesIdle()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+        pane.PaneStatus.RunningStatus = RunningStatus.Idle;
+        Assert.False(pane.AnyTabIsRunning);
+    }
+
+    [Fact]
+    public void AnyTabIsRunning_RaisesPropertyChanged_WhenPaneStatusRunningChanges()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var raised = false;
+        pane.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(pane.AnyTabIsRunning))
+                raised = true;
+        };
+
+        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+
+        Assert.True(raised);
+    }
+
+    // ── AnyTabHasUnreadNotification ───────────────────────────────────────────
+
+    [Fact]
+    public void AnyTabHasUnreadNotification_DefaultIsFalse()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        Assert.False(pane.AnyTabHasUnreadNotification);
+    }
+
+    [Fact]
+    public void AnyTabHasUnreadNotification_SetToTrue_IsTrue()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        pane.AnyTabHasUnreadNotification = true;
+        Assert.True(pane.AnyTabHasUnreadNotification);
+    }
+
+    [Fact]
+    public void AnyTabHasUnreadNotification_SetToTrue_RaisesPropertyChanged()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var raised = false;
+        pane.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(pane.AnyTabHasUnreadNotification))
+                raised = true;
+        };
+
+        pane.AnyTabHasUnreadNotification = true;
+
+        Assert.True(raised);
+    }
+
+    // ── WorkspacePaneDocument – EffectiveTabHeader indicators ─────────────────
+
+    [Fact]
+    public void WorkspacePaneDocument_EffectiveTabHeader_ContainsRunningIndicator()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var indicator = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().FirstOrDefault();
+
+        Assert.NotNull(indicator);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_EffectiveTabHeader_ContainsNotificationIndicator()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var indicator = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().FirstOrDefault();
+
+        Assert.NotNull(indicator);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_AnyTabIsRunning_PropagatesTo_RunningIndicator()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        pane.PaneStatus.RunningStatus = RunningStatus.Running;
+
+        var indicator = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        Assert.True(indicator.IsRunning);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_AnyTabHasUnreadNotification_PropagatesTo_NotificationIndicator()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        pane.AnyTabHasUnreadNotification = true;
+
+        var indicator = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+        Assert.True(indicator.HasUnread);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_EffectiveTabHeader_Title_MatchesPaneTitle()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        Assert.Equal(pane.Title, doc.EffectiveTabHeader.Title);
     }
 
     private static SubscribedEntityViewModel CreateWorkspaceEntity(

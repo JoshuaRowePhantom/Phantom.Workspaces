@@ -65,6 +65,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledTools.ScheduledToolRunner? scheduledToolRunner;
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
     private ScheduledToolsRunningViewModel? scheduledToolsRunning;
+    private RunningAgentBrainViewModel? runningAgentBrain;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -142,6 +143,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.dockFactory.ActiveDockableChanged += this.OnActiveDockableChanged;
+
+        if (applicationServices?.RunningAgentChats is { } runningAgentChats)
+        {
+            this.runningAgentBrain = new RunningAgentBrainViewModel(
+                runningAgentChats,
+                this.GetAllAgentTabs,
+                this.ActivateTabById,
+                action => Dispatcher.UIThread.Post(action));
+        }
     }
 
     public RepositorySource RepositorySource { get; }
@@ -424,6 +434,53 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         get => this.scheduledToolsRunning;
         private set => this.SetProperty(ref this.scheduledToolsRunning, value);
     }
+
+    /// <summary>
+    /// The brain-button popup view model for running agent sessions.
+    /// Null when <see cref="ApplicationServices"/> was not supplied with a running-agent table.
+    /// </summary>
+    internal RunningAgentBrainViewModel? RunningAgentBrain
+    {
+        get => this.runningAgentBrain;
+        private set => this.SetProperty(ref this.runningAgentBrain, value);
+    }
+
+    /// <summary>
+    /// Returns an <see cref="AgentTabInfo"/> for every open agent-session tab that is in the
+    /// <see cref="AgentTabState.Ready"/> state, across all workspace panes.
+    /// </summary>
+    internal IEnumerable<AgentTabInfo> GetAllAgentTabs()
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null)
+            {
+                continue;
+            }
+
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null)
+            {
+                continue;
+            }
+
+            foreach (var doc in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
+            {
+                if (doc.TabViewModel is AgentSessionWorkspaceTabViewModel agentTab
+                    && agentTab.State == AgentTabState.Ready)
+                {
+                    yield return new AgentTabInfo(pane.Id, pane.Title, agentTab);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Called from <see cref="OpenAgentSessionShortcutHandler"/> after an agent tab transitions to
+    /// <see cref="AgentTabState.Ready"/> or <see cref="AgentTabState.Failed"/>.
+    /// Triggers a refresh of the running-agent brain popup so newly-ready tabs appear immediately.
+    /// </summary>
+    internal void NotifyAgentTabStateChanged() => this.runningAgentBrain?.Refresh();
 
     /// <summary>
     /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
@@ -3285,11 +3342,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (pane.ContentLayout is null) continue;
             var documentDock = this.FindDocumentDock(pane.ContentLayout);
             if (documentDock?.VisibleDockables is null) continue;
+            var anyUnread = false;
             foreach (var dockable in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
             {
                 var hasUnread = notifications.Any(n => n.TabKey == dockable.Id && !n.IsRead);
                 dockable.HasUnreadNotification = hasUnread;
+                if (hasUnread) anyUnread = true;
             }
+            pane.AnyTabHasUnreadNotification = anyUnread;
         }
     }
 
@@ -3378,6 +3438,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.scheduledToolsPause?.Dispose();
         this.scheduledToolsRunning?.Dispose();
+        this.runningAgentBrain?.Dispose();
 
         if (this.devTunnelHostService is not null)
         {
