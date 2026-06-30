@@ -135,6 +135,72 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(100.0, progressBar.Value);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ScheduledToolsIndicator_ApplyingClassToProgressBar_DoesNotThrow()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar();
+        progressBar.Classes.Add("scheduled-tools-indicator");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ScheduledToolsIndicator_WhenIndeterminate_DoesNotThrow()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = true };
+        progressBar.Classes.Add("scheduled-tools-indicator");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ScheduledToolsIndicator_WhenPaused_DoesNotThrow()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = false };
+        progressBar.Classes.Add("scheduled-tools-indicator");
+        progressBar.Classes.Add("paused");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ScheduledToolsIndicator_WhenFailed_DoesNotThrow()
+    {
+        var styles = LoadSharedStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = false };
+        progressBar.Classes.Add("scheduled-tools-indicator");
+        progressBar.Classes.Add("failed");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
     private static Avalonia.Styling.Styles LoadSharedStyles()
     {
         var source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml");
