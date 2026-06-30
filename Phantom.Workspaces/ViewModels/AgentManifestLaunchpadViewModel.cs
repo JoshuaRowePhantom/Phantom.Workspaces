@@ -97,6 +97,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 DisplayName = paramName,
                 Description = param.Description ?? string.Empty,
                 IsRequired = param.Required == true,
+                ParameterKind = DetermineParameterKind(paramName),
             };
 
             if (this.initialParameterValues is not null
@@ -250,5 +251,12 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
             this.mainWindowViewModel,
             Shortcut.Edit,
             this.ManifestEntity);
+    }
+
+    internal static AgentManifestParameterKind DetermineParameterKind(string parameterName)
+    {
+        return parameterName == "working-directory"
+            ? AgentManifestParameterKind.Directory
+            : AgentManifestParameterKind.Text;
     }
 }

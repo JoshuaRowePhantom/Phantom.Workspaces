@@ -22,7 +22,14 @@
               <TextBlock Text="{Binding Description}"
                          Opacity="0.7"
                          IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-              <TextBox Text="{Binding Value}" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0" Text="{Binding Value}" />
+                <Button Grid.Column="1"
+                        Content="Browse…"
+                        Margin="4,0,0,0"
+                        IsVisible="{Binding IsDirectoryPicker}"
+                        Click="OnBrowseButtonClick" />
+              </Grid>
             </StackPanel>
           </DataTemplate>
         </ItemsControl.ItemTemplate>

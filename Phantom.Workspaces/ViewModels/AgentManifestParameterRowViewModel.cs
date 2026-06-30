@@ -8,6 +8,8 @@ public sealed class AgentManifestParameterRowViewModel : ViewModelBase
     public string DisplayName { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
     public bool IsRequired { get; init; }
+    public AgentManifestParameterKind ParameterKind { get; init; } = AgentManifestParameterKind.Text;
+    public bool IsDirectoryPicker => this.ParameterKind == AgentManifestParameterKind.Directory;
 
     public string Value
     {
