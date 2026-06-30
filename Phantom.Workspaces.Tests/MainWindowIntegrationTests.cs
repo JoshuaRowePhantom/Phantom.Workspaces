@@ -2023,11 +2023,11 @@ public sealed class MainWindowIntegrationTests
 
         var entityBroker = GetEntityBroker(viewModel);
 
-        var agentDefinitionId = new EntityId("url00003-0000-4000-8000-000000000001");
+        var agentDefinitionId = new EntityId("ab020003-0000-4000-8000-000000000001");
         var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
             """
             {
-              "entity-id": "url00003-0000-4000-8000-000000000001",
+              "entity-id": "ab020003-0000-4000-8000-000000000001",
               "entity-types": ["entity", "agent-definition"],
               "names": [["tests", "agent-definitions", "url-insert-echo"]],
               "display-name": { "default": "URL Insert Echo" },

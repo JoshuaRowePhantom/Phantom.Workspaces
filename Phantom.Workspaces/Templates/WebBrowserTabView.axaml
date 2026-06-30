@@ -12,7 +12,7 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" Margin="0,0,8,0">
                     <Button Command="{Binding NavigateHomeCommand}"
                             Content="🏠"
-                            ToolTip.Tip="Go to home page"
+                            ToolTip.Tip="{Binding HomeUrlTooltip}"
                             IsVisible="{Binding HasHomeUrl}"
                             Width="32" />
                     <Button Command="{Binding GoBackCommand}"
