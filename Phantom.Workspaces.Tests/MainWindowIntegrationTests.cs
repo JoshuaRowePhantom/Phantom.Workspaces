@@ -3816,6 +3816,41 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_ScrollLock_IsHandledInTunnelPhase()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-handled", Title = "Agent" };
+        agentTab.SetReady(agentViewModel, loggerFactory);
+        await viewModel.OpenTabAsync(agentTab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        bool handled = false;
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.Key == Key.Scroll)
+                    handled = e.Handled;
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+
+        Assert.True(handled);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
