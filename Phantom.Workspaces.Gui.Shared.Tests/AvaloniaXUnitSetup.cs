@@ -4,7 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Themes.Fluent;
 
 [assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Gui.Shared.Tests.GuiStylesTestAppBuilder))]
-[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerAssembly)]
+[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerTest)]
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
