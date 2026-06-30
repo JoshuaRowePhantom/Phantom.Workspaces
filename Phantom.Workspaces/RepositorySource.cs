@@ -29,15 +29,10 @@ public sealed record WebRepositorySource(string Endpoint, bool UseGitHubAuthToke
 /// change its listening port without the client reconfiguring.
 /// </summary>
 /// <param name="TunnelName">The dev tunnel name to resolve.</param>
-/// <param name="AccessMode">The tunnel access mode (governs whether a pre-shared token is used).</param>
-/// <param name="AccessTokenSource">
-/// For <see cref="Configuration.DevTunnelAccessMode.Token"/> access, the name of the source (for
-/// example, an environment variable) supplying the pre-shared tunnel token. Never the raw token.
-/// </param>
+/// <param name="AccessMode">The tunnel access mode (Anonymous: no token; Private/Token: connect token fetched automatically from Management API).</param>
 public sealed record DevTunnelNameRepositorySource(
     string TunnelName,
-    Configuration.DevTunnelAccessMode AccessMode,
-    string? AccessTokenSource = null) : RepositorySource;
+    Configuration.DevTunnelAccessMode AccessMode) : RepositorySource;
 
 /// <summary>A local Git-backed repository at the given path.</summary>
 public sealed record LocalGitRepositorySource(string Path) : RepositorySource;
