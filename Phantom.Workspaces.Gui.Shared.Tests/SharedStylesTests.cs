@@ -196,6 +196,45 @@ public sealed class SharedStylesTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void AltIndexBadge_DefaultOpacity_Is0Point5()
+    {
+        // Issue #349: badges must appear instantly at 0.50 base opacity, not fade in from 0.
+        var sharedStyles = LoadSharedStyles();
+
+        var border = new Border();
+        border.Classes.Add("alt-index-badge");
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(border);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.50, border.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AltIndexBadge_WhenAltHeld_OpacityIsOne()
+    {
+        // Issue #349: the alt-held override must still raise opacity to 1.
+        var sharedStyles = LoadSharedStyles();
+
+        var border = new Border();
+        border.Classes.Add("alt-index-badge");
+        border.Classes.Add("alt-held");
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(border);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(1.0, border.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void SharedStyles_QueueStatusStyles_DoNotReferenceSubmitStatusOption()
     {
         // Issue #253: SubmitStatusOption no longer exists on any ViewModel.

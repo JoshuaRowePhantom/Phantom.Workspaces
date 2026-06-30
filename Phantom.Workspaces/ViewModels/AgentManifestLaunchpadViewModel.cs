@@ -199,7 +199,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                             ForegroundScheduler = foregroundScheduler,
                         });
                     var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                        this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName);
+                        this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id);
                     await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetReady(agent, loggerFactory));
                 }
                 catch (Exception ex)
@@ -228,7 +228,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                             ForegroundScheduler = foregroundScheduler,
                         });
                     var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                        this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName);
+                        this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id);
                     await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetReady(agent, loggerFactory));
                 }
                 catch (Exception ex)

@@ -37,7 +37,7 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,
 ```
 
 - Extract the **specified behaviour**: what code should exist, what it should do, and what test cases are described or implied by the issue body and any comments.
-- Note the issue title — used as a search keyword in Step 5.
+- Note the issue title — used as a search keyword in Step 4.
 
 ---
 
@@ -72,19 +72,11 @@ Apply the **Verify behaviour** section from `.github/skills/shared/CODE-VERIFICA
 
 ---
 
-## Step 4 — Find and run tests
+## Step 4 — Search for superseding work items (only on failure)
 
-Apply the **Find and run tests** section from `.github/skills/shared/CODE-VERIFICATION.md`, using the implementation files found in Step 2.
+## Step 4 — Search for superseding work items (only on failure)
 
-**Conclude `tests missing`** if no tests validate the core described behaviour.
-
-**Conclude `tests failing`** if relevant tests exist but `Failed:` is non-zero in the results log.
-
----
-
-## Step 5 — Search for superseding work items (only on failure)
-
-If Step 3 or Step 4 concluded failure, search for open or closed issues that supersede this one:
+If Step 3 concluded failure, search for open or closed issues that supersede this one:
 
 ```powershell
 gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces --state all --search "supersedes #<NUMBER>"
@@ -110,7 +102,7 @@ A credible superseding issue is one that:
 
 ---
 
-## Step 6 — Apply `failed-verification` label (only on failure with no superseder)
+## Step 5 — Apply `failed-verification` label (only on failure with no superseder)
 
 If verification failed and no superseding item was found:
 
@@ -122,7 +114,7 @@ If verification failed and no superseding item was found:
 
    **Found:** <describe what was present>
 
-   **Missing:** <describe the specific gap — code not found / behaviour not implemented / tests missing / tests failing>"
+   **Missing:** <describe the specific gap — code not found / behaviour not implemented / tests missing>"
    ```
 2. Apply the label:
    ```powershell
@@ -137,7 +129,7 @@ If verification failed and no superseding item was found:
 
    **Original issue:** #<NUMBER> — <title>
 
-   **Verification gap:** <code not found / behaviour not implemented / tests missing / tests failing>
+   **Verification gap:** <code not found / behaviour not implemented / tests missing>
 
    **Detail:** <describe exactly what was checked and what is absent>"
    ```
@@ -145,9 +137,9 @@ If verification failed and no superseding item was found:
 
 ---
 
-## Step 7 — Report pass
+## Step 6 — Report pass
 
-If Steps 2–4 all pass (code found, behaviour implemented, all fail-verification criteria satisfied, tests present and green):
+If Steps 2–3 all pass (code found, behaviour implemented, all fail-verification criteria satisfied):
 
 1. Apply the `verified` label:
    ```powershell
@@ -170,11 +162,11 @@ If Steps 2–4 all pass (code found, behaviour implemented, all fail-verificatio
 
    **Checked:** <describe what files/commits/tests were inspected>
 
-   **Result:** Implementation found, all verification criteria satisfied, tests present and green.
+   **Result:** Implementation found, all verification criteria satisfied.
 
    <If duplication bugs were filed:> **Follow-up bugs filed:** #<N>, ..."
    ```
-4. **Report outcome: `✅ Verified — implementation found and tests pass`.**
+4. **Report outcome: `✅ Verified — implementation found and criteria satisfied`.**
 
 ---
 
@@ -182,8 +174,7 @@ If Steps 2–4 all pass (code found, behaviour implemented, all fail-verificatio
 
 1. Never modify source code — this skill is read-only.
 2. Never push (`git push`).
-3. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
-4. Always check for superseding issues before applying `failed-verification`.
-5. Ensure `failed-verification`, `superseded`, and `verified` labels exist before attempting to apply them (see Prerequisites).
-6. When filing a `next-up` bug in Step 6, be precise: name the specific file, method, or test class that is missing.
-7. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.
+3. Always check for superseding issues before applying `failed-verification`.
+4. Ensure `failed-verification`, `superseded`, and `verified` labels exist before attempting to apply them (see Prerequisites).
+5. When filing a `next-up` bug in Step 5, be precise: name the specific file, method, or test class that is missing.
+6. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.

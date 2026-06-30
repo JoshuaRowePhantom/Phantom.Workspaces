@@ -36,6 +36,7 @@ public class WebViewModel : WorkspaceTabViewModel
         this.GoForwardCommand = new RelayCommand(_ => this.GoForward(), _ => this.CanGoForward);
         this.OpenInExternalBrowserCommand = new RelayCommand(_ => this.OpenInExternalBrowser());
         this.NavigateHomeCommand = new RelayCommand(_ => this.NavigateHome(), _ => this.HomeUrl != null);
+        this.FocusUrlBarCommand = new RelayCommand(_ => this.RaiseFocusUrlBarRequested());
 
         this.faviconItem = new FaviconTabHeaderItemViewModel();
         this.TabHeader = new TabHeaderViewModel { Title = string.Empty };
@@ -107,6 +108,7 @@ public class WebViewModel : WorkspaceTabViewModel
     public ICommand GoForwardCommand { get; }
     public ICommand OpenInExternalBrowserCommand { get; }
     public ICommand NavigateHomeCommand { get; }
+    public ICommand FocusUrlBarCommand { get; }
 
     private void Navigate()
     {
@@ -162,10 +164,16 @@ public class WebViewModel : WorkspaceTabViewModel
     public event EventHandler<NavigationDirection>? NavigationRequested;
     public event EventHandler<int>? GoToTabAtIndexRequested;
     public event EventHandler<bool>? AltKeyStateChanged;
+    public event EventHandler? FocusUrlBarRequested;
 
     private void RaiseNavigationRequested(NavigationDirection direction)
     {
         this.NavigationRequested?.Invoke(this, direction);
+    }
+
+    private void RaiseFocusUrlBarRequested()
+    {
+        this.FocusUrlBarRequested?.Invoke(this, EventArgs.Empty);
     }
 
     public void RaiseGoToTabAtIndex(int index)

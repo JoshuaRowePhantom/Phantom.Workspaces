@@ -531,6 +531,58 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, scrollCount);
     }
 
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_ScrollIsPostedAfterAllBatchMessages()
+    {
+        // Verify that the "scroll" command appears in PostedMessages AFTER all "update" messages.
+        // This ensures the scroll is sent in a separate IPC round-trip after EndBatch, so the
+        // browser has already rendered the content before scrolling.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+
+        var messages = browser.PostedMessages;
+        var lastUpdateIndex = -1;
+        var scrollIndex = -1;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(messages[i]);
+                if (doc.RootElement.TryGetProperty("type", out var t))
+                {
+                    var type = t.GetString();
+                    if (type == "update") lastUpdateIndex = i;
+                    if (type == "scroll") scrollIndex = i;
+                }
+            }
+            catch (JsonException) { }
+        }
+
+        Assert.True(lastUpdateIndex >= 0, "Expected at least one 'update' command.");
+        Assert.True(scrollIndex >= 0, "Expected a 'scroll' command.");
+        Assert.True(
+            scrollIndex > lastUpdateIndex,
+            $"Expected scroll (index {scrollIndex}) to appear after all update messages (last update index {lastUpdateIndex}).");
+    }
+
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
     {
         var field = typeof(AgentChatOutputControl)

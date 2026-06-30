@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
 
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
         MainWindowViewModel viewModel)
     {
         InitializeComponent();
+        AddDockDataTemplates();
         this.DataContext = viewModel;
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
         this.AddHandler(InputElement.KeyUpEvent, this.OnPreviewKeyUp, RoutingStrategies.Tunnel);
@@ -32,6 +34,14 @@ public partial class MainWindow : Window
                 vm.NavStackPopup.Dismiss();
             }
         };
+    }
+
+    private void AddDockDataTemplates()
+    {
+        foreach (var template in new DockDataTemplates())
+        {
+            this.DataTemplates.Add(template);
+        }
     }
 
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
