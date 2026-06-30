@@ -167,6 +167,94 @@ public class AgentChatHistoryPromotionTests
     }
 
     [Fact]
+    public async Task MultiMessageStream_IncrementalPromotion()
+    {
+        // Two pairs of role-alternating updates are promoted in two separate incremental steps,
+        // followed by a gated final message at turn end.
+        //
+        // Pair 1 (u0+u1 immediately ready):
+        //   u0: assistant FC("c0"), u1: tool FR("c0")
+        //   → CoalesceAsync produces [FC, FR, blank] (3 items), stableCount=2
+        //   → FC and FR promoted to History → History: user + FC + FR = 3
+        //
+        // Pair 2 (u2+u3 released after step-1 verified):
+        //   u2: assistant FC("c1"), u3: tool FR("c1")
+        //   → CoalesceAsync produces [FC, FR, FC2, FR2, blank], stableCount=4
+        //   → FC2 and FR2 also promoted → History: user + FC + FR + FC2 + FR2 = 5
+        //
+        // Final (u4 released after step-2 verified):
+        //   u4: assistant "done" (finishReason=stop)
+        //   → DrainAsync promotes last item → History: 6
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse(isReady: false);
+
+        await using var chat = await CreateChatAsync(client);
+
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c0", "tool", null)] },
+            isReady: true);
+        stream.EnqueueUpdate(
+            new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c0", "r0")] },
+            isReady: true);
+
+        var u2 = stream.EnqueueUpdate(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool", null)] },
+            isReady: false);
+        var u3 = stream.EnqueueUpdate(
+            new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "r1")] },
+            isReady: false);
+
+        var u4 = stream.EnqueueUpdate(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("done")], FinishReason = new ChatFinishReason("stop") },
+            isReady: false);
+        var terminal = stream.Complete(isReady: false);
+
+        stream.MarkReady();
+        chat.EnqueueUserMessage("hi");
+
+        // Step 1: user + FC + FR = 3 items after pair 1 is promoted mid-stream.
+        await WaitForHistoryCountAsync(chat.History, 3, "step 1: user + FC + FR promoted");
+        Assert.Equal(3, chat.History.Count);
+
+        u2.MarkReady();
+        u3.MarkReady();
+
+        // Step 2: + FC2 + FR2 = 5 items after pair 2 is promoted mid-stream.
+        await WaitForHistoryCountAsync(chat.History, 5, "step 2: + FC2 + FR2 promoted");
+        Assert.Equal(5, chat.History.Count);
+
+        u4.MarkReady();
+        terminal.MarkReady();
+
+        // Step 3: + "done" = 6 items after turn end.
+        await WaitForHistoryCountAsync(chat.History, 6, "step 3: + done after turn end");
+        Assert.Equal(6, chat.History.Count);
+    }
+
+    [Fact]
+    public async Task EmptyStream_HistoryEmpty_AfterTurnEnd()
+    {
+        // A streaming response with zero updates must complete without throwing
+        // and must not add any assistant items to History.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.Complete();
+
+        await using var chat = await CreateChatAsync(client);
+        chat.EnqueueUserMessage("hi");
+
+        // Wait for the user message to appear in History.
+        await WaitForHistoryCountAsync(chat.History, 1, "user message");
+
+        // Wait for the running item to disappear, confirming the turn has fully completed.
+        await WaitForRunningItemsEmptyAsync(chat.RunningItems);
+
+        // No assistant items were added — History has only the user message.
+        Assert.Single(chat.History);
+        Assert.Equal(ChatRole.User, chat.History[0].Role);
+    }
+
+    [Fact]
     public async Task RunningItem_ContainsOnlyActiveTail_AfterPromotion()
     {
         // After the first two updates arrive (func-call and tool-result), CoalesceAsync appends a
@@ -221,6 +309,40 @@ public class AgentChatHistoryPromotionTests
             ClientOverride = client,
             DisplayNameOverride = "test",
         });
+    }
+
+    private static async Task WaitForRunningItemsEmptyAsync(
+        System.Collections.Specialized.INotifyCollectionChanged collection)
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = Task.Delay(TimeSpan.FromSeconds(30));
+
+        void OnChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (((System.Collections.ICollection)collection).Count == 0)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        collection.CollectionChanged += OnChanged;
+        try
+        {
+            if (((System.Collections.ICollection)collection).Count == 0)
+            {
+                return;
+            }
+
+            var completed = await Task.WhenAny(signal.Task, timeout);
+            if (completed == timeout)
+            {
+                throw new TimeoutException("Timeout waiting for running items to become empty.");
+            }
+        }
+        finally
+        {
+            collection.CollectionChanged -= OnChanged;
+        }
     }
 
     private static async Task WaitForHistoryCountAsync(
