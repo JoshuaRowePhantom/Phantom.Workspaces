@@ -1,10 +1,12 @@
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Echo;
+using Phantom.Workspaces.Llm.Interfaces;
+using System.Reflection;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
-public class AgentPersistenceChatHistoryProviderTests
+public class IncrementalPersistenceChatHistoryProviderTests
 {
     [Fact]
     public void SetAgentSessionId_WhenSessionProvided_UpdatesExtractedValue()
@@ -74,14 +76,53 @@ public class AgentPersistenceChatHistoryProviderTests
         Assert.Equal("session-updated", extractedAgentSessionId);
     }
 
+    [Fact]
+    public async Task StoreChatHistoryAsync_IsNoOp_DoesNotWriteToStore()
+    {
+        var spyStore = new SpyAgentPersistenceStore();
+        var provider = new IncrementalPersistenceChatHistoryProvider(agentDefinition: null, store: spyStore);
+
+        // Call StoreChatHistoryAsync via reflection (it is protected).
+        var method = typeof(ChatHistoryProvider).GetMethod(
+            "StoreChatHistoryAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            [typeof(ChatHistoryProvider.InvokedContext), typeof(CancellationToken)])
+            ?? throw new InvalidOperationException("StoreChatHistoryAsync method not found.");
+
+        var result = method.Invoke(provider, [null!, CancellationToken.None]);
+        if (result is ValueTask task)
+        {
+            await task;
+        }
+
+        Assert.Equal(0, spyStore.StoreCallCount);
+    }
+
     private sealed class TestAgentSession : Microsoft.Agents.AI.AgentSession
     {
     }
 
-    private static AgentPersistenceChatHistoryProvider CreateProvider()
+    private static IncrementalPersistenceChatHistoryProvider CreateProvider()
     {
-        return new AgentPersistenceChatHistoryProvider(
+        return new IncrementalPersistenceChatHistoryProvider(
             agentDefinition: null,
             store: new InMemoryAgentPersistenceStore());
+    }
+
+    private sealed class SpyAgentPersistenceStore : IAgentPersistenceStore
+    {
+        public int StoreCallCount { get; private set; }
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            StoreCallCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<PersistedAgent?>(null);
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Array.Empty<ChatMessage>());
     }
 }

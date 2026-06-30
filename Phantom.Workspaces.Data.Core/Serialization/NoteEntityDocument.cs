@@ -12,6 +12,17 @@ public sealed record NoteEntityDocument
     [JsonPropertyName("title")]
     public Dictionary<string, string>? TitleByLocale { get; init; }
 
+    public static string? TryReadDefaultMarkdownText(JsonElement? entityData)
+    {
+        if (entityData is not JsonElement entityDataElement
+            || Deserialize(entityDataElement) is not NoteEntityDocument noteEntityDocument)
+        {
+            return null;
+        }
+
+        return noteEntityDocument.GetPreferredMarkdownText();
+    }
+
     public static NoteEntityDocument? Deserialize(JsonElement entityData)
     {
         if (entityData.ValueKind != JsonValueKind.Object)

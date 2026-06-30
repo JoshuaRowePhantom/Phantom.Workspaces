@@ -57,19 +57,9 @@ public sealed class WorkspaceEntityContextProvider : AIContextProvider
             cancellationToken);
 
         var instructionsEntity = getResult.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
-        return TryReadDefaultMarkdownText(instructionsEntity?.Data);
+        return NoteEntityDocument.TryReadDefaultMarkdownText(instructionsEntity?.Data);
     }
 
-    private static string? TryReadDefaultMarkdownText(JsonElement? entityData)
-    {
-        if (entityData is not JsonElement entityDataElement
-            || NoteEntityDocument.Deserialize(entityDataElement) is not NoteEntityDocument noteEntityDocument)
-        {
-            return null;
-        }
-
-        return noteEntityDocument.GetPreferredMarkdownText();
-    }
 
     private sealed class WorkspacesEntityGetTool : AIFunction
     {
