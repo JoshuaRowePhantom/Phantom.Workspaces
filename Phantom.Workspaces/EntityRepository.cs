@@ -104,9 +104,8 @@ public sealed class EntityRepository
     {
         // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
         // on a connection drop the reconnecting layer re-resolves the tunnel (picking up a changed
-        // port) and reconnects with bounded backoff, without restarting the workspace. Token access
-        // uses the resolved pre-shared token; Private access reuses the GitHub identity token as the
-        // X-Tunnel-Authorization, matching the explicit-endpoint dev tunnel scheme.
+        // port) and reconnects with bounded backoff, without restarting the workspace. The connect
+        // token is fetched automatically by the Management API (Private mode) or absent (Anonymous).
         var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
             .CreateEndpointResolver();
 
@@ -117,7 +116,7 @@ public sealed class EntityRepository
                 cancellationToken),
             buildDataAccessLayer: resolution => new WebClientDataAccessLayer(
                 resolution.BaseUri.ToString(),
-                resolution.TunnelAuthToken ?? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
+                resolution.TunnelAuthToken),   // null for Anonymous; connect-token for Private
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
         await reconnectingDataAccessLayer.StartAsync().ConfigureAwait(false);

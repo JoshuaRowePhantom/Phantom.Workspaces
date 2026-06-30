@@ -142,7 +142,40 @@ Then run the fast test suite:
 .\scripts\run-tests.ps1 -Mode fast
 ```
 
+### 9a — Check for hang dumps before reading results
+
+After the test run completes, before reading `test-results.log`, check for `.dmp` files produced by a crashed or timed-out test host:
+
+```powershell
+$dumps = Get-ChildItem -Path . -Recurse -Filter "*.dmp" -ErrorAction SilentlyContinue
+if ($dumps) {
+    # Invoke the diagnose-hang-dump skill before doing anything else.
+    # The skill will analyse the dump, file or update a bug, and delete the dump file.
+}
+```
+
+If dumps are present, invoke the `diagnose-hang-dump` skill now and record the resulting issue number before continuing.
+
+### 9b — Search for related bugs before rerunning
+
 Read `scripts\test-results.log`. All suites must show `Failed: 0`. Fix any failures before proceeding.
+
+Before attempting any rerun of a failing test, check whether an open bug already documents the failure as a known flake:
+
+```powershell
+$failingTest = "<short-name-extracted-from-test-results.log>"
+$related = gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces `
+    --state open --search "$failingTest" `
+    --json number,title | ConvertFrom-Json | Select-Object -First 3
+if ($related) {
+    Write-Host "Related open issues found:"
+    $related | ForEach-Object { Write-Host "  #$($_.number): $($_.title)" }
+    # If the failure matches a known flake documented in an existing bug,
+    # skip the rerun and proceed, recording the issue number in the commit message.
+}
+```
+
+If a matching open issue is found that documents the failure as a known flake, skip the rerun and proceed (recording the issue number).
 
 If a test fails, perform root cause analysis before classifying it as transient:
 

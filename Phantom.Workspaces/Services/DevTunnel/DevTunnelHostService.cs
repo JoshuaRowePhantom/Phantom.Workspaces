@@ -42,7 +42,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 .SetSingleForwardedPortAsync(this.descriptor.TunnelId, localPort, protocol, cancellationToken)
                 .ConfigureAwait(false);
 
-            await this.managementClient
+            var connectToken = await this.managementClient
                 .ApplyAccessModeAsync(this.descriptor.TunnelId, configuration.AccessMode, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -59,6 +59,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 accessPointUrl,
                 this.descriptor.TunnelId,
                 configuration.AccessMode,
+                ConnectToken: connectToken,
                 LastError: null));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -68,6 +69,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 AccessPointUrl: null,
                 this.descriptor?.TunnelId,
                 configuration.AccessMode,
+                ConnectToken: null,
                 exception.Message));
             throw;
         }
@@ -91,6 +93,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
             AccessPointUrl: null,
             this.descriptor?.TunnelId,
             this.Status.AccessMode,
+            ConnectToken: null,
             LastError: null));
     }
 

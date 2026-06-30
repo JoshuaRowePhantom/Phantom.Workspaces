@@ -31,15 +31,20 @@ public enum DevTunnelHostState
 /// <param name="AccessPointUrl">The public https URL of the hosted port, when <see cref="DevTunnelHostState.Hosting"/>; otherwise null.</param>
 /// <param name="TunnelId">The id of the owned tunnel, when known.</param>
 /// <param name="AccessMode">The access mode the tunnel currently requires of inbound clients.</param>
+/// <param name="ConnectToken">
+/// The connect-scope tunnel token for cross-account client distribution, when <see cref="DevTunnelHostState.Hosting"/>
+/// and access mode is not Anonymous; otherwise null. Short-lived — re-fetched on each host start.
+/// </param>
 /// <param name="LastError">The most recent error message, when <see cref="DevTunnelHostState.Error"/>; otherwise null.</param>
 public sealed record DevTunnelHostStatus(
     DevTunnelHostState State,
     string? AccessPointUrl,
     string? TunnelId,
     DevTunnelAccessMode AccessMode,
+    string? ConnectToken,
     string? LastError)
 {
     /// <summary>The default stopped status.</summary>
     public static DevTunnelHostStatus Stopped { get; } =
-        new(DevTunnelHostState.Stopped, AccessPointUrl: null, TunnelId: null, DevTunnelAccessMode.Private, LastError: null);
+        new(DevTunnelHostState.Stopped, AccessPointUrl: null, TunnelId: null, DevTunnelAccessMode.Private, ConnectToken: null, LastError: null);
 }
