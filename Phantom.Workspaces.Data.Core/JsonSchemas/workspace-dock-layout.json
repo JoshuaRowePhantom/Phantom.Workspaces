@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-dock-layout.json",
+  "description": "Inline Dock layout snapshot stored in a workspace entity's dock-layout property. Produced by Dock.Serializer.SystemTextJson. A null or structurally invalid object causes the workspace to fall back to default layout.",
+  "type": "object",
+  "properties": {
+    "Id": { "type": "string", "description": "Stable identifier for the root dock container." },
+    "ActiveDockable": { "$ref": "#/$defs/dockable-ref" },
+    "DefaultDockable": { "$ref": "#/$defs/dockable-ref" },
+    "FocusedDockable": { "$ref": "#/$defs/dockable-ref" },
+    "VisibleDockables": {
+      "type": "array",
+      "description": "Top-level dockable items in this dock (documents or nested docks).",
+      "items": { "$ref": "#/$defs/dockable" }
+    },
+    "HiddenDockables": { "type": "array", "items": { "$ref": "#/$defs/dockable" } },
+    "PinnedDockables": { "type": "array", "items": { "$ref": "#/$defs/dockable" } }
+  },
+  "unevaluatedProperties": true,
+  "$defs": {
+    "dockable-ref": {
+      "type": "object",
+      "properties": { "Id": { "type": "string" } },
+      "description": "A reference to a dockable by its Id."
+    },
+    "dockable": {
+      "type": "object",
+      "description": "A single dockable item — either a WorkspaceDocument (leaf) or a nested dock (split/proportional).",
+      "properties": {
+        "Id": {
+          "type": "string",
+          "description": "Must match the tab-id of the corresponding workspace-tab-descriptor in the tabs array."
+        },
+        "Title": { "type": "string" },
+        "CanClose": { "type": "boolean" },
+        "Proportion": {
+          "type": "number",
+          "description": "Fractional width/height of this item in a split layout. Values sum to 1.0 across siblings.",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "VisibleDockables": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dockable" },
+          "description": "Child dockables when this item is a nested dock (split panel)."
+        },
+        "ActiveDockable": { "$ref": "#/$defs/dockable-ref" }
+      },
+      "unevaluatedProperties": true
+    }
+  }
+}
