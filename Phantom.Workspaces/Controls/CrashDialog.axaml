@@ -1,0 +1,53 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Phantom.Workspaces.Controls.CrashDialog"
+        Width="640"
+        Height="480"
+        MinWidth="480"
+        MinHeight="360"
+        WindowStartupLocation="CenterScreen"
+        Title="⚠ An unexpected error occurred">
+    <Grid RowDefinitions="Auto,*,Auto,Auto,Auto"
+          Margin="16">
+
+        <TextBlock Grid.Row="0"
+                   Text="Phantom Workspaces encountered an unhandled exception. You may choose to ignore this error and continue, or abort the application."
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,12" />
+
+        <TextBox Grid.Row="1"
+                 Name="ExceptionTextBox"
+                 Classes="copyable-text"
+                 TextWrapping="Wrap"
+                 AcceptsReturn="True"
+                 IsReadOnly="True"
+                 FontFamily="Cascadia Mono,Consolas,Courier New,monospace"
+                 FontSize="11"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 Margin="0,0,0,8" />
+
+        <Button Grid.Row="2"
+                Content="Copy"
+                HorizontalAlignment="Right"
+                Margin="0,0,0,8"
+                Click="OnCopyClick" />
+
+        <Button Grid.Row="3"
+                Name="ReportLinkButton"
+                Classes="hyperlink"
+                Content="🔗 Report this issue on GitHub"
+                HorizontalAlignment="Left"
+                Margin="0,0,0,16"
+                Click="OnReportClick" />
+
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+            <Button Content="Ignore"
+                    Click="OnIgnoreClick" />
+            <Button Content="Abort"
+                    Click="OnAbortClick" />
+        </StackPanel>
+    </Grid>
+</Window>
