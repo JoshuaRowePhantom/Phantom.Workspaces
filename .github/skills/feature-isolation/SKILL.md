@@ -171,6 +171,15 @@ Run the full suite only when the change touches the filesystem or Git repository
 .\scripts\run-tests.ps1 -Mode full
 ```
 
+## Step 9b — Verify code quality
+
+Apply the shared code verification criteria from `.github/skills/shared/CODE-VERIFICATION.md`.
+Inspect the code you just wrote against every criterion in that file.
+
+- If a **fail-verification criterion** is triggered (feature coverage gap, missing test coverage, disabled test, unresolved TODO without a backing issue, or timing-dependent test), fix the code or tests before proceeding to Step 10.
+- Note any **code duplication** for a follow-up bug but do not block on it.
+- If a TODO has no backing issue, file one before committing.
+
 ## Step 10 — Commit
 
 ```powershell
