@@ -126,7 +126,7 @@ public partial class MainWindow : Window
             viewModel.GoToTabAtIndexCommand.Execute(index.ToString());
             e.Handled = true;
         }
-        else if (e.KeyModifiers == KeyModifiers.Control)
+        else if (e.KeyModifiers == (KeyModifiers.Alt | KeyModifiers.Shift))
         {
             viewModel.GoToWorkspacePaneAtIndexCommand.Execute(index.ToString());
             e.Handled = true;

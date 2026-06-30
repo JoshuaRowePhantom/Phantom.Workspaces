@@ -38,9 +38,11 @@
                         Classes="agent-chat-status-line"
                         IsVisible="{Binding StatusLine.HasVisibleContent}">
                     <StackPanel Orientation="Horizontal">
-                        <ProgressBar Classes="running-indicator"
-                                     VerticalAlignment="Center"
-                                     IsIndeterminate="{Binding StatusLine.IsThinking}"/>
+                        <TextBlock Classes="agent-chat-status-line-brain"
+                                     Classes.thinking="{Binding StatusLine.IsThinking}"
+                                     Classes.idle="{Binding !StatusLine.IsThinking}"
+                                     Text="🧠"
+                                     VerticalAlignment="Center"/>
                         <TextBlock Classes="agent-chat-status-line-value"
                                    Text="{Binding StatusLine.ModelDisplay}"
                                    VerticalAlignment="Center"

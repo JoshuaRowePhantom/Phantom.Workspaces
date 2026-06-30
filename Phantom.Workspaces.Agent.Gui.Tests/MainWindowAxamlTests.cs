@@ -216,7 +216,11 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "IsIndeterminate=\"{Binding StatusLine.IsThinking}\"",
+            "Classes=\"agent-chat-status-line-brain\"",
+            editorControlContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes.thinking=\"{Binding StatusLine.IsThinking}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
