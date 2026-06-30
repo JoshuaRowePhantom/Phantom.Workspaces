@@ -24,7 +24,7 @@ public class WorkspaceDockFactory : Factory
     /// </summary>
     public override IRootDock CreateLayout()
     {
-        var workspacesDock = new DocumentDock
+        var workspacesDock = new WorkspacesPaneDock
         {
             Id = "WorkspacesDock",
             Title = "Workspaces",

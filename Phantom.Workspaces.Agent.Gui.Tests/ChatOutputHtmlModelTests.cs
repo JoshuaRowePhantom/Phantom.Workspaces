@@ -980,4 +980,32 @@ public sealed class ChatOutputHtmlModelTests
         var streamOps = sink.ContentOperations;
         Assert.Contains(streamOps, op => op.Content.Contains(">recovered stream<"));
     }
+
+    [Fact]
+    public void ChatOutputHtmlModel_InspectMessage_HandledByBridge()
+    {
+        // The rendered HTML for each content block must contain data-inspect-target so that the
+        // InspectGutter JS component can attach an inspect button.  When the user clicks that
+        // button the page posts {type:"inspect", contentId, contentJson} to the C# bridge, which
+        // fires AgentChatOutputControl.InspectorRequested and opens AIContentInspectorWindow.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "inspect me"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink);
+
+        var op = Assert.Single(sink.ContentOperations);
+        var expectedContentId = ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.MessageId(0), 0);
+
+        // The content block element must carry data-inspect-target (the JS bridge trigger).
+        Assert.Contains("data-inspect-target", op.Content);
+
+        // The content block must have the correct id so the bridge can reference it back.
+        Assert.Contains($"id=\"{expectedContentId}\"", op.Content);
+    }
 }

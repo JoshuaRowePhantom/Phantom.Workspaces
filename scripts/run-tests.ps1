@@ -97,6 +97,16 @@ if ($filterClauses.Count -gt 0)
 $rawOutput = & dotnet @dotnetArgs 2>&1
 $exitCode = $LASTEXITCODE
 
+# dotnet test may exit 0 even when the test host crashes. Detect the abort
+# message explicitly and treat it as a failure.
+$hostCrashed = $rawOutput | Where-Object {
+    $_ -match 'Test Run was aborted' -or $_ -match 'host process exited unexpectedly'
+}
+if ($exitCode -eq 0 -and $hostCrashed)
+{
+    $exitCode = 1
+}
+
 $cleanOutput = $rawOutput | ForEach-Object {
     $_.ToString().Replace("`r`n", "`n").Replace("`r", "`n")
 } | ForEach-Object {

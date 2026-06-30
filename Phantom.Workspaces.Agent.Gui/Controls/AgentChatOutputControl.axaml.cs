@@ -307,6 +307,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                     if (!string.IsNullOrEmpty(contentId))
                     {
                         this.InspectorRequested?.Invoke(this, contentId);
+                        var contentJson = root.TryGetProperty("contentJson", out var contentJsonProp)
+                            ? contentJsonProp.GetString() ?? string.Empty
+                            : string.Empty;
+                        var inspector = new AIContentInspectorWindow(contentId, contentJson);
+                        if (TopLevel.GetTopLevel(this) is Window owner)
+                        {
+                            inspector.Show(owner);
+                        }
+                        else
+                        {
+                            inspector.Show();
+                        }
                     }
                 }
                 break;
