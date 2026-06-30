@@ -496,7 +496,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:TabHeaderViewModel">
-        <Grid>
+        <Grid HorizontalAlignment="Left">
             <StackPanel Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding Title}" />
                 <ItemsControl ItemsSource="{Binding Items}">
