@@ -365,6 +365,39 @@ public sealed class ScheduledToolHostTests
     }
 
     [Fact]
+    public async Task RunToolAsync_OuterCancellationToken_Cancelled_RecordsFailedResult()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tool = new BlockingTool(started);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([tool]), timeProvider: new FixedTimeProvider());
+
+        using var cts = new CancellationTokenSource();
+        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName, cts.Token);
+
+        // Wait until the tool is actually running before cancelling.
+        await started.Task;
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+
+        // The result entity must be recorded as failed, not left stuck as "running".
+        var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
+        var resultEntity = Assert.Single(results);
+        Assert.Equal("failed", resultEntity.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task RunDueTools_ToolReturnsFailure_RecordsFailedResult()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
