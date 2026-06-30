@@ -276,3 +276,75 @@ Entity types with schema documentation include (but are not limited to):
 
 5. Execution history and errors are recorded as `tool-execution-result` entities; read them to verify
    a tool ran and to see any error messages.
+
+## Adding tabs to a workspace
+
+### Choosing entity-view vs browser-view
+
+- **Always prefer `entity-view`** for any URL the user cares about. Create an `external` entity to hold the URL and reference it by entity name in the tab.
+- Use `browser-view` only for transient, one-off URLs that have no ongoing relevance and do not need to be persisted.
+
+### external entity rules
+
+- `entity-types` must be `["entity", "external"]` — **not** `["external"]` alone.
+- Name the entity `["external", "<descriptive-name>"]` — **not** under any other namespace.
+- The URL that workspace tabs open is stored under the `"default"` key in the `urls` map.
+
+### Pattern: adding a persistent URL tab
+
+When the user asks to open a URL in a workspace, perform these three operations in a single `workspaces_entity_update` call:
+
+1. **Create the `external` entity** with the URL under `"default"` in `urls`.
+2. **Create a `related` relationship** linking the workspace entity and the new external entity (include a `note`).
+3. **Patch the workspace entity** to add an `entity-view` tab whose `target-entity-name` points at the new external entity's name.
+
+Pre-generate both new entity IDs with `workspaces_entity_generate_guid` so the relationship can reference them before they exist.
+
+```json
+{
+  "update-metadata": { "comment": { "text": "Add URL tab to workspace" } },
+  "changes": [
+    {
+      "entity-id": "<external-guid>",
+      "entity-change-mode": "replace",
+      "data": {
+        "entity-id": "<external-guid>",
+        "entity-types": ["entity", "external"],
+        "names": [["external", "<name>"]],
+        "display-name": { "default": "<display name>" },
+        "urls": { "default": "<url>" }
+      }
+    },
+    {
+      "entity-id": "<related-guid>",
+      "entity-change-mode": "replace",
+      "data": {
+        "entity-id": "<related-guid>",
+        "entity-types": ["entity", "related", "relationship"],
+        "participants": {
+          "source": "<workspace-entity-id>",
+          "target": "<external-guid>"
+        },
+        "note": "Surfaces the external entity as a tab in the workspace."
+      }
+    },
+    {
+      "entity-id": "<workspace-entity-id>",
+      "concurrency-tag": "<current-concurrency-tag>",
+      "entity-change-mode": "json-patch",
+      "data": [
+        {
+          "op": "add",
+          "path": "/regions/0/tabs/-",
+          "value": {
+            "tab-id": "<stable-tab-uuid>",
+            "title": "<display name>",
+            "kind": "entity-view",
+            "content": { "target-entity-name": ["external", "<name>"] }
+          }
+        }
+      ]
+    }
+  ]
+}
+```
