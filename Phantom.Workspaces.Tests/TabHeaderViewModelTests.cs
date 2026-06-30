@@ -343,7 +343,7 @@ public sealed class TabHeaderViewModelTests
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesRunningIndicatorClass()
+    public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
     {
         var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
         var templates = new WorkspaceDataTemplates();
@@ -352,7 +352,8 @@ public sealed class TabHeaderViewModelTests
         var control = matchingTemplate.Build(viewModel);
 
         var progressBar = Assert.IsType<ProgressBar>(control);
-        Assert.Contains("running-indicator", progressBar.Classes);
+        Assert.Contains("glyph-indicator", progressBar.Classes);
+        Assert.Contains("pulsating-brain", progressBar.Classes);
     }
 
     // ── AgentSessionWorkspaceTabViewModel – SetReady wires tab header indicators
