@@ -12,7 +12,11 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 /// <param name="TunnelId">The management-plane tunnel id.</param>
 /// <param name="ClusterId">The cluster the tunnel lives in (part of the relay host name).</param>
 /// <param name="ForwardedPorts">The port numbers currently forwarded by the tunnel.</param>
-public sealed record DevTunnelLookupResult(string TunnelId, string ClusterId, IReadOnlyList<int> ForwardedPorts);
+public sealed record DevTunnelLookupResult(
+    string TunnelId,
+    string ClusterId,
+    IReadOnlyList<int> ForwardedPorts,
+    string? ConnectToken = null);
 
 /// <summary>
 /// Looks up a tunnel by name on the management plane, returning the facts needed to build its relay
