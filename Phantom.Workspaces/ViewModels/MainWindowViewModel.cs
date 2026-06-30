@@ -22,7 +22,7 @@ using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IScrollLockLedHost, IAsyncDisposable
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -268,6 +268,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    IAutoScrollViewModel? IScrollLockLedHost.ActiveAgentViewModel => this.ActiveAgentViewModel;
+
     public INotificationService NotificationService => this.notificationService;
 
     public ConnectionStatusViewModel? ConnectionStatus{ get; private set; }
@@ -346,7 +348,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public WorkspacePaneViewModel SelectedWorkspacePane
     {
         get => this.selectedWorkspacePane;
-        set => this.SetProperty(ref this.selectedWorkspacePane, value);
+        set
+        {
+            if (this.SetProperty(ref this.selectedWorkspacePane, value))
+            {
+                this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
+            }
+        }
     }
 
     public string RepositoryStatusText => this.RepositorySource switch
@@ -2425,11 +2433,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var urls = OpenExternalEntityShortcutHandler.ParseUrls(targetEntity);
             if (urls.Count > 0)
             {
-                var entityUrl = urls.ContainsKey("default") ? urls["default"] : urls.First().Value;
-                return new WebViewModel(entityUrl, this)
+                var urlKey = urls.ContainsKey("default") ? "default" : urls.Keys.First();
+                var entityUrl = urls[urlKey];
+                var isDefault = string.Equals(urlKey, "default", StringComparison.OrdinalIgnoreCase);
+                var explicitTitle = ReadString(tab, "title");
+
+                return new WebViewModel(entityUrl, this, titleFixed: explicitTitle is not null || !isDefault)
                 {
                     Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
-                    Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                    Title = explicitTitle ?? (isDefault ? targetEntity.DisplayName : urlKey),
                     DockRegion = ReadString(tab, "dock") ?? "full",
                 };
             }
@@ -3254,6 +3266,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
     {
+        this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
         if (e.Dockable is WorkspacePaneDocument paneDoc)
             this.SelectedWorkspacePane = paneDoc.WorkspacePane;
         else if (e.Dockable is WorkspaceDocument doc)

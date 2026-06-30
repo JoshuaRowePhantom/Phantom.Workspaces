@@ -9,11 +9,6 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class NotificationsViewModelTests
 {
-    private sealed class FakeActiveTabProvider : IActiveTabProvider
-    {
-        public string? ActiveTabId { get; set; }
-    }
-
     private static TabDescriptor Tab(string tabId) =>
         new TabDescriptor { TabId = tabId };
 

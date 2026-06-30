@@ -103,6 +103,10 @@ public class WebViewModel : WorkspaceTabViewModel
 
     public bool HasHomeUrl => this.HomeUrl != null;
 
+    public string HomeUrlTooltip => this.HomeUrl is { Length: > 0 }
+        ? $"Go to home page\n{this.HomeUrl}"
+        : "Go to home page";
+
     public ICommand NavigateCommand { get; }
     public ICommand GoBackCommand { get; }
     public ICommand GoForwardCommand { get; }
