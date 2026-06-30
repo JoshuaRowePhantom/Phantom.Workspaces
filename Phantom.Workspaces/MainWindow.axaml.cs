@@ -14,8 +14,6 @@ namespace Phantom.Workspaces;
 
 public partial class MainWindow : Window
 {
-    private ScrollLockLedService? scrollLockLedService;
-
     public MainWindow()
         : this(new MainWindowViewModel(new UnknownRepositorySource()))
     {
@@ -37,14 +35,6 @@ public partial class MainWindow : Window
                 vm.NavStackPopup.Dismiss();
             }
         };
-        this.scrollLockLedService = new ScrollLockLedService(viewModel);
-        this.Closed += this.OnWindowClosed;
-    }
-
-    private void OnWindowClosed(object? sender, EventArgs e)
-    {
-        this.scrollLockLedService?.Dispose();
-        this.scrollLockLedService = null;
     }
 
     private void AddDockDataTemplates()
