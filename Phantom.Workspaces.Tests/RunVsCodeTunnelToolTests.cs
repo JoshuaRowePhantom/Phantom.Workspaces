@@ -282,6 +282,22 @@ public sealed class RunVsCodeTunnelToolTests
     }
 
     [Fact]
+    public async Task RunVsCodeTunnelTool_DefaultCli_InstallNonZeroExit_LogsWarning()
+    {
+        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
+        // Status check exits non-zero (→ NotInstalled) so install is attempted.
+        // The install call also uses DefaultRunCliAsync and exits non-zero, which must log a Warning.
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            defaultCliPathResolver: () => "nonexistent_cli.cmd",
+            logger: testLogger);
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
+    }
+
+    [Fact]
     public async Task RunVsCodeTunnelTool_DefaultCli_ServiceLogNonZeroExit_LogsWarning()
     {
         var testLogger = new TestLogger<RunVsCodeTunnelTool>();
