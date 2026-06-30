@@ -1071,10 +1071,19 @@ public sealed class MainWindowIntegrationTests
             .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
 
         // Switch back to pane B — this should mark the notification as read.
+        var paneBLayout = viewModel.WorkspacePanes[1].ContentLayout;
+        var paneBDock = paneBLayout is not null ? FindDocumentDockIn(paneBLayout) : null;
+        var activeDockableId = paneBDock?.ActiveDockable?.Id ?? "(null)";
+        var visibleIds = paneBDock?.VisibleDockables is not null
+            ? string.Join(", ", paneBDock.VisibleDockables.Select(d => d.Id))
+            : "(null)";
+        var selectedTabId = viewModel.WorkspacePanes[1].SelectedRegion?.SelectedTab?.Id ?? "(null)";
+
         viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
 
         Assert.True(viewModel.NotificationService.Notifications
-            .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
+            .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead,
+            $"Expected notification read. PaneB dock: {paneBDock is null}; ActiveDockable: {activeDockableId}; Visible: [{visibleIds}]; SelectedTab: {selectedTabId}");
     }
 
     [AvaloniaFact(Timeout = 15_000)]

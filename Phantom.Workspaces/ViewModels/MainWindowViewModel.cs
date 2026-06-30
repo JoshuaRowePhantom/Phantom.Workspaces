@@ -1533,9 +1533,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var contentLayout = this.SelectedWorkspacePane.ContentLayout;
         var documentDock = contentLayout is not null ? this.FindDocumentDock(contentLayout) : null;
-        // Fall back to SelectedRegion.SelectedTab when ActiveDockable is unavailable
+        // Fall back through VisibleDockables then SelectedRegion when ActiveDockable is unavailable
         // (e.g. in headless tests where the Avalonia visual tree is not fully initialised).
         var notifTabId = (documentDock?.ActiveDockable as WorkspaceDocument)?.Id
+            ?? documentDock?.VisibleDockables?.OfType<WorkspaceDocument>().FirstOrDefault()?.Id
             ?? this.SelectedWorkspacePane.SelectedRegion?.SelectedTab?.Id;
         if (notifTabId is not null)
         {
