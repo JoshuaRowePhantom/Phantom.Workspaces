@@ -47,6 +47,38 @@ public sealed class NotificationsStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void NotificationsIndicator_ApplyingClassToProgressBar_DoesNotThrow()
+    {
+        var styles = LoadNotificationsStyles();
+
+        var progressBar = new ProgressBar();
+        progressBar.Classes.Add("notifications-indicator");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void NotificationsIndicator_WhenIndeterminate_DoesNotThrow()
+    {
+        var styles = LoadNotificationsStyles();
+
+        var progressBar = new ProgressBar { IsIndeterminate = true };
+        progressBar.Classes.Add("notifications-indicator");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(progressBar);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+    }
+
     private static Avalonia.Styling.Styles LoadNotificationsStyles()
     {
         var source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/NotificationsStyles.axaml");

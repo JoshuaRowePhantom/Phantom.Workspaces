@@ -58,4 +58,23 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="IsHitTestVisible" Value="False" />
     </Style>
+
+    <!-- notifications-indicator: the 🔔 bell button in the status bar.
+         Idle: bell glyph at full opacity.
+         :indeterminate (HasActiveRun=true): same glyph, Avalonia IsIndeterminate state active.
+         PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
+    <Style Selector="ProgressBar.notifications-indicator">
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="🔔"
+                               FontSize="14"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
 </Styles>
