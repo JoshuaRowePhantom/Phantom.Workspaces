@@ -99,6 +99,30 @@ public sealed class AgentChatStatusLineViewModelTests
     }
 
     [Fact]
+    public async Task ReasoningIndicatorText_WhenIsReasoningVisibleIsTrue_ReturnsShowingText()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        agentViewModel.SetReasoningVisibility(true);
+
+        Assert.Equal("🧠 Showing Reasoning", statusLine.ReasoningIndicatorText);
+    }
+
+    [Fact]
+    public async Task ReasoningIndicatorText_WhenIsReasoningVisibleIsFalse_ReturnsNotShowingText()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        agentViewModel.SetReasoningVisibility(false);
+
+        Assert.Equal("🚫🧠 Not Showing Reasoning", statusLine.ReasoningIndicatorText);
+    }
+
+    [Fact]
     public async Task Dispose_UnsubscribesFromAgentChanges()
     {
         using var loggerFactory = new ObservableLoggerFactory();

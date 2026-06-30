@@ -13,7 +13,7 @@ using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
-public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
+public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsyncDisposable
 {
     private readonly AgentChat agentChat;
     private readonly ObservableLoggerFactory loggerFactory;
