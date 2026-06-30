@@ -156,12 +156,21 @@ If a test fails, perform root cause analysis before classifying it as transient:
 5. **If it fails again on the second run** — investigate further: read the test code, identify the specific mechanism causing the failure (e.g. missing `await`, shared static state, timer dependency, missing `Dispose`). "Non-deterministic" is not an acceptable root cause. Either fix the test or document the specific mechanism in a filed bug before proceeding.
 6. **Only proceed past a failing test** when the root cause is confirmed to be outside the scope of the current change and is documented in a filed bug with a specific diagnosis.
 
-File a next-up bug for any test failure that you proceed past:
+File a next-up bug for any test failure that you proceed past. Before filing, check whether an open bug already exists for this test to avoid duplicates:
 ```powershell
-gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
-  --title "Bug: flaky test — <TestName>" `
-  --label "bug,next-up" `
-  --body "## Flaky test report`n`n**Test:** <FullyQualifiedTestName>`n**Failure message:**`n``````n<paste error output here>`n``````n**Observed during:** fix/feature branch for issue #<ORIGINAL_NUMBER>`n**Why it appears unrelated:** <explain>`n**Root cause diagnosis:** <specific mechanism — e.g. missing await on async setup, shared static counter not reset between tests>"
+$existingBug = gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces `
+    --state open --label bug --search "<TestMethodShortName>" `
+    --json number,title | ConvertFrom-Json |
+    Where-Object { $_.title -like "*<TestMethodShortName>*" } |
+    Select-Object -First 1
+if ($existingBug) {
+    # An open bug already exists for this test — skip filing to avoid duplicates
+} else {
+    gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
+      --title "Bug: flaky test — <TestName>" `
+      --label "bug,next-up" `
+      --body "## Flaky test report`n`n**Test:** <FullyQualifiedTestName>`n**Failure message:**`n``````n<paste error output here>`n``````n**Observed during:** fix/feature branch for issue #<ORIGINAL_NUMBER>`n**Why it appears unrelated:** <explain>`n**Root cause diagnosis:** <specific mechanism — e.g. missing await on async setup, shared static counter not reset between tests>"
+}
 ```
 
 Add a note to the original issue comment or commit message referencing the filed bug.

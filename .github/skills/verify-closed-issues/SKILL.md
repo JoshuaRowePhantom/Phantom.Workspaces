@@ -23,7 +23,7 @@ gh label create superseded --repo JoshuaRowePhantom/Phantom.Workspaces --descrip
 
 ## Step 1 — Fetch unverified closed issues
 
-List all closed issues that do not have any of the verification outcome labels (`verified`, `failed-verification`, `superseded`), and skip issues labelled `wontfix` or `duplicate` or closed as `not_planned` (intentionally excluded):
+List all closed issues that do not have any of the verification outcome labels (`verified`, `failed-verification`, `superseded`), and only include issues closed as fixed (`stateReason: completed`) — skip issues closed as `not_planned`, `duplicate`, or any other reason:
 
 ```powershell
 $skipLabels = @("verified", "failed-verification", "superseded", "wontfix", "duplicate")
@@ -35,7 +35,7 @@ $issues = gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces `
     ConvertFrom-Json |
     Where-Object {
         $issueLabels = $_.labels.name
-        $_.stateReason -ne "not_planned" -and
+        $_.stateReason -eq "completed" -and
         -not ($skipLabels | Where-Object { $issueLabels -contains $_ })
     }
 
@@ -106,7 +106,7 @@ gh issue comment <TRACKING_ISSUE_NUMBER> --repo JoshuaRowePhantom/Phantom.Worksp
 1. Process issues in ascending number order.
 2. One issue per subagent; one subagent at a time (sequential).
 3. Wait for each subagent to finish before launching the next.
-4. Skip issues labelled `wontfix` or `duplicate`, or closed with `stateReason` of `not_planned` — do not attempt to verify them.
+4. Only verify issues closed as `completed` (fixed). Skip all other close reasons (`not_planned`, `duplicate`, or anything else) — do not attempt to verify them.
 5. Skip issues already labelled `verified`, `failed-verification`, or `superseded` — they are already done.
 6. Never push. Never modify code.
 7. The main agent does not verify anything itself — all inspection and labelling happens inside subagents.

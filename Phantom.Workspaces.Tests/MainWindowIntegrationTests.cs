@@ -3828,6 +3828,21 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_GitWorkspaceDiscoveryTool_IsRegistered()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var hostField = typeof(MainWindowViewModel).GetField(
+            "scheduledToolHost",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(hostField);
+        var host = Assert.IsType<Phantom.Workspaces.ScheduledTools.ScheduledToolHost>(hostField!.GetValue(viewModel));
+
+        Assert.True(host.TryGetTool("git-workspace-discovery", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_WorkspaceWithChildren_ShowsExpandAffordance()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
