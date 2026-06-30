@@ -41,8 +41,7 @@ public sealed class ConfigurationPersistenceServiceTests
             {
                 TunnelName = "workspaces-host",
                 HostedPorts = [5280],
-                AccessMode = DevTunnelAccessMode.Token,
-                AccessTokenSource = "DEVTUNNEL_TOKEN",
+                AccessMode = DevTunnelAccessMode.Private,
             },
         };
 
@@ -75,8 +74,7 @@ public sealed class ConfigurationPersistenceServiceTests
             },
             DevTunnel = new DevTunnelConfiguration
             {
-                AccessMode = DevTunnelAccessMode.Token,
-                AccessTokenSource = "DEVTUNNEL_TOKEN",
+                AccessMode = DevTunnelAccessMode.Private,
             },
         };
 
@@ -84,9 +82,6 @@ public sealed class ConfigurationPersistenceServiceTests
         {
             await service.SaveAsync(configuration);
             var json = await File.ReadAllTextAsync(path);
-
-            // Only secret sources (env var names) are stored.
-            Assert.Contains("accessTokenSource", json, System.StringComparison.Ordinal);
 
             // No raw-token-bearing properties exist in the serialized document.
             Assert.DoesNotContain("\"accessToken\":", json, System.StringComparison.Ordinal);
