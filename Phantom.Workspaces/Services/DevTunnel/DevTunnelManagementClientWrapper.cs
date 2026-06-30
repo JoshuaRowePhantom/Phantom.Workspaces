@@ -124,9 +124,7 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
         }
 
         var existingPort = (existingPorts ?? []).FirstOrDefault(port => port.PortNumber == portNumber);
-        if (existingPort is not null
-            && !string.IsNullOrEmpty(existingPort.Protocol)
-            && !string.Equals(existingPort.Protocol, protocol, StringComparison.OrdinalIgnoreCase))
+        if (existingPort is not null)
         {
             await this.managementClient
                 .DeleteTunnelPortAsync(tunnel, portNumber, requestOptions, cancellationToken)
