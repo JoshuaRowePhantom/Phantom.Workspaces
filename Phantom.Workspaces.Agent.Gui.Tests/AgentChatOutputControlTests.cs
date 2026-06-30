@@ -583,6 +583,132 @@ public sealed class AgentChatOutputControlTests
             $"Expected scroll (index {scrollIndex}) to appear after all update messages (last update index {lastUpdateIndex}).");
     }
 
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AutoScrollEnabled_SetToTrue_PostsScrollCommandToBrowser()
+    {
+        // Arrange: attach a view model, then disable auto-scroll and clear messages so we
+        // can isolate the re-enable action.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+
+        viewModel.AutoScrollEnabled = false;
+        browser.PostedMessages.Clear();
+
+        // Act: re-enable auto-scroll — OnViewModelPropertyChanged must post a scroll command.
+        viewModel.AutoScrollEnabled = true;
+
+        Assert.True(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "scroll";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected a 'scroll' command to be posted when AutoScrollEnabled is set to true.");
+    }
+
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AutoScrollEnabled_SetToFalse_DoesNotPostScrollCommand()
+    {
+        // Arrange: attach a view model (AutoScrollEnabled starts true after OnBrowserReady).
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        browser.PostedMessages.Clear();
+
+        // Act: disable auto-scroll — must NOT post any scroll command.
+        viewModel.AutoScrollEnabled = false;
+
+        Assert.False(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "scroll";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected no 'scroll' command when AutoScrollEnabled is set to false.");
+    }
+
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AutoScrollEnabled_SetToTrue_WhenSuppressed_DoesNotPostScrollCommand()
+    {
+        // Arrange: attach a view model, disable auto-scroll, and clear messages.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        viewModel.AutoScrollEnabled = false;
+        browser.PostedMessages.Clear();
+
+        // Act: simulate the page reporting atBottom=true — SetAutoScrollFromPage re-enables
+        // AutoScrollEnabled under suppressScrollOnEnable, so no scroll command should be posted
+        // (the page is already at the bottom; a redundant scroll would be wrong).
+        browser.FireMessage("""{"type":"scrollState","atBottom":true}""");
+
+        Assert.False(
+            browser.PostedMessages.Any(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "scroll";
+                }
+                catch (JsonException) { return false; }
+            }),
+            "Expected no 'scroll' command when AutoScrollEnabled is re-enabled via SetAutoScrollFromPage (atBottom suppression).");
+    }
+
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
     {
         var field = typeof(AgentChatOutputControl)
