@@ -28,6 +28,16 @@
 
     <Style Selector="TextBlock.agent-chat-status-line-brain.thinking">
         <Setter Property="Opacity" Value="1" />
+        <Style.Animations>
+            <Animation Duration="0:0:1" IterationCount="INFINITE" PlaybackDirection="Alternate" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="1.0" />
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="0.4" />
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
     </Style>
 
     <Style Selector="TextBlock.agent-tab-header-brain">

@@ -59,6 +59,24 @@ public sealed class AgentChatStatusLineStylesTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatStatusLineBrain_Default_OpacityIsZero()
+    {
+        var styles = LoadAgentChatStatusLineStyles();
+
+        var textBlock = new TextBlock();
+        textBlock.Classes.Add("agent-chat-status-line-brain");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(textBlock);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.0, textBlock.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineBrain_WhenIdle_OpacityIs0Point25()
     {
         var styles = LoadAgentChatStatusLineStyles();
@@ -94,6 +112,42 @@ public sealed class AgentChatStatusLineStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
 
         Assert.Equal(1.0, textBlock.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatStatusLineBrain_WhenThinking_OpacityIsOne()
+    {
+        var styles = LoadAgentChatStatusLineStyles();
+
+        var textBlock = new TextBlock();
+        textBlock.Classes.Add("agent-chat-status-line-brain");
+        textBlock.Classes.Add("thinking");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(textBlock);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(1.0, textBlock.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatStatusLineBrain_WhenThinking_ApplyingClassToTextBlock_DoesNotThrow()
+    {
+        var styles = LoadAgentChatStatusLineStyles();
+
+        var textBlock = new TextBlock();
+        textBlock.Classes.Add("agent-chat-status-line-brain");
+        textBlock.Classes.Add("thinking");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(textBlock);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
     private static Avalonia.Styling.Styles LoadAgentChatStatusLineStyles()
