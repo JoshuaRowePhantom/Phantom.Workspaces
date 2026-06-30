@@ -10,6 +10,121 @@ namespace Phantom.Workspaces.Data.Web.Client.Tests;
 public sealed class WebClientDataAccessLayerTests
 {
     [Fact]
+    public void IsConnectivityFailure_WithUnauthorizedStatusCode_ReturnsTrue()
+    {
+        var exception = new WebDataAccessRequestException("401 response", HttpStatusCode.Unauthorized);
+
+        Assert.True(exception.IsConnectivityFailure);
+    }
+
+    [Fact]
+    public async Task GetAsync_On401_WithTokenResolver_RefreshesTokenAndRetries()
+    {
+        var callCount = 0;
+        var observedAuthHeaders = new List<string?>();
+        var handler = new RecordingHttpMessageHandler(request =>
+        {
+            callCount++;
+            observedAuthHeaders.Add(
+                request.Headers.TryGetValues("X-Tunnel-Authorization", out var vals)
+                    ? string.Join(",", vals)
+                    : null);
+            return callCount == 1
+                ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
+                : JsonResponse(new GetResult { Batches = [] });
+        });
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://example.test"),
+        };
+        using var dataAccessLayer = new WebClientDataAccessLayer(
+            "https://example.test",
+            devTunnelAccessToken: "old-token",
+            devTunnelAccessTokenResolver: () => "new-token",
+            httpClient: httpClient);
+
+        var result = await dataAccessLayer.GetAsync(new GetRequest { Entities = [] });
+
+        Assert.NotNull(result);
+        Assert.Equal(2, callCount);
+        Assert.Equal("tunnel old-token", observedAuthHeaders[0]);
+        Assert.Equal("tunnel new-token", observedAuthHeaders[1]);
+    }
+
+    [Fact]
+    public async Task GetAsync_On401_WithoutTokenResolver_ThrowsWebDataAccessRequestException()
+    {
+        var handler = new RecordingHttpMessageHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://example.test"),
+        };
+        using var dataAccessLayer = new WebClientDataAccessLayer(
+            "https://example.test",
+            devTunnelAccessToken: "token",
+            httpClient: httpClient);
+
+        var exception = await Assert.ThrowsAsync<WebDataAccessRequestException>(
+            () => dataAccessLayer.GetAsync(new GetRequest { Entities = [] }));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetAsync_On401_WithTokenResolver_AfterRetryAlso401_ThrowsWebDataAccessRequestException()
+    {
+        var callCount = 0;
+        var handler = new RecordingHttpMessageHandler(_ =>
+        {
+            callCount++;
+            return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        });
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://example.test"),
+        };
+        using var dataAccessLayer = new WebClientDataAccessLayer(
+            "https://example.test",
+            devTunnelAccessToken: "old-token",
+            devTunnelAccessTokenResolver: () => "new-token",
+            httpClient: httpClient);
+
+        var exception = await Assert.ThrowsAsync<WebDataAccessRequestException>(
+            () => dataAccessLayer.GetAsync(new GetRequest { Entities = [] }));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
+        Assert.Equal(2, callCount); // initial + one retry
+    }
+
+    [Fact]
+    public async Task GetAsync_On401_WithTokenResolverReturningNull_RetriesWithoutUpdatingHeader()
+    {
+        var callCount = 0;
+        var handler = new RecordingHttpMessageHandler(_ =>
+        {
+            callCount++;
+            return callCount == 1
+                ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
+                : JsonResponse(new GetResult { Batches = [] });
+        });
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://example.test"),
+        };
+        using var dataAccessLayer = new WebClientDataAccessLayer(
+            "https://example.test",
+            devTunnelAccessToken: "old-token",
+            devTunnelAccessTokenResolver: () => null,
+            httpClient: httpClient);
+
+        var result = await dataAccessLayer.GetAsync(new GetRequest { Entities = [] });
+
+        Assert.NotNull(result);
+        Assert.Equal(2, callCount);
+    }
+
+    [Fact]
     public async Task UpdateAsync_PostsToExpectedEndpointAndParsesResponse()
     {
         var updateResult = new UpdateResult

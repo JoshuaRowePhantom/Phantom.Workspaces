@@ -3,7 +3,7 @@
              xmlns:vm="using:Phantom.Workspaces.ViewModels"
              x:Class="Phantom.Workspaces.Controls.StatusControl"
              x:CompileBindings="False">
-    <ProgressBar Classes="running-indicator"
+    <ProgressBar Classes="running-indicator running-indicator-agent"
                  Classes.succeeded="{Binding ErrorStatus, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:ErrorStatus.Successful}}"
                  Classes.failed="{Binding ErrorStatus, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:ErrorStatus.Error}}"
                  IsIndeterminate="{Binding RunningStatus, Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunningStatus.Running}}" />
