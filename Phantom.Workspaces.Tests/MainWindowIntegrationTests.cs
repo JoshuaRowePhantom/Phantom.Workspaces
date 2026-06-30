@@ -4729,6 +4729,151 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentTab.Id, activeDoc!.Id);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentBrain_RowActivateCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var brain = viewModel.RunningAgentBrain;
+        Assert.NotNull(brain);
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceBId = new EntityId("ab100001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab100001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "brain-cross-pane-ws"]],
+              "display-name": { "default": "Brain Cross-Pane Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var agentDefinitionId = new EntityId("ab100002-0000-4000-8000-000000000002");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ab100002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "brain-cross-pane-echo"]],
+              "display-name": { "default": "Brain Cross-Pane Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "brain-cross-pane-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // Switch to workspace B and open an agent tab there
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceBId.ToString());
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), table);
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+
+        brain!.Refresh();
+        Assert.Single(brain.Rows);
+
+        // Switch back to the default (first) pane so workspace B is not selected
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.NotEqual(workspaceBId.ToString(), viewModel.SelectedWorkspacePane.Id);
+
+        // Execute the activate command on the running-agent row
+        var row = Assert.Single(brain.Rows);
+        brain.IsOpen = true;
+        row.ActivateCommand.Execute(null);
+
+        // Workspace B should now be selected and the agent tab active
+        Assert.Equal(workspaceBId.ToString(), viewModel.SelectedWorkspacePane.Id);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal(agentTab.Id, (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ActivateTabById_WhenWorkspacePaneNotInWorkspacePanes_OpensWorkspaceAndActivatesTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceBId = new EntityId("ab110001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab110001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "activate-closed-ws"]],
+              "display-name": { "default": "Activate Closed Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "closed-ws-tab",
+                      "title": "Closed WS Tab",
+                      "kind": "web",
+                      "dock": "full",
+                      "content": { "url": "https://example.com/closed-ws" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        // Open workspace B to confirm it loads correctly, then close it
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+        var initialPane = viewModel.WorkspacePanes.Single(
+            p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        var initialDock = FindDocumentDockIn(initialPane.ContentLayout!);
+        Assert.NotNull(initialDock);
+        await WaitForWorkspaceTabAsync(initialDock!, "closed-ws-tab");
+        await viewModel.RemoveWorkspacePaneAsync(initialPane);
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+
+        // Now activate the tab by ID — workspace B is not open
+        await viewModel.ActivateTabByIdAsync("closed-ws-tab", workspaceBId.ToString());
+
+        // Workspace B should have been re-opened and selected
+        Assert.Equal(workspaceBId.ToString(), viewModel.SelectedWorkspacePane.Id);
+
+        // Wait for the tab to be loaded and activated
+        var newPane = viewModel.WorkspacePanes.Single(
+            p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        var contentDock = FindDocumentDockIn(newPane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "closed-ws-tab");
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("closed-ws-tab", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
     private sealed class FakeShellSession : ITerminalSession
     {
         private readonly MemoryStream stream = new();
