@@ -5,6 +5,7 @@ using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm;
 using Dock.Model.Mvvm.Controls;
+using Phantom.Workspaces.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -128,7 +129,7 @@ public class WorkspaceDockFactory : Factory
 
         HostWindowLocator = new Dictionary<string, Func<IHostWindow?>>
         {
-            [nameof(IDockWindow)] = () => new HostWindow(),
+            [nameof(IDockWindow)] = () => new PhantomHostWindow(),
         };
 
         base.InitLayout(layout);
