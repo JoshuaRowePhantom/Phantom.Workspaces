@@ -57,6 +57,11 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         this.UpdateCanStart();
 
         this.Parameters.CollectionChanged += this.OnParametersCollectionChanged;
+
+        if (this.Parameters.Count == 0)
+        {
+            Dispatcher.UIThread.Post(async () => await this.StartSessionAsync());
+        }
     }
 
     private void LoadParameters()
