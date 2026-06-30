@@ -3167,7 +3167,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task GoToTabAtIndexCommand_Execute_ClearsIsAltHeld()
+    public async Task GoToTabAtIndexCommand_Execute_DoesNotClearIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -3178,7 +3178,7 @@ public sealed class MainWindowIntegrationTests
         viewModel.IsAltHeld = true;
         viewModel.GoToTabAtIndexCommand.Execute("0");
 
-        Assert.False(viewModel.IsAltHeld);
+        Assert.True(viewModel.IsAltHeld);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
