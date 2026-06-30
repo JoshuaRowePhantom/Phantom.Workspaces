@@ -71,7 +71,12 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
                 return WorkspaceToolExecutionResult.Failure("VS Code tunnel service did not start after installation");
         }
 
-        return WorkspaceToolExecutionResult.Success();
+        var tunnelStatusOutput = await this.GetTunnelStatusOutputAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+        var resultContent = !string.IsNullOrWhiteSpace(tunnelStatusOutput)
+            ? tunnelStatusOutput
+            : "VS Code tunnel service is running.";
+
+        return new WorkspaceToolExecutionResult { ResultContent = resultContent };
     }
 
     private string ResolveTunnelName(JsonElement? toolData)
@@ -100,6 +105,20 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         }
 
         return this.defaultCliPathResolver();
+    }
+
+    private async Task<string?> GetTunnelStatusOutputAsync(string cliPath, CancellationToken cancellationToken)
+    {
+        var runner = this.cliRunner ?? DefaultRunCliAsync;
+        try
+        {
+            var (output, exitCode) = await runner(cliPath, "tunnel status", cancellationToken).ConfigureAwait(false);
+            return exitCode == 0 && !string.IsNullOrWhiteSpace(output) ? output : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<(VsCodeTunnelServiceStatus Status, string? ErrorMessage)> GetServiceStatusAsync(

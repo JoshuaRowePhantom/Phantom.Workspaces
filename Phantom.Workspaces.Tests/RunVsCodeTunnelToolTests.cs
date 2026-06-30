@@ -61,8 +61,9 @@ public sealed class RunVsCodeTunnelToolTests
 
         await tool.ExecuteAsync(this.Context());
 
-        Assert.Single(calls);
+        Assert.Equal(2, calls.Count);
         Assert.Equal("tunnel service status", calls[0].Arguments);
+        Assert.Equal("tunnel status", calls[1].Arguments);
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("uninstall"));
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("install"));
     }
@@ -279,6 +280,114 @@ public sealed class RunVsCodeTunnelToolTests
         var result = await tool.ExecuteAsync(this.Context());
 
         Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ServiceAlreadyRunning_ResultContentContainsTunnelStatusOutput()
+    {
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) => args switch
+            {
+                "tunnel service status" => Task.FromResult(("service is running", 0)),
+                "tunnel status" => Task.FromResult(("Connected to tunnel: my-machine", 0)),
+                _ => Task.FromResult(("", 0))
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("Connected to tunnel: my-machine", result.ResultContent);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ServiceAlreadyRunning_TunnelStatusFails_ResultContentFallsBack()
+    {
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) => args switch
+            {
+                "tunnel service status" => Task.FromResult(("service is running", 0)),
+                "tunnel status" => Task.FromResult(("", 1)),
+                _ => Task.FromResult(("", 0))
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ServiceAlreadyRunning_TunnelStatusEmpty_ResultContentFallsBack()
+    {
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) => args switch
+            {
+                "tunnel service status" => Task.FromResult(("service is running", 0)),
+                "tunnel status" => Task.FromResult(("", 0)),
+                _ => Task.FromResult(("", 0))
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_AfterInstall_ServiceRunning_ResultContentContainsTunnelStatusOutput()
+    {
+        var callCount = 0;
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                if (args == "tunnel status")
+                    return Task.FromResult(("Connected to tunnel: test-machine", 0));
+                callCount++;
+                return Task.FromResult(callCount switch
+                {
+                    1 => ("", 1),                    // status: not installed
+                    2 => ("", 0),                    // install: success
+                    _ => ("service is running", 0),  // follow-up status: running
+                });
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("Connected to tunnel: test-machine", result.ResultContent);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_AfterReinstall_ServiceRunning_ResultContentContainsTunnelStatusOutput()
+    {
+        var callCount = 0;
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                if (args == "tunnel status")
+                    return Task.FromResult(("Connected to tunnel: test-machine", 0));
+                callCount++;
+                return Task.FromResult(callCount switch
+                {
+                    1 => ("service is stopped", 0),  // status: stopped
+                    2 => ("", 0),                    // uninstall: success
+                    3 => ("", 0),                    // install: success
+                    _ => ("service is running", 0),  // follow-up status: running
+                });
+            });
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("Connected to tunnel: test-machine", result.ResultContent);
     }
 
     [Fact]
