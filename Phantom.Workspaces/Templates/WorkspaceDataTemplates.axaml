@@ -470,10 +470,25 @@
         </Grid>
     </DataTemplate>
     <!-- Tab header item templates (top-level so they are individually testable and visible to the full
-         template-resolution chain inside ItemsControl) -->
+         template-resolution chain inside ItemsControl after Dock pane moves) -->
+    <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
+        <!-- Show the globe glyph; favicon image loading is a future enhancement -->
+        <TextBlock Text="🌐" />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
+        <TextBlock Text="{Binding Icon}" />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
         <ProgressBar Classes="running-indicator"
                      IsIndeterminate="{Binding IsRunning}" />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
+        <!-- Always occupies space; empty bar hides it when there is no unread notification -->
+        <ProgressBar Classes="notification-indicator"
+                     Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
@@ -490,27 +505,6 @@
                             <StackPanel Orientation="Horizontal" Spacing="2" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
-                    <ItemsControl.DataTemplates>
-                        <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
-                            <!-- Show the globe glyph; favicon image loading is a future enhancement -->
-                            <TextBlock Text="🌐" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
-                            <TextBlock Text="{Binding Icon}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-                            <ProgressBar Classes="running-indicator"
-                                         IsIndeterminate="{Binding IsRunning}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-                            <!-- Always occupies space; empty bar hides it when there is no unread notification -->
-                            <ProgressBar Classes="notification-indicator"
-                                         Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
-                            <entityControls:StatusControl Item="{Binding Status}" />
-                        </DataTemplate>
-                    </ItemsControl.DataTemplates>
                 </ItemsControl>
             </StackPanel>
             <!-- Alt+N shortcut badge: visible only for tabs 1–10; fades in when Alt is held -->

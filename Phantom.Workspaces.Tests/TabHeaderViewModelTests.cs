@@ -304,6 +304,30 @@ public sealed class TabHeaderViewModelTests
         Assert.Null(label);
     }
 
+    // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
+    {
+        var templates = new WorkspaceDataTemplates();
+        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
+    {
+        var templates = new WorkspaceDataTemplates();
+        var viewModel = new IconTabHeaderItemViewModel { Icon = "🧠" };
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
     [AvaloniaFact(Timeout = 15_000)]

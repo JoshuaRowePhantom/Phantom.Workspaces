@@ -71,6 +71,41 @@ public sealed class GitEntitySchemaTests
         Assert.Contains(seededNames, n => n.SequenceEqual(["entity-types", "git-work-item"], StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void GitSchema_HasDefsGitDefinition_WithExpectedSubFields()
+    {
+        using var document = LoadEmbeddedSchema("git.json");
+
+        Assert.True(document.RootElement.TryGetProperty("$defs", out var defs), "git.json must have a $defs section");
+        Assert.True(defs.TryGetProperty("git", out var gitDef), "$defs must contain a 'git' entry");
+        Assert.True(gitDef.TryGetProperty("properties", out var properties), "$defs.git must have a 'properties' section");
+        Assert.True(properties.TryGetProperty("branch", out _), "$defs.git.properties must contain 'branch'");
+        Assert.True(properties.TryGetProperty("head-commit", out _), "$defs.git.properties must contain 'head-commit'");
+        Assert.True(properties.TryGetProperty("remotes", out _), "$defs.git.properties must contain 'remotes'");
+    }
+
+    [Fact]
+    public void GitSchema_PropertiesGit_IsRefToDefsGit()
+    {
+        using var document = LoadEmbeddedSchema("git.json");
+
+        Assert.True(document.RootElement.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("git", out var gitProperty));
+        Assert.True(gitProperty.TryGetProperty("$ref", out var refValue), "git.json#/properties/git must be a $ref");
+        Assert.Equal("#/$defs/git", refValue.GetString());
+    }
+
+    [Fact]
+    public void GitWorktreeSchema_PropertiesGit_IsRefToGitSchemaDefsGit()
+    {
+        using var document = LoadEmbeddedSchema("git-worktree.json");
+
+        Assert.True(document.RootElement.TryGetProperty("properties", out var properties));
+        Assert.True(properties.TryGetProperty("git", out var gitProperty));
+        Assert.True(gitProperty.TryGetProperty("$ref", out var refValue), "git-worktree.json#/properties/git must be a $ref");
+        Assert.Equal("git.json#/$defs/git", refValue.GetString());
+    }
+
     private static JsonDocument LoadEmbeddedSchema(string fileName)
     {
         var resourceName = $"Phantom.Workspaces.Data.JsonSchemas.{fileName}";
