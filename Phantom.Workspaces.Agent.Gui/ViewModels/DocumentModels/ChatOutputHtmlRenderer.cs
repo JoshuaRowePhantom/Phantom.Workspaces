@@ -75,7 +75,7 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderToolCallGroupSummary(string groupId, string lastToolName, int callCount)
     {
         var builder = new StringBuilder();
-        builder.Append("<summary class=\"chat-collapsible-summary\" id=\"").Append(ToolCallGroupSummaryId(groupId)).Append("\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolCallGroupSummaryId(groupId)).Append("\">");
         builder.Append("tool call: <span class=\"tool-name\">").Append(HtmlEscape(lastToolName)).Append("</span>");
         builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
         builder.Append("</summary>");
@@ -92,7 +92,7 @@ internal static class ChatOutputHtmlRenderer
     {
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-wrapper\" id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\">tools  ").Append(HtmlEscape(summary))
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">tools  ").Append(HtmlEscape(summary))
             .Append("  (").Append(callCount).Append(" calls)</summary>");
         builder.Append(innerHtml);
         builder.Append("</details>");
@@ -121,7 +121,7 @@ internal static class ChatOutputHtmlRenderer
         }
 
         builder.Append(">");
-        builder.Append("<summary class=\"chat-collapsible-summary\">tool ").Append(callSummary).Append("</summary>");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"3\">tool ").Append(callSummary).Append("</summary>");
 
         builder.Append("<details class=\"chat-tool-call\" open>");
         builder.Append("<summary class=\"chat-collapsible-summary\">call  ").Append(callSummary).Append("</summary>");
@@ -239,7 +239,7 @@ internal static class ChatOutputHtmlRenderer
         }
 
         var builder = new StringBuilder();
-        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"0\">");
+        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"1\">");
         builder.Append("<span>[").Append(HtmlEscape(roleLabel)).Append("]</span>");
         if (timestamp.HasValue)
         {
