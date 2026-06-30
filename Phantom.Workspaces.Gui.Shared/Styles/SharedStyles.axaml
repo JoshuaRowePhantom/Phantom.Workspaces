@@ -990,7 +990,7 @@
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="3,1" />
         <Setter Property="Margin" Value="0,-2,-2,0" />
-        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Opacity" Value="0.50" />
         <Setter Property="ZIndex" Value="10" />
         <Setter Property="Transitions">
             <Transitions>
