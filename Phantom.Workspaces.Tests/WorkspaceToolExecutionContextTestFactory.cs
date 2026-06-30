@@ -8,7 +8,8 @@ internal static class WorkspaceToolExecutionContextTestFactory
 {
     public static WorkspaceToolExecutionContext Create(
         IDataAccessLayer dataAccessLayer,
-        string toolJson)
+        string toolJson,
+        EntitySnapshot? profileEntity = null)
     {
         var placeholder = CreateSnapshot(
             """
@@ -25,7 +26,7 @@ internal static class WorkspaceToolExecutionContextTestFactory
             CancellationToken = CancellationToken.None,
             CurrentComputerEntity = placeholder,
             CurrentUserEntity = placeholder,
-            CurrentComputerUserProfileEntity = placeholder,
+            CurrentComputerUserProfileEntity = profileEntity ?? placeholder,
             ToolRelationship = placeholder,
             Participants = [placeholder],
             Tool = CreateSnapshot(toolJson),

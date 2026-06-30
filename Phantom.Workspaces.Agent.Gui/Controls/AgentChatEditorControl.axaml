@@ -47,34 +47,19 @@
                                    Text="{Binding StatusLine.ModelDisplay}"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasModel}"/>
-                        <TextBlock Classes="agent-chat-status-line-separator"
-                                   Text="•"
-                                   VerticalAlignment="Center"
-                                   IsVisible="{Binding StatusLine.HasProvider}"/>
                         <TextBlock Classes="agent-chat-status-line-label"
                                    Text="{Binding StatusLine.ProviderDisplay}"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasProvider}"/>
-                        <TextBlock Classes="agent-chat-status-line-separator"
-                                   Text="•"
-                                   VerticalAlignment="Center"
-                                   IsVisible="{Binding StatusLine.HasTokens}"/>
                         <TextBlock Classes="agent-chat-status-line-label"
                                    Text="{Binding StatusLine.TokensDisplay}"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasTokens}"/>
-                        <TextBlock Classes="agent-chat-status-line-separator"
-                                   Text="•"
-                                   VerticalAlignment="Center"
-                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"
                                   VerticalAlignment="Center"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
-                        <TextBlock Classes="agent-chat-status-line-separator"
-                                   Text="•"
-                                   VerticalAlignment="Center" />
                         <Button Classes="agent-chat-status-line-reasoning-toggle"
                                 VerticalAlignment="Center"
                                 Command="{Binding Agent.ToggleReasoningVisibilityCommand}"
@@ -89,9 +74,11 @@
                                 </Panel>
                                 <TextBlock Text="Showing Reasoning"
                                            Classes="agent-chat-status-line-label"
+                                           Margin="0"
                                            IsVisible="{Binding Agent.IsReasoningVisible}" />
                                 <TextBlock Text="Not Showing Reasoning"
                                            Classes="agent-chat-status-line-label muted"
+                                           Margin="0"
                                            IsVisible="{Binding !Agent.IsReasoningVisible}" />
                             </StackPanel>
                         </Button>
@@ -191,10 +178,6 @@
                                 </MultiBinding>
                             </TextBlock.Text>
                         </TextBlock>
-                        <TextBlock Classes="agent-chat-status-line-separator"
-                                   Text="•"
-                                   VerticalAlignment="Center"
-                                   IsVisible="{Binding StatusLine.HasWarnings}"/>
                         <TextBlock Classes="agent-chat-status-line-label"
                                    VerticalAlignment="Center"
                                    IsVisible="{Binding StatusLine.HasWarnings}">

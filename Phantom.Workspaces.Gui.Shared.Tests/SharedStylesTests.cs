@@ -180,7 +180,6 @@ public sealed class SharedStylesTests
             "AgentChat.StatusLine.ThinkingBrain.Foreground",
             "AgentChat.StatusLine.Label.Foreground",
             "AgentChat.StatusLine.Value.Foreground",
-            "AgentChat.StatusLine.Separator.Foreground",
         };
 
         foreach (var key in brushKeys)
