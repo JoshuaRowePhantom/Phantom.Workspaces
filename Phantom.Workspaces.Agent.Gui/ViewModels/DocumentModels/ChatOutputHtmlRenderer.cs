@@ -296,7 +296,9 @@ internal static class ChatOutputHtmlRenderer
                     }
                 }
 
-                return RenderCollapsible(contentId, "chat-tool", $"tool call: {call.Name}", PrettyJson(call.Arguments), SerializeContentJson(call));
+                var description = call.Arguments is not null && call.Arguments.TryGetValue("description", out var descObj) ? descObj as string : null;
+                var label = string.IsNullOrEmpty(description) ? $"tool call: {call.Name}" : $"tool call: {call.Name}: {description}";
+                return RenderCollapsible(contentId, "chat-tool", label, PrettyJson(call.Arguments), SerializeContentJson(call));
             }
 
             case FunctionResultContent result:

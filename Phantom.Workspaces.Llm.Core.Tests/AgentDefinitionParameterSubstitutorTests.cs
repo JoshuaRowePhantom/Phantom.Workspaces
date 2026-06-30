@@ -246,6 +246,110 @@ public sealed class AgentDefinitionParameterSubstitutorTests
     }
 
     [Fact]
+    public void Substitute_OptionalParameterWithEmptyStringValue_RemovesKey()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": false }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(
+            manifest,
+            new Dictionary<string, string> { ["working-directory"] = "" });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.False(
+            promptAgent.Model?.Options?.AdditionalProperties?.ContainsKey("working-directory") == true,
+            "working-directory key should be removed when provided value is empty string");
+    }
+
+    [Fact]
+    public void Substitute_OptionalParameterWithWhitespaceValue_RemovesKey()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": false }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(
+            manifest,
+            new Dictionary<string, string> { ["working-directory"] = "   " });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.False(
+            promptAgent.Model?.Options?.AdditionalProperties?.ContainsKey("working-directory") == true,
+            "working-directory key should be removed when provided value is whitespace");
+    }
+
+    [Fact]
+    public void Substitute_RequiredParameterWithEmptyStringValue_ThrowsArgumentException()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": true }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+          }
+        }
+        """);
+
+        Assert.Throws<ArgumentException>(() =>
+            AgentDefinitionParameterSubstitutor.Substitute(
+                manifest,
+                new Dictionary<string, string> { ["working-directory"] = "" }));
+    }
+
+    [Fact]
     public void Substitute_DoesNotMutateManifestTemplate()
     {
         var manifest = AgentManifestLoader.LoadManifestFromJson("""
