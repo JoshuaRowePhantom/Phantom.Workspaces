@@ -731,6 +731,42 @@
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
     </Style>
 
+    <!-- scheduled-tools-indicator: the ⏱/⏸ clock button in the status bar.
+         Idle: clock glyph (⏱) at full opacity.
+         :indeterminate (running): same glyph, Avalonia IsIndeterminate state active.
+         .paused: pause glyph (⏸) with dimmed opacity.
+         .failed: clock glyph with error foreground. -->
+    <Style Selector="ProgressBar.scheduled-tools-indicator">
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <TextBlock Text="⏱"
+                           FontSize="14"
+                           Foreground="{TemplateBinding Foreground}"
+                           Opacity="{TemplateBinding Opacity}"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center" />
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.scheduled-tools-indicator.paused">
+        <Setter Property="Opacity" Value="0.55" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <TextBlock Text="⏸"
+                           FontSize="14"
+                           Foreground="{TemplateBinding Foreground}"
+                           Opacity="{TemplateBinding Opacity}"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center" />
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.scheduled-tools-indicator.failed">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+    </Style>
+
     <Style Selector="TextBlock.terminal-mono">
         <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
     </Style>
