@@ -139,13 +139,13 @@ public sealed class DevTunnelManagementClientWrapperTests
             .ReturnsAsync(true);
         TunnelPort? createdPort = null;
         management
-            .Setup(client => client.CreateOrUpdateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Setup(client => client.CreateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .Callback<Tunnel, TunnelPort, TunnelRequestOptions, CancellationToken>((_, port, _, _) => createdPort = port)
             .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
 
         await wrapper.SetSingleForwardedPortAsync("tunnel-1", localPort: 5280, protocol: "https", TestContext.Current.CancellationToken);
 
-        Assert.Equal([(ushort)9000, (ushort)5280], deletedPorts); // stale port removed, then target port deleted before recreating
+        Assert.Equal([(ushort)9000, (ushort)5280], deletedPorts); // stale port removed, then target port unconditionally deleted before recreating
         Assert.NotNull(createdPort);
         Assert.Equal(5280, createdPort!.PortNumber);
         Assert.Equal("https", createdPort.Protocol);
@@ -166,7 +166,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .ReturnsAsync(true);
         TunnelPort? createdPort = null;
         management
-            .Setup(client => client.CreateOrUpdateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Setup(client => client.CreateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .Callback<Tunnel, TunnelPort, TunnelRequestOptions, CancellationToken>((_, port, _, _) => createdPort = port)
             .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
 
@@ -196,7 +196,7 @@ public sealed class DevTunnelManagementClientWrapperTests
             .ReturnsAsync(true);
         TunnelPort? createdPort = null;
         management
-            .Setup(client => client.CreateOrUpdateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Setup(client => client.CreateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .Callback<Tunnel, TunnelPort, TunnelRequestOptions, CancellationToken>((_, port, _, _) => createdPort = port)
             .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
 
@@ -210,22 +210,29 @@ public sealed class DevTunnelManagementClientWrapperTests
     }
 
     [Fact]
-    public async Task SetSingleForwardedPortAsync_WhenNoExistingPort_DoesNotDelete()
+    public async Task SetSingleForwardedPortAsync_WhenListReturnsEmpty_StillDeletesTargetPort()
     {
+        // ListTunnelPortsAsync may return stale/empty data while the port still exists on the server.
+        // The delete must be unconditional so the port is always removed before CreateTunnelPortAsync,
+        // preventing the Dev Tunnels service from rejecting a protocol change.
         var tunnel = new Tunnel { TunnelId = "tunnel-1", Labels = [Marker] };
         var management = CreateManagementWithTunnel(tunnel, out var wrapper);
         management
             .Setup(client => client.ListTunnelPortsAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        var deletedPorts = new List<ushort>();
         management
-            .Setup(client => client.CreateOrUpdateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Setup(client => client.DeleteTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<ushort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Tunnel, ushort, TunnelRequestOptions, CancellationToken>((_, port, _, _) => deletedPorts.Add(port))
+            .ReturnsAsync(false); // false = port did not exist on server; no error
+        management
+            .Setup(client => client.CreateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
 
         await wrapper.SetSingleForwardedPortAsync("tunnel-1", localPort: 5280, protocol: "https", TestContext.Current.CancellationToken);
 
-        management.Verify(
-            client => client.DeleteTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<ushort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        // Even with an empty list (stale data), the target port must be unconditionally deleted.
+        Assert.Equal([(ushort)5280], deletedPorts);
     }
 
     [Fact]
@@ -272,6 +279,69 @@ public sealed class DevTunnelManagementClientWrapperTests
         var entry = Assert.Single(updatedTunnel!.AccessControl!.Entries!);
         Assert.Equal(TunnelAccessControlEntryType.Anonymous, entry.Type);
         Assert.Contains(TunnelAccessScopes.Connect, entry.Scopes!);
+    }
+
+    [Fact]
+    public async Task LookupByNameAsync_PropagatesConnectTokenFromAccessTokens()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Tunnel
+                {
+                    TunnelId = "wanted", ClusterId = "usw2",
+                    Labels = [Marker, "my-tunnel"],
+                    Ports = [new TunnelPort { PortNumber = 5280 }],
+                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
+                },
+            ]);
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
+
+        Assert.Equal("tunnel-connect-token", result.ConnectToken);
+    }
+
+    [Fact]
+    public async Task LookupByNameAsync_WhenNoAccessTokens_ReturnsNullConnectToken()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Tunnel { TunnelId = "wanted", ClusterId = "usw2", Labels = [Marker, "my-tunnel"], Ports = [new TunnelPort { PortNumber = 5280 }] },
+            ]);
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
+
+        Assert.Null(result.ConnectToken);
+    }
+
+    [Fact]
+    public async Task DiscoverSingleAsync_PropagatesConnectTokenFromAccessTokens()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Tunnel
+                {
+                    TunnelId = "ours", ClusterId = "usw2",
+                    Labels = [Marker],
+                    Ports = [new TunnelPort { PortNumber = 5280 }],
+                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
+                },
+            ]);
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("tunnel-connect-token", result.ConnectToken);
     }
 
     [Fact]
@@ -390,6 +460,43 @@ public sealed class DevTunnelManagementClientWrapperTests
 
         var port = Assert.Single(result.Ports!);
         Assert.Equal(5280, port.PortNumber);
+    }
+
+    [Fact]
+    public async Task SetSingleForwardedPortAsync_ClearsCachedPortsBeforeCreate_SoSdkDoesNotSeeStaleProtocol()
+    {
+        // Arrange: tunnel has a pre-populated Ports cache from a prior GetConnectReadyTunnelAsync call,
+        // but ListTunnelPortsAsync returns empty (stale data scenario). The unconditional delete must
+        // still fire so the port is removed before CreateTunnelPortAsync. After the delete, tunnel.Ports
+        // is cleared so the SDK cannot observe the stale protocol and reject the call.
+        var tunnel = new Tunnel
+        {
+            TunnelId = "tunnel-1",
+            Labels = [Marker],
+            Ports = [new TunnelPort { PortNumber = 5280, Protocol = "http" }],
+        };
+        var management = CreateManagementWithTunnel(tunnel, out var wrapper);
+        management
+            .Setup(client => client.ListTunnelPortsAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]); // empty — simulating stale/missing data
+        var deletedPorts = new List<ushort>();
+        management
+            .Setup(client => client.DeleteTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<ushort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Tunnel, ushort, TunnelRequestOptions, CancellationToken>((_, port, _, _) => deletedPorts.Add(port))
+            .ReturnsAsync(false); // false = port not found on server; safe no-op
+        TunnelPort[]? portsAtCreateTime = null;
+        management
+            .Setup(client => client.CreateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Tunnel, TunnelPort, TunnelRequestOptions, CancellationToken>((t, _, _, _) => portsAtCreateTime = t.Ports)
+            .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
+
+        await wrapper.SetSingleForwardedPortAsync("tunnel-1", localPort: 5280, protocol: "https", TestContext.Current.CancellationToken);
+
+        // Delete must be unconditional — even when ListTunnelPortsAsync returned empty.
+        Assert.Equal([(ushort)5280], deletedPorts);
+        // tunnel.Ports must be null at the moment CreateTunnelPortAsync is called so the SDK
+        // cannot observe stale protocol data and reject the call.
+        Assert.Null(portsAtCreateTime);
     }
 
     private static Mock<ITunnelManagementClient> CreateManagementWithTunnel(Tunnel tunnel, out DevTunnelManagementClientWrapper wrapper)

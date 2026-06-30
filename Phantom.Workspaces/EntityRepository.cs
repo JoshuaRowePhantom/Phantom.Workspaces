@@ -108,7 +108,7 @@ public sealed class EntityRepository
         // uses the resolved pre-shared token; Private access reuses the GitHub identity token as the
         // X-Tunnel-Authorization, matching the explicit-endpoint dev tunnel scheme.
         var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
-            .CreateEndpointResolver(repositorySource.AccessTokenSource);
+            .CreateEndpointResolver();
 
         var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
             resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(

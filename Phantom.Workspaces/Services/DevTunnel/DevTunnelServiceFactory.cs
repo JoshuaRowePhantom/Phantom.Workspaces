@@ -33,10 +33,10 @@ public sealed class DevTunnelServiceFactory
     }
 
     /// <summary>Creates a client-side endpoint resolver that locates a tunnel by name.</summary>
-    public IDevTunnelEndpointResolver CreateEndpointResolver(string? accessTokenSource = null)
+    public IDevTunnelEndpointResolver CreateEndpointResolver()
     {
         var managementClientWrapper = this.CreateManagementClientWrapper();
-        return new DevTunnelEndpointResolver(managementClientWrapper, accessTokenSource);
+        return new DevTunnelEndpointResolver(managementClientWrapper);
     }
 
     private DevTunnelManagementClientWrapper CreateManagementClientWrapper()
