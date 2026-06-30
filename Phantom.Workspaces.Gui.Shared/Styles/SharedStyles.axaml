@@ -702,33 +702,74 @@
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.accent.Foreground}" />
     </Style>
 
-    <!-- running-indicator: replaces emoji TextBlock status glyphs for running/success/error state.
-         Idle (no modifier): hidden (opacity 0, preserves layout).
-         :indeterminate (running): visible with Avalonia built-in animation.
-         .succeeded: full green bar (Value=100 set by this style).
-         .failed: full red bar (Value=100 set by this style). -->
+    <!-- running-indicator: glyph-based ControlTemplate status indicators.
+         Idle (no modifier): hidden (opacity 0, preserves layout space).
+         :indeterminate (running): ⏰ alarm clock glyph (scheduled-task context).
+         .succeeded: ✅ check mark glyph.
+         .failed: ❌ cross mark glyph.
+         Use running-indicator-agent subclass to show 🧠 brain glyph when running (agent context).
+         PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
     <Style Selector="ProgressBar.running-indicator">
-        <Setter Property="Height" Value="3" />
-        <Setter Property="Width" Value="16" />
-        <Setter Property="Maximum" Value="100" />
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
-        <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="IsHitTestVisible" Value="False" />
         <Setter Property="Opacity" Value="0" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏰"
+                               FontSize="14"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
     </Style>
     <Style Selector="ProgressBar.running-indicator:indeterminate">
         <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="ProgressBar.running-indicator.succeeded">
-        <Setter Property="Value" Value="100" />
         <Setter Property="Opacity" Value="1" />
-        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Good}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="✅"
+                               FontSize="14"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
     </Style>
     <Style Selector="ProgressBar.running-indicator.failed">
-        <Setter Property="Value" Value="100" />
         <Setter Property="Opacity" Value="1" />
-        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="❌"
+                               FontSize="14"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <!-- running-indicator-agent: overrides :indeterminate template to show 🧠 brain glyph.
+         Declared after running-indicator:indeterminate so it wins the Template property
+         while Opacity=1 still comes from running-indicator:indeterminate. -->
+    <Style Selector="ProgressBar.running-indicator-agent:indeterminate">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="🧠"
+                               FontSize="14"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
     </Style>
 
     <!-- scheduled-tools-indicator: the ⏱/⏸ clock button in the status bar.
