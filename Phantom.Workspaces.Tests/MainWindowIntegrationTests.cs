@@ -3574,6 +3574,62 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnPreviewKeyDown_CtrlShiftK_CallsDuplicateBrowserTabCommandAndHandlesEvent()
+    {
+        // Verifies that Ctrl+Shift+K fires DuplicateBrowserTabCommand and marks the event as
+        // handled so that child controls such as WebView2 do not receive the keystroke.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-shift-k-tab", Title = "Browser" };
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        bool handledByTunnel = false;
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                    handledByTunnel = e.Handled;
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
+
+        window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control | RawInputModifiers.Shift);
+
+        Assert.True(handledByTunnel);
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        Assert.Equal(2, selectedRegion.Tabs!.Count);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnPreviewKeyDown_CtrlK_WithoutShift_DoesNotDuplicateTab()
+    {
+        // Verifies that Ctrl+K alone (missing Shift) does not trigger DuplicateBrowserTabCommand.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-k-no-dup", Title = "Browser" };
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
+
+        var selectedRegion = Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion);
+        Assert.Single(selectedRegion.Tabs!);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
     {
         // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
