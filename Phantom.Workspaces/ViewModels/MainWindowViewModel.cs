@@ -65,6 +65,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledTools.ScheduledToolRunner? scheduledToolRunner;
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
     private ScheduledToolsRunningViewModel? scheduledToolsRunning;
+    private RunningAgentBrainViewModel? runningAgentBrain;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -142,6 +143,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.dockFactory.ActiveDockableChanged += this.OnActiveDockableChanged;
+
+        if (applicationServices?.RunningAgentChats is { } runningAgentChats)
+        {
+            this.runningAgentBrain = new RunningAgentBrainViewModel(
+                runningAgentChats,
+                this.GetAllAgentTabs,
+                this.ActivateTabById,
+                action => Dispatcher.UIThread.Post(action));
+        }
     }
 
     public RepositorySource RepositorySource { get; }
@@ -183,7 +193,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public NavigationStackPopupViewModel NavStackPopup =>
         this.navStackPopup ??= new NavigationStackPopupViewModel(
             this.navigationHistoryService,
-            tabId => this.GetTabTitle(tabId));
+            tabId => this.GetTabInfo(tabId));
 
     /// <summary>
     /// Navigate directly to the history entry at <paramref name="historyIndex"/> without
@@ -207,7 +217,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    private string? GetTabTitle(string tabId)
+    private NavigationTabInfo? GetTabInfo(string tabId)
     {
         foreach (var pane in this.WorkspacePanes)
         {
@@ -219,7 +229,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (dockable is WorkspaceDocument doc &&
                     string.Equals(doc.Id, tabId, StringComparison.Ordinal))
                 {
-                    return doc.Title;
+                    var statusIndicator = doc.EffectiveTabHeader.Items
+                        .OfType<StatusTabHeaderItemViewModel>()
+                        .FirstOrDefault();
+                    return new NavigationTabInfo(
+                        doc.Title,
+                        pane.Title,
+                        statusIndicator?.Status.RunningStatus == RunningStatus.Running,
+                        doc.HasUnreadNotification);
                 }
             }
         }
@@ -424,6 +441,53 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         get => this.scheduledToolsRunning;
         private set => this.SetProperty(ref this.scheduledToolsRunning, value);
     }
+
+    /// <summary>
+    /// The brain-button popup view model for running agent sessions.
+    /// Null when <see cref="ApplicationServices"/> was not supplied with a running-agent table.
+    /// </summary>
+    internal RunningAgentBrainViewModel? RunningAgentBrain
+    {
+        get => this.runningAgentBrain;
+        private set => this.SetProperty(ref this.runningAgentBrain, value);
+    }
+
+    /// <summary>
+    /// Returns an <see cref="AgentTabInfo"/> for every open agent-session tab that is in the
+    /// <see cref="AgentTabState.Ready"/> state, across all workspace panes.
+    /// </summary>
+    internal IEnumerable<AgentTabInfo> GetAllAgentTabs()
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null)
+            {
+                continue;
+            }
+
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables is null)
+            {
+                continue;
+            }
+
+            foreach (var doc in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
+            {
+                if (doc.TabViewModel is AgentSessionWorkspaceTabViewModel agentTab
+                    && agentTab.State == AgentTabState.Ready)
+                {
+                    yield return new AgentTabInfo(pane.Id, pane.Title, agentTab);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Called from <see cref="OpenAgentSessionShortcutHandler"/> after an agent tab transitions to
+    /// <see cref="AgentTabState.Ready"/> or <see cref="AgentTabState.Failed"/>.
+    /// Triggers a refresh of the running-agent brain popup so newly-ready tabs appear immediately.
+    /// </summary>
+    internal void NotifyAgentTabStateChanged() => this.runningAgentBrain?.Refresh();
 
     /// <summary>
     /// Creates the scheduled tasks view model (scheduled tool-relationships plus the tool-execution
@@ -1563,15 +1627,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnNavigateBack()
     {
-        if (!this.navigationHistoryService.GoBack(out var entry) || entry is null)
-        {
-            return;
-        }
-
         this.navigatingViaHistory = true;
         try
         {
-            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
+            {
+                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            }
         }
         finally
         {
@@ -1581,20 +1643,51 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnNavigateForward()
     {
-        if (!this.navigationHistoryService.GoForward(out var entry) || entry is null)
-        {
-            return;
-        }
-
         this.navigatingViaHistory = true;
         try
         {
-            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            if (this.navigationHistoryService.GoForwardSkipping(this.IsTabOpen, out var entry) && entry is not null)
+            {
+                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            }
         }
         finally
         {
             this.navigatingViaHistory = false;
         }
+    }
+
+    private bool IsTabOpen(NavigationEntry entry)
+    {
+        if (entry.WorkspacePaneId is not null)
+        {
+            var targetPane = this.WorkspacePanes.FirstOrDefault(
+                p => string.Equals(p.Id, entry.WorkspacePaneId, StringComparison.Ordinal));
+            if (targetPane?.ContentLayout is not null)
+            {
+                var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
+                if (documentDock?.VisibleDockables
+                    ?.OfType<WorkspaceDocument>()
+                    .Any(d => string.Equals(d.Id, entry.TabId, StringComparison.Ordinal)) == true)
+                {
+                    return true;
+                }
+            }
+        }
+
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables
+                ?.OfType<WorkspaceDocument>()
+                .Any(d => string.Equals(d.Id, entry.TabId, StringComparison.Ordinal)) == true)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void ActivateTabById(string tabId, string? workspacePaneId)
@@ -3256,11 +3349,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (pane.ContentLayout is null) continue;
             var documentDock = this.FindDocumentDock(pane.ContentLayout);
             if (documentDock?.VisibleDockables is null) continue;
+            var anyUnread = false;
             foreach (var dockable in documentDock.VisibleDockables.OfType<WorkspaceDocument>())
             {
                 var hasUnread = notifications.Any(n => n.TabKey == dockable.Id && !n.IsRead);
                 dockable.HasUnreadNotification = hasUnread;
+                if (hasUnread) anyUnread = true;
             }
+            pane.AnyTabHasUnreadNotification = anyUnread;
         }
     }
 
@@ -3349,6 +3445,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.scheduledToolsPause?.Dispose();
         this.scheduledToolsRunning?.Dispose();
+        this.runningAgentBrain?.Dispose();
 
         if (this.devTunnelHostService is not null)
         {

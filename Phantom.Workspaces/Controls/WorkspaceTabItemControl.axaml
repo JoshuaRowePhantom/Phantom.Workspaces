@@ -1,0 +1,33 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Phantom.Workspaces.Controls.WorkspaceTabItemControl"
+             x:CompileBindings="False">
+    <StackPanel Orientation="Horizontal" Spacing="2">
+        <!-- Running indicator (pulsating when IsRunning) -->
+        <Border Width="20" Height="20" VerticalAlignment="Center">
+            <ProgressBar Classes="running-indicator"
+                         IsIndeterminate="{Binding IsRunning}" />
+        </Border>
+        <!-- Exclamation slot (visible when IsInteresting) -->
+        <Border Width="20" Height="20" VerticalAlignment="Center">
+            <TextBlock Text="!"
+                       Classes="notification-unread-indicator"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Center"
+                       IsVisible="{Binding IsInteresting}" />
+        </Border>
+        <!-- Workspace name (muted, hidden when null/empty) + tab title -->
+        <StackPanel Spacing="1">
+            <TextBlock Text="{Binding WorkspaceName}"
+                       Classes="muted"
+                       FontSize="11"
+                       TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis"
+                       IsVisible="{Binding WorkspaceName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <TextBlock Text="{Binding TabTitle}"
+                       FontWeight="SemiBold"
+                       TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

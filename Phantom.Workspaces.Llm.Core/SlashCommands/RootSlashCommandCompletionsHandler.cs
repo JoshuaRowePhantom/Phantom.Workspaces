@@ -26,7 +26,7 @@ public sealed class RootSlashCommandCompletionsHandler
     public IReadOnlyList<SlashCommandCompletion> GetCompletions(string partialCommandName)
         => this.registry.Commands
             .Where(c => c.Name.StartsWith(partialCommandName, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(c => c.Name, StringComparer.Ordinal)
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
             .Select(c => new SlashCommandCompletion(
                 CompletionText: $"{c.Name} ",
                 Label: $"/{c.Name}",
