@@ -1508,7 +1508,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        this.IsAltHeld = false;
         var target = tabs[index];
         this.dockFactory.SetActiveDockable(target);
         this.dockFactory.SetFocusedDockable(documentDock, target);
@@ -3222,7 +3221,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
     {
-        if (e.Dockable is WorkspaceDocument doc)
+        if (e.Dockable is WorkspacePaneDocument paneDoc)
+            this.SelectedWorkspacePane = paneDoc.WorkspacePane;
+        else if (e.Dockable is WorkspaceDocument doc)
         {
             this.notificationService.MarkRead(doc.Id);
             Dispatcher.UIThread.Post(
