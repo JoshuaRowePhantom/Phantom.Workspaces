@@ -392,6 +392,39 @@ public sealed class DevTunnelManagementClientWrapperTests
         Assert.Equal(5280, port.PortNumber);
     }
 
+    [Fact]
+    public async Task SetSingleForwardedPortAsync_ClearsCachedPortsBeforeCreate_SoSdkDoesNotSeeStaleProtocol()
+    {
+        // Arrange: tunnel has a pre-populated Ports cache from a prior GetConnectReadyTunnelAsync call.
+        // ListTunnelPortsAsync may also update tunnel.Ports. After DeleteTunnelPortAsync removes the port
+        // server-side, the stale entry remains in tunnel.Ports. Without clearing it, the SDK sees the old
+        // protocol and rejects CreateOrUpdateTunnelPortAsync with "protocol cannot be changed".
+        var tunnel = new Tunnel
+        {
+            TunnelId = "tunnel-1",
+            Labels = [Marker],
+            Ports = [new TunnelPort { PortNumber = 5280, Protocol = "http" }],
+        };
+        var management = CreateManagementWithTunnel(tunnel, out var wrapper);
+        management
+            .Setup(client => client.ListTunnelPortsAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new TunnelPort { PortNumber = 5280, Protocol = null }]);
+        management
+            .Setup(client => client.DeleteTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<ushort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        TunnelPort[]? portsAtCreateTime = null;
+        management
+            .Setup(client => client.CreateOrUpdateTunnelPortAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelPort>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Tunnel, TunnelPort, TunnelRequestOptions, CancellationToken>((t, _, _, _) => portsAtCreateTime = t.Ports)
+            .ReturnsAsync((Tunnel _, TunnelPort port, TunnelRequestOptions _, CancellationToken _) => port);
+
+        await wrapper.SetSingleForwardedPortAsync("tunnel-1", localPort: 5280, protocol: "https", TestContext.Current.CancellationToken);
+
+        // tunnel.Ports must be null at the moment CreateOrUpdateTunnelPortAsync is called so the SDK
+        // cannot observe stale protocol data and reject the call.
+        Assert.Null(portsAtCreateTime);
+    }
+
     private static Mock<ITunnelManagementClient> CreateManagementWithTunnel(Tunnel tunnel, out DevTunnelManagementClientWrapper wrapper)
     {
         var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);

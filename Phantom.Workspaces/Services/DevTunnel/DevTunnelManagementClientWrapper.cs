@@ -131,6 +131,10 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
                 .ConfigureAwait(false);
         }
 
+        // Clear cached ports so the SDK does not see stale protocol information when
+        // CreateOrUpdateTunnelPortAsync is called (it checks tunnel.Ports to detect protocol changes).
+        tunnel.Ports = null;
+
         await this.managementClient
             .CreateOrUpdateTunnelPortAsync(
                 tunnel,
