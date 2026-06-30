@@ -13,7 +13,6 @@ public sealed class RemoteAccessSettingsViewModelTests
             TunnelId = "tunnel-123",
             TunnelName = "old-name",
             HostedPorts = [5280, 5281],
-            Protocol = "https",
             AccessMode = DevTunnelAccessMode.Private,
             AccessTokenSource = null,
         };
@@ -30,7 +29,6 @@ public sealed class RemoteAccessSettingsViewModelTests
         // Preserved from the base configuration.
         Assert.Equal("tunnel-123", projected.TunnelId);
         Assert.Equal([5280, 5281], projected.HostedPorts);
-        Assert.Equal("https", projected.Protocol);
 
         // Updated from the editable view-model state.
         Assert.Equal("new-name", projected.TunnelName);

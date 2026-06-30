@@ -666,6 +666,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ConnectionStatus?.SetTunnelName(devTunnelConfiguration.TunnelName);
 
         var localPort = listenUri.Port;
+        var protocol = listenUri.Scheme;
         var hostService = new Services.DevTunnel.DevTunnelServiceFactory().CreateHostService();
         this.devTunnelHostService = hostService;
         hostService.StatusChanged += (_, status) => Dispatcher.UIThread.Post(
@@ -675,7 +676,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // sign-in or relay failure never blocks GUI startup. The task is observed to avoid an
         // unobserved-exception escalation; the Error status already carries the failure detail.
         this.devTunnelHostStartTask = ObserveAsync(
-            hostService.StartAsync(localPort, devTunnelConfiguration));
+            hostService.StartAsync(localPort, protocol, devTunnelConfiguration));
 
         static async Task ObserveAsync(Task task)
         {

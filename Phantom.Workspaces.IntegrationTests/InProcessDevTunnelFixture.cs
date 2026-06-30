@@ -73,10 +73,10 @@ public sealed class InProcessDevTunnelFixture : IAsyncLifetime
         hostService = factory.CreateHostService();
         await hostService.StartAsync(
             LocalPort,
+            protocol: "http",
             new DevTunnelConfiguration
             {
                 TunnelName = TunnelName,
-                Protocol = "https",
                 AccessMode = DevTunnelAccessMode.Anonymous,
             },
             CancellationToken.None).ConfigureAwait(false);
