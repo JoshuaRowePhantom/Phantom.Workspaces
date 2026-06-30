@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using System.Reflection;
@@ -173,6 +174,300 @@ public sealed class WorkspaceGuiContextProviderTests
 
         var resultJson = Assert.IsType<JsonElement>(result);
         Assert.True(resultJson.TryGetProperty("error", out _));
+    }
+
+    // ── workspace_close tests ─────────────────────────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceClose_ExistingPane_RemovesPaneAndReturnsClosed()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("aa110001-aa11-4aa1-aa11-aa1100000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$$"""
+            {
+              "entity-id": "{{{workspaceId}}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "close-existing"]],
+              "display-name": { "default": "Close Existing Workspace" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var initialCount = viewModel.WorkspacePanes.Count;
+        Assert.Contains(viewModel.WorkspacePanes, p => p.Id == workspaceId.ToString());
+
+        var tool = await GetToolAsync(viewModel, "workspace_close");
+        var idArg = JsonDocument.Parse($"\"{workspaceId}\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["workspace_entity_id"] = idArg }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("closed").GetBoolean());
+        Assert.DoesNotContain(viewModel.WorkspacePanes, p => p.Id == workspaceId.ToString());
+        Assert.Equal(initialCount - 1, viewModel.WorkspacePanes.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceClose_UnknownPaneId_NoOpReturnsClosed()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+        var initialCount = viewModel.WorkspacePanes.Count;
+
+        var tool = await GetToolAsync(viewModel, "workspace_close");
+        var idArg = JsonDocument.Parse("\"ffffffff-ffff-4fff-ffff-ffffffffffff\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["workspace_entity_id"] = idArg }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("closed").GetBoolean());
+        Assert.Equal(initialCount, viewModel.WorkspacePanes.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceClose_DefaultPlaceholderPane_NoOpReturnsClosed()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Add a pane with the default placeholder ID back to exercise the no-op branch in RemoveWorkspacePaneAsync
+        using var entityDoc = JsonDocument.Parse("""
+            {
+              "entity-id": "00000000-0000-0000-0000-000000000000",
+              "entity-types": ["entity", "workspace"],
+              "display-name": "No workspace selected."
+            }
+            """);
+        var entity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId(Guid.Empty),
+                ModifiedTime = new Timestamp(DateTimeOffset.UnixEpoch, "0"),
+                Data = entityDoc.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+        var placeholderPane = new WorkspacePaneViewModel(entity, "default-workspace");
+        viewModel.WorkspacePanes.Add(placeholderPane);
+        var initialCount = viewModel.WorkspacePanes.Count;
+
+        var tool = await GetToolAsync(viewModel, "workspace_close");
+        var idArg = JsonDocument.Parse("\"default-workspace\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["workspace_entity_id"] = idArg }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("closed").GetBoolean());
+        Assert.Contains(viewModel.WorkspacePanes, p => p.Id == "default-workspace");
+        Assert.Equal(initialCount, viewModel.WorkspacePanes.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceClose_MissingWorkspaceEntityId_ReturnsError()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tool = await GetToolAsync(viewModel, "workspace_close");
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>()),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.TryGetProperty("error", out _));
+    }
+
+    // ── tab_close tests ───────────────────────────────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TabClose_ExistingTab_ClosesTabAndReturnsClosedTrue()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://close.example.com") { Id = "close-tab-existing", Title = "Close Tab" };
+        await viewModel.OpenTabAsync(tab);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Contains(documentDock!.VisibleDockables!.OfType<WorkspaceDocument>(), d => d.Id == "close-tab-existing");
+
+        var tool = await GetToolAsync(viewModel, "tab_close");
+        var idArg = JsonDocument.Parse("\"close-tab-existing\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["tab_id"] = idArg }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("closed").GetBoolean());
+        var updatedDock = GetDocumentDock(viewModel);
+        Assert.DoesNotContain(
+            updatedDock?.VisibleDockables?.OfType<WorkspaceDocument>() ?? Enumerable.Empty<WorkspaceDocument>(),
+            d => d.Id == "close-tab-existing");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TabClose_UnknownTabId_ReturnsClosedFalse()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tool = await GetToolAsync(viewModel, "tab_close");
+        var idArg = JsonDocument.Parse("\"tab-does-not-exist\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["tab_id"] = idArg }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.False(resultJson.GetProperty("closed").GetBoolean());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TabClose_MissingTabId_ReturnsError()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tool = await GetToolAsync(viewModel, "tab_close");
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>()),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.TryGetProperty("error", out _));
+    }
+
+    // ── entity_invoke_shortcut tests ──────────────────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_EntityFound_ValidShortcut_ReturnsHandled()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("bb220001-bb22-4bb2-bb22-bb2200000001");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tests", "shortcut", "invoke-1"]],
+              "display-name": { "default": "Shortcut Invoke Test Entity" }
+            }
+            """);
+
+        var tool = await GetToolAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"Open\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.TryGetProperty("handled", out _));
+        Assert.False(resultJson.TryGetProperty("error", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_EntityNotFound_ReturnsHandledFalse()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tool = await GetToolAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse("\"cccccccc-cccc-4ccc-cccc-cccccccccccc\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"Open\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.False(resultJson.GetProperty("handled").GetBoolean());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_UnknownShortcut_ReturnsError()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tool = await GetToolAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse("\"dddddddd-dddd-4ddd-dddd-dddddddddddd\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"NotAShortcut\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.TryGetProperty("error", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_MissingEntityId_ReturnsError()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tool = await GetToolAsync(viewModel, "entity_invoke_shortcut");
+        var shortcutArg = JsonDocument.Parse("\"Open\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?> { ["shortcut"] = shortcutArg }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.TryGetProperty("error", out _));
+    }
+
+    // ── ProvideAIContextAsync instructions tests ──────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ProvideAIContextAsync_InstructionsEntityPresent_LoadsInstructions()
+    {
+        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var instructionsId = new EntityId("ee330001-ee33-4ee3-ee33-ee3300000001");
+        const string expectedText = "Use workspace_list to enumerate open panes.";
+        await UpsertEntityAndLoadAsync(entityBroker, instructionsId, $$"""
+            {
+              "entity-id": "{{instructionsId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["documentation", "entity-workspace-gui-agent-tool-instructions"]],
+              "display-name": { "default": "Workspace GUI Tool Instructions" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": {
+                    "text": "{{expectedText}}"
+                  }
+                }
+              }
+            }
+            """);
+
+        var context = await GetContextAsync(viewModel);
+
+        Assert.NotNull(context.Instructions);
+        Assert.Contains(expectedText, context.Instructions, StringComparison.Ordinal);
     }
 
     // ── open_tab tests ────────────────────────────────────────────────────────
@@ -529,6 +824,22 @@ public sealed class WorkspaceGuiContextProviderTests
         var provider = new WorkspaceGuiContextProvider(context);
         var tools = await GetToolsAsync(provider);
         return (AIFunction)tools.Single(t => string.Equals(t.Name, toolName, StringComparison.Ordinal));
+    }
+
+    private static async Task<AIContext> GetContextAsync(MainWindowViewModel viewModel)
+    {
+        var context = new WorkspaceGuiContext
+        {
+            MainWindowViewModel = viewModel,
+            ShortcutManager = new ShortcutManager(),
+        };
+        var provider = new WorkspaceGuiContextProvider(context);
+        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
+        {
+            UseProvidedChatClientAsIs = true,
+        });
+        var session = await agent.CreateSessionAsync(CancellationToken.None);
+        return await AIContextProviderToolReader.GetContextAsync(provider, agent, session, CancellationToken.None);
     }
 
     private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)
