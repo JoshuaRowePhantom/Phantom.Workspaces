@@ -77,37 +77,23 @@
                                    ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
                     </Panel>
 
-                    <Panel>
-                        <Button Classes="settings-gear"
-                                ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
-                                Click="OnOpenScheduledTasksClicked">
-                            <TextBlock Text="{Binding ScheduledToolsPause.ButtonGlyph, FallbackValue=⏱, TargetNullValue=⏱}" />
-                        </Button>
-                        <ProgressBar Classes="running-indicator"
-                                     VerticalAlignment="Bottom"
-                                     IsIndeterminate="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}" />
-                        <TextBlock Text="❗"
-                                   Foreground="{DynamicResource Theme.Status.Bad}"
-                                   FontSize="9"
-                                   FontWeight="Bold"
-                                   IsHitTestVisible="False"
-                                   HorizontalAlignment="Right"
-                                   VerticalAlignment="Top"
-                                   Margin="0,-2,-2,0"
-                                   IsVisible="{Binding ScheduledToolsRunning.HasFailure, FallbackValue=False}"
-                                   ToolTip.Tip="A scheduled tool run has failed" />
-                    </Panel>
+                    <Button Classes="settings-gear"
+                            ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
+                            Click="OnOpenScheduledTasksClicked">
+                        <ProgressBar Classes="scheduled-tools-indicator"
+                                     IsIndeterminate="{Binding ScheduledToolsRunning.HasRunningTools, FallbackValue=False}"
+                                     Classes.failed="{Binding ScheduledToolsRunning.HasFailure, FallbackValue=False}"
+                                     Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
+                    </Button>
 
                     <Panel>
                         <Button x:Name="NotificationBellButton"
                                 Classes="settings-gear"
                                 ToolTip.Tip="Notifications"
                                 Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
-                            <TextBlock Text="🔔" />
+                            <ProgressBar Classes="notifications-indicator"
+                                         IsIndeterminate="{Binding NotificationsViewModel.HasActiveRun}" />
                         </Button>
-                        <ProgressBar Classes="running-indicator"
-                                     VerticalAlignment="Bottom"
-                                     IsIndeterminate="{Binding NotificationsViewModel.HasActiveRun}" />
                         <TextBlock Text="{Binding NotificationsViewModel.UnreadCount}"
                                    IsVisible="{Binding NotificationsViewModel.HasUnread, FallbackValue=False}"
                                    Foreground="{DynamicResource Theme.Notifications.Badge.Foreground}"
