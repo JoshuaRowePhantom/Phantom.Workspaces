@@ -29,6 +29,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
     private RunningAgentChatLease? lease;
+    private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
 
     public AgentSessionWorkspaceTabViewModel()
     {
@@ -92,6 +93,17 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         agentViewModel.GoToTabAtIndexRequested += this.OnAgentGoToTabAtIndexRequested;
         this.tabStatus.RunningStatus = agentViewModel.IsChatRunning ? RunningStatus.Running : RunningStatus.Idle;
         this.wasRunning = agentViewModel.IsChatRunning;
+
+        this.runningIndicator = new AgentRunningIndicatorTabHeaderItemViewModel
+        {
+            IsRunning = agentViewModel.IsChatRunning,
+        };
+        var notificationIndicator = new NotificationIndicatorTabHeaderItemViewModel();
+        var header = new TabHeaderViewModel { Title = this.Title };
+        header.Items.Add(this.runningIndicator);
+        header.Items.Add(notificationIndicator);
+        this.TabHeader = header;
+
         this.State = AgentTabState.Ready;
     }
 
@@ -121,6 +133,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
         this.loggerFactory?.Dispose();
         this.loggerFactory = null;
+        this.runningIndicator = null;
+        this.TabHeader = null;
         this.State = AgentTabState.Loading;
     }
 
@@ -139,6 +153,10 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
 
         var isRunning = vm.IsChatRunning;
         this.tabStatus.RunningStatus = isRunning ? RunningStatus.Running : RunningStatus.Idle;
+        if (this.runningIndicator is not null)
+        {
+            this.runningIndicator.IsRunning = isRunning;
+        }
 
         if (isRunning && !this.wasRunning)
         {

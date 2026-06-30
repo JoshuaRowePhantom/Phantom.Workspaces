@@ -22,6 +22,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     private readonly AgentChatToolsDetailViewModel toolsDetail;
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
+    private readonly AgentChatDiagnosticsDetailViewModel diagnosticsDetail;
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
@@ -44,6 +45,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
         this.subAgentsDetail = new AgentChatPlaceholderDetailViewModel(
             "Sub-agents",
             "Sub-agent model coming later.");
+        this.diagnosticsDetail = new AgentChatDiagnosticsDetailViewModel(this);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
@@ -350,6 +352,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
                 new AgentEditorNavigationItemViewModel("chat-tools", "Tools", null, "Loaded tools", null, this.toolsDetail, toolNavigationItems, isExpanded: true),
                 new AgentEditorNavigationItemViewModel("chat-background-tasks", "Background tasks", null, "Planned background work", null, this.backgroundTasksDetail, []),
                 new AgentEditorNavigationItemViewModel("chat-sub-agents", "Sub-agents", null, "Planned sub-agent work", null, this.subAgentsDetail, []),
+                new AgentEditorNavigationItemViewModel("chat-diagnostics", "Diagnostics", null, "Diagnostic information", null, this.diagnosticsDetail, []),
             ],
             isExpanded: false);
 
@@ -406,6 +409,7 @@ public sealed class AgentViewModel : ViewModelBase, IAsyncDisposable
     {
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
+        this.diagnosticsDetail.Dispose();
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;

@@ -325,4 +325,36 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.DoesNotContain("<details class=\"chat-content chat-tool-group-item\" id=\"c0\" open>", html, StringComparison.Ordinal);
         Assert.Contains("<details class=\"chat-content chat-tool-group-item\"", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RenderContent_FunctionCallWithDescription_LabelIncludesDescription()
+    {
+        var call = new FunctionCallContent("call-1", "powershell", new Dictionary<string, object?> { ["command"] = "ls", ["description"] = "Read issue #70" });
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("tool call: powershell: Read issue #70", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_FunctionCallWithoutDescription_LabelIsToolCallName()
+    {
+        var call = new FunctionCallContent("call-1", "powershell", new Dictionary<string, object?> { ["command"] = "ls" });
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("tool call: powershell", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("tool call: powershell:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_FunctionCallWithEmptyDescription_LabelIsToolCallName()
+    {
+        var call = new FunctionCallContent("call-1", "powershell", new Dictionary<string, object?> { ["command"] = "ls", ["description"] = "" });
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("tool call: powershell", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("tool call: powershell:", html, StringComparison.Ordinal);
+    }
 }

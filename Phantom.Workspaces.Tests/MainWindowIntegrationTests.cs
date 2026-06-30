@@ -1530,7 +1530,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task OpenAgentSessionShortcutHandler_Handle_SameEntityOpenedTwiceInSameWorkspace_DeduplicatesTab()
+    public async Task OpenAgentSessionShortcutHandler_Handle_SameEntityOpenedTwice_DeduplicatesTab()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
