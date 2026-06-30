@@ -123,16 +123,20 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
                 .ConfigureAwait(false);
         }
 
-        var existingPort = (existingPorts ?? []).FirstOrDefault(port => port.PortNumber == portNumber);
-        if (existingPort is not null)
-        {
-            await this.managementClient
-                .DeleteTunnelPortAsync(tunnel, portNumber, requestOptions, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        // Unconditionally delete the target port to allow protocol changes.
+        // DeleteTunnelPortAsync returns false (not throws) if the port does not exist.
+        // We must NOT use CreateOrUpdateTunnelPortAsync after this because it acts as an upsert
+        // (PUT) — if the server still sees the port (e.g., due to stale ListTunnelPortsAsync data),
+        // it would UPDATE the protocol, which the Dev Tunnels service rejects.
+        await this.managementClient
+            .DeleteTunnelPortAsync(tunnel, portNumber, requestOptions, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Clear any cached port data so the SDK does not send stale protocol information.
+        tunnel.Ports = null;
 
         await this.managementClient
-            .CreateOrUpdateTunnelPortAsync(
+            .CreateTunnelPortAsync(
                 tunnel,
                 new TunnelPort { PortNumber = portNumber, Protocol = protocol },
                 requestOptions,
@@ -252,7 +256,13 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
         var forwardedPorts = (tunnel.Ports ?? [])
             .Select(port => (int)port.PortNumber)
             .ToArray();
-        return new DevTunnelLookupResult(tunnel.TunnelId ?? string.Empty, tunnel.ClusterId ?? string.Empty, forwardedPorts);
+        string? connectToken = null;
+        tunnel.AccessTokens?.TryGetValue(TunnelAccessScopes.Connect, out connectToken);
+        return new DevTunnelLookupResult(
+            tunnel.TunnelId ?? string.Empty,
+            tunnel.ClusterId ?? string.Empty,
+            forwardedPorts,
+            connectToken);
     }
 
     private static string[] BuildLabels(string? nameLabel)

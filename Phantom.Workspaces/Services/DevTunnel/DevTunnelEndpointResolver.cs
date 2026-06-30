@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
@@ -15,18 +14,10 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 public sealed class DevTunnelEndpointResolver : IDevTunnelEndpointResolver
 {
     private readonly IDevTunnelLookupClient lookupClient;
-    private readonly string? accessTokenSource;
-    private readonly Func<string, string?> tokenSourceResolver;
 
-    public DevTunnelEndpointResolver(
-        IDevTunnelLookupClient lookupClient,
-        string? accessTokenSource = null,
-        Func<string, string?>? tokenSourceResolver = null)
+    public DevTunnelEndpointResolver(IDevTunnelLookupClient lookupClient)
     {
         this.lookupClient = lookupClient ?? throw new ArgumentNullException(nameof(lookupClient));
-        this.accessTokenSource = accessTokenSource;
-        this.tokenSourceResolver = tokenSourceResolver
-            ?? (static sourceName => Environment.GetEnvironmentVariable(sourceName));
     }
 
     public async Task<DevTunnelEndpointResolution> ResolveAsync(
@@ -50,30 +41,12 @@ public sealed class DevTunnelEndpointResolver : IDevTunnelEndpointResolver
 
         var port = lookup.ForwardedPorts[0];
         var baseUri = new Uri($"https://{lookup.TunnelId}-{port}.{lookup.ClusterId}.devtunnels.ms/");
-        var tunnelAuthToken = this.ResolveTunnelAuthToken(accessMode);
+        var tunnelAuthToken = accessMode == DevTunnelAccessMode.Token
+            ? (lookup.ConnectToken
+                ?? throw new InvalidOperationException(
+                    "The Management API did not return a Connect-scope tunnel token. " +
+                    "Ensure the tunnel is not anonymous and the caller has Connect access."))
+            : null;
         return new DevTunnelEndpointResolution(baseUri, tunnelAuthToken);
-    }
-
-    private string? ResolveTunnelAuthToken(DevTunnelAccessMode accessMode)
-    {
-        if (accessMode != DevTunnelAccessMode.Token)
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(this.accessTokenSource))
-        {
-            throw new InvalidOperationException(
-                "Token access mode requires a configured AccessTokenSource to resolve the tunnel access token.");
-        }
-
-        var token = this.tokenSourceResolver(this.accessTokenSource);
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            throw new InvalidOperationException(
-                $"The dev tunnel access token source '{this.accessTokenSource}' did not yield a token.");
-        }
-
-        return token;
     }
 }
