@@ -22,7 +22,8 @@ public sealed class WebDataAccessRequestException : Exception
 
     /// <summary>
     /// Whether the failure indicates a connectivity problem worth reconnecting for: no response at all
-    /// (transport failure) or a server/gateway error (status &gt;= 500).
+    /// (transport failure), a server/gateway error (status &gt;= 500), or an authentication failure
+    /// (status 401 — a stale token that can be resolved by refreshing and reconnecting).
     /// </summary>
-    public bool IsConnectivityFailure => this.StatusCode is null || (int)this.StatusCode >= 500;
+    public bool IsConnectivityFailure => this.StatusCode is null || this.StatusCode == HttpStatusCode.Unauthorized || (int)this.StatusCode >= 500;
 }
