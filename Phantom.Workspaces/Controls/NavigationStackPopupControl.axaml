@@ -32,11 +32,11 @@
                     <ItemsControl ItemsSource="{Binding Rows}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:NavigationStackRowViewModel">
-                                <Border Padding="12,6"
+                                <Border Classes="interactive-row"
+                                        Classes.highlighted="{Binding IsSelected}"
+                                        Padding="12,6"
                                         Margin="4,1">
-                                    <TextBlock Text="{Binding TabTitle}"
-                                               TextWrapping="NoWrap"
-                                               TextTrimming="CharacterEllipsis" />
+                                    <controls:WorkspaceTabItemControl />
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

@@ -183,7 +183,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public NavigationStackPopupViewModel NavStackPopup =>
         this.navStackPopup ??= new NavigationStackPopupViewModel(
             this.navigationHistoryService,
-            tabId => this.GetTabTitle(tabId));
+            tabId => this.GetTabInfo(tabId));
 
     /// <summary>
     /// Navigate directly to the history entry at <paramref name="historyIndex"/> without
@@ -207,7 +207,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    private string? GetTabTitle(string tabId)
+    private NavigationTabInfo? GetTabInfo(string tabId)
     {
         foreach (var pane in this.WorkspacePanes)
         {
@@ -219,7 +219,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (dockable is WorkspaceDocument doc &&
                     string.Equals(doc.Id, tabId, StringComparison.Ordinal))
                 {
-                    return doc.Title;
+                    var statusIndicator = doc.EffectiveTabHeader.Items
+                        .OfType<StatusTabHeaderItemViewModel>()
+                        .FirstOrDefault();
+                    return new NavigationTabInfo(
+                        doc.Title,
+                        pane.Title,
+                        statusIndicator?.Status.RunningStatus == RunningStatus.Running,
+                        doc.HasUnreadNotification);
                 }
             }
         }
