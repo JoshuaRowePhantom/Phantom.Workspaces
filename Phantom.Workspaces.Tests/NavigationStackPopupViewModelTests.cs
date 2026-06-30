@@ -10,12 +10,13 @@ public sealed class NavigationStackPopupViewModelTests
 {
     private static NavigationEntry Entry(string tabId) => new NavigationEntry(tabId, null);
 
-    private static string? DefaultTitleProvider(string tabId) => tabId + "-title";
+    private static NavigationTabInfo? DefaultInfoProvider(string tabId)
+        => new NavigationTabInfo(tabId + "-title", tabId + "-workspace", false, false);
 
     private static NavigationStackPopupViewModel CreateViewModel(
         INavigationHistoryService service,
-        Func<string, string?>? titleProvider = null)
-        => new NavigationStackPopupViewModel(service, titleProvider ?? DefaultTitleProvider);
+        Func<string, NavigationTabInfo?>? infoProvider = null)
+        => new NavigationStackPopupViewModel(service, infoProvider ?? DefaultInfoProvider);
 
     [Fact]
     public void OpenAtCurrentPosition_WithEntries_SetsIsOpenTrue_WithoutAutoClose()
@@ -240,5 +241,139 @@ public sealed class NavigationStackPopupViewModelTests
         service.Push(Entry("tab-b"));
 
         Assert.Empty(vm.Rows);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_RowsHaveWorkspaceName()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        var vm = CreateViewModel(service);
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.Equal("tab-b-workspace", vm.Rows[0].WorkspaceName);
+        Assert.Equal("tab-a-workspace", vm.Rows[1].WorkspaceName);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_RowsHaveIsRunning_WhenTabIsRunning()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("running-tab"));
+        var vm = CreateViewModel(service,
+            tabId => new NavigationTabInfo(tabId, null, IsRunning: tabId == "running-tab", IsInteresting: false));
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.True(vm.Rows[0].IsRunning);
+        Assert.False(vm.Rows[1].IsRunning);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_RowsHaveIsInteresting_WhenTabIsInteresting()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("interesting-tab"));
+        var vm = CreateViewModel(service,
+            tabId => new NavigationTabInfo(tabId, null, IsRunning: false, IsInteresting: tabId == "interesting-tab"));
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.True(vm.Rows[0].IsInteresting);
+        Assert.False(vm.Rows[1].IsInteresting);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_RowsHaveIsRunningFalse_WhenInfoIsNull()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        var vm = CreateViewModel(service, _ => null);
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.False(vm.Rows[0].IsRunning);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_RowsHaveIsInterestingFalse_WhenInfoIsNull()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        var vm = CreateViewModel(service, _ => null);
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.False(vm.Rows[0].IsInteresting);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_SelectedRow_HasIsSelectedTrue()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        service.Push(Entry("tab-c"));
+        // currentIndex=2 → selectedDisplayIndex=0 (tab-c)
+        var vm = CreateViewModel(service);
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.True(vm.Rows[0].IsSelected);
+    }
+
+    [Fact]
+    public void OpenAtCurrentPosition_NonSelectedRows_HaveIsSelectedFalse()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        service.Push(Entry("tab-c"));
+        var vm = CreateViewModel(service);
+
+        vm.OpenAtCurrentPosition();
+
+        Assert.False(vm.Rows[1].IsSelected);
+        Assert.False(vm.Rows[2].IsSelected);
+    }
+
+    [Fact]
+    public void MoveSelectionUp_UpdatesIsSelectedOnAffectedRows()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        service.Push(Entry("tab-c"));
+        service.GoBack(out _); // selectedIndex=1
+        var vm = CreateViewModel(service);
+        vm.OpenAtCurrentPosition();
+        Assert.True(vm.Rows[1].IsSelected);
+
+        vm.MoveSelectionUp(); // selectedIndex→0
+
+        Assert.True(vm.Rows[0].IsSelected);
+        Assert.False(vm.Rows[1].IsSelected);
+    }
+
+    [Fact]
+    public void MoveSelectionDown_UpdatesIsSelectedOnAffectedRows()
+    {
+        var service = new NavigationHistoryService();
+        service.Push(Entry("tab-a"));
+        service.Push(Entry("tab-b"));
+        service.Push(Entry("tab-c"));
+        service.GoBack(out _); // selectedIndex=1
+        var vm = CreateViewModel(service);
+        vm.OpenAtCurrentPosition();
+        Assert.True(vm.Rows[1].IsSelected);
+
+        vm.MoveSelectionDown(); // selectedIndex→2
+
+        Assert.True(vm.Rows[2].IsSelected);
+        Assert.False(vm.Rows[1].IsSelected);
     }
 }

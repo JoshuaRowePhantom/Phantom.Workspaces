@@ -1,0 +1,22 @@
+{
+  "entity-id": "0e18887c-b6f3-4277-a200-a5eba1bbe06c",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "entity-workspace-gui-agent-tool-instructions"
+    ]
+  ],
+  "display-name": {
+    "default": "Workspace GUI Tool Instructions"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/entity-workspace-gui-agent-tool-instructions.md"
+    }
+  }
+}

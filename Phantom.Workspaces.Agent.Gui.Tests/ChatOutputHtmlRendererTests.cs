@@ -35,11 +35,11 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void RenderHeader_EmitsDataStickyLevelOnHeader()
+    public void RenderHeader_EmitsDataStickyLevel1OnChatHeader()
     {
         var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant");
 
-        Assert.Contains("data-sticky-level=\"0\"", html);
+        Assert.Contains("data-sticky-level=\"1\"", html);
     }
 
     [Fact]
@@ -299,6 +299,38 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.NotNull(html);
         Assert.DoesNotContain($"data-details-target=\"{message}\"", html, StringComparison.Ordinal);
         Assert.Contains("data-details-target=\"{", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_SummaryHasDataStickyLevel2()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", "my_tool", 3);
+
+        Assert.Contains("data-sticky-level=\"2\"", html);
+    }
+
+    [Fact]
+    public void RenderToolCallGroup_SummaryHasDataStickyLevel2()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("grp-0", "my_tool", 1, "<div>body</div>");
+
+        Assert.Contains("data-sticky-level=\"2\"", html);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_SummaryHasDataStickyLevel2()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper("c0", 2, "last_tool(…)", "<div>inner</div>");
+
+        Assert.Contains("data-sticky-level=\"2\"", html);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_GroupItemSummaryHasDataStickyLevel3()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        Assert.Contains("data-sticky-level=\"3\"", html);
     }
 
     [Fact]

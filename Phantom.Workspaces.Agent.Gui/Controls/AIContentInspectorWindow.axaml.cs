@@ -19,6 +19,13 @@ public partial class AIContentInspectorWindow : Window
         this.InitializeComponent();
     }
 
+    public AIContentInspectorWindow(string contentId, string payloadJson)
+    {
+        this.InitializeComponent();
+        this.Title = $"Inspect [{contentId}]";
+        this.PayloadTextBox.Text = payloadJson;
+    }
+
     public AIContentInspectorWindow(string contentId, AIContent content)
     {
         this.InitializeComponent();

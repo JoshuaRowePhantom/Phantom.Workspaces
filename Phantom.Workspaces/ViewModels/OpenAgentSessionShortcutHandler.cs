@@ -95,11 +95,17 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                 {
                     tab.SetFailed("Could not load agent session: missing required entity data.");
                 }
+
+                mainWindowViewModel.NotifyAgentTabStateChanged();
             });
         }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => tab.SetFailed(ex.Message));
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                tab.SetFailed(ex.Message);
+                mainWindowViewModel.NotifyAgentTabStateChanged();
+            });
         }
     }
 
