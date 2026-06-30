@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
-namespace Phantom.Workspaces.Gui.Styles.Controls;
+namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 internal static class CoreWebView2KeyEventKind
 {

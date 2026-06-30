@@ -3,10 +3,10 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Themes.Fluent;
 
-[assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Gui.Styles.Tests.GuiStylesTestAppBuilder))]
+[assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Gui.Shared.Tests.GuiStylesTestAppBuilder))]
 [assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerAssembly)]
 
-namespace Phantom.Workspaces.Gui.Styles.Tests;
+namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public static class GuiStylesTestAppBuilder
 {
