@@ -110,6 +110,33 @@ public sealed class RunVsCodeTunnelToolTests
     }
 
     [Fact]
+    public async Task RunVsCodeTunnelTool_ServiceRunning_HistoricalLogText_DoesNotFalselyTriggerReinstall()
+    {
+        // Verifies that output from "tunnel service status" containing "running" in a historical/
+        // past-tense context (e.g. "service was running on port 3000") is still classified as
+        // Running, so no uninstall+reinstall cycle is triggered.  This confirms the design
+        // invariant: the switch to the status command makes detection reliable by key-word
+        // presence alone, regardless of surrounding grammatical context.
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                return Task.FromResult(args switch
+                {
+                    "tunnel service status" => ("service was running on port 3000", 0),
+                    _ => ("", 0)
+                });
+            });
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.DoesNotContain(calls, c => c.Arguments == "tunnel service uninstall");
+        Assert.DoesNotContain(calls, c => c.Arguments.StartsWith("tunnel service install", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RunVsCodeTunnelTool_ServiceStopped_ExitZeroWithoutRunning_MapsToStopped()
     {
         // Verifies that exit 0 with no "running" keyword triggers uninstall+reinstall (Stopped path),

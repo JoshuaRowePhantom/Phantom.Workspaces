@@ -85,13 +85,14 @@ public sealed class QueueComposerSlashCommandTests
         // Subscribe before Submit so we never miss the addition event.
         // The processing loop (started in AgentChat.InitializeAsync) may dequeue the item immediately
         // after it is enqueued, so asserting Items.Count after Submit is a race condition.
-        // Instead, capture the moment the item is added via the Changed event and await that signal.
-        var itemQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The Changed event fires synchronously on the submitting thread inside Enqueue, so the
+        // flag is always set before Submit() returns, regardless of the processing loop.
+        var itemWasQueued = false;
         chat.DefaultInputQueue.Changed += (_, _) =>
         {
             if (chat.DefaultInputQueue.Items.Count > 0)
             {
-                itemQueued.TrySetResult();
+                itemWasQueued = true;
             }
         };
 
@@ -99,7 +100,7 @@ public sealed class QueueComposerSlashCommandTests
         composer.InputText = "/working-directory C:\\Foo";
         composer.Submit();
 
-        await itemQueued.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.True(itemWasQueued);
 
         inputQueue.Dispose();
     }
