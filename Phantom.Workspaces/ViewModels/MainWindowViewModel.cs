@@ -22,7 +22,7 @@ using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IScrollLockLedHost, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -285,9 +285,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    IAutoScrollViewModel? IScrollLockLedHost.ActiveAgentViewModel => this.ActiveAgentViewModel;
-
-    public INotificationService NotificationService => this.notificationService;
+    public INotificationService NotificationService=> this.notificationService;
 
     public ConnectionStatusViewModel? ConnectionStatus{ get; private set; }
 
@@ -369,7 +367,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.SetProperty(ref this.selectedWorkspacePane, value))
             {
-                this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
+                this.RaisePropertyChanged(nameof(this.ActiveAgentViewModel));
             }
         }
     }
@@ -1693,22 +1691,52 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void ActivateTabById(string tabId, string? workspacePaneId)
     {
+        _ = this.ActivateTabByIdAsync(tabId, workspacePaneId);
+    }
+
+    /// <summary>
+    /// Searches all workspace panes for a tab with the given <paramref name="tabId"/>, switches
+    /// <see cref="SelectedWorkspacePane"/> to the pane that contains it, and activates the tab.
+    /// If <paramref name="workspacePaneId"/> is supplied and the target pane is not currently open,
+    /// the workspace is opened first via <see cref="OpenWorkspaceAsync"/> before attempting
+    /// tab activation.
+    /// </summary>
+    internal async Task ActivateTabByIdAsync(string tabId, string? workspacePaneId)
+    {
         // Prefer the workspace pane recorded in the history entry
         if (workspacePaneId is not null)
         {
             var targetPane = this.WorkspacePanes.FirstOrDefault(
                 p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal));
+
+            // If the pane is not open yet, open it first
+            if ((targetPane is null || targetPane.ContentLayout is null)
+                && Guid.TryParse(workspacePaneId, out var paneGuid))
+            {
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = new EntityId(paneGuid) });
+                targetPane = this.WorkspacePanes.FirstOrDefault(
+                    p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal));
+            }
+
             if (targetPane?.ContentLayout is not null)
             {
                 var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
-                var doc = documentDock?.VisibleDockables
-                    ?.OfType<WorkspaceDocument>()
-                    .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
-                if (doc is not null)
+                if (documentDock is not null)
                 {
-                    this.SelectedWorkspacePane = targetPane;
-                    this.dockFactory.SetActiveDockable(doc);
-                    this.dockFactory.SetFocusedDockable(documentDock!, doc);
+                    var doc = documentDock.VisibleDockables
+                        ?.OfType<WorkspaceDocument>()
+                        .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+                    if (doc is not null)
+                    {
+                        this.SelectedWorkspacePane = targetPane;
+                        this.dockFactory.SetActiveDockable(doc);
+                        this.dockFactory.SetFocusedDockable(documentDock, doc);
+                        return;
+                    }
+
+                    // Tab not yet in VisibleDockables (async population in progress after workspace open).
+                    // Subscribe and activate the tab once it appears.
+                    this.ActivateTabWhenLoaded(documentDock, targetPane, tabId);
                     return;
                 }
             }
@@ -1729,6 +1757,41 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.dockFactory.SetFocusedDockable(documentDock!, doc);
                 return;
             }
+        }
+    }
+
+    private void ActivateTabWhenLoaded(IDocumentDock documentDock, WorkspacePaneViewModel pane, string tabId)
+    {
+        if (documentDock.VisibleDockables is not INotifyCollectionChanged observable)
+        {
+            return;
+        }
+
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            var doc = documentDock.VisibleDockables
+                ?.OfType<WorkspaceDocument>()
+                .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+            if (doc is null) return;
+
+            observable.CollectionChanged -= OnCollectionChanged;
+            this.SelectedWorkspacePane = pane;
+            this.dockFactory.SetActiveDockable(doc);
+            this.dockFactory.SetFocusedDockable(documentDock, doc);
+        }
+
+        observable.CollectionChanged += OnCollectionChanged;
+
+        // Race-condition guard: check again after subscribing
+        var existing = documentDock.VisibleDockables
+            ?.OfType<WorkspaceDocument>()
+            .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+        if (existing is not null)
+        {
+            observable.CollectionChanged -= OnCollectionChanged;
+            this.SelectedWorkspacePane = pane;
+            this.dockFactory.SetActiveDockable(existing);
+            this.dockFactory.SetFocusedDockable(documentDock, existing);
         }
     }
 
@@ -3363,7 +3426,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
     {
-        this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
+        this.RaisePropertyChanged(nameof(this.ActiveAgentViewModel));
         if (e.Dockable is WorkspacePaneDocument paneDoc)
         {
             this.SelectedWorkspacePane = paneDoc.WorkspacePane;
@@ -3424,9 +3487,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             .FirstOrDefault(e => e.TabKey == tabId)
             ?.TabDescriptor.WorkspaceId;
         this.ActivateTabById(tabId, workspacePaneId);
-        if (!this.navigatingViaHistory && this.SelectedWorkspacePane is not null)
+        if (!this.navigatingViaHistory)
         {
-            this.navigationHistoryService.Push(new NavigationEntry(tabId, this.SelectedWorkspacePane.Id));
+            var paneId = workspacePaneId ?? this.SelectedWorkspacePane?.Id;
+            if (paneId is not null)
+            {
+                this.navigationHistoryService.Push(new NavigationEntry(tabId, paneId));
+            }
         }
     }
 
