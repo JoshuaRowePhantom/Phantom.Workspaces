@@ -87,7 +87,8 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
                 rootRepoCount++;
                 var entityId = DeterministicEntityId.Create("git-workspace-scan", NormalizeRepositoryPath(repositoryPath));
-                using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath));
+                var profileNames = WorkspaceEntitySnapshotReader.GetEntityNames(context.CurrentComputerUserProfileEntity);
+                using var document = JsonDocument.Parse(BuildGitEntityJson(repositoryPath, profileNames));
                 discoveredEntities.Add((entityId, document.RootElement.Clone()));
             }
 
@@ -278,7 +279,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         return Path.GetFullPath(repositoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
     }
 
-    private static string BuildGitEntityJson(string repositoryPath)
+    private static string BuildGitEntityJson(string repositoryPath, IReadOnlyCollection<EntityName> profileNames)
     {
         var fullPath = Path.GetFullPath(repositoryPath);
         var name = Path.GetFileName(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
@@ -292,15 +293,33 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             writer.WritePropertyName("entity-types");
             writer.WriteStartArray();
             writer.WriteStringValue("entity");
-            writer.WriteStringValue("git");
+            writer.WriteStringValue("git-worktree");
             writer.WriteEndArray();
 
             writer.WritePropertyName("names");
             writer.WriteStartArray();
+
+            // Primary name
             writer.WriteStartArray();
-            writer.WriteStringValue("git");
+            writer.WriteStringValue("git-worktrees");
             writer.WriteStringValue(fullPath);
             writer.WriteEndArray();
+
+            // Secondary profile name -- enables GitWorkspacesViewModel to group by profile
+            var profileName = profileNames.FirstOrDefault(
+                n => n.Components.Length > 0
+                     && string.Equals(n.Components[0], "computer-user-profiles", StringComparison.Ordinal));
+            if (profileName.Components.Length > 0)
+            {
+                writer.WriteStartArray();
+                foreach (var component in profileName.Components)
+                {
+                    writer.WriteStringValue(component);
+                }
+
+                writer.WriteEndArray();
+            }
+
             writer.WriteEndArray();
 
             writer.WritePropertyName("display-name");
@@ -361,3 +380,4 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         return [];
     }
 }
+
