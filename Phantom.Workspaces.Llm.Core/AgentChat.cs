@@ -41,7 +41,7 @@ public sealed class AgentChat : IAsyncDisposable
     private AgentDefinition? agentDefinition;
     private IChatClient? client;
     private AgentFrameworkChatHistoryProvider? chatHistoryProvider;
-    private AgentPersistenceChatHistoryProvider? persistenceProvider;
+    private IncrementalPersistenceChatHistoryProvider? persistenceProvider;
     private ChatClientAgent? chatClientAgent;
     private ChatClientAgentOptions? chatOptions;
     private IReadOnlyList<RuntimeContextProviderRegistration> runtimeContextProviderRegistrations = [];
@@ -177,8 +177,11 @@ public sealed class AgentChat : IAsyncDisposable
            this.RegisterOwnedResource(asyncDisposableClient);
        }
 
-       this.persistenceProvider = new AgentPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore);
+       this.persistenceProvider = new IncrementalPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore);
        this.chatHistoryProvider = new AgentFrameworkChatHistoryProvider(this.persistenceProvider);
+       var streamingMiddleware = new StreamingPersistenceMiddleware(resolvedClient, this.persistenceProvider, this.request.ConfiguredStore);
+       this.chatHistoryProvider.InvocationStarting += (_, args) => streamingMiddleware.SetCurrentSession(args.Session);
+       this.client = streamingMiddleware;
        this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider);
 #pragma warning disable MAAI001
        this.chatOptions = new ChatClientAgentOptions
@@ -201,7 +204,7 @@ public sealed class AgentChat : IAsyncDisposable
                this.IsToolEnabledForRuntime))
            .ToArray();
 
-       this.chatClientAgent = new ChatClientAgent(resolvedClient, this.chatOptions);
+       this.chatClientAgent = new ChatClientAgent(streamingMiddleware, this.chatOptions);
        this.persistenceProvider.SetSessionSerializer(
            async (session, token) =>
            {
@@ -542,6 +545,30 @@ public sealed class AgentChat : IAsyncDisposable
         this.runningItemOperations.Remove(item);
     }
 
+    /// <summary>
+    /// Moves the supplied stable items from the running item into <see cref="History"/>.
+    /// Only items whose running item is still active are promoted; promotions that arrive after
+    /// <see cref="CompleteRunningItem"/> has removed the running item are silently dropped to
+    /// prevent double-adds in exception paths where the processing loop completes the item before
+    /// all pending conflator dispatches have executed.
+    /// </summary>
+    public void PromoteItemsToHistory(AgentChatRunningItem runningItem, AgentChatHistoryItem[] items)
+    {
+        ArgumentNullException.ThrowIfNull(runningItem);
+        ArgumentNullException.ThrowIfNull(items);
+
+        if (!this.runningItems.Contains(runningItem))
+        {
+            return;
+        }
+
+        foreach (var historyItem in items)
+        {
+            this.AddHistoryItem(historyItem);
+            this.TurnCompleted?.Invoke(this, historyItem);
+        }
+    }
+
     private void AddHistoryItem(AgentChatHistoryItem item)
     {
         this.History.Add(item);
@@ -730,6 +757,7 @@ public sealed class AgentChat : IAsyncDisposable
         private bool workerRunning;
         private Task worker = Task.CompletedTask;
         private AgentChatHistoryItem[] cachedItems = [];
+        private int promotedCount;
 
         public PartialResponseConflator(AgentChat owner, AgentChatRunningItem runningItem)
         {
@@ -784,14 +812,38 @@ public sealed class AgentChat : IAsyncDisposable
             }
         }
 
-        // Awaited after the producer loop ends. Because the worker always coalesces the latest
-        // accumulated version before exiting, awaiting it guarantees the final frame is applied.
-        public Task DrainAsync()
+        // Awaited after the producer loop ends. Processes any final stable items that were not yet
+        // promoted during the streaming worker loop, then clears the running item so CompleteRunningItem
+        // finds an empty Items collection and avoids re-adding already-promoted items to History.
+        public async Task DrainAsync()
         {
+            Task workerTask;
             lock (this.gate)
             {
-                return this.worker;
+                workerTask = this.worker;
             }
+
+            await workerTask;
+
+            // After the worker finishes all queued versions, the last active item (if any) is now
+            // stable. Promote remaining items and clear the running item.
+            var finalItems = this.cachedItems;
+            if (this.promotedCount < finalItems.Length)
+            {
+                var toPromote = finalItems[this.promotedCount..];
+                await Task.Factory.StartNew(
+                    () => this.owner.PromoteItemsToHistory(this.runningItem, toPromote),
+                    CancellationToken.None,
+                    TaskCreationOptions.DenyChildAttach,
+                    this.foregroundScheduler);
+                this.promotedCount = finalItems.Length;
+            }
+
+            await Task.Factory.StartNew(
+                () => this.owner.UpdateRunningItem(this.runningItem, []),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                this.foregroundScheduler);
         }
 
         private async Task RunWorkerAsync()
@@ -824,10 +876,24 @@ public sealed class AgentChat : IAsyncDisposable
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
 
-                // Populate the running item on the foreground scheduler so the UI-bound collection is
-                // only ever mutated there, even though the producer loop may run off the foreground.
+                // Items 0..stableCount-1 are stable (the last item is still receiving tokens).
+                // Promote any not yet promoted to History.
+                var stableCount = chatHistoryItems.Length > 1 ? chatHistoryItems.Length - 1 : 0;
+                if (stableCount > this.promotedCount)
+                {
+                    var toPromote = chatHistoryItems[this.promotedCount..stableCount];
+                    await Task.Factory.StartNew(
+                        () => this.owner.PromoteItemsToHistory(this.runningItem, toPromote),
+                        CancellationToken.None,
+                        TaskCreationOptions.DenyChildAttach,
+                        this.foregroundScheduler);
+                    this.promotedCount = stableCount;
+                }
+
+                // Populate the running item with only the active tail on the foreground scheduler
+                // so the UI-bound collection is only ever mutated there.
                 await Task.Factory.StartNew(
-                    () => this.owner.UpdateRunningItem(this.runningItem, chatHistoryItems),
+                    () => this.owner.UpdateRunningItem(this.runningItem, chatHistoryItems[this.promotedCount..]),
                     CancellationToken.None,
                     TaskCreationOptions.DenyChildAttach,
                     this.foregroundScheduler);
