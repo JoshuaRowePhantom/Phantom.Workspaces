@@ -501,14 +501,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 action => Dispatcher.UIThread.Post(action))
             : null;
 
-    /// <summary>
-    /// Creates the git workspaces view model, or returns null if the workspace has not finished initializing.
-    /// </summary>
-    internal GitWorkspacesViewModel? TryCreateGitWorkspacesViewModel()
-        => this.entityBroker is { } broker
-            ? new GitWorkspacesViewModel(broker)
-            : null;
-
     private EntityId HostProfileEntityId =>
         this.entityBroker?.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId
         ?? default;

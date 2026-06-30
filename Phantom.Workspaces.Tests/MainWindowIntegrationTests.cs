@@ -4089,30 +4089,6 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void OnOpenGitWorkspacesClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
-    {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
-        var mainWindow = new MainWindow(viewModel);
-
-        var trackingField = typeof(MainWindow).GetField(
-            "openGitWorkspacesWindow",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(trackingField);
-
-        var existingDialog = new GitWorkspacesWindow();
-        trackingField!.SetValue(mainWindow, existingDialog);
-
-        var handler = typeof(MainWindow).GetMethod(
-            "OnOpenGitWorkspacesClicked",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(handler);
-        handler!.Invoke(mainWindow, [null, new RoutedEventArgs()]);
-
-        // The tracking field must still reference the same existing dialog — the guard returned early.
-        Assert.Same(existingDialog, trackingField.GetValue(mainWindow));
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
     public void OnOpenScheduledTasksClicked_TrackingField_InitiallyNull()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -4120,19 +4096,6 @@ public sealed class MainWindowIntegrationTests
 
         var trackingField = typeof(MainWindow).GetField(
             "openScheduledTasksWindow",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(trackingField);
-        Assert.Null(trackingField!.GetValue(mainWindow));
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
-    public void OnOpenGitWorkspacesClicked_TrackingField_InitiallyNull()
-    {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
-        var mainWindow = new MainWindow(viewModel);
-
-        var trackingField = typeof(MainWindow).GetField(
-            "openGitWorkspacesWindow",
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(trackingField);
         Assert.Null(trackingField!.GetValue(mainWindow));
