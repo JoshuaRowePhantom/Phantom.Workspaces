@@ -710,6 +710,8 @@
          Use running-indicator-agent subclass to show 🧠 brain glyph when running (agent context).
          PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
     <Style Selector="ProgressBar.running-indicator">
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
         <Setter Property="IsHitTestVisible" Value="False" />
         <Setter Property="Opacity" Value="0" />
         <Setter Property="Template">

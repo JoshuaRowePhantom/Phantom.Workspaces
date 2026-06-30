@@ -36,6 +36,8 @@
     <!-- notification-indicator: replaces emoji badge TextBlocks that show unread/active state.
          Value=0 → empty bar (invisible); Value=100 → full Gold bar (visible). -->
     <Style Selector="ProgressBar.notification-indicator">
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
         <Setter Property="Height" Value="3" />
         <Setter Property="Width" Value="12" />
         <Setter Property="Maximum" Value="100" />
