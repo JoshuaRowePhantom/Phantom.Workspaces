@@ -1508,7 +1508,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        this.IsAltHeld = false;
         var target = tabs[index];
         this.dockFactory.SetActiveDockable(target);
         this.dockFactory.SetFocusedDockable(documentDock, target);
