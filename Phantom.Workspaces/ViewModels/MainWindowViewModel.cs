@@ -22,7 +22,7 @@ using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IScrollLockLedHost, IAsyncDisposable
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -268,6 +268,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    IAutoScrollViewModel? IScrollLockLedHost.ActiveAgentViewModel => this.ActiveAgentViewModel;
+
     public INotificationService NotificationService => this.notificationService;
 
     public ConnectionStatusViewModel? ConnectionStatus{ get; private set; }
@@ -346,7 +348,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public WorkspacePaneViewModel SelectedWorkspacePane
     {
         get => this.selectedWorkspacePane;
-        set => this.SetProperty(ref this.selectedWorkspacePane, value);
+        set
+        {
+            if (this.SetProperty(ref this.selectedWorkspacePane, value))
+            {
+                this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
+            }
+        }
     }
 
     public string RepositoryStatusText => this.RepositorySource switch
@@ -3258,6 +3266,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
     {
+        this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
         if (e.Dockable is WorkspacePaneDocument paneDoc)
             this.SelectedWorkspacePane = paneDoc.WorkspacePane;
         else if (e.Dockable is WorkspaceDocument doc)
