@@ -1,24 +1,7 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/git.json",
   "description": "Schema for git repository entities and repository-level metadata used by workspace tooling.",
-  "type": "object",
-  "required": [
-    "entity-types"
-  ],
-  "properties": {
-    "entity-types": {
-      "type": "array",
-      "items": {
-        "$ref": "core.json#/$defs/entity-type-id"
-      },
-      "contains": {
-        "const": "git"
-      }
-    },
-    "path": {
-      "type": "string",
-      "description": "Filesystem path of the git repository root directory."
-    },
+  "$defs": {
     "git": {
       "type": "object",
       "description": "Git repository metadata populated by workspace discovery tooling.",
@@ -50,6 +33,28 @@
           }
         }
       }
+    }
+  },
+  "type": "object",
+  "required": [
+    "entity-types"
+  ],
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "git"
+      }
+    },
+    "path": {
+      "type": "string",
+      "description": "Filesystem path of the git repository root directory."
+    },
+    "git": {
+      "$ref": "#/$defs/git"
     }
   }
 }

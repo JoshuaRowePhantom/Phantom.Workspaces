@@ -89,4 +89,58 @@ public sealed class EntitySerializationTests
         Assert.NotNull(noteEntityDocument);
         Assert.Equal("# English", noteEntityDocument.GetPreferredMarkdownText());
     }
+
+    [Fact]
+    public void NoteEntityDocument_TryReadDefaultMarkdownText_NullData_ReturnsNull()
+    {
+        Assert.Null(NoteEntityDocument.TryReadDefaultMarkdownText(null));
+    }
+
+    [Fact]
+    public void NoteEntityDocument_TryReadDefaultMarkdownText_NonObjectElement_ReturnsNull()
+    {
+        using var document = JsonDocument.Parse("\"not-an-object\"");
+
+        Assert.Null(NoteEntityDocument.TryReadDefaultMarkdownText(document.RootElement));
+    }
+
+    [Fact]
+    public void NoteEntityDocument_TryReadDefaultMarkdownText_ValidMarkdownContent_ReturnsMarkdownText()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": {
+                    "text": "# Hello"
+                  }
+                }
+              }
+            }
+            """);
+
+        Assert.Equal("# Hello", NoteEntityDocument.TryReadDefaultMarkdownText(document.RootElement));
+    }
+
+    [Fact]
+    public void NoteEntityDocument_TryReadDefaultMarkdownText_NoMarkdownContent_ReturnsNull()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "content": {
+                "default": {
+                  "mime-type": "text/plain",
+                  "content": {
+                    "text": "plain text"
+                  }
+                }
+              }
+            }
+            """);
+
+        Assert.Null(NoteEntityDocument.TryReadDefaultMarkdownText(document.RootElement));
+    }
 }

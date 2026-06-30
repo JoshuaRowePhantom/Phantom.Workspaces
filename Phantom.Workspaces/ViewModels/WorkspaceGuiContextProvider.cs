@@ -65,18 +65,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
         var entities = await this.context.MainWindowViewModel.EntityBroker.GetEntitiesAsync(
             [new GetEntityRequest { EntityName = WorkspaceGuiToolInstructionsEntityName }],
             cancellationToken);
-        return TryReadDefaultMarkdownText(entities.FirstOrDefault()?.Data);
-    }
-
-    private static string? TryReadDefaultMarkdownText(JsonElement? entityData)
-    {
-        if (entityData is not JsonElement entityDataElement
-            || NoteEntityDocument.Deserialize(entityDataElement) is not NoteEntityDocument noteEntityDocument)
-        {
-            return null;
-        }
-
-        return noteEntityDocument.GetPreferredMarkdownText();
+        return NoteEntityDocument.TryReadDefaultMarkdownText(entities.FirstOrDefault()?.Data);
     }
 
     private sealed class WorkspaceListTool : AIFunction
