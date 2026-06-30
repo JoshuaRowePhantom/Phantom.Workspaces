@@ -4,6 +4,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System.Collections.Specialized;
 using System.Linq;
@@ -258,6 +259,88 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(tabDoc);
         Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
     }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_CloseWhileTabsLoading_DoesNotCrash()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Create an external entity referenced by the workspace tab
+        var externalEntityId = new EntityId("e0e00001-e0e0-4e0e-ae0e-e0e0e0e0e0e1");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            externalEntityId,
+            """
+            {
+              "entity-id": "e0e00001-e0e0-4e0e-ae0e-e0e0e0e0e0e1",
+              "entity-types": ["entity", "external"],
+              "names": [["tests", "externals", "close-while-loading"]],
+              "display-name": { "default": "Close While Loading" },
+              "urls": { "default": "https://example.com" }
+            }
+            """);
+
+        // Create a workspace that references the external entity via async entity lookup
+        var workspaceId = new EntityId("e0e00002-e0e0-4e0e-ae0e-e0e0e0e0e0e2");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "e0e00002-e0e0-4e0e-ae0e-e0e0e0e0e0e2",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "close-while-loading"]],
+              "display-name": { "default": "Close While Loading Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "cwl-tab-1",
+                      "title": "CWL Tab",
+                      "kind": "entity",
+                      "dock": "full",
+                      "content": {
+                        "target-entity-name": ["tests", "externals", "close-while-loading"]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        // Phase 1 completes on return; Phase 2 (PopulateWorkspacePaneTabsAsync) fires and
+        // suspends at its async entity-fetch before it can add any tabs to the dock.
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        // Close the workspace before Phase 2's UI callbacks run.
+        await viewModel.RemoveWorkspacePaneAsync(workspacePane);
+
+        // Pump the Avalonia dispatcher enough times to let Phase 2 run to completion.
+        // Each pump drains one layer of async work: entity-fetch continuation, guard-check
+        // InvokeAsync, and final SyncWorkspacePaneFromDock InvokeAsync.
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+
+        // Guard must have fired: workspace is gone and no exception was thrown.
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
