@@ -12,10 +12,13 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class WorkspacePaneViewModel : ViewModelBase
 {
     private string title;
-    private WorkspaceRegionViewModel? selectedRegion;
     private IRootDock? contentLayout;
     private bool anyTabIsRunning;
     private bool anyTabHasUnreadNotification;
+    private WorkspaceTabViewModel? selectedTab;
+
+    private readonly List<(WorkspaceTabViewModel tab, System.ComponentModel.PropertyChangedEventHandler tabHandler)> subscribedTabs = [];
+    private readonly List<(IStatusItem tabStatus, System.ComponentModel.PropertyChangedEventHandler handler)> subscribedTabStatuses = [];
 
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
@@ -27,8 +30,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         this.Id = id ?? entity.EntityId.ToString();
         this.CloseCommand = closeCommand;
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
-        this.Regions.CollectionChanged += this.OnRegionsCollectionChanged;
-        this.PaneStatus.PropertyChanged += this.OnPaneStatusPropertyChanged;
+        this.Tabs.CollectionChanged += this.OnTabsCollectionChanged;
     }
 
     public string Id { get; }
@@ -43,16 +45,22 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
     public RelayCommand? CloseCommand { get; }
 
-    public ObservableCollection<WorkspaceRegionViewModel> Regions { get; } = [];
+    /// <summary>
+    /// Ordered list of open tabs in their current visual order (left to right).
+    /// This is the source of truth for open tabs — used for Alt+N indexing, alt-label assignment,
+    /// aggregated status, and all business-logic tab enumeration.
+    /// Kept in sync with the dock model's VisibleDockables order via CollectionChanged subscription.
+    /// </summary>
+    public ObservableCollection<WorkspaceTabViewModel> Tabs { get; } = new();
 
-    public bool HasRegions => this.Regions.Count > 0;
-
-    public bool HasNoRegions => !this.HasRegions;
-
-    public WorkspaceRegionViewModel? SelectedRegion
+    /// <summary>
+    /// The currently active/selected tab in this pane.
+    /// Updated by <see cref="MainWindowViewModel"/> when the dock's active dockable changes.
+    /// </summary>
+    public WorkspaceTabViewModel? SelectedTab
     {
-        get => this.selectedRegion;
-        set => this.SetProperty(ref this.selectedRegion, value);
+        get => this.selectedTab;
+        set => this.SetProperty(ref this.selectedTab, value);
     }
 
     /// <summary>
@@ -65,13 +73,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Aggregated status from all tabs across all regions in this pane.
-    /// </summary>
-    public StatusItem PaneStatus { get; } = new();
-
-    /// <summary>
     /// True if any tab in this pane has a running agent session.
-    /// Derived from <see cref="PaneStatus"/>.
+    /// Aggregated directly from <see cref="Tabs"/> via each tab's <see cref="WorkspaceTabViewModel.TabStatus"/>.
     /// </summary>
     public bool AnyTabIsRunning
     {
@@ -89,20 +92,6 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         set => this.SetProperty(ref this.anyTabHasUnreadNotification, value);
     }
 
-    public void SetRegions(
-        IEnumerable<WorkspaceRegionViewModel> regions)
-    {
-        this.Regions.Clear();
-        foreach (var region in regions)
-        {
-            this.Regions.Add(region);
-        }
-
-        this.SelectedRegion = this.Regions.FirstOrDefault();
-        this.RaisePropertyChanged(nameof(this.HasRegions));
-        this.RaisePropertyChanged(nameof(this.HasNoRegions));
-    }
-
     private void OnEntityPropertyChanged(
         object? sender,
         System.ComponentModel.PropertyChangedEventArgs e)
@@ -113,50 +102,36 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         }
     }
 
-    private void OnPaneStatusPropertyChanged(
-        object? sender,
-        System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (string.Equals(e.PropertyName, nameof(IStatusItem.RunningStatus), StringComparison.Ordinal))
-        {
-            this.AnyTabIsRunning = this.PaneStatus.RunningStatus == RunningStatus.Running;
-        }
-    }
-
-    private readonly List<(WorkspaceRegionViewModel region, NotifyCollectionChangedEventHandler handler)> subscribedRegions = [];
-    private readonly List<(IStatusItem tabStatus, System.ComponentModel.PropertyChangedEventHandler handler)> subscribedTabStatuses = [];
-
-    private void OnRegionsCollectionChanged(
+    private void OnTabsCollectionChanged(
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
-        this.RaisePropertyChanged(nameof(this.HasRegions));
-        this.RaisePropertyChanged(nameof(this.HasNoRegions));
-        this.ResubscribeToRegions();
-        this.RecomputePaneStatus();
+        this.ResubscribeToTabs();
+        this.RecomputeAnyTabIsRunning();
     }
 
-    private void ResubscribeToRegions()
+    private void ResubscribeToTabs()
     {
-        // Unsubscribe from all region tab collections and tab statuses
-        foreach (var (region, handler) in this.subscribedRegions)
-            region.Tabs.CollectionChanged -= handler;
-        this.subscribedRegions.Clear();
+        foreach (var (tab, handler) in this.subscribedTabs)
+            tab.PropertyChanged -= handler;
+        this.subscribedTabs.Clear();
 
         foreach (var (tabStatus, handler) in this.subscribedTabStatuses)
             tabStatus.PropertyChanged -= handler;
         this.subscribedTabStatuses.Clear();
 
-        // Subscribe to each region's Tabs collection
-        foreach (var region in this.Regions)
+        foreach (var tab in this.Tabs)
         {
-            NotifyCollectionChangedEventHandler tabsHandler = (_, _) =>
+            System.ComponentModel.PropertyChangedEventHandler tabHandler = (_, e) =>
             {
-                this.ResubscribeToTabStatuses();
-                this.RecomputePaneStatus();
+                if (string.Equals(e.PropertyName, nameof(WorkspaceTabViewModel.TabStatus), StringComparison.Ordinal))
+                {
+                    this.ResubscribeToTabStatuses();
+                    this.RecomputeAnyTabIsRunning();
+                }
             };
-            region.Tabs.CollectionChanged += tabsHandler;
-            this.subscribedRegions.Add((region, tabsHandler));
+            tab.PropertyChanged += tabHandler;
+            this.subscribedTabs.Add((tab, tabHandler));
         }
 
         this.ResubscribeToTabStatuses();
@@ -168,24 +143,20 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
             tabStatus.PropertyChanged -= handler;
         this.subscribedTabStatuses.Clear();
 
-        foreach (var tab in this.Regions.SelectMany(r => r.Tabs))
+        foreach (var tab in this.Tabs)
         {
             if (tab.TabStatus is { } ts)
             {
-                System.ComponentModel.PropertyChangedEventHandler statusHandler = (_, _) => this.RecomputePaneStatus();
+                System.ComponentModel.PropertyChangedEventHandler statusHandler = (_, _) => this.RecomputeAnyTabIsRunning();
                 ts.PropertyChanged += statusHandler;
                 this.subscribedTabStatuses.Add((ts, statusHandler));
             }
         }
     }
 
-    private void RecomputePaneStatus()
+    private void RecomputeAnyTabIsRunning()
     {
-        var allTabStatuses = this.Regions
-            .SelectMany(r => r.Tabs)
-            .Select(t => t.TabStatus)
-            .Where(s => s is not null)
-            .Select(s => s!);
-        StatusItemAggregator.UpdateFrom(this.PaneStatus, allTabStatuses);
+        var running = this.Tabs.Any(t => t.TabStatus?.RunningStatus == RunningStatus.Running);
+        this.AnyTabIsRunning = running;
     }
 }
