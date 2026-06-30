@@ -504,6 +504,19 @@ public sealed class MainWindowAxamlTests
     }
 
     [Fact]
+    public void AgentChatEditorControl_StatusLine_HasNoSeparatorTextBlocks()
+    {
+        // Issue #401: all TextBlock separator elements must be removed; spacing is now
+        // handled by left margins on the item style classes.
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.DoesNotContain(
+            "agent-chat-status-line-separator",
+            editorControlContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AgentChatEditorControl_AutoScrollCheckbox_UsesScrollLockedClassForAnimation()
     {
         // Issue #130: the auto-scroll checkbox (and preceding separator) must animate between opacity
