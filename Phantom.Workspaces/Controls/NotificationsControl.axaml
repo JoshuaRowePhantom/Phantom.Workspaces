@@ -43,36 +43,18 @@
                                             Background="Transparent"
                                             BorderThickness="0"
                                             Padding="4">
-                                        <StackPanel Orientation="Horizontal" Spacing="2">
-                                            <!-- Bell slot — always present, animated as running-indicator when running -->
-                                            <Border Width="20" Height="20" VerticalAlignment="Center">
-                                                <ProgressBar Classes="running-indicator"
-                                                             IsIndeterminate="{Binding IsRunning}" />
-                                            </Border>
-                                            <!-- Exclamation slot — always present, visible only when interesting -->
-                                            <Border Width="20" Height="20" VerticalAlignment="Center">
-                                                <TextBlock Text="!"
-                                                           Classes="notification-unread-indicator"
-                                                           VerticalAlignment="Center"
-                                                           HorizontalAlignment="Center"
-                                                           IsVisible="{Binding IsInteresting}" />
-                                            </Border>
-                                            <StackPanel Spacing="2">
-                                                <TextBlock Text="{Binding TabTitle}"
-                                                           FontWeight="SemiBold"
-                                                           TextWrapping="NoWrap"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Text="{Binding Heading}"
-                                                           Classes="muted"
-                                                           TextWrapping="NoWrap"
-                                                           IsVisible="{Binding IsRunning}" />
-                                                <TextBlock Text="{Binding Description}"
-                                                           Classes="muted"
-                                                           TextWrapping="Wrap"
-                                                           IsVisible="{Binding HasDescription}" />
-                                                <TextBlock Text="{Binding RelativeTime}" 
-                                                           Classes="caption" />
-                                            </StackPanel>
+                                        <StackPanel Spacing="2">
+                                            <controls:WorkspaceTabItemControl />
+                                            <TextBlock Text="{Binding Heading}"
+                                                       Classes="muted"
+                                                       TextWrapping="NoWrap"
+                                                       IsVisible="{Binding IsRunning}" />
+                                            <TextBlock Text="{Binding Description}"
+                                                       Classes="muted"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding HasDescription}" />
+                                            <TextBlock Text="{Binding RelativeTime}" 
+                                                       Classes="caption" />
                                         </StackPanel>
                                     </Button>
                                     <Button Grid.Column="1"
