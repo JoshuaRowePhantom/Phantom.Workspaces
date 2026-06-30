@@ -22,21 +22,31 @@ Map of URL keys to URL values. Each key is a string identifier, and each value m
 - `display-name`: Human-readable name with language localization
 - `content`: Associated content with MIME type and reference
 
+## Naming convention
+
+External entities must be named under the `external` namespace:
+
+```json
+"names": [["external", "<descriptive-name>"]]
+```
+
+## URL keys
+
+- The `"default"` key is special: workspace tabs that open this entity via `entity-view` will open the URL stored under `"default"`.
+- Additional keys are informational and are not automatically opened by tabs.
+
 ## Example
 
 ```json
 {
   "entity-id": "12345678-1234-1234-1234-123456789012",
-  "entity-types": ["external"],
-  "names": [
-    ["external-systems", "our-api"],
-    ["service-references", "primary"]
-  ],
+  "entity-types": ["entity", "external"],
+  "names": [["external", "our-api"]],
   "display-name": {
     "default": "Our API Integration"
   },
   "urls": {
-    "api-docs": "https://api.example.com/docs",
+    "default": "https://api.example.com/docs",
     "api-endpoint": "https://api.example.com/v1",
     "status-page": "https://status.example.com"
   }

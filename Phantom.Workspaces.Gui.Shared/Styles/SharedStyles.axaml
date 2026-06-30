@@ -731,6 +731,47 @@
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
     </Style>
 
+    <!-- scheduled-tools-indicator: the ⏱/⏸ clock button in the status bar.
+         Idle: clock glyph (⏱) at full opacity.
+         :indeterminate (running): same glyph, Avalonia IsIndeterminate state active.
+         .paused: pause glyph (⏸) with dimmed opacity.
+         .failed: clock glyph with error foreground.
+         PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
+    <Style Selector="ProgressBar.scheduled-tools-indicator">
+        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏱"
+                               FontSize="14"
+                               Foreground="{TemplateBinding Foreground}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.scheduled-tools-indicator.paused">
+        <Setter Property="Opacity" Value="0.55" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏸"
+                               FontSize="14"
+                               Foreground="{TemplateBinding Foreground}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.scheduled-tools-indicator.failed">
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+    </Style>
+
     <Style Selector="TextBlock.terminal-mono">
         <Setter Property="FontFamily" Value="Cascadia Code,Consolas,Courier New,monospace" />
     </Style>
