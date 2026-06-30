@@ -6,7 +6,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm;
 
-internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
+internal sealed class IncrementalPersistenceChatHistoryProvider : ChatHistoryProvider
 {
     private sealed class SessionState
     {
@@ -17,9 +17,10 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
     private readonly BsonDocument? agentDefinitionJson;
     private readonly IAgentPersistenceStore store;
     private volatile string? copilotSdkSessionId;
+    private volatile BsonDocument? cachedAgentSessionJson;
     private Func<AgentSession, CancellationToken, ValueTask<BsonDocument>>? serializeSession;
 
-    public AgentPersistenceChatHistoryProvider(
+    public IncrementalPersistenceChatHistoryProvider(
         AgentDefinition? agentDefinition,
         IAgentPersistenceStore store)
         : base(null, null, null)
@@ -30,7 +31,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
             : BsonDocument.Parse(agentDefinition.ToJson());
         this.sessionState = new ProviderSessionState<SessionState>(
             stateInitializer: InitializeSessionState,
-            stateKey: nameof(AgentPersistenceChatHistoryProvider));
+            stateKey: nameof(IncrementalPersistenceChatHistoryProvider));
     }
 
     public void SetSessionSerializer(
@@ -92,6 +93,21 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
         state.AgentSessionId = agentSessionId;
     }
 
+    /// <summary>
+    /// Builds a <see cref="PersistedAgent"/> snapshot for the given session using the session JSON
+    /// that was cached during the most recent <see cref="ProvideChatHistoryAsync"/> call.
+    /// </summary>
+    internal PersistedAgent BuildPersistedAgent(AgentSession session)
+    {
+        return new PersistedAgent
+        {
+            AgentSessionId = this.ExtractAgentSessionId(session),
+            AgentSessionJson = this.cachedAgentSessionJson,
+            AgentDefinitionJson = this.agentDefinitionJson,
+            CopilotSdkSessionId = this.copilotSdkSessionId,
+        };
+    }
+
     private static SessionState InitializeSessionState(AgentSession? session)
     {
         return new SessionState { AgentSessionId = Guid.NewGuid().ToString("n") };
@@ -109,6 +125,10 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
             new ReadMessagesRequest { AgentSessionId = agentSessionId },
             cancellationToken).ConfigureAwait(false);
 
+        // Always serialize and cache so the streaming middleware can build PersistedAgent mid-stream.
+        var sessionJson = await this.SerializeSessionAsync(context.Session, cancellationToken).ConfigureAwait(false);
+        this.cachedAgentSessionJson = sessionJson;
+
         var requestMessages = context.RequestMessages.ToArray();
         if (requestMessages.Length > 0)
         {
@@ -118,7 +138,7 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
                     Agent = new PersistedAgent
                     {
                         AgentSessionId = agentSessionId,
-                        AgentSessionJson = await this.SerializeSessionAsync(context.Session, cancellationToken).ConfigureAwait(false),
+                        AgentSessionJson = sessionJson,
                         AgentDefinitionJson = this.agentDefinitionJson,
                         CopilotSdkSessionId = this.copilotSdkSessionId,
                     },
@@ -130,35 +150,14 @@ internal sealed class AgentPersistenceChatHistoryProvider : ChatHistoryProvider
         return existingMessages;
     }
 
-    protected override async ValueTask StoreChatHistoryAsync(
+    /// <summary>
+    /// No-op: the <see cref="StreamingPersistenceMiddleware"/> owns all response-message
+    /// persistence. Making this a no-op avoids double-writes without any deduplication bookkeeping.
+    /// </summary>
+    protected override ValueTask StoreChatHistoryAsync(
         InvokedContext context,
         CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(context.Session);
-
-        var agentSessionId = this.ExtractAgentSessionId(context.Session);
-
-        var responseMessages = context.ResponseMessages?.ToArray() ?? [];
-        if (responseMessages.Length == 0)
-        {
-            return;
-        }
-
-        await this.store.StoreAsync(
-            new StoreRequestAgent
-            {
-                Agent = new PersistedAgent
-                {
-                    AgentSessionId = agentSessionId,
-                    AgentSessionJson = await this.SerializeSessionAsync(context.Session, cancellationToken).ConfigureAwait(false),
-                    AgentDefinitionJson = this.agentDefinitionJson,
-                    CopilotSdkSessionId = this.copilotSdkSessionId,
-                },
-                NewMessages = responseMessages,
-            },
-            CancellationToken.None).ConfigureAwait(false);
-    }
+        => ValueTask.CompletedTask;
 
     private async ValueTask<BsonDocument> SerializeSessionAsync(AgentSession session, CancellationToken cancellationToken)
     {
