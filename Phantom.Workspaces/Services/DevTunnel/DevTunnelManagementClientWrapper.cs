@@ -123,6 +123,14 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
                 .ConfigureAwait(false);
         }
 
+        var existingPort = (existingPorts ?? []).FirstOrDefault(port => port.PortNumber == portNumber);
+        if (existingPort is not null)
+        {
+            await this.managementClient
+                .DeleteTunnelPortAsync(tunnel, portNumber, requestOptions, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await this.managementClient
             .CreateOrUpdateTunnelPortAsync(
                 tunnel,

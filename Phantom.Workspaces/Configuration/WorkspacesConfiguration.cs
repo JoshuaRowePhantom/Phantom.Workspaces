@@ -106,9 +106,6 @@ public sealed record DevTunnelConfiguration
     /// <summary>Ports hosted through the tunnel.</summary>
     public IReadOnlyList<int> HostedPorts { get; init; } = [];
 
-    /// <summary>Protocol metadata for the hosted ports.</summary>
-    public string Protocol { get; init; } = "https";
-
     /// <summary>Tunnel access mode; private by default.</summary>
     public DevTunnelAccessMode AccessMode { get; init; } = DevTunnelAccessMode.Private;
 

@@ -39,17 +39,6 @@
         </Style.Animations>
     </Style>
 
-    <Style Selector="TextBlock.agent-tab-header-brain">
-        <Setter Property="FontSize" Value="{DynamicResource AgentChat.TabHeader.Icon.FontSize}" />
-        <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.ThinkingBrain.Foreground}" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="Opacity" Value="0.25" />
-    </Style>
-
-    <Style Selector="TextBlock.agent-tab-header-brain.thinking">
-        <Setter Property="Opacity" Value="1" />
-    </Style>
-
     <Style Selector="TextBlock.agent-chat-status-line-value">
         <Setter Property="FontSize" Value="{DynamicResource AgentChat.StatusLine.FontSize}" />
         <Setter Property="Foreground" Value="{DynamicResource AgentChat.StatusLine.Value.Foreground}" />

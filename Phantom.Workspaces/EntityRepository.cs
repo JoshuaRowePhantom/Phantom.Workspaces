@@ -82,11 +82,21 @@ public sealed class EntityRepository
 
         // Dev tunnel access authorizes with the GitHub auth token (GITHUB_TOKEN env var, else
         // `gh auth token`); plain web access uses no tunnel-authorization header.
-        var devTunnelAccessToken = repositorySource.UseGitHubAuthToken
-            ? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()
-            : null;
+        string? devTunnelAccessToken = null;
+        Func<string?>? devTunnelAccessTokenResolver = null;
+        if (repositorySource.UseGitHubAuthToken)
+        {
+            devTunnelAccessToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+            if (string.IsNullOrWhiteSpace(devTunnelAccessToken))
+            {
+                throw new InvalidOperationException(
+                    "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
+            }
 
-        return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken);
+            devTunnelAccessTokenResolver = () => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+        }
+
+        return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken, devTunnelAccessTokenResolver);
     }
 
     private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
