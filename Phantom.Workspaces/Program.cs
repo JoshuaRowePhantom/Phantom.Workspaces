@@ -21,6 +21,8 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        UnhandledExceptionHandler.Install();
+
         StartupArguments = args;
 
         var managementExitCode = ManagementModeDispatcher.TryRun(args);
