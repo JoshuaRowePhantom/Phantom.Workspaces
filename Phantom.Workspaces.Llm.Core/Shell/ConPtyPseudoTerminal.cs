@@ -31,10 +31,17 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern void ClosePseudoConsole(IntPtr hPC);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CreatePipe(
-        out SafeFileHandle hReadPipe, out SafeFileHandle hWritePipe,
-        IntPtr lpPipeAttributes, uint nSize);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateNamedPipeW(
+        string lpName, uint dwOpenMode, uint dwPipeMode,
+        uint nMaxInstances, uint nOutBufferSize, uint nInBufferSize,
+        uint nDefaultTimeOut, IntPtr lpSecurityAttributes);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+        IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
@@ -71,6 +78,16 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
+    private const uint PIPE_ACCESS_INBOUND  = 0x00000001;
+    private const uint PIPE_ACCESS_OUTBOUND = 0x00000002;
+    private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+    private const uint PIPE_TYPE_BYTE       = 0x00000000;
+    private const uint PIPE_READMODE_BYTE   = 0x00000000;
+    private const uint PIPE_WAIT            = 0x00000000;
+    private const uint OPEN_EXISTING        = 3;
+    private const uint GENERIC_READ         = 0x80000000;
+    private const uint GENERIC_WRITE        = 0x40000000;
+    private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
     // ── Structures ──────────────────────────────────────────────────────────
 
@@ -136,16 +153,21 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        // PTY input pipe: child reads from inputRead, caller writes to inputWrite
-        if (!CreatePipe(out var inputRead, out var inputWrite, IntPtr.Zero, 0))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe (input) failed.");
+        // PTY input pipe (overlapped): child reads from inputRead, caller writes to inputWrite
+        var id = Guid.NewGuid().ToString("N");
+        var (inputRead, inputWrite)   = CreateOverlappedPipe($@"\\.\pipe\phantom-pty-in-{id}",  PIPE_ACCESS_INBOUND,  GENERIC_WRITE);
 
-        // PTY output pipe: caller reads from outputRead, child writes to outputWrite
-        if (!CreatePipe(out var outputRead, out var outputWrite, IntPtr.Zero, 0))
+        // PTY output pipe (overlapped): caller reads from outputRead, child writes to outputWrite
+        SafeFileHandle outputWrite, outputRead;
+        try
+        {
+            (outputWrite, outputRead) = CreateOverlappedPipe($@"\\.\pipe\phantom-pty-out-{id}", PIPE_ACCESS_OUTBOUND, GENERIC_READ);
+        }
+        catch
         {
             inputRead.Dispose();
             inputWrite.Dispose();
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe (output) failed.");
+            throw;
         }
 
         var size = new COORD { X = (short)payload.Columns, Y = (short)payload.Rows };
@@ -250,6 +272,32 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a named pipe pair where the server handle carries <c>FILE_FLAG_OVERLAPPED</c>,
+    /// making it compatible with <see cref="FileStream"/> constructed with <c>isAsync: true</c>.
+    /// </summary>
+    private static (SafeFileHandle Server, SafeFileHandle Client) CreateOverlappedPipe(
+        string name, uint serverAccess, uint clientAccess)
+    {
+        var server = CreateNamedPipeW(
+            name,
+            serverAccess | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1, 4096, 4096, 0, IntPtr.Zero);
+        if (server.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateNamedPipeW failed for '{name}'.");
+
+        var client = CreateFileW(name, clientAccess, 0, IntPtr.Zero, OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED | FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+        if (client.IsInvalid)
+        {
+            server.Dispose();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateFileW failed for '{name}'.");
+        }
+
+        return (server, client);
+    }
 
     /// <summary>
     /// Builds a PROC_THREAD_ATTRIBUTE_LIST containing PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.
