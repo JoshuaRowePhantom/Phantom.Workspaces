@@ -85,6 +85,26 @@
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
                     </Button>
 
+                    <Panel IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <Button x:Name="RunningAgentBrainButton"
+                                Classes="settings-gear"
+                                ToolTip.Tip="Running agents"
+                                Command="{Binding RunningAgentBrain.ToggleOpenCommand}">
+                            <TextBlock Classes="agent-chat-status-line-brain"
+                                       Classes.thinking="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False}"
+                                       Classes.idle="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False, Converter={x:Static BoolConverters.Not}}"
+                                       Text="🧠"
+                                       FontSize="14"
+                                       Margin="0" />
+                        </Button>
+                        <Popup IsOpen="{Binding RunningAgentBrain.IsOpen, Mode=TwoWay}"
+                               PlacementTarget="{Binding #RunningAgentBrainButton}"
+                               IsLightDismissEnabled="True"
+                               Focusable="False">
+                            <controls:RunningAgentBrainControl DataContext="{Binding RunningAgentBrain}" />
+                        </Popup>
+                    </Panel>
+
                     <Panel>
                         <Button x:Name="NotificationBellButton"
                                 Classes="settings-gear"
