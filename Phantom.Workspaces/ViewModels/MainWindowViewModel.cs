@@ -3325,7 +3325,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     {
         this.RaisePropertyChanged(nameof(IScrollLockLedHost.ActiveAgentViewModel));
         if (e.Dockable is WorkspacePaneDocument paneDoc)
+        {
             this.SelectedWorkspacePane = paneDoc.WorkspacePane;
+            if (!this.navigatingViaHistory)
+            {
+                var activeTabId = this.ActiveTabId;
+                if (activeTabId is not null)
+                {
+                    this.navigationHistoryService.Push(new NavigationEntry(activeTabId, paneDoc.WorkspacePane.Id));
+                }
+            }
+        }
         else if (e.Dockable is WorkspaceDocument doc)
         {
             this.notificationService.MarkRead(doc.Id);
