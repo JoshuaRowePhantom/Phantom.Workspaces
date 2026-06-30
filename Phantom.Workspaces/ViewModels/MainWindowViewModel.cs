@@ -1508,7 +1508,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        this.IsAltHeld = false;
         var target = tabs[index];
         this.dockFactory.SetActiveDockable(target);
         this.dockFactory.SetFocusedDockable(documentDock, target);
@@ -1711,18 +1710,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             focus: focus);
     }
 
-    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true)
+    public async Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true, string? workspacePaneId = null)
     {
         // Ensure we have a real workspace loaded (not the placeholder)
         await this.EnsureWorkspaceLoadedAsync();
-        
-        if (this.selectedWorkspacePane?.ContentLayout is null)
+
+        var targetPane = workspacePaneId is not null
+            ? this.WorkspacePanes.FirstOrDefault(p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal))
+                ?? this.selectedWorkspacePane
+            : this.selectedWorkspacePane;
+
+        if (targetPane?.ContentLayout is null)
         {
             return;
         }
 
-        // Find the document dock in the selected workspace's ContentLayout
-        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
+        // Find the document dock in the target workspace's ContentLayout
+        var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
         if (documentDock is null)
         {
             return;
@@ -1754,13 +1758,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
             if (focus)
             {
+                if (!ReferenceEquals(this.selectedWorkspacePane, targetPane))
+                {
+                    this.SelectedWorkspacePane = targetPane;
+                }
                 this.dockFactory.SetActiveDockable(existingDocument);
                 this.notificationService.MarkRead(tab.Id);
                 this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
-                this.SyncSelectedWorkspacePaneFromDock();
+                this.SyncWorkspacePaneFromDock(targetPane);
                 if (!this.navigatingViaHistory)
                 {
-                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                    this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
                 }
             }
             return;
@@ -1786,12 +1794,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.dockFactory.InsertDockable(documentDock, newDocument, sourceIndex + 1);
                 if (focus)
                 {
+                    if (!ReferenceEquals(this.selectedWorkspacePane, targetPane))
+                    {
+                        this.SelectedWorkspacePane = targetPane;
+                    }
                     this.dockFactory.SetActiveDockable(newDocument);
                     this.dockFactory.SetFocusedDockable(documentDock, newDocument);
-                    this.SyncSelectedWorkspacePaneFromDock();
+                    this.SyncWorkspacePaneFromDock(targetPane);
                     if (!this.navigatingViaHistory)
                     {
-                        this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+                        this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
                     }
                 }
                 return;
@@ -1799,11 +1811,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Default: append the new tab at the end.
+        if (focus && !ReferenceEquals(this.selectedWorkspacePane, targetPane))
+        {
+            this.SelectedWorkspacePane = targetPane;
+        }
         this.dockFactory.AddWorkspaceTab(documentDock, tab, focus);
-        this.SyncSelectedWorkspacePaneFromDock();
+        this.SyncWorkspacePaneFromDock(targetPane);
         if (focus && !this.navigatingViaHistory)
         {
-            this.navigationHistoryService.Push(new NavigationEntry(tab.Id, this.selectedWorkspacePane?.Id));
+            this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
         }
     }
 
@@ -2047,6 +2063,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
+        return null;
+    }
+
+    internal string? FindWorkspacePaneIdForTab(string tabId)
+    {
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var dock = this.FindDocumentDock(pane.ContentLayout);
+            if (dock?.VisibleDockables?.OfType<WorkspaceDocument>()
+                .Any(d => string.Equals(d.Id, tabId, StringComparison.Ordinal)) == true)
+            {
+                return pane.Id;
+            }
+        }
         return null;
     }
 
@@ -3222,7 +3253,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
     {
-        if (e.Dockable is WorkspaceDocument doc)
+        if (e.Dockable is WorkspacePaneDocument paneDoc)
+            this.SelectedWorkspacePane = paneDoc.WorkspacePane;
+        else if (e.Dockable is WorkspaceDocument doc)
         {
             this.notificationService.MarkRead(doc.Id);
             Dispatcher.UIThread.Post(

@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System.Collections.Specialized;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -16,6 +17,7 @@ using Dock.Model.Core;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
@@ -1750,11 +1752,266 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlHandler_WhenAgentChatIsInNonSelectedPane_OpensTabInAgentChatPane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("url00001-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("url00001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "url00001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-handler-pane-a"]],
+              "display-name": { "default": "URL Handler Pane A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "url00001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-handler-pane-b"]],
+              "display-name": { "default": "URL Handler Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceIdA.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceIdB.ToString());
+
+        // Open agent session in pane A
+        var paneAIndex = viewModel.WorkspacePanes.IndexOf(paneA);
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
+
+        var agentDefinitionId = new EntityId("url00001-0000-4000-8000-000000000003");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "url00001-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "url-nonselected-echo"]],
+              "display-name": { "default": "URL Nonselected Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "url-nonselected-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.NotNull(agentTab.Agent);
+
+        // Switch to pane B so agent chat pane is NOT selected
+        var paneBIndex = viewModel.WorkspacePanes.IndexOf(paneB);
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
+        Assert.Equal(paneB, viewModel.SelectedWorkspacePane);
+
+        // Invoke the URL handler — should open in pane A, not pane B
+        const string testUrl = "https://url-nonselected.example.com";
+        agentTab.Agent!.OpenUrlHandler!.Invoke(testUrl);
+
+        var paneBDock = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(paneBDock);
+        var paneADock = FindDocumentDockIn(paneA.ContentLayout!);
+        Assert.NotNull(paneADock);
+
+        await WaitForWorkspaceTabAsync(paneADock!, $"web-{testUrl}");
+
+        // New tab must appear in pane A
+        Assert.Contains(
+            paneADock!.VisibleDockables!.OfType<WorkspaceDocument>(),
+            doc => doc.Id == $"web-{testUrl}");
+
+        // New tab must NOT appear in pane B
+        Assert.DoesNotContain(
+            paneBDock!.VisibleDockables?.OfType<WorkspaceDocument>() ?? [],
+            doc => doc.Id == $"web-{testUrl}");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlHandler_WhenAgentChatIsInSelectedPane_OpensTabInSamePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("url00002-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("url00002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdA,
+            """
+            {
+              "entity-id": "url00002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-selected-pane-a"]],
+              "display-name": { "default": "URL Selected Pane A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceIdB,
+            """
+            {
+              "entity-id": "url00002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "url-selected-pane-b"]],
+              "display-name": { "default": "URL Selected Pane B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceIdA.ToString());
+        var paneAIndex = viewModel.WorkspacePanes.IndexOf(paneA);
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
+        Assert.Equal(paneA, viewModel.SelectedWorkspacePane);
+
+        var agentDefinitionId = new EntityId("url00002-0000-4000-8000-000000000003");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "url00002-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "url-selected-echo"]],
+              "display-name": { "default": "URL Selected Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "url-selected-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.NotNull(agentTab.Agent);
+
+        // Pane A is selected — invoke handler while it IS selected
+        Assert.Equal(paneA, viewModel.SelectedWorkspacePane);
+
+        const string testUrl = "https://url-selected.example.com";
+        agentTab.Agent!.OpenUrlHandler!.Invoke(testUrl);
+
+        var paneADock = FindDocumentDockIn(paneA.ContentLayout!);
+        Assert.NotNull(paneADock);
+        await WaitForWorkspaceTabAsync(paneADock!, $"web-{testUrl}");
+
+        Assert.Contains(
+            paneADock!.VisibleDockables!.OfType<WorkspaceDocument>(),
+            doc => doc.Id == $"web-{testUrl}");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlHandler_InsertsNewTabAfterAgentSessionTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionId = new EntityId("url00003-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "url00003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "url-insert-echo"]],
+              "display-name": { "default": "URL Insert Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "url-insert-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        // Open agent session tab
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            Assert.IsType<WorkspaceRegionViewModel>(viewModel.SelectedWorkspacePane.SelectedRegion).SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.NotNull(agentTab.Agent);
+
+        // Open another tab after the agent session tab
+        var otherTab = new WebViewModel("https://other.example.com") { Id = "url-insert-other", Title = "Other" };
+        await viewModel.OpenTabAsync(otherTab);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var agentTabIndex = documentDock!.VisibleDockables!
+            .Select((d, i) => (d, i))
+            .First(x => x.d.Id == agentTab.Id).i;
+
+        // Invoke the URL handler — new tab should be inserted right after the agent session tab
+        const string testUrl = "https://url-insert.example.com";
+        agentTab.Agent!.OpenUrlHandler!.Invoke(testUrl);
+
+        await WaitForWorkspaceTabAsync(documentDock!, $"web-{testUrl}");
+
+        var webTabIndex = documentDock!.VisibleDockables!
+            .Select((d, i) => (d, i))
+            .First(x => x.d.Id == $"web-{testUrl}").i;
+
+        Assert.Equal(agentTabIndex + 1, webTabIndex);
+    }
+
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
 
-    private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)
+    private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel) where T : class
     {
+        var field = typeof(MainWindowViewModel)
+            .GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsAssignableFrom<T>(field!.GetValue(viewModel));
+    }
+
+    private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)    {
         var contentLayout = viewModel.SelectedWorkspacePane?.ContentLayout;
         if (contentLayout is null)
         {
@@ -2355,6 +2612,167 @@ public sealed class MainWindowIntegrationTests
         var documentDock = GetDocumentDock(viewModel);
         Assert.NotNull(documentDock);
         Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_UpdatesSelectedWorkspacePane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("38300001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "38300001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-switch-a"]],
+              "display-name": { "default": "ADC Switch A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("38300001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "38300001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-switch-b"]],
+              "display-name": { "default": "ADC Switch B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var pane1 = viewModel.WorkspacePanes[0];
+        var pane2 = viewModel.WorkspacePanes[1];
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.Equal(pane1, viewModel.SelectedWorkspacePane);
+
+        // Simulate clicking pane 2's tab in the outer dock (fires ActiveDockableChanged with WorkspacePaneDocument).
+        var dockFactory = GetDockFactoryAs<IFactory>(viewModel);
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+        var paneDoc2 = workspacesDock!.VisibleDockables!
+            .OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane == pane2);
+        dockFactory.SetActiveDockable(paneDoc2);
+
+        Assert.Equal(pane2, viewModel.SelectedWorkspacePane);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_ThenAlt1_ActivatesTabInNewPane()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("38300002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "38300002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-alt1-a"]],
+              "display-name": { "default": "ADC Alt1 A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("38300002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "38300002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "adc-alt1-b"]],
+              "display-name": { "default": "ADC Alt1 B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Open a tab in pane 1.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        var tabInPane1 = new AgentSessionWorkspaceTabViewModel { Id = "adc-alt1-pane1-tab", Title = "Pane1 Tab" };
+        await viewModel.OpenTabAsync(tabInPane1);
+
+        // Open two tabs in pane 2.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        var tabInPane2A = new AgentSessionWorkspaceTabViewModel { Id = "adc-alt1-pane2-a", Title = "Pane2 Tab A" };
+        var tabInPane2B = new AgentSessionWorkspaceTabViewModel { Id = "adc-alt1-pane2-b", Title = "Pane2 Tab B" };
+        await viewModel.OpenTabAsync(tabInPane2A);
+        await viewModel.OpenTabAsync(tabInPane2B);
+
+        // Switch selection back to pane 1.
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+        // Simulate clicking pane 2's tab in the outer dock — SelectedWorkspacePane must update.
+        var dockFactory = GetDockFactoryAs<IFactory>(viewModel);
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+        var pane2 = viewModel.WorkspacePanes[1];
+        var paneDoc2 = workspacesDock!.VisibleDockables!
+            .OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane == pane2);
+        dockFactory.SetActiveDockable(paneDoc2);
+        Assert.Equal(pane2, viewModel.SelectedWorkspacePane);
+
+        // Alt+1 must activate the first tab of pane 2, not pane 1.
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("adc-alt1-pane2-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_KeyPress_Alt1_WithShellTabActive_ActivatesFirstContentTab()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-shell-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        var shellTab = new ShellTabViewModel(new FakeShellSession()) { Id = "kb-alt1-shell-b", Title = "Shell Tab" };
+        await viewModel.OpenTabAsync(shellTab);
+
+        // Shell tab is now active (last opened).
+        var window = new MainWindow(viewModel);
+        window.Show();
+
+        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("kb-alt1-shell-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
 
         window.Close();
     }
@@ -2997,7 +3415,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task GoToTabAtIndexCommand_Execute_ClearsIsAltHeld()
+    public async Task GoToTabAtIndexCommand_Execute_DoesNotClearIsAltHeld()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
@@ -3008,7 +3426,7 @@ public sealed class MainWindowIntegrationTests
         viewModel.IsAltHeld = true;
         viewModel.GoToTabAtIndexCommand.Execute("0");
 
-        Assert.False(viewModel.IsAltHeld);
+        Assert.True(viewModel.IsAltHeld);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -3442,7 +3860,8 @@ public sealed class MainWindowIntegrationTests
               "entity-id": "{{childId}}",
               "entity-types": ["entity", "note"],
               "names": [["notes", "expand-affordance-child"]],
-              "display-name": { "default": "Expand Affordance Child" }
+              "display-name": { "default": "Expand Affordance Child" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "" } }
             }
             """);
 
@@ -3510,7 +3929,8 @@ public sealed class MainWindowIntegrationTests
               "entity-id": "{{childId}}",
               "entity-types": ["entity", "note"],
               "names": [["notes", "toggle-expand-child"]],
-              "display-name": { "default": "Toggle Expand Child" }
+              "display-name": { "default": "Toggle Expand Child" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "" } }
             }
             """);
 
@@ -3792,6 +4212,27 @@ public sealed class MainWindowIntegrationTests
         var probe2 = await table.AcquireAsync(agentSessionId, TrackedFactory);
         Assert.Equal(1, callCount); // factory called — chat was disposed and entry removed
         await probe2.DisposeAsync();
+    }
+
+    private sealed class FakeShellSession : ITerminalSession
+    {
+        private readonly MemoryStream stream = new();
+
+        public Stream Stream => this.stream;
+
+        public ValueTask ResizeAsync(int columns, int rows, CancellationToken cancellationToken)
+            => ValueTask.CompletedTask;
+
+        public ValueTask SignalAsync(string signal, CancellationToken cancellationToken)
+            => ValueTask.CompletedTask;
+
+        public Task<int> WaitForExitAsync() => Task.FromResult(0);
+
+        public ValueTask DisposeAsync()
+        {
+            this.stream.Dispose();
+            return ValueTask.CompletedTask;
+        }
     }
 
 }
