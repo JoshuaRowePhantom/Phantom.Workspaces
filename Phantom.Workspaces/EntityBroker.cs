@@ -341,9 +341,12 @@ public sealed class EntityBroker
             },
             cancellationToken);
 
-        return getResult.Batches
-            .SelectMany(static batch => batch.Entities)
-            .ToDictionary(static snapshot => snapshot.EntityId, static snapshot => snapshot);
+        var result = new Dictionary<EntityId, EntitySnapshot>();
+        foreach (var snapshot in getResult.Batches.SelectMany(static b => b.Entities))
+        {
+            result[snapshot.EntityId] = snapshot;
+        }
+        return result;
     }
 
     private EntitySnapshot? ResolveEntityReference(
