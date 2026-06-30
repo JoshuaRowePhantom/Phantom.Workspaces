@@ -735,18 +735,21 @@
          Idle: clock glyph (⏱) at full opacity.
          :indeterminate (running): same glyph, Avalonia IsIndeterminate state active.
          .paused: pause glyph (⏸) with dimmed opacity.
-         .failed: clock glyph with error foreground. -->
+         .failed: clock glyph with error foreground.
+         PART_Indicator is required by ProgressBar but hidden; the glyph TextBlock is the visual. -->
     <Style Selector="ProgressBar.scheduled-tools-indicator">
         <Setter Property="IsHitTestVisible" Value="False" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.normal.Foreground}" />
         <Setter Property="Template">
             <ControlTemplate>
-                <TextBlock Text="⏱"
-                           FontSize="14"
-                           Foreground="{TemplateBinding Foreground}"
-                           Opacity="{TemplateBinding Opacity}"
-                           VerticalAlignment="Center"
-                           HorizontalAlignment="Center" />
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏱"
+                               FontSize="14"
+                               Foreground="{TemplateBinding Foreground}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
             </ControlTemplate>
         </Setter>
     </Style>
@@ -754,12 +757,14 @@
         <Setter Property="Opacity" Value="0.55" />
         <Setter Property="Template">
             <ControlTemplate>
-                <TextBlock Text="⏸"
-                           FontSize="14"
-                           Foreground="{TemplateBinding Foreground}"
-                           Opacity="{TemplateBinding Opacity}"
-                           VerticalAlignment="Center"
-                           HorizontalAlignment="Center" />
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock Text="⏸"
+                               FontSize="14"
+                               Foreground="{TemplateBinding Foreground}"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Center" />
+                </Panel>
             </ControlTemplate>
         </Setter>
     </Style>
