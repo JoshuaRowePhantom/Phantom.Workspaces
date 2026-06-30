@@ -496,7 +496,26 @@ public sealed class WebViewModelTests
         Assert.Equal(indexA + 1, indexNew);
     }
 
+    // --- FocusUrlBarCommand ---
 
+    [Fact]
+    public void FocusUrlBarCommand_IsAlwaysExecutable()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "focus-1", Title = "T" };
+        Assert.True(vm.FocusUrlBarCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void FocusUrlBarCommand_Execute_RaisesFocusUrlBarRequested()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "focus-2", Title = "T" };
+        var raised = false;
+        vm.FocusUrlBarRequested += (_, _) => raised = true;
+
+        vm.FocusUrlBarCommand.Execute(null);
+
+        Assert.True(raised);
+    }
 
     private static SubscribedEntityViewModel CreateExternalEntity(
         string entityId,

@@ -10,7 +10,7 @@ using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
-using Phantom.Workspaces.Gui.Styles.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
@@ -49,6 +49,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private AgentViewModel? subscribedViewModel;
     private bool isAttached;
     private bool suppressScrollOnEnable;
+    private bool suppressSinkScroll;
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
@@ -104,7 +105,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     public void ScrollToBottom()
     {
-        if (this.subscribedViewModel?.AutoScrollEnabled == false)
+        if (this.subscribedViewModel?.AutoScrollEnabled == false || this.suppressSinkScroll)
         {
             return;
         }
@@ -233,6 +234,11 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         if (this.subscribedViewModel is { } vm)
         {
+            // Suppress scroll-to-bottom calls from inside the batch: the scroll command would
+            // be processed before the browser lays out the new DOM nodes, so it would have no
+            // effect. The explicit scroll posted after EndBatch arrives in a later IPC round-trip,
+            // once the DOM is rendered, and therefore lands correctly at the bottom.
+            this.suppressSinkScroll = true;
             this.browser.BeginBatch();
             this.outputModel = new ChatOutputHtmlModel(
                 vm.History,
@@ -243,20 +249,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 toolFactory: DefaultToolFactory,
                 statusSink: this);
             this.browser.EndBatch();
+            this.suppressSinkScroll = false;
 
-            // Scroll to bottom and enable auto-scroll after initial content load.
-            // If AutoScrollEnabled was already true the ChatOutputHtmlModel constructor
-            // already called ScrollToBottom(); we only need an explicit scroll when
-            // AutoScrollEnabled was false (in which case the constructor's scroll was
-            // suppressed by the guard in ScrollToBottom()).
-            bool wasAutoScrollDisabled = !vm.AutoScrollEnabled;
+            // Always scroll to bottom and enable auto-scroll after the batch is flushed.
+            // Using suppressScrollOnEnable prevents the PropertyChanged handler from emitting
+            // a redundant second scroll command.
             this.suppressScrollOnEnable = true;
             vm.AutoScrollEnabled = true;
             this.suppressScrollOnEnable = false;
-            if (wasAutoScrollDisabled)
-            {
-                this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
-            }
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
         }
     }
 

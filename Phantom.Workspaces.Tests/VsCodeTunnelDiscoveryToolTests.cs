@@ -244,6 +244,23 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     }
 
     [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_CliNonZeroExit_UpsertEntityWithActiveFalse()
+    {
+        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            (_, _) => Task.FromResult(1)); // non-zero exit, no throw
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+
+        Assert.True(result.IsSuccess);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.NotNull(entity);
+        Assert.False(entity!.Value.GetProperty("active").GetBoolean());
+    }
+
+    [Fact]
     [Trait("Category", "Integration")]
     public async Task VsCodeTunnelDiscoveryTool_DefaultCli_TunnelStatusNonZeroExit_LogsWarning()
     {

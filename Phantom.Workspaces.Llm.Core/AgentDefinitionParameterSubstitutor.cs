@@ -100,7 +100,8 @@ public static class AgentDefinitionParameterSubstitutor
             if (name is null) continue;
 
             string? value = null;
-            if (parameterValues?.TryGetValue(name, out var providedValue) == true)
+            if (parameterValues?.TryGetValue(name, out var providedValue) == true
+                && !string.IsNullOrWhiteSpace(providedValue))
             {
                 value = providedValue;
             }
