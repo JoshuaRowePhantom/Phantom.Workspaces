@@ -76,6 +76,44 @@ public sealed class NavigationHistoryService : INavigationHistoryService
         return true;
     }
 
+    public bool GoBackSkipping(Func<NavigationEntry, bool> isEntryAvailable, out NavigationEntry? entry)
+    {
+        while (this.CanGoBack)
+        {
+            this.currentIndex--;
+            var candidate = this.entries[this.currentIndex];
+            if (isEntryAvailable(candidate))
+            {
+                entry = candidate;
+                this.CanNavigateChanged?.Invoke(this, EventArgs.Empty);
+                return true;
+            }
+        }
+
+        this.CanNavigateChanged?.Invoke(this, EventArgs.Empty);
+        entry = null;
+        return false;
+    }
+
+    public bool GoForwardSkipping(Func<NavigationEntry, bool> isEntryAvailable, out NavigationEntry? entry)
+    {
+        while (this.CanGoForward)
+        {
+            this.currentIndex++;
+            var candidate = this.entries[this.currentIndex];
+            if (isEntryAvailable(candidate))
+            {
+                entry = candidate;
+                this.CanNavigateChanged?.Invoke(this, EventArgs.Empty);
+                return true;
+            }
+        }
+
+        this.CanNavigateChanged?.Invoke(this, EventArgs.Empty);
+        entry = null;
+        return false;
+    }
+
     public bool GoToIndex(int index, out NavigationEntry? entry)
     {
         if (index < 0 || index >= this.entries.Count)

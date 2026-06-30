@@ -1563,15 +1563,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnNavigateBack()
     {
-        if (!this.navigationHistoryService.GoBack(out var entry) || entry is null)
-        {
-            return;
-        }
-
         this.navigatingViaHistory = true;
         try
         {
-            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
+            {
+                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            }
         }
         finally
         {
@@ -1581,20 +1579,51 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnNavigateForward()
     {
-        if (!this.navigationHistoryService.GoForward(out var entry) || entry is null)
-        {
-            return;
-        }
-
         this.navigatingViaHistory = true;
         try
         {
-            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            if (this.navigationHistoryService.GoForwardSkipping(this.IsTabOpen, out var entry) && entry is not null)
+            {
+                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            }
         }
         finally
         {
             this.navigatingViaHistory = false;
         }
+    }
+
+    private bool IsTabOpen(NavigationEntry entry)
+    {
+        if (entry.WorkspacePaneId is not null)
+        {
+            var targetPane = this.WorkspacePanes.FirstOrDefault(
+                p => string.Equals(p.Id, entry.WorkspacePaneId, StringComparison.Ordinal));
+            if (targetPane?.ContentLayout is not null)
+            {
+                var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
+                if (documentDock?.VisibleDockables
+                    ?.OfType<WorkspaceDocument>()
+                    .Any(d => string.Equals(d.Id, entry.TabId, StringComparison.Ordinal)) == true)
+                {
+                    return true;
+                }
+            }
+        }
+
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (pane.ContentLayout is null) continue;
+            var documentDock = this.FindDocumentDock(pane.ContentLayout);
+            if (documentDock?.VisibleDockables
+                ?.OfType<WorkspaceDocument>()
+                .Any(d => string.Equals(d.Id, entry.TabId, StringComparison.Ordinal)) == true)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void ActivateTabById(string tabId, string? workspacePaneId)
