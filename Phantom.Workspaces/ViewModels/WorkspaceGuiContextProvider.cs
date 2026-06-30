@@ -7,8 +7,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
-using Dock.Model.Controls;
-using Dock.Model.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
@@ -177,53 +175,19 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                     pane = mainVm.SelectedWorkspacePane;
                 }
 
-                if (pane.ContentLayout is null)
-                {
-                    return Serialize(Array.Empty<object>());
-                }
-
-                var documentDock = FindDocumentDock(pane.ContentLayout);
-                if (documentDock?.VisibleDockables is null)
-                {
-                    return Serialize(Array.Empty<object>());
-                }
-
-                var activeTabId = documentDock.ActiveDockable?.Id;
-                var tabs = documentDock.VisibleDockables
-                    .OfType<WorkspaceDocument>()
-                    .Select(doc => new
+                var activeTabId = pane.SelectedTab?.Id;
+                var tabs = pane.Tabs
+                    .Select(tab => new
                     {
-                        tab_id = doc.Id,
-                        title = doc.TabViewModel.Title,
-                        is_active = string.Equals(doc.Id, activeTabId, StringComparison.Ordinal),
+                        tab_id = tab.Id,
+                        title = tab.Title,
+                        is_active = string.Equals(tab.Id, activeTabId, StringComparison.Ordinal),
                     })
                     .ToArray();
                 return Serialize(tabs);
             });
             return new ValueTask<object?>(result);
         }
-    }
-
-    private static IDocumentDock? FindDocumentDock(IDockable dockable)
-    {
-        if (dockable is IDocumentDock documentDock)
-        {
-            return documentDock;
-        }
-
-        if (dockable is IDock dock && dock.VisibleDockables is not null)
-        {
-            foreach (var child in dock.VisibleDockables)
-            {
-                var result = FindDocumentDock(child);
-                if (result is not null)
-                {
-                    return result;
-                }
-            }
-        }
-
-        return null;
     }
 
     private sealed class WorkspaceCloseTool : AIFunction
