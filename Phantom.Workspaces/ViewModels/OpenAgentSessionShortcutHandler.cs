@@ -50,12 +50,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         SubscribedEntityViewModel entityViewModel)
     {
         // Open a loading tab immediately so the user sees feedback right away.
-        // Use the entity ID so OpenTabAsync deduplicates within the same workspace pane.
-        // Across panes each pane's dock is checked independently, so opening in a second
-        // pane still creates a new tab there while sharing the AgentChat via RunningAgentChatTable.
+        // Use a pane-scoped ID so OpenTabAsync deduplicates within the same workspace pane
+        // while still allowing the same session to be open in multiple panes simultaneously,
+        // sharing a single AgentChat via RunningAgentChatTable.
+        var paneId = mainWindowViewModel.SelectedWorkspacePane?.Id;
         var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
-            Id = entityViewModel.EntityId.ToString(),
+            Id = paneId is not null ? $"{paneId}-{entityViewModel.EntityId}" : entityViewModel.EntityId.ToString(),
             Title = entityViewModel.DisplayName,
             DockRegion = "full",
             Entity = entityViewModel,
