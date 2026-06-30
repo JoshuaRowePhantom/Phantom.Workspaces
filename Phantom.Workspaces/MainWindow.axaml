@@ -4,7 +4,6 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
-        xmlns:dmc="using:Dock.Model.Controls"
 
         xmlns:controls="using:Phantom.Workspaces.Controls"
         mc:Ignorable="d"
@@ -160,41 +159,7 @@
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />
 
-            <dock:DockControl Grid.Column="2" Layout="{Binding Layout}">
-                <dock:DockControl.DataTemplates>
-                    <!-- Workspace-level tab: shows the workspace's ContentLayout -->
-                    <DataTemplate DataType="vm:WorkspacePaneDocument">
-                        <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}"
-                                         AutoCreateDataTemplates="False">
-                            <dock:DockControl.DataTemplates>
-                                <!-- Supply root dock template (normally auto-created). -->
-                                <DataTemplate DataType="dmc:IRootDock">
-                                    <dock:RootDockControl />
-                                </DataTemplate>
-                                <!-- WorkspaceContentDock is our typed subclass of DocumentDock.
-                                     Using a concrete subtype means Dock's FuncDataTemplate<IDocumentDock>
-                                     (on PART_ContentControl) is bypassed, so AutoCreateDataTemplates=False
-                                     lets our DataTemplate on DockControl be found first. Setting
-                                     HeaderTemplate here is a local value (priority 1), which beats the
-                                     ControlTheme setter (priority 3). -->
-                                <DataTemplate DataType="vm:WorkspaceContentDock">
-                                    <dock:DocumentControl>
-                                        <dock:DocumentControl.HeaderTemplate>
-                                            <DataTemplate x:DataType="vm:WorkspaceDocument">
-                                                <ContentControl Content="{Binding EffectiveTabHeader}" />
-                                            </DataTemplate>
-                                        </dock:DocumentControl.HeaderTemplate>
-                                    </dock:DocumentControl>
-                                </DataTemplate>
-                                <!-- Content-level tab: shows the tab's ViewModel -->
-                                <DataTemplate DataType="vm:WorkspaceDocument">
-                                    <ContentControl Content="{Binding TabViewModel}" />
-                                </DataTemplate>
-                            </dock:DockControl.DataTemplates>
-                        </dock:DockControl>
-                    </DataTemplate>
-                </dock:DockControl.DataTemplates>
-            </dock:DockControl>
+            <dock:DockControl Grid.Column="2" Layout="{Binding Layout}" />
         </Grid>
 
         <!-- Anchor for the navigation-stack popup in the lower-left corner -->

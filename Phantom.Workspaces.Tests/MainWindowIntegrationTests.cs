@@ -3860,7 +3860,8 @@ public sealed class MainWindowIntegrationTests
               "entity-id": "{{childId}}",
               "entity-types": ["entity", "note"],
               "names": [["notes", "expand-affordance-child"]],
-              "display-name": { "default": "Expand Affordance Child" }
+              "display-name": { "default": "Expand Affordance Child" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "" } }
             }
             """);
 
@@ -3928,7 +3929,8 @@ public sealed class MainWindowIntegrationTests
               "entity-id": "{{childId}}",
               "entity-types": ["entity", "note"],
               "names": [["notes", "toggle-expand-child"]],
-              "display-name": { "default": "Toggle Expand Child" }
+              "display-name": { "default": "Toggle Expand Child" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "" } }
             }
             """);
 
