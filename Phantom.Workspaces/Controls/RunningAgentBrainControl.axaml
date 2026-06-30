@@ -1,0 +1,84 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Controls.RunningAgentBrainControl"
+             x:CompileBindings="False"
+             Focusable="False">
+    <Border Classes="notifications-panel"
+            Width="380"
+            MaxHeight="480">
+        <Grid RowDefinitions="Auto,*">
+            <Border Grid.Row="0"
+                    Padding="12,8">
+                <TextBlock Text="Running agents"
+                           FontWeight="SemiBold" />
+            </Border>
+
+            <!-- Empty state message -->
+            <TextBlock Grid.Row="1"
+                       Text="No agent sessions are currently active."
+                       Classes="muted"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       Margin="16"
+                       IsVisible="{Binding !HasRows}" />
+
+            <!-- Running agents list -->
+            <ScrollViewer Grid.Row="1"
+                          MaxHeight="420"
+                          IsVisible="{Binding HasRows}">
+                <ItemsControl ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RunningAgentRowViewModel">
+                            <Border Classes="interactive-row"
+                                    Padding="8,6" Margin="4,2">
+                                <Button Command="{Binding ActivateCommand}"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Left"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Padding="4">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <!-- Brain icon: pulsating when thinking, dimmed when idle -->
+                                        <TextBlock Classes="agent-chat-status-line-brain"
+                                                   Classes.thinking="{Binding IsThinking}"
+                                                   Classes.idle="{Binding IsThinking, Converter={x:Static BoolConverters.Not}}"
+                                                   Text="🧠"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,0,0" />
+
+                                        <!-- Workspace + tab labels (when open tab exists) -->
+                                        <StackPanel Spacing="1"
+                                                    IsVisible="{Binding HasOpenTab}">
+                                            <TextBlock Text="{Binding WorkspacePaneTitle}"
+                                                       Classes="muted"
+                                                       FontSize="11"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding TabTitle}"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+
+                                        <!-- Fallback label (when no open tab) -->
+                                        <StackPanel Spacing="1"
+                                                    IsVisible="{Binding !HasOpenTab}">
+                                            <TextBlock Text="No Open Tab"
+                                                       Classes="muted"
+                                                       FontSize="11" />
+                                            <TextBlock Text="{Binding EntityName}"
+                                                       FontWeight="SemiBold"
+                                                       TextWrapping="NoWrap"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Button>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</UserControl>
