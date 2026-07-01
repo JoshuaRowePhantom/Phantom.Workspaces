@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
@@ -13,6 +15,7 @@ using Avalonia.Threading;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
+using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
@@ -73,6 +76,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private bool isAltHeld;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
+    private readonly Dictionary<string, NotifyCollectionChangedEventHandler> tabsWriteBackSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
 
     public MainWindowViewModel(
@@ -1458,21 +1462,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        // WorkspacesPaneDock uses ItemsSource = WorkspacePanes, so the pane document
+        // is created automatically when the pane is added to WorkspacePanes.
+        // We only need to activate it here.
         var workspacesDock = FindDocumentDock(this.Layout);
         if (workspacesDock is not null)
         {
-            // Check if already in dock
-            var existingDocument = workspacesDock.VisibleDockables
-                ?.OfType<WorkspacePaneDocument>()
-                .FirstOrDefault(doc => doc.WorkspacePane == workspacePane);
-            
-            if (existingDocument is null)
+            var existingDocument = this.dockFactory.GetPaneDocument(workspacePane.Id)
+                ?? workspacesDock.VisibleDockables
+                    ?.OfType<WorkspacePaneDocument>()
+                    .FirstOrDefault(doc => doc.WorkspacePane == workspacePane);
+            if (existingDocument is not null)
             {
-                this.dockFactory.AddWorkspacePane(workspacesDock, workspacePane);
-            }
-            else
-            {
-                // Already in dock, just activate it
                 this.dockFactory.SetActiveDockable(existingDocument);
             }
         }
@@ -1514,10 +1515,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var pane = this.selectedWorkspacePane;
         var tab = activeDoc.TabViewModel;
-        // Remove from pane.Tabs before CloseDockable to prevent double-remove in CollectionChanged handler
+        // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
         pane.Tabs.Remove(tab);
-        this.dockFactory.UnregisterDocument(activeDoc.Id);
-        this.dockFactory.CloseDockable(activeDoc);
         DisposeWorkspaceTab(tab);
     }
 
@@ -1909,35 +1908,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             var sourceTabIndex = targetPane.Tabs.IndexOf(
                 targetPane.Tabs.FirstOrDefault(t => string.Equals(t.Id, insertAfterTabId, StringComparison.Ordinal))!);
-            var sourceDockIndex = -1;
-            var visibleDockables = documentDock.VisibleDockables;
-            if (visibleDockables is not null)
-            {
-                for (var i = 0; i < visibleDockables.Count; i++)
-                {
-                    if (string.Equals(visibleDockables[i].Id, insertAfterTabId, StringComparison.Ordinal))
-                    {
-                        sourceDockIndex = i;
-                        break;
-                    }
-                }
-            }
 
-            if (sourceDockIndex >= 0)
+            if (sourceTabIndex >= 0)
             {
-                var newDocument = this.dockFactory.CreateWorkspaceTabDocument(tab);
-                this.dockFactory.InsertDockable(documentDock, newDocument, sourceDockIndex + 1);
-                var paneInsertIndex = sourceTabIndex >= 0 ? sourceTabIndex + 1 : targetPane.Tabs.Count;
+                // Insert into pane.Tabs at the right position; ItemsSource creates the
+                // WorkspaceDocument at the correct dock position automatically.
+                var paneInsertIndex = sourceTabIndex + 1;
                 if (paneInsertIndex > targetPane.Tabs.Count) paneInsertIndex = targetPane.Tabs.Count;
                 targetPane.Tabs.Insert(paneInsertIndex, tab);
+                var newDocument = this.dockFactory.GetDocumentForTab(tab.Id);
                 if (focus)
                 {
                     if (!ReferenceEquals(this.selectedWorkspacePane, targetPane))
                     {
                         this.SelectedWorkspacePane = targetPane;
                     }
-                    this.dockFactory.SetActiveDockable(newDocument);
-                    this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+                    if (newDocument is not null)
+                    {
+                        this.dockFactory.SetActiveDockable(newDocument);
+                        this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+                    }
                     if (!this.navigatingViaHistory)
                     {
                         this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
@@ -1947,16 +1937,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        // Default: append the new tab at the end.
+        // Default: append the new tab at the end. ItemsSource creates the WorkspaceDocument automatically.
         if (focus && !ReferenceEquals(this.selectedWorkspacePane, targetPane))
         {
             this.SelectedWorkspacePane = targetPane;
         }
         targetPane.Tabs.Add(tab);
-        this.dockFactory.AddWorkspaceTab(documentDock, tab, focus);
-        if (focus && !this.navigatingViaHistory)
+        var appendedDocument = this.dockFactory.GetDocumentForTab(tab.Id);
+        if (focus)
         {
-            this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
+            if (appendedDocument is not null)
+            {
+                this.dockFactory.SetActiveDockable(appendedDocument);
+                this.dockFactory.SetFocusedDockable(documentDock, appendedDocument);
+            }
+            if (!this.navigatingViaHistory)
+            {
+                this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
+            }
         }
     }
 
@@ -1989,25 +1987,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var paneIndex = pane.Tabs.IndexOf(oldTab);
         var wasActive = ReferenceEquals(documentDock.ActiveDockable, existingDocument);
 
-        // Remove old tab from pane.Tabs before touching VisibleDockables to prevent double-remove
+        // Remove old tab from pane.Tabs; ItemsSource removes the WorkspaceDocument automatically.
         if (paneIndex >= 0)
             pane.Tabs.RemoveAt(paneIndex);
-        this.dockFactory.UnregisterDocument(oldTab.Id);
-
-        var visibleDockables = documentDock.VisibleDockables;
-        var dockIndex = visibleDockables?.IndexOf(existingDocument) ?? -1;
-        visibleDockables?.Remove(existingDocument);
-
-        // Create new document with the new tab
-        var newDocument = this.dockFactory.CreateWorkspaceTabDocument(newTab);
-
-        // Insert at the same dock position
-        if (dockIndex >= 0 && visibleDockables is not null && dockIndex < visibleDockables.Count)
-            visibleDockables.Insert(dockIndex, newDocument);
         else
-            visibleDockables?.Add(newDocument);
+            pane.Tabs.Remove(oldTab);
 
-        // Insert in pane.Tabs at the same position
+        // Insert new tab at the same position; ItemsSource creates a new WorkspaceDocument automatically.
         if (paneIndex >= 0 && paneIndex <= pane.Tabs.Count)
             pane.Tabs.Insert(paneIndex, newTab);
         else
@@ -2015,8 +2001,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (wasActive)
         {
-            this.dockFactory.SetActiveDockable(newDocument);
-            this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+            var newDocument = this.dockFactory.GetDocumentForTab(newTab.Id);
+            if (newDocument is not null)
+            {
+                this.dockFactory.SetActiveDockable(newDocument);
+                this.dockFactory.SetFocusedDockable(documentDock, newDocument);
+            }
         }
 
         DisposeWorkspaceTab(oldTab);
@@ -2028,12 +2018,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (!pane.Tabs.Contains(tab)) continue;
 
-            var doc = this.dockFactory.GetDocumentForTab(tab.Id);
-            // Remove from pane.Tabs before CloseDockable to prevent double-remove in CollectionChanged handler
+            // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
             pane.Tabs.Remove(tab);
-            this.dockFactory.UnregisterDocument(tab.Id);
-            if (doc is not null)
-                this.dockFactory.CloseDockable(doc);
             DisposeWorkspaceTab(tab);
             return;
         }
@@ -2078,11 +2064,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var tab = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
             if (tab is null) continue;
 
-            var doc = this.dockFactory.GetDocumentForTab(tabId);
+            // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
             pane.Tabs.Remove(tab);
-            this.dockFactory.UnregisterDocument(tabId);
-            if (doc is not null)
-                this.dockFactory.CloseDockable(doc);
             DisposeWorkspaceTab(tab);
             return true;
         }
@@ -2105,6 +2088,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.innerDockSubscriptions[workspacePane.Id] = handler;
 
         RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
+
+        // Subscribe to pane.Tabs changes for write-back to the workspace entity.
+        NotifyCollectionChangedEventHandler writeBackHandler = (_, _) =>
+        {
+            this.WriteBackWorkspaceTabs(workspacePane);
+        };
+        workspacePane.Tabs.CollectionChanged += writeBackHandler;
+        this.tabsWriteBackSubscriptions[workspacePane.Id] = writeBackHandler;
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
@@ -2116,6 +2107,149 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
         if (documentDock?.VisibleDockables is INotifyCollectionChanged collection)
             collection.CollectionChanged -= handler;
+
+        if (this.tabsWriteBackSubscriptions.TryGetValue(workspacePane.Id, out var writeBackHandler))
+        {
+            this.tabsWriteBackSubscriptions.Remove(workspacePane.Id);
+            workspacePane.Tabs.CollectionChanged -= writeBackHandler;
+        }
+    }
+
+    /// <summary>
+    /// Writes the current visual tab order and dock layout back to the workspace entity.
+    /// Called whenever <see cref="WorkspacePaneViewModel.Tabs"/> changes (add, remove, reorder).
+    /// </summary>
+    private void WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
+    {
+        if (this.entityBroker is null) return;
+        var entityData = workspacePane.Entity.Data;
+        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return;
+
+        // Build tabs array as workspace-tab-descriptors
+        var tabDescriptors = new JsonArray();
+        foreach (var tab in workspacePane.Tabs)
+        {
+            var descriptor = BuildTabDescriptor(tab);
+            if (descriptor is not null)
+            {
+                tabDescriptors.Add(descriptor);
+            }
+        }
+
+        // Serialize dock layout
+        JsonNode? dockLayout = null;
+        if (workspacePane.ContentLayout is not null)
+        {
+            try
+            {
+                var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+                using var ms = new MemoryStream();
+                serializer.Save(ms, workspacePane.ContentLayout);
+                ms.Position = 0;
+                var layoutJson = new StreamReader(ms).ReadToEnd();
+                if (!string.IsNullOrWhiteSpace(layoutJson))
+                {
+                    dockLayout = JsonNode.Parse(layoutJson);
+                }
+            }
+            catch
+            {
+                // Silently ignore dock layout serialization failures.
+            }
+        }
+
+        // Build merged entity data with updated tabs and dock-layout
+        var entityNode = JsonNode.Parse(dataElement.GetRawText())?.AsObject();
+        if (entityNode is null) return;
+
+        entityNode["tabs"] = tabDescriptors;
+
+        // Capture the currently active tab's ID
+        var documentDock = workspacePane.ContentLayout is not null
+            ? this.FindDocumentDock(workspacePane.ContentLayout)
+            : null;
+        var activeTabId = (documentDock?.ActiveDockable as WorkspaceDocument)?.Id;
+        if (activeTabId is not null)
+        {
+            entityNode["active-tab-id"] = activeTabId;
+        }
+        else
+        {
+            entityNode.Remove("active-tab-id");
+        }
+        if (dockLayout is not null)
+        {
+            entityNode["dock-layout"] = dockLayout;
+        }
+        else
+        {
+            entityNode.Remove("dock-layout");
+        }
+
+        // Remove legacy fields that we no longer write
+        entityNode.Remove("focused-tab-id");
+
+        var updatedJson = entityNode.ToJsonString();
+        using var doc = JsonDocument.Parse(updatedJson);
+        var updatedData = doc.RootElement.Clone();
+
+        _ = this.entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata
+            {
+                Comment = new Markdown { Text = "Update workspace tabs" },
+            },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = workspacePane.Entity.EntityId,
+                    ConcurrencyTag = null,
+                    Data = updatedData,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+    }
+
+    /// <summary>
+    /// Builds a workspace-tab-descriptor <see cref="JsonObject"/> for write-back.
+    /// Returns null for tab types that cannot be serialized.
+    /// </summary>
+    private static JsonObject? BuildTabDescriptor(WorkspaceTabViewModel tab)
+    {
+        JsonObject? content = null;
+
+        if (tab.Entity is { } entity)
+        {
+            // Entity-reference tab
+            var entityId = entity.EntityId.Value.ToString();
+            content = new JsonObject
+            {
+                ["target-entity-name"] = new JsonObject
+                {
+                    ["entity-id"] = entityId,
+                },
+            };
+        }
+        else if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
+        {
+            // Browser-URL tab
+            content = new JsonObject
+            {
+                ["url"] = webVm.AddressBarUrl,
+            };
+        }
+
+        if (content is null) return null;
+
+        return new JsonObject
+        {
+            ["tab-id"] = tab.Id,
+            ["title"] = tab.Title,
+            ["kind"] = tab.DockRegion,
+            ["content"] = content,
+        };
     }
 
     /// <summary>
@@ -2135,8 +2269,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 if (item is WorkspaceDocument doc && workspacePane.Tabs.Contains(doc.TabViewModel))
                 {
+                    // Remove from pane.Tabs; WorkspaceDocumentGenerator.ClearDocumentContainer
+                    // already removes from documentsByTabId via the onCleared callback.
                     workspacePane.Tabs.Remove(doc.TabViewModel);
-                    this.dockFactory.UnregisterDocument(doc.Id);
                     DisposeWorkspaceTab(doc.TabViewModel);
                 }
             }
@@ -2310,12 +2445,56 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var requests = new List<GetEntityRequest>();
         var seenNames = new HashSet<EntityName>();
 
+        // Collect tab declarations from the new tabs[] property first, then fall back to legacy regions[].
+        var tabDeclarations = CollectTabDeclarations(workspaceData);
+        foreach (var tab in tabDeclarations)
+        {
+            if (tab.ValueKind != JsonValueKind.Object
+                || !tab.TryGetProperty("content", out var content)
+                || content.ValueKind != JsonValueKind.Object
+                || !content.TryGetProperty("target-entity-name", out var targetEntityName))
+            {
+                continue;
+            }
+
+            var entityName = ReadEntityName(targetEntityName);
+            if (entityName is null || !seenNames.Add(entityName.Value))
+            {
+                continue;
+            }
+
+            requests.Add(new GetEntityRequest
+            {
+                EntityName = entityName,
+            });
+        }
+
+        return requests;
+    }
+
+    /// <summary>
+    /// Collects tab declarations from workspaceData, preferring the new <c>tabs</c> array
+    /// and falling back to flattening the legacy <c>regions[].tabs</c>.
+    /// </summary>
+    private static IReadOnlyList<JsonElement> CollectTabDeclarations(JsonElement workspaceData)
+    {
+        // Prefer new top-level tabs array
+        if (workspaceData.TryGetProperty("tabs", out var tabsElement)
+            && tabsElement.ValueKind == JsonValueKind.Array)
+        {
+            return tabsElement.EnumerateArray()
+                .Where(t => t.ValueKind == JsonValueKind.Object)
+                .ToList();
+        }
+
+        // Legacy: flatten regions[].tabs
         if (!workspaceData.TryGetProperty("regions", out var regions)
             || regions.ValueKind != JsonValueKind.Array)
         {
-            return requests;
+            return [];
         }
 
+        var result = new List<JsonElement>();
         foreach (var region in regions.EnumerateArray())
         {
             if (region.ValueKind != JsonValueKind.Object
@@ -2327,28 +2506,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             foreach (var tab in tabs.EnumerateArray())
             {
-                if (tab.ValueKind != JsonValueKind.Object
-                    || !tab.TryGetProperty("content", out var content)
-                    || content.ValueKind != JsonValueKind.Object
-                    || !content.TryGetProperty("target-entity-name", out var targetEntityName))
+                if (tab.ValueKind == JsonValueKind.Object)
                 {
-                    continue;
+                    result.Add(tab);
                 }
-
-                var entityName = ReadEntityName(targetEntityName);
-                if (entityName is null || !seenNames.Add(entityName.Value))
-                {
-                    continue;
-                }
-
-                requests.Add(new GetEntityRequest
-                {
-                    EntityName = entityName,
-                });
             }
         }
-
-        return requests;
+        return result;
     }
 
     private async Task PopulateWorkspacePaneTabsAsync(
@@ -2356,35 +2520,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SubscribedEntityViewModel workspaceEntity,
         JsonElement workspaceData)
     {
-        var contentDock = this.FindDocumentDock(workspacePane.ContentLayout!);
-        if (contentDock is null)
-        {
-            return;
-        }
-
-        // Collect all tab declarations from regions
-        var tabDeclarations = new List<JsonElement>();
-        if (workspaceData.TryGetProperty("regions", out var regions)
-            && regions.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var region in regions.EnumerateArray())
-            {
-                if (region.ValueKind != JsonValueKind.Object
-                    || !region.TryGetProperty("tabs", out var tabs)
-                    || tabs.ValueKind != JsonValueKind.Array)
-                {
-                    continue;
-                }
-
-                foreach (var tab in tabs.EnumerateArray())
-                {
-                    if (tab.ValueKind == JsonValueKind.Object)
-                    {
-                        tabDeclarations.Add(tab);
-                    }
-                }
-            }
-        }
+        // Collect tab declarations: prefer new tabs[] array, fall back to legacy regions[].tabs
+        var tabDeclarations = CollectTabDeclarations(workspaceData);
 
         // Load all tabs in parallel, preserving declaration order
         var tabAdded = false;
@@ -2393,7 +2530,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var tabResults = await Task.WhenAll(
                 tabDeclarations.Select(tabDecl => this.TryFetchWorkspaceTabAsync(tabDecl)));
 
-            // Add to dock in declaration order on the UI thread
+            // Add to pane.Tabs on the UI thread; WorkspaceDocumentGenerator creates dock documents automatically.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var workspaceClosed = false;
@@ -2409,7 +2546,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         continue;
                     }
 
-                    this.dockFactory.AddWorkspaceTab(contentDock, workspaceTab);
                     workspacePane.Tabs.Add(workspaceTab);
                     tabAdded = true;
                 }
@@ -2435,16 +2571,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     return;
                 }
 
-                this.dockFactory.AddWorkspaceTab(contentDock, defaultTab);
                 workspacePane.Tabs.Add(defaultTab);
             });
         }
 
-        if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
-            && focusedTabIdElement.ValueKind == JsonValueKind.String
-            && focusedTabIdElement.GetString() is { } focusedTabId
-            && !string.IsNullOrEmpty(focusedTabId))
+        // Activate the saved active/focused tab (new active-tab-id property, falling back to legacy focused-tab-id)
+        string? activeTabId = null;
+        if (workspaceData.TryGetProperty("active-tab-id", out var activeTabIdElement)
+            && activeTabIdElement.ValueKind == JsonValueKind.String)
         {
+            activeTabId = activeTabIdElement.GetString();
+        }
+        else if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
+            && focusedTabIdElement.ValueKind == JsonValueKind.String)
+        {
+            activeTabId = focusedTabIdElement.GetString();
+        }
+
+        if (!string.IsNullOrEmpty(activeTabId))
+        {
+            var tabIdToActivate = activeTabId;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (!this.WorkspacePanes.Contains(workspacePane))
@@ -2452,7 +2598,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     return;
                 }
 
-                var focusedDoc = this.dockFactory.GetDocumentForTab(focusedTabId);
+                var focusedDoc = this.dockFactory.GetDocumentForTab(tabIdToActivate);
                 if (focusedDoc is not null)
                 {
                     this.dockFactory.SetActiveDockable(focusedDoc);
@@ -2618,13 +2764,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Add all tabs to this workspace's ContentLayout and to pane.Tabs
-        var contentDock = FindDocumentDock(workspacePane.ContentLayout);
-        if (contentDock is not null)
+        // ItemsSource wiring means pane.Tabs.Add() automatically creates the WorkspaceDocument.
+        if (workspacePane.ContentLayout is not null)
         {
             foreach (var tab in tabs)
             {
                 workspacePane.Tabs.Add(tab);
-                this.dockFactory.AddWorkspaceTab(contentDock, tab);
             }
         }
 

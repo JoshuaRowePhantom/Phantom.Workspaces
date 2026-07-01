@@ -183,46 +183,53 @@ public sealed class ReverseTrustedExecutionTests
     [Fact]
     public async Task ReverseTrustedExecutor_CreateAgentChat_SetsNullPersistenceStore()
     {
-        var registry = new ReverseExecutionRegistry();
-        var connection = new StreamingConnection("computer-a", "response");
-        registry.Register(connection);
+        var trackingStore = new TrackingAgentPersistenceStore();
 
-        var spyStore = new SpyAgentPersistenceStore();
+        var registry = new ReverseExecutionRegistry();
+        var connection = new StreamingConnection("computer-a", "turn-result");
+        registry.Register(connection);
         var executor = new ReverseTrustedExecutor(registry);
+
+        // ReverseTrustedExecutor must override AgentPersistenceStoreOverride with NullAgentPersistenceStore.Instance,
+        // so the provided tracking store's ReadMessagesAsync should never be called.
         await using var chat = await executor.CreateAgentChatAsync(new TrustedExecutionRequest
         {
             AgentDefinition = AgentSchema.AgentDefinition.FromJson(
-                """{ "kind": "prompt", "name": "x", "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }, "tools": [] }""")!,
+                """{ "kind":"prompt","name":"x","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[] }"""),
             TrustProfile = new TrustProfile { HostingWorkspacesClientInstances = ["computer-a"] },
             TargetClientInstance = "computer-a",
-            AgentServices = new Phantom.Workspaces.Llm.AgentServices { AgentPersistenceStoreOverride = spyStore },
+            AgentSessionId = "test-null-store",
+            AgentServices = new Phantom.Workspaces.Llm.AgentServices { AgentPersistenceStoreOverride = trackingStore },
         });
 
-        await foreach (var _ in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")]))
-        {
-        }
+        await foreach (var _ in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")])) { }
 
-        // NullAgentPersistenceStore.Instance must override the spy so StoreAsync is never called.
-        Assert.Equal(0, spyStore.StoreCallCount);
+        Assert.Equal(0, trackingStore.ReadMessageCallCount);
     }
 
-    /// <summary>A persistence store spy that counts <see cref="StoreAsync"/> calls.</summary>
-    private sealed class SpyAgentPersistenceStore : IAgentPersistenceStore
+    private sealed class TrackingAgentPersistenceStore : Phantom.Workspaces.Llm.Interfaces.IAgentPersistenceStore
     {
-        public int StoreCallCount { get; private set; }
+        public int ReadMessageCallCount { get; private set; }
 
-        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        public ValueTask StoreAsync(
+            Phantom.Workspaces.Llm.Interfaces.StoreRequestAgent request,
+            CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<Phantom.Workspaces.Llm.Interfaces.PersistedAgent?> RestoreAsync(
+            Phantom.Workspaces.Llm.Interfaces.RestoreRequest request,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<Phantom.Workspaces.Llm.Interfaces.PersistedAgent?>(null);
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(
+            Phantom.Workspaces.Llm.Interfaces.ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
         {
-            this.StoreCallCount++;
-            return ValueTask.CompletedTask;
+            this.ReadMessageCallCount++;
+            return ValueTask.FromResult(System.Array.Empty<ChatMessage>());
         }
-
-        public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult<PersistedAgent?>(null);
-
-        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(Array.Empty<ChatMessage>());
     }
+
 
     /// <summary>
     /// A test <see cref="IReverseExecutionHandler"/> that, on a stream open, deserialises the

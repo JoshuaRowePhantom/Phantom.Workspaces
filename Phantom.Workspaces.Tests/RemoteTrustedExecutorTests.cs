@@ -15,6 +15,10 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class RemoteTrustedExecutorTests
 {
+    // AIJsonUtilities.DefaultOptions uses WriteIndented = true; NDJSON requires compact (single-line) JSON.
+    private static readonly System.Text.Json.JsonSerializerOptions CompactAiOptions =
+        new System.Text.Json.JsonSerializerOptions(AIJsonUtilities.DefaultOptions) { WriteIndented = false };
+
     [AvaloniaFact]
     public void Constructor_LocalInstance_Throws()
     {
@@ -137,11 +141,10 @@ public sealed class RemoteTrustedExecutorTests
     [AvaloniaFact]
     public async Task RemoteAgentChatClient_PostsToAgentChatTurnEndpoint_StreamsNdjsonResponse()
     {
-        var update1 = new ChatResponseUpdate(ChatRole.Assistant, "hello ");
-        var update2 = new ChatResponseUpdate(ChatRole.Assistant, "world");
-        var ndjson =
-            JsonSerializer.Serialize(update1, AIJsonUtilities.DefaultOptions) + "\n" +
-            JsonSerializer.Serialize(update2, AIJsonUtilities.DefaultOptions) + "\n";
+        var update1 = new ChatResponseUpdate(ChatRole.Assistant, "hello");
+        var update2 = new ChatResponseUpdate(ChatRole.Assistant, " world");
+        var ndjson = JsonSerializer.Serialize(update1, CompactAiOptions) + "\n"
+                   + JsonSerializer.Serialize(update2, CompactAiOptions) + "\n";
 
         string? requestedPath = null;
         var handler = new FakeHttpMessageHandler((request, _) =>
@@ -152,20 +155,21 @@ public sealed class RemoteTrustedExecutorTests
                 Content = new StringContent(ndjson, Encoding.UTF8, "application/x-ndjson"),
             };
         });
+
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
-        using var chatClient = new RemoteAgentChatClient(
+        using var client = new RemoteAgentChatClient(
             "https://remote.example/",
             "{\"kind\":\"prompt\",\"name\":\"a\"}",
-            "session-abc",
+            "session-42",
             httpClient: httpClient);
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
+        await foreach (var u in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
         {
-            updates.Add(update);
+            updates.Add(u);
         }
 
-        Assert.Equal("/agent/chat/session-abc/turn", requestedPath);
+        Assert.Equal("/agent/chat/session-42/turn", requestedPath);
         Assert.Equal(2, updates.Count);
         Assert.Equal("hello world", string.Concat(updates.Select(static u => u.Text)));
     }
@@ -176,29 +180,25 @@ public sealed class RemoteTrustedExecutorTests
         var handler = new FakeHttpMessageHandler((_, _) =>
             new HttpResponseMessage(HttpStatusCode.InternalServerError)
             {
-                Content = new StringContent("internal error"),
+                Content = new StringContent("boom"),
             });
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
-        using var chatClient = new RemoteAgentChatClient(
+        using var client = new RemoteAgentChatClient(
             "https://remote.example/",
             "{\"kind\":\"prompt\",\"name\":\"a\"}",
-            "session-abc",
+            "session-x",
             httpClient: httpClient);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            await foreach (var _ in chatClient.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
-            {
-            }
-        });
+            await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
         Assert.Contains("500", exception.Message, StringComparison.Ordinal);
     }
 
     [AvaloniaFact]
-    public async Task RemoteTrustedExecutor_CreateAgentChat_UsesRemoteAgentChatClientEndpoint()
+    public async Task RemoteTrustedExecutor_CreateAgentChat_SendsToAgentChatTurnEndpoint()
     {
-        var update = new ChatResponseUpdate(ChatRole.Assistant, "ok");
-        var ndjson = JsonSerializer.Serialize(update, AIJsonUtilities.DefaultOptions) + "\n";
+        var update = new ChatResponseUpdate(ChatRole.Assistant, "remote-reply");
+        var ndjson = JsonSerializer.Serialize(update, CompactAiOptions) + "\n";
 
         string? requestedPath = null;
         var handler = new FakeHttpMessageHandler((request, _) =>
@@ -209,25 +209,26 @@ public sealed class RemoteTrustedExecutorTests
                 Content = new StringContent(ndjson, Encoding.UTF8, "application/x-ndjson"),
             };
         });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://remote.example/") };
+        var executor = new RemoteTrustedExecutor("remote-a", "https://remote.example/", httpClient: httpClient);
 
-        var executor = new RemoteTrustedExecutor("remote-a", "https://remote.example/", httpMessageHandler: handler);
-        var agentDef = AgentSchema.AgentDefinition.FromJson(
-            """{ "kind": "prompt", "name": "x", "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }, "tools": [] }""")!;
         await using var chat = await executor.CreateAgentChatAsync(new TrustedExecutionRequest
         {
-            AgentDefinition = agentDef,
+            AgentDefinition = AgentSchema.AgentDefinition.FromJson(
+                """{ "kind":"prompt","name":"x","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[] }"""),
             TrustProfile = new TrustProfile { HostingWorkspacesClientInstances = ["remote-a"] },
             TargetClientInstance = "remote-a",
-            AgentSessionId = "sess-123",
+            AgentSessionId = "session-99",
         });
 
-        await foreach (var _ in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")]))
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")]))
         {
+            updates.Add(u);
         }
 
-        Assert.NotNull(requestedPath);
-        Assert.StartsWith("/agent/chat/", requestedPath, StringComparison.Ordinal);
-        Assert.EndsWith("/turn", requestedPath, StringComparison.Ordinal);
+        Assert.Equal("/agent/chat/session-99/turn", requestedPath);
+        Assert.NotEmpty(updates);
     }
 
     private sealed class FakeHttpMessageHandler : HttpMessageHandler

@@ -144,7 +144,7 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
             .ConfigureAwait(false);
     }
 
-    public async Task ApplyAccessModeAsync(
+    public async Task<string?> ApplyAccessModeAsync(
         string tunnelId,
         DevTunnelAccessMode accessMode,
         CancellationToken cancellationToken = default)
@@ -174,6 +174,24 @@ internal sealed class DevTunnelManagementClientWrapper : IDevTunnelManagementCli
         this.currentTunnel = await this.managementClient
             .UpdateTunnelAsync(tunnel, CreateHostRequestOptions(), cancellationToken)
             .ConfigureAwait(false);
+
+        if (accessMode == DevTunnelAccessMode.Anonymous)
+        {
+            return null;
+        }
+
+        // Re-fetch the tunnel with a connect-scope token so the host can expose it to operators
+        // for cross-account distribution. Connect tokens are short-lived — re-fetched on each start.
+        var withConnectToken = await this.managementClient
+            .GetTunnelAsync(
+                this.currentTunnel,
+                new TunnelRequestOptions { TokenScopes = [TunnelAccessScopes.Connect] },
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        string? connectToken = null;
+        withConnectToken?.AccessTokens?.TryGetValue(TunnelAccessScopes.Connect, out connectToken);
+        return connectToken;
     }
 
     public async Task<string> GetAccessPointUrlAsync(

@@ -253,6 +253,10 @@ public sealed class DevTunnelManagementClientWrapperTests
             .Setup(client => client.UpdateTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
             .Callback<Tunnel, TunnelRequestOptions, CancellationToken>((updated, _, _) => updatedTunnel = updated)
             .ReturnsAsync((Tunnel updated, TunnelRequestOptions _, CancellationToken _) => updated);
+        // Private mode re-fetches the tunnel for the connect token after the ACL update.
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(tunnel);
 
         await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
@@ -279,6 +283,51 @@ public sealed class DevTunnelManagementClientWrapperTests
         var entry = Assert.Single(updatedTunnel!.AccessControl!.Entries!);
         Assert.Equal(TunnelAccessControlEntryType.Anonymous, entry.Type);
         Assert.Contains(TunnelAccessScopes.Connect, entry.Scopes!);
+    }
+
+    [Fact]
+    public async Task ApplyAccessModeAsync_Private_FetchesConnectTokenAfterUpdate()
+    {
+        var tunnel = new Tunnel { TunnelId = "tunnel-1", Labels = [Marker] };
+        var management = CreateManagementWithTunnel(tunnel, out var wrapper);
+        management
+            .Setup(client => client.UpdateTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(tunnel);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "tunnel-1",
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "fresh-connect-token" },
+            });
+
+        var connectToken = await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
+
+        Assert.Equal("fresh-connect-token", connectToken);
+        management.Verify(
+            client => client.GetTunnelAsync(
+                It.IsAny<Tunnel>(),
+                It.Is<TunnelRequestOptions>(opts => opts.TokenScopes != null && opts.TokenScopes.Contains(TunnelAccessScopes.Connect)),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ApplyAccessModeAsync_Anonymous_DoesNotFetchConnectToken_ReturnsNull()
+    {
+        var tunnel = new Tunnel { TunnelId = "tunnel-1", Labels = [Marker] };
+        var management = CreateManagementWithTunnel(tunnel, out var wrapper);
+        management
+            .Setup(client => client.UpdateTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(tunnel);
+
+        var connectToken = await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Anonymous, TestContext.Current.CancellationToken);
+
+        Assert.Null(connectToken);
+        // GetTunnelAsync must NOT be called for Anonymous mode.
+        management.Verify(
+            client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

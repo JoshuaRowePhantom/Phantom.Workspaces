@@ -27,22 +27,71 @@
     "title": {
       "$ref": "core.json#/$defs/local-string"
     },
+    "tabs": {
+      "type": "array",
+      "description": "Ordered list of open tabs in their current visual order (left to right). Kept in sync with the dock model's VisibleDockables order. Replaces regions[].",
+      "items": {
+        "$ref": "#/$defs/workspace-tab-descriptor"
+      }
+    },
+    "dock-layout": {
+      "description": "Dock.Serializer snapshot of the workspace content layout, stored as an inline JSON object. Captures splits, proportions, and active-tab-per-dock. Absent or invalid values are silently ignored.",
+      "$ref": "workspace-dock-layout.json"
+    },
+    "active-tab-id": {
+      "type": "string",
+      "description": "Tab ID to activate after restore. Replaces focused-tab-id."
+    },
     "regions": {
       "type": "array",
+      "deprecated": true,
+      "description": "Deprecated. Use tabs and dock-layout instead. Kept for backward compatibility; read-only during migration, never written.",
       "items": {
         "$ref": "#/$defs/workspace-region"
       }
     },
     "focused-tab-id": {
       "type": "string",
-      "description": "The tab-id of the tab that should be active when the workspace is first opened. If absent or unmatched, the default dock behaviour applies."
+      "deprecated": true,
+      "description": "Deprecated. Use active-tab-id instead."
     }
   },
   "required": [
-    "entity-types",
-    "regions"
+    "entity-types"
   ],
   "$defs": {
+    "workspace-tab-descriptor": {
+      "type": "object",
+      "description": "Descriptor for a single open tab, stored in visual order.",
+      "properties": {
+        "tab-id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "content": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/workspace-entity-content"
+            },
+            {
+              "$ref": "#/$defs/workspace-browser-content"
+            }
+          ]
+        }
+      },
+      "required": [
+        "tab-id",
+        "title",
+        "kind",
+        "content"
+      ],
+      "unevaluatedProperties": false
+    },
     "workspace-region": {
       "type": "object",
       "properties": {
@@ -84,6 +133,7 @@
     },
     "workspace-tab": {
       "type": "object",
+      "description": "Deprecated tab descriptor used inside legacy regions[]. Replaced by workspace-tab-descriptor.",
       "properties": {
         "tab-id": {
           "type": "string"

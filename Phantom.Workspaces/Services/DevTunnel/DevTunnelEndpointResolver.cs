@@ -41,12 +41,17 @@ public sealed class DevTunnelEndpointResolver : IDevTunnelEndpointResolver
 
         var port = lookup.ForwardedPorts[0];
         var baseUri = new Uri($"https://{lookup.TunnelId}-{port}.{lookup.ClusterId}.devtunnels.ms/");
-        var tunnelAuthToken = accessMode == DevTunnelAccessMode.Token
-            ? (lookup.ConnectToken
+        // Both Private and Token modes require X-Tunnel-Authorization: tunnel <connect-token>.
+        // The connect token is fetched automatically by the Management API when the lookup request
+        // includes TokenScopes=[Connect] — no env-var or manual token configuration needed.
+        var tunnelAuthToken = accessMode switch
+        {
+            DevTunnelAccessMode.Anonymous => null,
+            _ => lookup.ConnectToken
                 ?? throw new InvalidOperationException(
                     "The Management API did not return a Connect-scope tunnel token. " +
-                    "Ensure the tunnel is not anonymous and the caller has Connect access."))
-            : null;
+                    "Ensure the GitHub identity has access to the tunnel."),
+        };
         return new DevTunnelEndpointResolution(baseUri, tunnelAuthToken);
     }
 }
