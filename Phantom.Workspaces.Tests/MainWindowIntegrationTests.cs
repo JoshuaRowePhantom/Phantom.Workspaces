@@ -678,9 +678,57 @@ public sealed class MainWindowIntegrationTests
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
 
         Assert.True(handled);
-        var launchpadTab2 = Assert.IsType<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
-        Assert.Same(agentManifestEntity, launchpadTab2.ManifestEntity);
-        Assert.True(launchpadTab2.CanStart);
+        var sessionTab2 = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane);
+        await WaitForAgentReadyAsync(sessionTab2);
+        Assert.NotNull(sessionTab2.Agent);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentManifestShortcutHandler_ManifestWithParameters_ShowsLaunchpadNotAutoStarted()
+    {
+        var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentManifestEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("a1b2c3d4-0000-4000-8000-000000000002"),
+            """
+            {
+              "entity-id": "a1b2c3d4-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "agent-manifest"],
+              "names": [["tests", "agent-manifests", "with-parameters"]],
+              "display-name": { "default": "Manifest With Parameters" },
+              "manifest": {
+                "name": "with-parameters",
+                "displayName": "Manifest With Parameters",
+                "template": {
+                  "kind": "prompt",
+                  "name": "with-parameters",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                },
+                "parameters": {
+                  "properties": [
+                    { "name": "working-directory", "required": true }
+                  ]
+                }
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+
+        var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
+
+        Assert.True(handled);
+        var launchpadTab = await WaitForSelectedTabAsync<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane);
+        Assert.Same(agentManifestEntity, launchpadTab.ManifestEntity);
+        Assert.Single(launchpadTab.Parameters);
+        Assert.False(launchpadTab.CanStart);
+        Assert.DoesNotContain(viewModel.SelectedWorkspacePane.Tabs, static t => t is AgentSessionWorkspaceTabViewModel);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -724,16 +772,7 @@ public sealed class MainWindowIntegrationTests
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
 
         Assert.True(handled);
-        var launchpadTab3 = Assert.IsType<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
-        Assert.Same(agentDefinitionEntity, launchpadTab3.ManifestEntity);
-
-        // Create an agent session directly (equivalent to the launchpad's Start Session) to verify tool mapping.
-        var agentSessionId = Guid.NewGuid().ToString("n");
-        var createdAgentSession = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-            viewModel, agentDefinitionEntity, agentSessionId);
-        Assert.NotNull(createdAgentSession);
-        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, createdAgentSession!);
-        var sessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        var sessionTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane);
         await WaitForAgentReadyAsync(sessionTab);
         Assert.NotNull(sessionTab.Agent);
         Assert.Contains(sessionTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
@@ -2138,6 +2177,40 @@ public sealed class MainWindowIntegrationTests
             {
                 observable.CollectionChanged -= OnCollectionChanged;
             }
+        }
+    }
+
+    private static async Task<T> WaitForSelectedTabAsync<T>(WorkspacePaneViewModel pane)
+        where T : WorkspaceTabViewModel
+    {
+        if (pane.SelectedTab is T alreadyReady)
+        {
+            return alreadyReady;
+        }
+
+        var signal = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(WorkspacePaneViewModel.SelectedTab) && pane.SelectedTab is T t)
+            {
+                signal.TrySetResult(t);
+            }
+        }
+
+        pane.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            if (pane.SelectedTab is T existing)
+            {
+                return existing;
+            }
+
+            return await signal.Task;
+        }
+        finally
+        {
+            pane.PropertyChanged -= OnPropertyChanged;
         }
     }
 
