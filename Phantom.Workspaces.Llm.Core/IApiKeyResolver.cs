@@ -1,0 +1,23 @@
+namespace Phantom.Workspaces.Llm;
+
+/// <summary>
+/// Resolves an API key value, expanding environment-variable references of the form
+/// <c>${VAR_NAME}</c> as needed.
+/// </summary>
+public interface IApiKeyResolver
+{
+    /// <summary>
+    /// Resolves the key.
+    /// </summary>
+    /// <param name="apiKeyValue">
+    /// The raw key value from the agent definition (may be a literal or a <c>${VAR}</c> reference).
+    /// </param>
+    /// <param name="serverName">
+    /// The MCP server / provider name used in error messages.
+    /// </param>
+    /// <returns>The resolved API key string.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the key cannot be resolved (missing environment variable, etc.).
+    /// </exception>
+    string ResolveApiKey(string? apiKeyValue, string? serverName);
+}
