@@ -128,21 +128,23 @@ Make the minimal changes to make the tests pass. Do not fix unrelated issues.
 
 ## Step 9 — Build and run tests
 
-First, verify the entire solution builds (this catches errors in projects excluded from the test suite):
+### 9a — Build the full solution first (mandatory)
 
 ```powershell
 dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
 ```
 
-All lines matching `error ` must be zero. Fix any build errors before proceeding.
+All lines matching `error ` must be zero. **If any build errors appear, stop here and fix them before running tests or committing. Do not proceed past this point with a broken build.**
 
-Then run the fast test suite:
+This step is required because `.\scripts\run-tests.ps1` only compiles projects that have test assemblies. Library projects with no corresponding test project (e.g. `Phantom.Workspaces.Data.Web.Client`) are not compiled by the test runner — compile errors there go undetected unless this build step is run first.
+
+### 9b — Run the fast test suite
 
 ```powershell
 .\scripts\run-tests.ps1 -Mode fast
 ```
 
-### 9a — Check for hang dumps before reading results
+### 9c — Check for hang dumps before reading results
 
 After the test run completes, before reading `test-results.log`, check for `.dmp` files produced by a crashed or timed-out test host:
 
@@ -156,7 +158,7 @@ if ($dumps) {
 
 If dumps are present, invoke the `diagnose-hang-dump` skill now and record the resulting issue number before continuing.
 
-### 9b — Search for related bugs before rerunning
+### 9d — Search for related bugs before rerunning
 
 Read `scripts\test-results.log`. All suites must show `Failed: 0`. Fix any failures before proceeding.
 
@@ -213,7 +215,7 @@ Run the full suite only when the change touches the filesystem or Git repository
 .\scripts\run-tests.ps1 -Mode full
 ```
 
-## Step 9b — Verify code quality
+## Step 9e — Verify code quality
 
 Apply the shared code verification criteria from `.github/skills/shared/CODE-VERIFICATION.md`.
 Inspect the code you just wrote against every criterion in that file.
@@ -230,6 +232,16 @@ git commit -m "Fix #<NUMBER>: <short description>
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
+
+## Step 10b — Validate implementation
+
+Spawn a `verify-closed-issue` subagent for this issue. In the subagent prompt, specify:
+
+- **Working directory:** the current worktree path (e.g. `C:\dev\phantom.workspaces-design\worktrees\<N>`)
+- **Branch under review:** the feature branch name (e.g. `fix/…` or `feat/…`)
+- Instruct the subagent to `cd` into the worktree and use the branch-diff commands from Step 2 of `verify-closed-issue` to identify commits and file changes unique to this branch before searching for implementation
+
+If the subagent concludes `failed-verification`, fix all identified gaps and re-run validation before continuing. **Do not proceed to Step 11 if validation fails.**
 
 ## Step 11 — Post a resolution comment
 
@@ -311,3 +323,5 @@ Pop-Location
 13. Each issue gets its own commit. Do not batch multiple issues into one commit.
 14. If there are open questions, assign back to the reporter and stop — do not guess.
 15. Always include the `Co-authored-by: Copilot` trailer in every commit message.
+16. The full-solution `dotnet build --no-incremental` (Step 9a) must report zero `error ` lines before `run-tests.ps1` is invoked. A passing test run does not substitute for a clean build — library projects with no test assembly will not be compiled by the test runner.
+17. After committing (Step 10), validation via a `verify-closed-issue` subagent must pass before posting the resolution comment or closing the issue.

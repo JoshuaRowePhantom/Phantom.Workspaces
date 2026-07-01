@@ -167,7 +167,8 @@ public sealed class ProfileStore
         {
             return new ProfileThemeSurfaces(
                 EntityPane: ReadSurfaceSet(surfacesElement, "entityPane", fallback.EntityPane),
-                EntityCard: ReadSurfaceSet(surfacesElement, "entityCard", fallback.EntityCard));
+                EntityCard: ReadSurfaceSet(surfacesElement, "entityCard", fallback.EntityCard),
+                Popup: ReadSurfaceSet(surfacesElement, "popup", fallback.Popup));
         }
 
         return fallback with
@@ -411,7 +412,8 @@ public sealed class ProfileStore
                         settings.Theme.Colors.Accent),
                     new PersistedSurfaces(
                         PersistedSurfaceSet.FromSurfaceSet(settings.Theme.Surfaces.EntityPane),
-                        PersistedSurfaceSet.FromSurfaceSet(settings.Theme.Surfaces.EntityCard)),
+                        PersistedSurfaceSet.FromSurfaceSet(settings.Theme.Surfaces.EntityCard),
+                        PersistedSurfaceSet.FromSurfaceSet(settings.Theme.Surfaces.Popup)),
                     new PersistedFonts(
                         settings.Theme.Fonts.BaseFamily,
                         settings.Theme.Fonts.BaseSize,
@@ -445,7 +447,8 @@ public sealed class ProfileStore
 
     private sealed record PersistedSurfaces(
         [property: JsonPropertyName("entityPane")] PersistedSurfaceSet EntityPane,
-        [property: JsonPropertyName("entityCard")] PersistedSurfaceSet EntityCard);
+        [property: JsonPropertyName("entityCard")] PersistedSurfaceSet EntityCard,
+        [property: JsonPropertyName("popup")] PersistedSurfaceSet Popup);
 
     private sealed record PersistedSurfaceSet(
         [property: JsonPropertyName("background")] string Background,
@@ -548,6 +551,13 @@ public sealed record ProfileThemeSettings(
                 HoverBackground: "#343434",
                 HoverBorder: "#4A4A4A",
                 SelectedBackground: "#3A3A3A",
+                SelectedBorder: "#5EA0FF"),
+            Popup: new ProfileThemeSurfaceSet(
+                Background: "#2C2C2C",
+                Border: "#3A3A3A",
+                HoverBackground: "#343434",
+                HoverBorder: "#4A4A4A",
+                SelectedBackground: "#3A3A3A",
                 SelectedBorder: "#5EA0FF")),
         new ProfileThemeFonts(
             BaseFamily: "Inter",
@@ -580,6 +590,13 @@ public sealed record ProfileThemeSettings(
                 SelectedBackground: "#E5E5E5",
                 SelectedBorder: "#C6C6C6"),
             EntityCard: new ProfileThemeSurfaceSet(
+                Background: "#FFFFFF",
+                Border: "#D0D0D0",
+                HoverBackground: "#F6F6F6",
+                HoverBorder: "#C2C2C2",
+                SelectedBackground: "#EFEFEF",
+                SelectedBorder: "#2B67D1"),
+            Popup: new ProfileThemeSurfaceSet(
                 Background: "#FFFFFF",
                 Border: "#D0D0D0",
                 HoverBackground: "#F6F6F6",
@@ -618,7 +635,8 @@ public sealed record ProfileThemeColors(
 
 public sealed record ProfileThemeSurfaces(
     ProfileThemeSurfaceSet EntityPane,
-    ProfileThemeSurfaceSet EntityCard);
+    ProfileThemeSurfaceSet EntityCard,
+    ProfileThemeSurfaceSet Popup);
 
 public sealed record ProfileThemeSurfaceSet(
     string Background,

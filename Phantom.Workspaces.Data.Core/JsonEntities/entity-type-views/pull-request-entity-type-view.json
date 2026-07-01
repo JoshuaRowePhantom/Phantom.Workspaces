@@ -7,5 +7,10 @@
     { "field-path": ["status"] },
     { "field-path": ["labels"] }
   ],
-  "traversed-entity-display-disposition": "collapsed"
+  "traversed-entity-display-disposition": "collapsed",
+  "group-by-parent": {
+    "source": "field",
+    "field-path": ["repository"],
+    "parent-entity-type-names": ["repository"]
+  }
 }

@@ -236,6 +236,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 .ToArray();
         };
 
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new AutoResumeSlashCommandHandler());
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
             getValue: () => this.ShowChatInputHelpText,
             setValue: v => this.ShowChatInputHelpText = v));
