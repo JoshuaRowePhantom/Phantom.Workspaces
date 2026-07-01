@@ -76,7 +76,8 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
     // ── Constants ───────────────────────────────────────────────────────────
 
-    private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const uint EXTENDED_STARTUPINFO_PRESENT  = 0x00080000;
+    private const uint CREATE_UNICODE_ENVIRONMENT    = 0x00000400;
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     private const uint PIPE_ACCESS_INBOUND  = 0x00000001;
     private const uint PIPE_ACCESS_OUTBOUND = 0x00000002;
@@ -185,11 +186,10 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         }
 
         IntPtr attrList = IntPtr.Zero;
-        IntPtr hpcValuePtr = IntPtr.Zero;
         PROCESS_INFORMATION pi = default;
         try
         {
-            (attrList, hpcValuePtr) = BuildAttributeList(_hPC);
+            attrList = BuildAttributeList(_hPC);
 
             var startupInfo = new STARTUPINFOEXW
             {
@@ -204,7 +204,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     commandLine,
                     IntPtr.Zero, IntPtr.Zero,
                     false,
-                    EXTENDED_STARTUPINFO_PRESENT,
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
                     IntPtr.Zero,
                     payload.WorkingDirectory,
                     ref startupInfo,
@@ -219,10 +219,6 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             {
                 DeleteProcThreadAttributeList(attrList);
                 Marshal.FreeHGlobal(attrList);
-            }
-            if (hpcValuePtr != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(hpcValuePtr);
             }
         }
 
@@ -274,15 +270,19 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Creates a named pipe pair where the server handle carries <c>FILE_FLAG_OVERLAPPED</c>,
-    /// making it compatible with <see cref="FileStream"/> constructed with <c>isAsync: true</c>.
+    /// Creates a named pipe pair where only the <em>client</em> handle carries
+    /// <c>FILE_FLAG_OVERLAPPED</c>, making it compatible with <see cref="FileStream"/>
+    /// constructed with <c>isAsync: true</c>. The server handle is kept synchronous because
+    /// <c>CreatePseudoConsole</c> uses it with synchronous I/O internally; passing an overlapped
+    /// server handle causes child-process console initialisation to fail with
+    /// <c>STATUS_DLL_INIT_FAILED</c>.
     /// </summary>
     private static (SafeFileHandle Server, SafeFileHandle Client) CreateOverlappedPipe(
         string name, uint serverAccess, uint clientAccess)
     {
         var server = CreateNamedPipeW(
             name,
-            serverAccess | FILE_FLAG_OVERLAPPED,
+            serverAccess,   // no FILE_FLAG_OVERLAPPED: ConPseudoConsole reads/writes synchronously
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1, 4096, 4096, 0, IntPtr.Zero);
         if (server.IsInvalid)
@@ -301,10 +301,10 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
     /// <summary>
     /// Builds a PROC_THREAD_ATTRIBUTE_LIST containing PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.
-    /// Returns (attributeList, hpcValuePtr) — the caller must free both with
-    /// DeleteProcThreadAttributeList+FreeHGlobal after CreateProcessW returns.
+    /// The caller must free the returned list with DeleteProcThreadAttributeList+FreeHGlobal
+    /// after CreateProcessW returns.
     /// </summary>
-    private static (IntPtr List, IntPtr HpcValuePtr) BuildAttributeList(IntPtr hPC)
+    private static IntPtr BuildAttributeList(IntPtr hPC)
     {
         IntPtr size = IntPtr.Zero;
         InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
@@ -317,24 +317,22 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
         }
 
-        // Allocate a buffer that holds the HPCON value; lpValue must remain valid through CreateProcess.
-        IntPtr hpcValuePtr = Marshal.AllocHGlobal(IntPtr.Size);
-        Marshal.WriteIntPtr(hpcValuePtr, hPC);
-
+        // Pass hPC directly as lpValue — for PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE the kernel
+        // takes the HPCON handle value from lpValue itself (not a pointer-to-pointer). This
+        // matches Microsoft's ConPTY sample (EchoCon) and every known working C# implementation.
         if (!UpdateProcThreadAttribute(
                 list, 0,
                 (IntPtr)PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                hpcValuePtr,
+                hPC,
                 (IntPtr)IntPtr.Size,
                 IntPtr.Zero, IntPtr.Zero))
         {
-            Marshal.FreeHGlobal(hpcValuePtr);
             DeleteProcThreadAttributeList(list);
             Marshal.FreeHGlobal(list);
             throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
         }
 
-        return (list, hpcValuePtr);
+        return list;
     }
 
     private static string BuildCommandLine(ShellOpenPayload payload)
