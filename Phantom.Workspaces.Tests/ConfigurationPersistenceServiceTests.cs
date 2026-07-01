@@ -6,7 +6,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ConfigurationPersistenceServiceTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task LoadAsync_WhenFileMissing_ReturnsDefaults()
     {
         var path = CreateTempConfigPath();
@@ -20,7 +20,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal(DevTunnelAccessMode.Private, configuration.DevTunnel.AccessMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SaveThenLoad_RoundTripsConfiguration()
     {
         var path = CreateTempConfigPath();
@@ -60,7 +60,7 @@ public sealed class ConfigurationPersistenceServiceTests
         }
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SaveAsync_DoesNotPersistRawSecrets()
     {
         var path = CreateTempConfigPath();
@@ -94,7 +94,7 @@ public sealed class ConfigurationPersistenceServiceTests
         }
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRepositorySource_LocalMongoContainer_MapsContainerFields()
     {
         var configuration = new WorkspacesConfiguration
@@ -117,7 +117,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal(27017, mongo.HostPort);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRepositorySource_Web_MapsEndpoint()
     {
         var configuration = new WorkspacesConfiguration
@@ -135,7 +135,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal("https://workspaces.example/", web.Endpoint);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRepositorySource_Web_DoesNotUseGitHubAuthToken()
     {
         var configuration = new WorkspacesConfiguration
@@ -151,7 +151,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.False(web.UseGitHubAuthToken);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRepositorySource_DevTunnelWeb_UsesGitHubAuthToken()
     {
         var configuration = new WorkspacesConfiguration
@@ -168,7 +168,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.True(web.UseGitHubAuthToken);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRepositorySource_RemoteMongo_Throws()
     {
         var configuration = new WorkspacesConfiguration
@@ -183,7 +183,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRepositorySource_WebWithoutEndpoint_Throws()
     {
         var configuration = new WorkspacesConfiguration

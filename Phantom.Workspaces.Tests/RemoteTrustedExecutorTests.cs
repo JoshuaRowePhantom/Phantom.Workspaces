@@ -19,14 +19,14 @@ public sealed class RemoteTrustedExecutorTests
     private static readonly System.Text.Json.JsonSerializerOptions CompactAiOptions =
         new System.Text.Json.JsonSerializerOptions(AIJsonUtilities.DefaultOptions) { WriteIndented = false };
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Constructor_LocalInstance_Throws()
     {
         Assert.Throws<ArgumentException>(
             () => new RemoteTrustedExecutor(".", "https://remote.example/"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void CanExecute_MatchesConfiguredInstanceOnly()
     {
         var executor = new RemoteTrustedExecutor("remote-a", "https://remote.example/");
@@ -36,7 +36,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.False(executor.CanExecute("."));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Selector_PrefersRemoteExecutorForRemoteInstance()
     {
         var definition = new TrustProfileDefinition
@@ -52,7 +52,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Same(remote, selected);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task WebRemoteChatClient_PostsToAgentEndpoint_ReturnsResponse()
     {
         var cannedResponse = new ChatResponse(new ChatMessage(ChatRole.Assistant, "remote-hello"));
@@ -78,7 +78,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Equal("remote-hello", response.Text);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task WebRemoteChatClient_Streaming_YieldsRemoteResponse()
     {
         var cannedResponse = new ChatResponse(new ChatMessage(ChatRole.Assistant, "streamed-remote"));
@@ -105,7 +105,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Equal("streamed-remote", aggregated.ToString());
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task WebRemoteChatClient_NonSuccessStatus_Throws()
     {
         var handler = new FakeHttpMessageHandler((_, _) =>
@@ -124,7 +124,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Contains("500", exception.Message, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RemoteTrustedExecutor_OpenStreamAsync_WrongInstance_Throws()
     {
         var executor = new RemoteTrustedExecutor("remote-a", "https://remote.example/");
@@ -138,7 +138,7 @@ public sealed class RemoteTrustedExecutorTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => executor.OpenStreamAsync(request));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RemoteAgentChatClient_PostsToAgentChatTurnEndpoint_StreamsNdjsonResponse()
     {
         var update1 = new ChatResponseUpdate(ChatRole.Assistant, "hello");
@@ -174,7 +174,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Equal("hello world", string.Concat(updates.Select(static u => u.Text)));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RemoteAgentChatClient_NonSuccessStatus_Throws()
     {
         var handler = new FakeHttpMessageHandler((_, _) =>
@@ -194,7 +194,7 @@ public sealed class RemoteTrustedExecutorTests
         Assert.Contains("500", exception.Message, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RemoteTrustedExecutor_CreateAgentChat_SendsToAgentChatTurnEndpoint()
     {
         var update = new ChatResponseUpdate(ChatRole.Assistant, "remote-reply");

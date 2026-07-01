@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -154,7 +154,7 @@ public sealed class WebViewModelTests
 
     // --- OpenExternalEntityShortcutHandler: default key → display name, title not fixed ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_DefaultKey_TitleIsDisplayName_AndBrowserCanOverride()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -179,7 +179,7 @@ public sealed class WebViewModelTests
 
     // --- OpenExternalEntityShortcutHandler: named key → key name as title, title fixed ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_NamedKey_TitleIsKeyName_AndBrowserCannotOverride()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -204,7 +204,7 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: explicit title from JSON wins and is pinned ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_ExplicitTitle_IsUsedAndPinned()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -261,7 +261,7 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: no explicit title + default key → display name, not pinned ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_DefaultKey_TitleIsDisplayName_NotFixed()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -317,7 +317,7 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: no explicit title + named key → key name, pinned ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_NamedKey_TitleIsKeyName_Fixed()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -373,7 +373,7 @@ public sealed class WebViewModelTests
 
     // --- DuplicateBrowserTabCommand ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_OpensNewTabAtSameUrl()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -392,7 +392,7 @@ public sealed class WebViewModelTests
         Assert.NotNull(duplicate);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_InsertsNewTabAfterSource()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -417,7 +417,7 @@ public sealed class WebViewModelTests
         Assert.Equal(indexA + 1, indexDup);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNonBrowserTab_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -436,7 +436,7 @@ public sealed class WebViewModelTests
         Assert.Equal(tabCountBeforeDuplicate, tabs3.Count);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNoActiveTab_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -449,7 +449,7 @@ public sealed class WebViewModelTests
         Assert.Empty(viewModel.SelectedWorkspacePane.Tabs);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithEmptyUrl_IsNoOp()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -465,7 +465,7 @@ public sealed class WebViewModelTests
 
     // --- RaiseOpenNewWindow: new tab insertion position ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RaiseOpenNewWindow_InsertsNewTabImmediatelyRightOfSourceTab()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

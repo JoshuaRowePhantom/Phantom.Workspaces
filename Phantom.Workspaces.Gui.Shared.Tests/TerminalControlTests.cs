@@ -64,7 +64,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – screen buffer updates ───────────────────────────────────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_PushBytes_UpdatesScreenBuffer()
     {
         var stream = new MemoryStream();
@@ -94,7 +94,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – key-down writes VT sequence to stream ──────────────────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_KeyDown_WritesSequenceToStream()
     {
         var stream = new MemoryStream();
@@ -123,7 +123,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – resize callback ─────────────────────────────────────────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_Resize_CallsResizeCallback()
     {
         var resizeCalls = new System.Collections.Generic.List<(int cols, int rows)>();

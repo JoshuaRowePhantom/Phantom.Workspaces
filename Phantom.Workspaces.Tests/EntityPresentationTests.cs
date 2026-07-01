@@ -6,7 +6,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityPresentationTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void IsEntityType_ReturnsTrue_WhenMatchingTypeIsPresent()
     {
         var snapshot = CreateSnapshot(
@@ -23,7 +23,7 @@ public sealed class EntityPresentationTests
         Assert.False(EntityPresentation.IsEntityType(snapshot, "agent-session"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void SubscribedEntityViewModel_IsEntityType_UsesTypeMembershipCheck()
     {
         var snapshot = CreateSnapshot(
@@ -42,7 +42,7 @@ public sealed class EntityPresentationTests
         Assert.False(entity.IsEntityType("agent-session"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void GetDisplayItems_ReturnsInlineMarkdownBody_ForNoteContent()
     {
         var snapshot = CreateSnapshot(
@@ -68,7 +68,7 @@ public sealed class EntityPresentationTests
         Assert.Contains("This is the body.", item.Text, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void GetDisplayItems_ReturnsEmpty_WhenNoteHasNoContent()
     {
         var snapshot = CreateSnapshot(

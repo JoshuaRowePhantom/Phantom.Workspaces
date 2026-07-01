@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class McpServerEntityToolResourceRepositoryTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ToolResources_ReflectExistingMcpServerEntities()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -21,7 +21,7 @@ public sealed class McpServerEntityToolResourceRepositoryTests
         Assert.Equal(McpServerEntityToolResourceFactory.McpServerEntityToolResourceId, resource.Id);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ToolResources_UpdateWhenMcpServerEntityAdded()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -34,7 +34,7 @@ public sealed class McpServerEntityToolResourceRepositoryTests
         Assert.Contains(repository.ToolResources, static resource => resource.Name == "custom");
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ToolResources_DeduplicateByServerName()
     {
         var ct = TestContext.Current.CancellationToken;

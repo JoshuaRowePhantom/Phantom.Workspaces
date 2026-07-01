@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ViewHierarchyAssemblerTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_NestsRelatedMembersUnderDedupedContextualParent()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -66,7 +66,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal([member1Id, member2Id], memberIds.OrderBy(id => id.Value).ToHashSet());
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_WithoutEntityTypeViews_ProducesFlatChildlessNodes()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -111,7 +111,7 @@ public sealed class ViewHierarchyAssemblerTests
             "traverse-relationships must include an entry with relationship-type-ids containing 'related'");
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_WithCollapsedDisposition_SetsIsExpandedFalseOnRootNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -163,7 +163,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.False(workspaceNode.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_WithoutDisposition_DefaultsToIsExpandedTrue()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -212,7 +212,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.True(taskNode.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithRelatedEntity_RendersEntityAsChild()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -262,7 +262,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(noteId, childNode.Entity!.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithNoRelatedEntities_RendersFlat()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -394,7 +394,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(entities[3].EntityId, single.ChildEntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ViewHierarchyAssembler_UsesAncestorRelationshipAsGroupNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -451,7 +451,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.All(groupNode.Children, static child => Assert.False(child.IsAncestorGroup));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_ShowsPullRequestsGroupedUnderRepository()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -546,7 +546,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(pr3Id, child.Entity!.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_ShowsEmptyRepositoryNode_WhenNoPrsExist()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -579,7 +579,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Empty(repoNode.Children);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_ShowsPullRequestsFromMultipleProviders()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -689,7 +689,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Contains("repository", parentEntityTypeNameValues, StringComparer.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_GroupsPullRequestsByRepositoryField()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -768,7 +768,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(pr2Id, repoBChild.Entity!.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_PullRequestWithNoRepository_RendersUngrouped()
     {
         var ct = TestContext.Current.CancellationToken;
