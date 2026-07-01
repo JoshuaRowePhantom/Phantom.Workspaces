@@ -60,9 +60,52 @@ For each unverified issue (in ascending number order):
 
 2. **Wait for the subagent to complete** before starting the next one (sequential processing keeps GitHub API usage predictable and avoids label-write races).
 
-3. Read the subagent result. Capture the outcome: `verified`, `failed-verification`, or `superseded`.
+3. Read the subagent result. Capture the outcome from the `OUTCOME:` line: `verified`, `failed-verification`, or `superseded`.
 
-4. **Report progress immediately** after each subagent completes, before launching the next:
+4. **Apply label, post comment, and file bugs based on the outcome:**
+
+   **If `verified`:**
+   ```powershell
+   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "verified"
+   gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Verification passed
+
+   **Checked:** <relay the 'Checked' detail from the subagent's OUTCOME block>
+
+   **Result:** Implementation found, all verification criteria satisfied.
+
+   <If the subagent noted duplication bugs:> **Follow-up bugs filed:** #<N>, ..."
+   ```
+
+   **If `failed-verification`:**
+   ```powershell
+   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "failed-verification"
+   gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Verification failed
+
+   **Checked:** <relay from subagent>
+
+   **Found:** <relay from subagent>
+
+   **Missing:** <relay the specific gap from the subagent's OUTCOME block>"
+   # File a next-up bug describing the missing implementation:
+   gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
+     --title "Bug: issue #<NUMBER> failed verification — <specific gap from subagent>" `
+     --label "bug,next-up" `
+     --body "## Missing implementation
+
+   **Original issue:** #<NUMBER> — <title>
+
+   **Verification gap:** <code not found / behaviour not implemented / tests missing>
+
+   **Detail:** <relay exactly what was checked and what is absent from the subagent's OUTCOME block>"
+   ```
+
+   **If `superseded`:**
+   ```powershell
+   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "superseded"
+   ```
+   (The informational comment on the subject issue was already posted by `verify-closed-issue` in Step 4 of that skill.)
+
+5. **Report progress immediately** after each subagent completes and labels are applied, before launching the next:
 
    After a successful verification:
    ```
@@ -109,5 +152,5 @@ gh issue comment <TRACKING_ISSUE_NUMBER> --repo JoshuaRowePhantom/Phantom.Worksp
 4. Only verify issues closed as `completed` (fixed). Skip all other close reasons (`not_planned`, `duplicate`, or anything else) — do not attempt to verify them.
 5. Skip issues already labelled `verified`, `failed-verification`, or `superseded` — they are already done.
 6. Never push. Never modify code.
-7. The main agent does not verify anything itself — all inspection and labelling happens inside subagents.
+7. This agent applies all labels and posts all verification-outcome comments — `verify-closed-issue` subagents do not apply labels.
 8. If a subagent errors out or cannot determine an outcome, record it as `error` in the summary table and continue with the next issue.
