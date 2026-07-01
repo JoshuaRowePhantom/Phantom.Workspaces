@@ -15,6 +15,7 @@ using System.Text.Json;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
+using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
@@ -1246,14 +1247,29 @@ public sealed class MainWindowIntegrationTests
         // Open both workspaces; after OpenWorkspaceAsync(B) pane B (index 1) is selected.
         await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
         await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+        Assert.True(viewModel.WorkspacePanes.Count >= 2,
+            $"Expected at least 2 panes. Actual: {viewModel.WorkspacePanes.Count}; ids={string.Join(", ", viewModel.WorkspacePanes.Select(p => $"'{p.Id}'"))}");
 
         // Open a tab in pane B while it is the selected pane.
         var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-switch-tab-b", Title = "Tab B" };
         await viewModel.OpenTabAsync(tabB);
 
+        // Flush the dispatcher queue so that any fire-and-forget work from OpenWorkspaceAsync
+        // (e.g. PopulateWorkspacePaneTabsAsync adding a default entity-view tab) completes
+        // before we assert on the dock state. Without this drain, the populate dispatch can run
+        // after the test has set up tabB and overwrite SelectedTab, making the test flaky.
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // After the drain, tabB must still be the selected/active tab in pane B.
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        Assert.True(paneBIndex >= 0, $"Pane B not found. Panes: {string.Join(", ", viewModel.WorkspacePanes.Select(p => $"'{p.Id}'"))}");
+        Assert.Equal("notif-pane-switch-tab-b", viewModel.WorkspacePanes[paneBIndex].SelectedTab?.Id);
+
         // Switch to pane A so pane B's tab is no longer visible/active in the view.
-        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
-        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        var paneAIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdA.ToString());
+        Assert.True(paneAIndex >= 0, $"Pane A not found. Panes: {string.Join(", ", viewModel.WorkspacePanes.Select(p => $"'{p.Id}'"))}");
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
+        Assert.Equal(viewModel.WorkspacePanes[paneAIndex], viewModel.SelectedWorkspacePane);
 
         // Post an unread notification to pane B's tab. Because pane B is not selected,
         // OnActiveDockableChanged is not fired for it, so the notification stays unread.
@@ -1265,19 +1281,11 @@ public sealed class MainWindowIntegrationTests
             .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead);
 
         // Switch back to pane B — this should mark the notification as read.
-        var paneBLayout = viewModel.WorkspacePanes[1].ContentLayout;
-        var paneBDock = paneBLayout is not null ? FindDocumentDockIn(paneBLayout) : null;
-        var activeDockableId = paneBDock?.ActiveDockable?.Id ?? "(null)";
-        var visibleIds = paneBDock?.VisibleDockables is not null
-            ? string.Join(", ", paneBDock.VisibleDockables.Select(d => d.Id))
-            : "(null)";
-        var selectedTabId = viewModel.WorkspacePanes[1].SelectedTab?.Id ?? "(null)";
-
-        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
 
         Assert.True(viewModel.NotificationService.Notifications
             .First(n => n.TabKey == "notif-pane-switch-tab-b").IsRead,
-            $"Expected notification read. PaneB dock: {paneBDock is null}; ActiveDockable: {activeDockableId}; Visible: [{visibleIds}]; SelectedTab: {selectedTabId}");
+            "Expected notification for tabB to be marked read after switching back to pane B");
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -1319,17 +1327,22 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
         await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
 
+        // Flush the dispatcher queue to let any pending PopulateWorkspacePaneTabsAsync complete.
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
         // Open a tab in pane B (currently selected after OpenWorkspaceAsync(B)).
+        // tabB becomes the active dockable in pane B, so pane B's SelectedTab = tabB.
         var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-only-tab-b", Title = "Tab B" };
         await viewModel.OpenTabAsync(tabB);
 
-        // Switch to pane A and open a tab there.
-        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
-        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "notif-pane-only-tab-a", Title = "Tab A" };
-        await viewModel.OpenTabAsync(tabA);
+        // Switch to pane A. Neither "notif-pane-only-tab-a" nor "notif-pane-only-tab-b" is the
+        // active dockable in pane A, so any notification posted now will not be auto-marked read.
+        var paneAIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdA.ToString());
+        Assert.True(paneAIndex >= 0, $"Pane A not found. Panes: {string.Join(", ", viewModel.WorkspacePanes.Select(p => $"'{p.Id}'"))}");
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneAIndex.ToString());
 
-        // Post unread notifications to both tabs. Pane A is selected so tabA is visible,
-        // but the notification is posted directly; tabB's pane is not selected.
+        // Post unread notifications to both tab IDs. The active tab in pane A is neither
+        // "notif-pane-only-tab-a" nor "notif-pane-only-tab-b", so both start unread.
         viewModel.NotificationService.Notify(new Notification(
             new TabDescriptor { TabId = "notif-pane-only-tab-a" },
             "Tab A", "test notification A", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
@@ -1337,8 +1350,10 @@ public sealed class MainWindowIntegrationTests
             new TabDescriptor { TabId = "notif-pane-only-tab-b" },
             "Tab B", "test notification B", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
 
-        // Switch to pane B — only pane B's active tab notification should be marked read.
-        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        // Switch to pane B — only pane B's active tab (tabB) notification should be marked read.
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        Assert.True(paneBIndex >= 0, $"Pane B not found. Panes: {string.Join(", ", viewModel.WorkspacePanes.Select(p => $"'{p.Id}'"))}");
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
 
         Assert.True(viewModel.NotificationService.Notifications
             .First(n => n.TabKey == "notif-pane-only-tab-b").IsRead,
@@ -2107,6 +2122,163 @@ public sealed class MainWindowIntegrationTests
 
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+
+    // ── Dock-layout save / restore (issue #561) ──────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThenWriteBack_DockLayoutJsonContainsDockTabDescriptor()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://descriptor-test.example.com")
+        {
+            Id = "dt-tab-1",
+            Title = "Descriptor Test",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        // Serialize the dock layout directly to verify DockTabDescriptor is embedded
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        // The serialized layout must contain the Descriptor property
+        Assert.Contains("Descriptor", layoutJson, StringComparison.Ordinal);
+        // And the browser kind
+        Assert.Contains("browser", layoutJson, StringComparison.Ordinal);
+        // And the URL
+        Assert.Contains("descriptor-test.example.com", layoutJson, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThenWriteBack_DockLayoutDoesNotContainTabViewModelData()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://no-vm-test.example.com")
+        {
+            Id = "no-vm-tab-1",
+            Title = "No VM Leak Test",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        // Content-bearing properties must NOT appear in the serialized layout
+        Assert.DoesNotContain("TabViewModel", layoutJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("EffectiveTabHeader", layoutJson, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithSavedDockLayout_RestoresTabsFromDescriptors()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Step 1: open a browser tab and capture the dock-layout JSON directly from the pane
+        var tab = new WebViewModel("https://restore-test.example.com")
+        {
+            Id = "restore-tab-browser",
+            Title = "Restore Browser Tab",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+        Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
+
+        // Step 2: build a workspace entity that carries the saved dock-layout and open it
+        var workspaceId = new EntityId("d0c1aya0-0000-4000-8000-000000000001");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "d0c1aya0-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Restore Dock Layout Workspace" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+
+        // Allow async restore to propagate
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+
+        // The pane must have at least one tab from the dock-layout restore
+        Assert.NotEmpty(restoredPane!.Tabs);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task PopulateWorkspacePaneTabsAsync_FallsBackToTabsArray_WhenDockLayoutAbsent()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("fa11b4c0-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "fa11b4c0-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "fallback-tabs-array"]],
+              "display-name": { "default": "Fallback Tabs Array Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "fallback-tab-1",
+                      "title": "Fallback Tab",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://fallback.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(workspacePane);
+
+        var contentDock = FindDocumentDockIn(workspacePane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "fallback-tab-1");
+
+        var tabDoc = contentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .FirstOrDefault(d => d.Id == "fallback-tab-1");
+        Assert.NotNull(tabDoc);
+        Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
+    }
 
     private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel) where T : class
     {

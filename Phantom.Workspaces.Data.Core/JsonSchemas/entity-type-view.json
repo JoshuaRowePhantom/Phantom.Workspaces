@@ -53,6 +53,28 @@
       "items": {
         "$ref": "#/$defs/relationship-traversal"
       }
+    },
+    "group-by-parent": {
+      "type": "object",
+      "description": "When present, the view assembler groups leaf entities by reading the entity-id in the given field and building parent nodes above them. Entities with no value in the field are placed at root level ungrouped.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["field"],
+          "description": "How to derive the parent entity-id. 'field' reads it from the named field on each leaf entity."
+        },
+        "field-path": {
+          "$ref": "core.json#/$defs/field-path"
+        },
+        "parent-entity-type-names": {
+          "type": "array",
+          "items": {
+            "$ref": "core.json#/$defs/entity-type-id"
+          }
+        }
+      },
+      "required": ["source", "field-path", "parent-entity-type-names"],
+      "unevaluatedProperties": false
     }
   },
   "$defs": {

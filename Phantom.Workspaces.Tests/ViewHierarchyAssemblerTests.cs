@@ -656,6 +656,167 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(gitPrId, gitChild.Entity!.EntityId);
     }
 
+    [Fact]
+    public void PullRequestEntityTypeView_GroupByParent_UsesRepositoryField()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        const string resourceName = "Phantom.Workspaces.Data.JsonEntities.entity_type_views.pull-request-entity-type-view.json";
+
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+
+        using var document = JsonDocument.Parse(stream);
+        var root = document.RootElement;
+
+        Assert.True(
+            root.TryGetProperty("group-by-parent", out var groupByParent),
+            "pull-request-entity-type-view.json must contain a 'group-by-parent' property");
+
+        Assert.Equal(JsonValueKind.Object, groupByParent.ValueKind);
+
+        Assert.True(
+            groupByParent.TryGetProperty("field-path", out var fieldPath),
+            "group-by-parent must contain 'field-path'");
+        Assert.Equal(JsonValueKind.Array, fieldPath.ValueKind);
+        var fieldPathValues = fieldPath.EnumerateArray().Select(static e => e.GetString()!).ToArray();
+        Assert.Equal(["repository"], fieldPathValues);
+
+        Assert.True(
+            groupByParent.TryGetProperty("parent-entity-type-names", out var parentEntityTypeNames),
+            "group-by-parent must contain 'parent-entity-type-names'");
+        Assert.Equal(JsonValueKind.Array, parentEntityTypeNames.ValueKind);
+        var parentEntityTypeNameValues = parentEntityTypeNames.EnumerateArray().Select(static e => e.GetString()!).ToArray();
+        Assert.Contains("repository", parentEntityTypeNameValues, StringComparer.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public async Task PullRequestsView_GroupsPullRequestsByRepositoryField()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "pull-request"]],
+              "group-by-parent": {
+                "source": "field",
+                "field-path": ["repository"],
+                "parent-entity-type-names": ["repository"]
+              }
+            }
+            """);
+
+        var repoAId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "owner", "repo-a"]],
+              "display-name": { "default": "repo-a" }
+            }
+            """);
+        var repoBId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "owner", "repo-b"]],
+              "display-name": { "default": "repo-b" }
+            }
+            """);
+
+        var pr1Id = await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request", "github-pull-request"],
+              "names": [["github-pull-requests", "owner", "repo-a", "1"]],
+              "display-name": { "default": "PR 1 in repo-a" },
+              "repository": "{{repoAId.Value}}"
+            }
+            """);
+        var pr2Id = await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request", "github-pull-request"],
+              "names": [["github-pull-requests", "owner", "repo-b", "2"]],
+              "display-name": { "default": "PR 2 in repo-b" },
+              "repository": "{{repoBId.Value}}"
+            }
+            """);
+
+        var query = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("pr-type"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(["pull-request"]),
+                    },
+                },
+            ],
+        };
+        var prRoots = (await broker.GetEntitiesAsync(query, ct)).ToList();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(prRoots, ct);
+
+        Assert.Equal(2, hierarchy.Count);
+        var repoANode = hierarchy.SingleOrDefault(n => n.Entity?.EntityId == repoAId);
+        var repoBNode = hierarchy.SingleOrDefault(n => n.Entity?.EntityId == repoBId);
+        Assert.NotNull(repoANode);
+        Assert.NotNull(repoBNode);
+        var repoAChild = Assert.Single(repoANode.Children);
+        Assert.Equal(pr1Id, repoAChild.Entity!.EntityId);
+        var repoBChild = Assert.Single(repoBNode.Children);
+        Assert.Equal(pr2Id, repoBChild.Entity!.EntityId);
+    }
+
+    [AvaloniaFact]
+    public async Task PullRequestsView_PullRequestWithNoRepository_RendersUngrouped()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "pull-request"]],
+              "group-by-parent": {
+                "source": "field",
+                "field-path": ["repository"],
+                "parent-entity-type-names": ["repository"]
+              }
+            }
+            """);
+
+        var prId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request"],
+              "names": [["pull-requests", "orphan-pr"]],
+              "display-name": { "default": "Orphan PR" }
+            }
+            """);
+
+        var query = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("pr-type"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(["pull-request"]),
+                    },
+                },
+            ],
+        };
+        var prRoots = (await broker.GetEntitiesAsync(query, ct)).ToList();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(prRoots, ct);
+
+        var prNode = Assert.Single(hierarchy);
+        Assert.Equal(prId, prNode.Entity!.EntityId);
+        Assert.Empty(prNode.Children);
+    }
+
     private static SubscribedEntityViewModel MakeSyntheticEntity(EntityId entityId, string[] nameParts)
     {
         var json = $$"""

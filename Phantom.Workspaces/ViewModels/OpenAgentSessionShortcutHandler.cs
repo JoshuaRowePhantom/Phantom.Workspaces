@@ -89,7 +89,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
     {
         try
         {
-            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, foregroundScheduler);
+            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, tab.Id, foregroundScheduler);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (result is var (agent, loggerFactory, lease))
@@ -248,6 +248,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
     private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)?> TryBuildAgentAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
+        string agentSessionTabId,
         TaskScheduler foregroundScheduler)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
@@ -323,7 +324,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
         }
 
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionTabId);
 
         var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
         var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);

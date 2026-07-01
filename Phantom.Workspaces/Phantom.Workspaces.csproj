@@ -76,5 +76,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Phantom.Workspaces.Tests" />
+    <InternalsVisibleTo Include="Phantom.Workspaces.Tools.Tests" />
   </ItemGroup>
 </Project>
