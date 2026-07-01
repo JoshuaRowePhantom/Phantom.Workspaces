@@ -90,6 +90,96 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.Equal("tab-roundtrip", idProp.GetString());
     }
 
+    // ── DockTabDescriptor is embedded in dock-layout JSON ─────────────────────
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_IsNotJsonIgnored()
+    {
+        var prop = typeof(WorkspaceDocument).GetProperty(nameof(WorkspaceDocument.Descriptor));
+        Assert.NotNull(prop);
+        Assert.Null(prop!.GetCustomAttribute<JsonIgnoreAttribute>());
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_EntityKind_IsSerializedByDockSerializer()
+    {
+        var tab = CreateEntityTabWithDeepData("tab-desc-entity", "Entity With Descriptor");
+        var doc = new WorkspaceDocument(tab);
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+
+        // Descriptor properties must appear in the serialized layout JSON
+        Assert.Contains("Descriptor", json);
+        Assert.Contains("entity", json);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_BrowserKind_IsSerializedWithUrl()
+    {
+        var tab = new StubWorkspaceTab("tab-desc-browser", "Browser Tab");
+        var doc = new WorkspaceDocument(tab)
+        {
+            Descriptor = new BrowserDockTabDescriptor("https://example.com"),
+        };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+
+        Assert.Contains("Descriptor", json);
+        Assert.Contains("browser", json);
+        Assert.Contains("https://example.com", json);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_NullDescriptor_IsDeserializedAsNull()
+    {
+        var tab = new StubWorkspaceTab("tab-null-desc", "No Descriptor Tab");
+        var doc = new WorkspaceDocument(tab);
+
+        Assert.Null(doc.Descriptor);
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        Assert.Null(restored!.Descriptor);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_EntityKind_RoundTrips()
+    {
+        var descriptor = new EntityDockTabDescriptor("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", "Open");
+        var tab = new StubWorkspaceTab("tab-rt-entity", "Entity Round-trip");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<EntityDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", restoredDesc.EntityId);
+        Assert.Equal("Open", restoredDesc.ShortcutName);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_BrowserKind_RoundTrips()
+    {
+        var descriptor = new BrowserDockTabDescriptor("https://roundtrip.example.com");
+        var tab = new StubWorkspaceTab("tab-rt-browser", "Browser Round-trip");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("https://roundtrip.example.com", restoredDesc.Url);
+    }
+
     // ── ContextLocator wires tab view model after deserialization ─────────────
 
     [Fact]

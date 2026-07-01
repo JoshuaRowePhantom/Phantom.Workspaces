@@ -15,6 +15,7 @@ using System.Text.Json;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
+using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
@@ -2107,6 +2108,163 @@ public sealed class MainWindowIntegrationTests
 
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+
+    // ── Dock-layout save / restore (issue #561) ──────────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThenWriteBack_DockLayoutJsonContainsDockTabDescriptor()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://descriptor-test.example.com")
+        {
+            Id = "dt-tab-1",
+            Title = "Descriptor Test",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        // Serialize the dock layout directly to verify DockTabDescriptor is embedded
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        // The serialized layout must contain the Descriptor property
+        Assert.Contains("Descriptor", layoutJson, StringComparison.Ordinal);
+        // And the browser kind
+        Assert.Contains("browser", layoutJson, StringComparison.Ordinal);
+        // And the URL
+        Assert.Contains("descriptor-test.example.com", layoutJson, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThenWriteBack_DockLayoutDoesNotContainTabViewModelData()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://no-vm-test.example.com")
+        {
+            Id = "no-vm-tab-1",
+            Title = "No VM Leak Test",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        // Content-bearing properties must NOT appear in the serialized layout
+        Assert.DoesNotContain("TabViewModel", layoutJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("EffectiveTabHeader", layoutJson, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenWorkspaceAsync_WithSavedDockLayout_RestoresTabsFromDescriptors()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Step 1: open a browser tab and capture the dock-layout JSON directly from the pane
+        var tab = new WebViewModel("https://restore-test.example.com")
+        {
+            Id = "restore-tab-browser",
+            Title = "Restore Browser Tab",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+        Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
+
+        // Step 2: build a workspace entity that carries the saved dock-layout and open it
+        var workspaceId = new EntityId("d0c1aya0-0000-4000-8000-000000000001");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "d0c1aya0-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Restore Dock Layout Workspace" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+
+        // Allow async restore to propagate
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+        await Dispatcher.UIThread.InvokeAsync(() => {});
+
+        // The pane must have at least one tab from the dock-layout restore
+        Assert.NotEmpty(restoredPane!.Tabs);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task PopulateWorkspacePaneTabsAsync_FallsBackToTabsArray_WhenDockLayoutAbsent()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("fa11b4c0-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceId,
+            """
+            {
+              "entity-id": "fa11b4c0-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "fallback-tabs-array"]],
+              "display-name": { "default": "Fallback Tabs Array Workspace" },
+              "regions": [
+                {
+                  "region-id": "main",
+                  "title": "Main",
+                  "dock": "center",
+                  "size": 1.0,
+                  "tabs": [
+                    {
+                      "tab-id": "fallback-tab-1",
+                      "title": "Fallback Tab",
+                      "kind": "browser",
+                      "dock": "full",
+                      "content": { "url": "https://fallback.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var workspacePane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(workspacePane);
+
+        var contentDock = FindDocumentDockIn(workspacePane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "fallback-tab-1");
+
+        var tabDoc = contentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .FirstOrDefault(d => d.Id == "fallback-tab-1");
+        Assert.NotNull(tabDoc);
+        Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
+    }
 
     private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel) where T : class
     {
