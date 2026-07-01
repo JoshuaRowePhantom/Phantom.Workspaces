@@ -5456,9 +5456,6 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(interceptor);
         await interceptor!("/auto-resume");
 
-        // Wait a tick so the async update completes
-        await Task.Delay(50);
-
         // Reload the entity and verify auto-resume was persisted
         var updatedEntities = await entityBroker.GetEntitiesAsync([agentSessionEntity!.EntityId]);
         var updatedEntity = updatedEntities.FirstOrDefault(e => e.EntityId == agentSessionEntity!.EntityId);
@@ -5511,11 +5508,9 @@ public sealed class MainWindowIntegrationTests
 
         // Enable auto-resume first
         await interceptor!("/auto-resume");
-        await Task.Delay(50);
 
         // Execute again — CurrentAutoResume should now be non-null so the toggle disables it
         await interceptor!("/auto-resume");
-        await Task.Delay(50);
 
         var updatedEntities = await entityBroker.GetEntitiesAsync([agentSessionEntity!.EntityId]);
         var updatedEntity = updatedEntities.FirstOrDefault(e => e.EntityId == agentSessionEntity!.EntityId);
