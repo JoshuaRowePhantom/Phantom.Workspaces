@@ -1,4 +1,6 @@
+using System.Net.Http;
 using Phantom.Workspaces.Data.MongoDB;
+using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm;
@@ -6,6 +8,9 @@ namespace Phantom.Workspaces.Llm;
 public static class AgentPersistenceStoreFactory
 {
     public static IAgentPersistenceStore CreateInMemory() => new InMemoryAgentPersistenceStore();
+
+    public static IAgentPersistenceStore CreateWeb(HttpClient httpClient)
+        => new WebAgentPersistenceStore(httpClient);
 
     public static ValueTask<IAgentPersistenceStore> CreateAsync(
         ChatHistoryProviderDefinition definition,

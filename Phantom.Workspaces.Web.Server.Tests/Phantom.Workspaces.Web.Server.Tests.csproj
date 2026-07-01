@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
@@ -15,9 +16,13 @@
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Workspaces.Data.Web.Client\Phantom.Workspaces.Data.Web.Client.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Web.Server\Phantom.Workspaces.Web.Server.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\AgentPersistenceStoreContractTests.cs" Link="AgentPersistenceStoreContractTests.cs" />
   </ItemGroup>
 </Project>
