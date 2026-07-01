@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Markup.Xaml;
+using Avalonia.Styling;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
@@ -61,6 +62,28 @@ public sealed class AgentChatStatusLineStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
 
         Assert.Equal(1.0, textBlock.Opacity);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatStatusLineBrain_WhenThinking_HasPulsatingAnimation()
+    {
+        var styles = LoadAgentChatStatusLineStyles();
+
+        var textBlock = new TextBlock();
+        textBlock.Classes.Add("agent-chat-status-line-brain");
+        textBlock.Classes.Add("thinking");
+
+        var host = new StackPanel();
+        host.Styles.Add(styles);
+        host.Children.Add(textBlock);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        var thinkingStyle = styles.OfType<Style>()
+            .First(s => s.Selector?.ToString()?.Contains("thinking") == true);
+
+        Assert.Single(thinkingStyle.Animations);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
