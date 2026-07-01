@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
 using Xunit;
 
@@ -178,6 +179,57 @@ public sealed class ReverseTrustedExecutionTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => executor.OpenStreamAsync(request));
     }
+
+    [Fact]
+    public async Task ReverseTrustedExecutor_CreateAgentChat_SetsNullPersistenceStore()
+    {
+        var trackingStore = new TrackingAgentPersistenceStore();
+
+        var registry = new ReverseExecutionRegistry();
+        var connection = new StreamingConnection("computer-a", "turn-result");
+        registry.Register(connection);
+        var executor = new ReverseTrustedExecutor(registry);
+
+        // ReverseTrustedExecutor must override AgentPersistenceStoreOverride with NullAgentPersistenceStore.Instance,
+        // so the provided tracking store's ReadMessagesAsync should never be called.
+        await using var chat = await executor.CreateAgentChatAsync(new TrustedExecutionRequest
+        {
+            AgentDefinition = AgentSchema.AgentDefinition.FromJson(
+                """{ "kind":"prompt","name":"x","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[] }"""),
+            TrustProfile = new TrustProfile { HostingWorkspacesClientInstances = ["computer-a"] },
+            TargetClientInstance = "computer-a",
+            AgentSessionId = "test-null-store",
+            AgentServices = new Phantom.Workspaces.Llm.AgentServices { AgentPersistenceStoreOverride = trackingStore },
+        });
+
+        await foreach (var _ in chat.RunSingleTurnAsync([new ChatMessage(ChatRole.User, "hi")])) { }
+
+        Assert.Equal(0, trackingStore.ReadMessageCallCount);
+    }
+
+    private sealed class TrackingAgentPersistenceStore : Phantom.Workspaces.Llm.Interfaces.IAgentPersistenceStore
+    {
+        public int ReadMessageCallCount { get; private set; }
+
+        public ValueTask StoreAsync(
+            Phantom.Workspaces.Llm.Interfaces.StoreRequestAgent request,
+            CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<Phantom.Workspaces.Llm.Interfaces.PersistedAgent?> RestoreAsync(
+            Phantom.Workspaces.Llm.Interfaces.RestoreRequest request,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<Phantom.Workspaces.Llm.Interfaces.PersistedAgent?>(null);
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(
+            Phantom.Workspaces.Llm.Interfaces.ReadMessagesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            this.ReadMessageCallCount++;
+            return ValueTask.FromResult(System.Array.Empty<ChatMessage>());
+        }
+    }
+
 
     /// <summary>
     /// A test <see cref="IReverseExecutionHandler"/> that, on a stream open, deserialises the

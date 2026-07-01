@@ -82,11 +82,21 @@ public sealed class EntityRepository
 
         // Dev tunnel access authorizes with the GitHub auth token (GITHUB_TOKEN env var, else
         // `gh auth token`); plain web access uses no tunnel-authorization header.
-        var devTunnelAccessToken = repositorySource.UseGitHubAuthToken
-            ? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()
-            : null;
+        string? devTunnelAccessToken = null;
+        Func<string?>? devTunnelAccessTokenResolver = null;
+        if (repositorySource.UseGitHubAuthToken)
+        {
+            devTunnelAccessToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+            if (string.IsNullOrWhiteSpace(devTunnelAccessToken))
+            {
+                throw new InvalidOperationException(
+                    "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
+            }
 
-        return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken);
+            devTunnelAccessTokenResolver = () => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+        }
+
+        return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken, devTunnelAccessTokenResolver);
     }
 
     private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
@@ -94,11 +104,10 @@ public sealed class EntityRepository
     {
         // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
         // on a connection drop the reconnecting layer re-resolves the tunnel (picking up a changed
-        // port) and reconnects with bounded backoff, without restarting the workspace. Token access
-        // uses the resolved pre-shared token; Private access reuses the GitHub identity token as the
-        // X-Tunnel-Authorization, matching the explicit-endpoint dev tunnel scheme.
+        // port) and reconnects with bounded backoff, without restarting the workspace. The connect
+        // token is fetched automatically by the Management API (Private mode) or absent (Anonymous).
         var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
-            .CreateEndpointResolver(repositorySource.AccessTokenSource);
+            .CreateEndpointResolver();
 
         var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
             resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
@@ -107,7 +116,7 @@ public sealed class EntityRepository
                 cancellationToken),
             buildDataAccessLayer: resolution => new WebClientDataAccessLayer(
                 resolution.BaseUri.ToString(),
-                resolution.TunnelAuthToken ?? Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
+                resolution.TunnelAuthToken),   // null for Anonymous; connect-token for Private
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
         await reconnectingDataAccessLayer.StartAsync().ConfigureAwait(false);

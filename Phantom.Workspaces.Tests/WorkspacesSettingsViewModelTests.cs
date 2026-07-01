@@ -128,19 +128,6 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
-    public void RemoteAccess_TokenMode_RequiresTokenSource()
-    {
-        var viewModel = new RemoteAccessSettingsViewModel
-        {
-            DevTunnelAccessMode = DevTunnelAccessMode.Token,
-        };
-
-        Assert.False(viewModel.IsValid);
-        viewModel.DevTunnelAccessTokenSource = "DEVTUNNEL_TOKEN";
-        Assert.True(viewModel.IsValid);
-    }
-
-    [AvaloniaFact]
     public void Settings_CanSave_TracksSectionValidity()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());

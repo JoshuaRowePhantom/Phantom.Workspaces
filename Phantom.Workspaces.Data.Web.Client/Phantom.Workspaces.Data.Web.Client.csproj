@@ -1,7 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <PackageReference Include="MongoDB.Bson" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Interfaces\Phantom.Workspaces.Llm.Interfaces.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

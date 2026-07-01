@@ -420,60 +420,39 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Row="1">
-                <Border Classes="entity-card"
-                        IsVisible="{Binding HasNoRegions}">
-                    <StackPanel Spacing="8">
-                        <TextBlock Text="Empty workspace" Classes="heading" />
-                        <TextBlock Text="See the guidance note for how to add regions and tabs to this workspace."
-                                   TextWrapping="Wrap" />
-                        <TextBlock Text="Documentation entity: documentation/empty-workspace"
-                                   Classes="muted"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
-
-                <ContentControl Content="{Binding SelectedRegion}"
-                                IsVisible="{Binding HasRegions}">
-                    <ContentControl.ContentTemplate>
-                        <DataTemplate x:DataType="vm:WorkspaceRegionViewModel">
-                            <Border Classes="workspace-region-card">
-                                <Grid RowDefinitions="Auto,*">
-                                    <StackPanel Classes="workspace-region-header-row">
-                                        <TextBlock Text="{Binding Title}" Classes="section-title" />
-                                        <TextBlock Text="{Binding DockRegion}" Classes="muted" />
-                                        <TextBlock Text="{Binding RelativeSize, StringFormat='x{0}'}" Classes="muted" />
-                                    </StackPanel>
-                                    <TabControl Grid.Row="1"
-                                                MinHeight="0"
-                                                Classes="workspace-tabs"
-                                                ItemsSource="{Binding Tabs}"
-                                                SelectedItem="{Binding SelectedTab}">
-                                        <TabControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <TextBlock Text="{Binding Title}" />
-                                                    <Button Content="✕"
-                                                            Classes="workspace-tab-close-button"
-                                                            Command="{Binding $parent[TabControl].DataContext.CloseTabCommand}"
-                                                            CommandParameter="{Binding}" />
-                                                </StackPanel>
-                                            </DataTemplate>
-                                        </TabControl.ItemTemplate>
-                                    </TabControl>
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ContentControl.ContentTemplate>
-                </ContentControl>
-            </Grid>
+            <TabControl Grid.Row="1"
+                        MinHeight="0"
+                        Classes="workspace-tabs"
+                        ItemsSource="{Binding Tabs}"
+                        SelectedItem="{Binding SelectedTab}">
+                <TabControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WorkspaceTabViewModel">
+                        <TextBlock Text="{Binding Title}" />
+                    </DataTemplate>
+                </TabControl.ItemTemplate>
+            </TabControl>
         </Grid>
     </DataTemplate>
     <!-- Tab header item templates (top-level so they are individually testable and visible to the full
-         template-resolution chain inside ItemsControl) -->
+         template-resolution chain inside ItemsControl after Dock pane moves) -->
+    <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
+        <!-- Show the globe glyph; favicon image loading is a future enhancement -->
+        <TextBlock Text="🌐" />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
+        <TextBlock Text="{Binding Icon}" />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="running-indicator"
+        <ProgressBar Classes="glyph-indicator pulsating-brain"
                      IsIndeterminate="{Binding IsRunning}" />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
+        <!-- Always occupies space; empty bar hides it when there is no unread notification -->
+        <ProgressBar Classes="notification-indicator"
+                     Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
@@ -481,7 +460,7 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:TabHeaderViewModel">
-        <Grid>
+        <Grid HorizontalAlignment="Left">
             <StackPanel Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding Title}" />
                 <ItemsControl ItemsSource="{Binding Items}">
@@ -490,27 +469,6 @@
                             <StackPanel Orientation="Horizontal" Spacing="2" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
-                    <ItemsControl.DataTemplates>
-                        <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
-                            <!-- Show the globe glyph; favicon image loading is a future enhancement -->
-                            <TextBlock Text="🌐" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
-                            <TextBlock Text="{Binding Icon}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-                            <ProgressBar Classes="running-indicator"
-                                         IsIndeterminate="{Binding IsRunning}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-                            <!-- Always occupies space; empty bar hides it when there is no unread notification -->
-                            <ProgressBar Classes="notification-indicator"
-                                         Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
-                        </DataTemplate>
-                        <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
-                            <entityControls:StatusControl Item="{Binding Status}" />
-                        </DataTemplate>
-                    </ItemsControl.DataTemplates>
                 </ItemsControl>
             </StackPanel>
             <!-- Alt+N shortcut badge: visible only for tabs 1–10; fades in when Alt is held -->

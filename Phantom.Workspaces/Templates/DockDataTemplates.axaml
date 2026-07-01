@@ -43,9 +43,28 @@
         </dock:DocumentControl>
     </DataTemplate>
 
-    <!-- Workspace-level tab: shows the workspace's ContentLayout -->
+    <!-- Workspace-level tab: shows the workspace's ContentLayout.
+         The inner WorkspaceContentDock and WorkspaceDocument DataTemplates are placed directly on
+         DockControl.DataTemplates so they are found before any ancestor FuncDataTemplate<IDocumentDock>
+         that Dock auto-registers on PART_ContentControl, which would otherwise shadow the top-level
+         templates and cause tab icons to go missing (regression from #374). -->
     <DataTemplate DataType="vm:WorkspacePaneDocument">
         <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}"
-                          AutoCreateDataTemplates="False" />
+                          AutoCreateDataTemplates="False">
+            <dock:DockControl.DataTemplates>
+                <DataTemplate DataType="vm:WorkspaceContentDock">
+                    <dock:DocumentControl>
+                        <dock:DocumentControl.HeaderTemplate>
+                            <DataTemplate x:DataType="vm:WorkspaceDocument">
+                                <ContentControl Content="{Binding EffectiveTabHeader}" />
+                            </DataTemplate>
+                        </dock:DocumentControl.HeaderTemplate>
+                    </dock:DocumentControl>
+                </DataTemplate>
+                <DataTemplate DataType="vm:WorkspaceDocument">
+                    <ContentControl Content="{Binding TabViewModel}" />
+                </DataTemplate>
+            </dock:DockControl.DataTemplates>
+        </dock:DockControl>
     </DataTemplate>
 </DataTemplates>

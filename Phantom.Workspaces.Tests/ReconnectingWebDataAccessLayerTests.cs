@@ -70,6 +70,34 @@ public sealed class ReconnectingWebDataAccessLayerTests
     }
 
     [Fact]
+    public async Task Operation_On401_TriggersReconnectAndRetries()
+    {
+        var endpoints = new Queue<DevTunnelEndpointResolution>(
+        [
+            Endpoint("https://t-5280.usw2.devtunnels.ms/"),
+            Endpoint("https://t-5280.usw2.devtunnels.ms/"),
+        ]);
+        // Layer 1 (initial) fails the update with 401; layer 2 (after reconnect) succeeds.
+        var layers = new Queue<FakeLayer>(
+        [
+            new FakeLayer { UpdateBehavior = () => throw UnauthorizedFailure() },
+            new FakeLayer(),
+        ]);
+        var reconnecting = new ReconnectingWebDataAccessLayer(
+            resolveEndpointAsync: _ => Task.FromResult(endpoints.Dequeue()),
+            buildDataAccessLayer: _ => layers.Dequeue(),
+            delayScheduler: new RecordingDelayScheduler(),
+            reconnectOptions: NoJitterOptions,
+            nextJitterSample: () => 0.0);
+
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
+        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(DevTunnelConnectionState.Connected, reconnecting.Status.State);
+    }
+
+    [Fact]
     public async Task Operation_OnApplicationError_DoesNotReconnect_AndPropagates()
     {
         var resolveCount = 0;
@@ -116,6 +144,9 @@ public sealed class ReconnectingWebDataAccessLayerTests
 
     private static WebDataAccessRequestException ConnectivityFailure()
         => new("relay unreachable", statusCode: null);
+
+    private static WebDataAccessRequestException UnauthorizedFailure()
+        => new("unauthorized", HttpStatusCode.Unauthorized);
 
     private static WebDataAccessRequestException ApplicationError()
         => new("bad request", HttpStatusCode.BadRequest);

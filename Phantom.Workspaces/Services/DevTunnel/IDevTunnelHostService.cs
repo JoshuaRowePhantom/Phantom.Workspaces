@@ -23,13 +23,13 @@ public interface IDevTunnelHostService : IAsyncDisposable
     /// Ensures the tunnel exists, forwards the supplied local port (enforcing the single-port
     /// invariant), applies the configured access mode, and begins hosting.
     /// </summary>
-    Task StartAsync(int localPort, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default);
+    Task StartAsync(int localPort, string protocol, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Applies a configuration change (e.g. access mode or listen port) without losing the tunnel
     /// identity.
     /// </summary>
-    Task ReconfigureAsync(int localPort, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default);
+    Task ReconfigureAsync(int localPort, string protocol, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default);
 
     /// <summary>Stops hosting and releases the relay host; the tunnel resource persists.</summary>
     Task StopAsync(CancellationToken cancellationToken = default);

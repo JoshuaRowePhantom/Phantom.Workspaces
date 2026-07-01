@@ -29,7 +29,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
 
     public event EventHandler<DevTunnelHostStatus>? StatusChanged;
 
-    public async Task StartAsync(int localPort, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default)
+    public async Task StartAsync(int localPort, string protocol, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default)
     {
         this.SetStatus(this.Status with { State = DevTunnelHostState.Starting, AccessMode = configuration.AccessMode, LastError = null });
         try
@@ -39,10 +39,10 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 .ConfigureAwait(false);
 
             await this.managementClient
-                .SetSingleForwardedPortAsync(this.descriptor.TunnelId, localPort, configuration.Protocol, cancellationToken)
+                .SetSingleForwardedPortAsync(this.descriptor.TunnelId, localPort, protocol, cancellationToken)
                 .ConfigureAwait(false);
 
-            await this.managementClient
+            var connectToken = await this.managementClient
                 .ApplyAccessModeAsync(this.descriptor.TunnelId, configuration.AccessMode, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -59,6 +59,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 accessPointUrl,
                 this.descriptor.TunnelId,
                 configuration.AccessMode,
+                ConnectToken: connectToken,
                 LastError: null));
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -68,15 +69,16 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
                 AccessPointUrl: null,
                 this.descriptor?.TunnelId,
                 configuration.AccessMode,
+                ConnectToken: null,
                 exception.Message));
             throw;
         }
     }
 
-    public async Task ReconfigureAsync(int localPort, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default)
+    public async Task ReconfigureAsync(int localPort, string protocol, DevTunnelConfiguration configuration, CancellationToken cancellationToken = default)
     {
         await this.StopAsync(cancellationToken).ConfigureAwait(false);
-        await this.StartAsync(localPort, configuration, cancellationToken).ConfigureAwait(false);
+        await this.StartAsync(localPort, protocol, configuration, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -91,6 +93,7 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
             AccessPointUrl: null,
             this.descriptor?.TunnelId,
             this.Status.AccessMode,
+            ConnectToken: null,
             LastError: null));
     }
 

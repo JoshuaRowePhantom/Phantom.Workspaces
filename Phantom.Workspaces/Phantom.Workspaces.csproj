@@ -51,7 +51,9 @@
     </PackageReference>
     <PackageReference Include="Dock.Avalonia" />
     <PackageReference Include="Dock.Avalonia.Themes.Fluent" />
+    <PackageReference Include="Dock.Model.Avalonia" />
     <PackageReference Include="Dock.Model.Mvvm" />
+    <PackageReference Include="Dock.Serializer.SystemTextJson" />
     <PackageReference Include="Avalonia.Controls.WebView" />
     <PackageReference Include="Microsoft.DevTunnels.Connections" />
     <PackageReference Include="Microsoft.DevTunnels.Contracts" />

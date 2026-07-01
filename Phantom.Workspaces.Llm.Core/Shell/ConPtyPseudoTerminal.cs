@@ -31,10 +31,17 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern void ClosePseudoConsole(IntPtr hPC);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CreatePipe(
-        out SafeFileHandle hReadPipe, out SafeFileHandle hWritePipe,
-        IntPtr lpPipeAttributes, uint nSize);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateNamedPipeW(
+        string lpName, uint dwOpenMode, uint dwPipeMode,
+        uint nMaxInstances, uint nOutBufferSize, uint nInBufferSize,
+        uint nDefaultTimeOut, IntPtr lpSecurityAttributes);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+        IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
@@ -67,10 +74,28 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool DeleteProcThreadAttributeList(IntPtr lpAttributeList);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetHandleInformation(SafeFileHandle hObject, uint dwMask, uint dwFlags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessHandleCount(IntPtr hProcess, out uint pdwHandleCount);
+
     // ── Constants ───────────────────────────────────────────────────────────
 
-    private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const uint EXTENDED_STARTUPINFO_PRESENT  = 0x00080000;
+    private const uint CREATE_UNICODE_ENVIRONMENT    = 0x00000400;
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
+    private const uint HANDLE_FLAG_INHERIT           = 0x00000001;
+    private const uint PIPE_ACCESS_INBOUND  = 0x00000001;
+    private const uint PIPE_ACCESS_OUTBOUND = 0x00000002;
+    private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+    private const uint PIPE_TYPE_BYTE       = 0x00000000;
+    private const uint PIPE_READMODE_BYTE   = 0x00000000;
+    private const uint PIPE_WAIT            = 0x00000000;
+    private const uint OPEN_EXISTING        = 3;
+    private const uint GENERIC_READ         = 0x80000000;
+    private const uint GENERIC_WRITE        = 0x40000000;
+    private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
     // ── Structures ──────────────────────────────────────────────────────────
 
@@ -130,22 +155,40 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     public Stream Output { get; }
     public Stream Input { get; }
 
+    internal uint ProcessId { get; }
+
+    /// <summary>
+    /// Returns the current handle count of the child process, or <c>0</c> if the child has
+    /// already exited. Uses the kernel handle directly so the result is valid even after the
+    /// <see cref="System.Diagnostics.Process"/> object would have lost its snapshot.
+    /// </summary>
+    internal uint GetChildHandleCount()
+    {
+        GetProcessHandleCount(_hProcess, out uint count);
+        return count;
+    }
+
     // ── Constructor ─────────────────────────────────────────────────────────
 
     public ConPtyPseudoTerminal(ShellOpenPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        // PTY input pipe: child reads from inputRead, caller writes to inputWrite
-        if (!CreatePipe(out var inputRead, out var inputWrite, IntPtr.Zero, 0))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe (input) failed.");
+        // PTY input pipe: ConPTY reads from inputRead (synchronous), caller writes to inputWrite (overlapped)
+        var id = Guid.NewGuid().ToString("N");
+        var (inputRead, inputWrite)   = CreateNamedPipePair($@"\\.\pipe\phantom-pty-in-{id}",  PIPE_ACCESS_INBOUND,  GENERIC_WRITE);
 
-        // PTY output pipe: caller reads from outputRead, child writes to outputWrite
-        if (!CreatePipe(out var outputRead, out var outputWrite, IntPtr.Zero, 0))
+        // PTY output pipe: ConPTY writes to outputWrite (synchronous), caller reads from outputRead (overlapped)
+        SafeFileHandle outputWrite, outputRead;
+        try
+        {
+            (outputWrite, outputRead) = CreateNamedPipePair($@"\\.\pipe\phantom-pty-out-{id}", PIPE_ACCESS_OUTBOUND, GENERIC_READ);
+        }
+        catch
         {
             inputRead.Dispose();
             inputWrite.Dispose();
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe (output) failed.");
+            throw;
         }
 
         var size = new COORD { X = (short)payload.Columns, Y = (short)payload.Rows };
@@ -163,11 +206,10 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         }
 
         IntPtr attrList = IntPtr.Zero;
-        IntPtr hpcValuePtr = IntPtr.Zero;
         PROCESS_INFORMATION pi = default;
         try
         {
-            (attrList, hpcValuePtr) = BuildAttributeList(_hPC);
+            attrList = BuildAttributeList(_hPC);
 
             var startupInfo = new STARTUPINFOEXW
             {
@@ -182,7 +224,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                     commandLine,
                     IntPtr.Zero, IntPtr.Zero,
                     false,
-                    EXTENDED_STARTUPINFO_PRESENT,
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
                     IntPtr.Zero,
                     payload.WorkingDirectory,
                     ref startupInfo,
@@ -198,14 +240,11 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
                 DeleteProcThreadAttributeList(attrList);
                 Marshal.FreeHGlobal(attrList);
             }
-            if (hpcValuePtr != IntPtr.Zero)
-            {
-                Marshal.FreeHGlobal(hpcValuePtr);
-            }
         }
 
         _hProcess = pi.hProcess;
         _hThread = pi.hThread;
+        ProcessId = pi.dwProcessId;
 
         Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
         Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
@@ -252,11 +291,46 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds a PROC_THREAD_ATTRIBUTE_LIST containing PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.
-    /// Returns (attributeList, hpcValuePtr) — the caller must free both with
-    /// DeleteProcThreadAttributeList+FreeHGlobal after CreateProcessW returns.
+    /// Creates a named-pipe pair where the server handle is <b>synchronous</b> (required by
+    /// <c>CreatePseudoConsole</c>) and the client handle is <c>FILE_FLAG_OVERLAPPED</c>
+    /// (required by <see cref="FileStream"/> constructed with <c>isAsync: true</c>). The
+    /// inherit flag is explicitly cleared on both handles to prevent accidental leakage into
+    /// child processes.
     /// </summary>
-    private static (IntPtr List, IntPtr HpcValuePtr) BuildAttributeList(IntPtr hPC)
+    private static (SafeFileHandle Server, SafeFileHandle Client) CreateNamedPipePair(
+        string name, uint serverAccess, uint clientAccess)
+    {
+        var server = CreateNamedPipeW(
+            name,
+            serverAccess,   // synchronous — CreatePseudoConsole requires non-overlapped handles
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1, 4096, 4096, 0, IntPtr.Zero);
+        if (server.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateNamedPipeW failed for '{name}'.");
+
+        // Explicitly clear the inherit flag so these handles are never leaked into
+        // child processes, guarding against any future caller that passes bInheritHandles=true.
+        SetHandleInformation(server, HANDLE_FLAG_INHERIT, 0);
+
+        var client = CreateFileW(name, clientAccess, 0, IntPtr.Zero, OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED | FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+        if (client.IsInvalid)
+        {
+            server.Dispose();
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateFileW failed for '{name}'.");
+        }
+
+        SetHandleInformation(client, HANDLE_FLAG_INHERIT, 0);
+
+        return (server, client);
+    }
+
+    /// <summary>
+    /// Builds a PROC_THREAD_ATTRIBUTE_LIST containing PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.
+    /// The caller must free the returned list with DeleteProcThreadAttributeList+FreeHGlobal
+    /// after CreateProcessW returns.
+    /// </summary>
+    private static IntPtr BuildAttributeList(IntPtr hPC)
     {
         IntPtr size = IntPtr.Zero;
         InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
@@ -269,24 +343,22 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
         }
 
-        // Allocate a buffer that holds the HPCON value; lpValue must remain valid through CreateProcess.
-        IntPtr hpcValuePtr = Marshal.AllocHGlobal(IntPtr.Size);
-        Marshal.WriteIntPtr(hpcValuePtr, hPC);
-
+        // Pass hPC directly as lpValue — for PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE the kernel
+        // takes the HPCON handle value from lpValue itself (not a pointer-to-pointer). This
+        // matches Microsoft's ConPTY sample (EchoCon) and every known working C# implementation.
         if (!UpdateProcThreadAttribute(
                 list, 0,
                 (IntPtr)PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                hpcValuePtr,
+                hPC,
                 (IntPtr)IntPtr.Size,
                 IntPtr.Zero, IntPtr.Zero))
         {
-            Marshal.FreeHGlobal(hpcValuePtr);
             DeleteProcThreadAttributeList(list);
             Marshal.FreeHGlobal(list);
             throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
         }
 
-        return (list, hpcValuePtr);
+        return list;
     }
 
     private static string BuildCommandLine(ShellOpenPayload payload)

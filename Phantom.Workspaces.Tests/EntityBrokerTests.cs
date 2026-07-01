@@ -882,6 +882,40 @@ public sealed class EntityBrokerTests
             TestContext.Current.CancellationToken);
     }
 
+    [AvaloniaFact]
+    public async Task GetEntitiesAsync_WithDuplicateEntityIdAcrossBatches_DoesNotThrowAndReturnsEntityOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("d1d1d1d1-0000-0000-0000-000000000001");
+        var timestamp = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1");
+        var snapshot = CreateSnapshot(
+            entityId,
+            timestamp,
+            """
+            {
+              "entity-id": "d1d1d1d1-0000-0000-0000-000000000001",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["dup-test", "alias-one"], ["dup-test", "alias-two"]],
+              "display-name": { "default": "Worktree" }
+            }
+            """);
+
+        var broker = await CreateBrokerAsync(ct);
+        await SeedSnapshotAsync(broker, snapshot);
+
+        // Two requests using the two different name aliases — both resolve to the same entity,
+        // which produces two response batches containing the same EntityId.
+        var entities = await broker.GetEntitiesAsync(
+            [
+                new GetEntityRequest { EntityName = new EntityName("dup-test", "alias-one") },
+                new GetEntityRequest { EntityName = new EntityName("dup-test", "alias-two") },
+            ],
+            ct);
+
+        var entity = Assert.Single(entities);
+        Assert.Equal(entityId, entity.EntityId);
+    }
+
     private static EntitySnapshot CreateSnapshot(
         EntityId entityId,
         Timestamp modifiedTime,

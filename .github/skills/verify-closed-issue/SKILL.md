@@ -44,6 +44,10 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,
 
 ## Step 2 — Find corresponding code on `features`
 
+This step handles two cases:
+
+**Default case — inspecting the `features` tip in `C:\dev\Phantom.Workspaces`:**
+
 All inspection is done in `C:\dev\Phantom.Workspaces`, which tracks the `features` branch.
 
 Search for the files, classes, and methods the issue describes:
@@ -55,6 +59,23 @@ git --no-pager log features --grep="#<NUMBER>" --oneline
 # Search for relevant identifiers (class names, method names, file names from the issue)
 # Use grep and glob to locate implementation files
 ```
+
+**Worktree/branch case — invoked from a feature-isolation worktree:**
+
+When the caller supplies a worktree path and branch name, `cd` into the worktree first, then use these commands to identify what is unique to the branch before searching for implementation:
+
+```powershell
+# Show commits unique to this branch (reachable from HEAD but not from features)
+git --no-pager log features..HEAD --oneline --stat
+
+# Show which files were changed on this branch relative to the merge base
+git --no-pager diff --name-status features...HEAD
+
+# Full diff if detail is needed
+git --no-pager diff features...HEAD
+```
+
+The triple-dot form (`features...HEAD`) diffs against the merge base, so results are correct even if `features` has received new commits since this branch was created. The double-dot form (`features..HEAD`) lists commits by reachability — commits in HEAD not reachable from `features`.
 
 - Look for the implementation files mentioned or implied by the issue.
 - Look for any new types, methods, or schema files the issue specifies.

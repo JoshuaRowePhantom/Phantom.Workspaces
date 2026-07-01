@@ -26,10 +26,15 @@ public enum DataAccessMode
 /// </summary>
 public enum DevTunnelAccessMode
 {
-    /// <summary>Private tunnel requiring authenticated identity (default).</summary>
+    /// <summary>Private tunnel requiring authenticated identity (default). Connect tokens are fetched automatically from the Management API.</summary>
     Private = 0,
 
-    /// <summary>Non-interactive access via a tunnel access token.</summary>
+    /// <summary>
+    /// Deprecated. Previously used for non-interactive access via a manually configured tunnel access token.
+    /// Treated identically to <see cref="Private"/> at runtime; connect tokens are now always fetched
+    /// automatically. Kept as a numeric value for backward-compatible deserialisation of existing configs.
+    /// </summary>
+    [Obsolete("Use Private instead. Token mode is retired; connect tokens are now fetched automatically from the Management API.")]
     Token = 1,
 
     /// <summary>Anonymous access (opt-in; should be warned in UI).</summary>
@@ -106,17 +111,8 @@ public sealed record DevTunnelConfiguration
     /// <summary>Ports hosted through the tunnel.</summary>
     public IReadOnlyList<int> HostedPorts { get; init; } = [];
 
-    /// <summary>Protocol metadata for the hosted ports.</summary>
-    public string Protocol { get; init; } = "https";
-
     /// <summary>Tunnel access mode; private by default.</summary>
     public DevTunnelAccessMode AccessMode { get; init; } = DevTunnelAccessMode.Private;
-
-    /// <summary>
-    /// Name of the source that supplies the tunnel access token for non-interactive access.
-    /// Never the raw token value.
-    /// </summary>
-    public string? AccessTokenSource { get; init; }
 }
 
 /// <summary>How the application applies updates discovered from the GitHub Releases feed.</summary>
@@ -208,8 +204,7 @@ public sealed record WorkspacesConfiguration
                 : this.DevTunnel.TunnelName is { Length: > 0 } devTunnelName
                     ? new DevTunnelNameRepositorySource(
                         devTunnelName,
-                        this.DevTunnel.AccessMode,
-                        this.DevTunnel.AccessTokenSource)
+                        this.DevTunnel.AccessMode)
                     : throw new InvalidOperationException(
                         "Dev tunnel web data-access mode requires either a web endpoint URL or a dev tunnel name."),
             DataAccessMode.RemoteMongo => throw new InvalidOperationException(

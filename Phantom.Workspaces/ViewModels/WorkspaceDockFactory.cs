@@ -4,7 +4,6 @@ using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm;
-using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -13,14 +12,45 @@ public class WorkspaceDockFactory : Factory
 {
     private readonly MainWindowViewModel mainWindowViewModel;
 
+    /// <summary>
+    /// Registry mapping tab IDs to their dock documents. Populated by
+    /// <see cref="WorkspaceDocumentGenerator"/> via the onPrepared callback.
+    /// </summary>
+    private readonly Dictionary<string, WorkspaceDocument> documentsByTabId = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Registry mapping pane IDs to their dock documents. Populated by
+    /// <see cref="WorkspacePaneDocumentGenerator"/> via the onPrepared callback.
+    /// </summary>
+    private readonly Dictionary<string, WorkspacePaneDocument> paneDocumentsByPaneId = new(StringComparer.Ordinal);
+
     public WorkspaceDockFactory(MainWindowViewModel mainWindowViewModel)
     {
         this.mainWindowViewModel = mainWindowViewModel;
     }
 
     /// <summary>
+    /// Returns the <see cref="WorkspaceDocument"/> registered for the given tab ID, or null if none.
+    /// </summary>
+    public WorkspaceDocument? GetDocumentForTab(string tabId)
+        => this.documentsByTabId.TryGetValue(tabId, out var doc) ? doc : null;
+
+    /// <summary>
+    /// Removes the document registration for the given tab ID (called when a document is cleared).
+    /// </summary>
+    public void UnregisterDocument(string tabId)
+        => this.documentsByTabId.Remove(tabId);
+
+    /// <summary>
+    /// Returns the <see cref="WorkspacePaneDocument"/> registered for the given pane ID, or null if none.
+    /// </summary>
+    public WorkspacePaneDocument? GetPaneDocument(string paneId)
+        => this.paneDocumentsByPaneId.TryGetValue(paneId, out var doc) ? doc : null;
+
+    /// <summary>
     /// Creates the root layout with a DocumentDock for workspace-level tabs.
-    /// Each workspace tab contains its own nested ContentLayout for workspace content.
+    /// Uses ItemsSource wired to <see cref="MainWindowViewModel.WorkspacePanes"/> so that
+    /// adding/removing workspace panes automatically creates/destroys dock documents.
     /// </summary>
     public override IRootDock CreateLayout()
     {
@@ -33,6 +63,10 @@ public class WorkspaceDockFactory : Factory
             CanFloat = false,
             CanPin = false,
             VisibleDockables = CreateList<IDockable>(),
+            ItemsSource = mainWindowViewModel.WorkspacePanes,
+            ItemContainerGenerator = new WorkspacePaneDocumentGenerator(
+                doc => this.paneDocumentsByPaneId[doc.Id] = doc,
+                id => this.paneDocumentsByPaneId.Remove(id)),
         };
 
         var root = CreateRootDock();
@@ -50,6 +84,9 @@ public class WorkspaceDockFactory : Factory
 
     /// <summary>
     /// Creates a dock layout for workspace content (entity tabs, agent sessions, etc.)
+    /// Uses ItemsSource wired to <see cref="WorkspacePaneViewModel.Tabs"/> so that
+    /// adding/removing tabs automatically creates/destroys dock documents via
+    /// <see cref="WorkspaceDocumentGenerator"/>.
     /// </summary>
     public IRootDock CreateWorkspaceContentLayout(WorkspacePaneViewModel workspacePane)
     {
@@ -60,6 +97,10 @@ public class WorkspaceDockFactory : Factory
             CanCreateDocument = false,
             IsCollapsable = false,
             VisibleDockables = CreateList<IDockable>(),
+            ItemsSource = workspacePane.Tabs,
+            ItemContainerGenerator = new WorkspaceDocumentGenerator(
+                doc => this.documentsByTabId[doc.Id] = doc,
+                id => this.documentsByTabId.Remove(id)),
         };
 
         var root = CreateRootDock();
@@ -73,47 +114,6 @@ public class WorkspaceDockFactory : Factory
         InitLayout(root);
 
         return root;
-    }
-
-    public WorkspacePaneDocument CreateWorkspacePaneDocument(WorkspacePaneViewModel workspacePane)
-    {
-        return new WorkspacePaneDocument(workspacePane)
-        {
-            Id = workspacePane.Id,
-            Title = workspacePane.Title,
-            CanClose = true,
-            CanFloat = false,
-            CanPin = false,
-        };
-    }
-
-    public void AddWorkspacePane(IDocumentDock dock, WorkspacePaneViewModel workspacePane)
-    {
-        var document = CreateWorkspacePaneDocument(workspacePane);
-        AddDockable(dock, document);
-        SetActiveDockable(document);
-        SetFocusedDockable(dock, document);
-    }
-
-    public WorkspaceDocument CreateWorkspaceTabDocument(WorkspaceTabViewModel tabViewModel)
-    {
-        return new WorkspaceDocument(tabViewModel)
-        {
-            Id = tabViewModel.Id,
-            Title = tabViewModel.Title,
-            CanClose = true,
-        };
-    }
-
-    public void AddWorkspaceTab(IDocumentDock dock, WorkspaceTabViewModel tabViewModel, bool focus = true)
-    {
-        var document = CreateWorkspaceTabDocument(tabViewModel);
-        AddDockable(dock, document);
-        if (focus)
-        {
-            SetActiveDockable(document);
-            SetFocusedDockable(dock, document);
-        }
     }
 
     public override void InitLayout(IDockable layout)
