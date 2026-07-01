@@ -500,3 +500,4 @@ mongo-data
 mongo-data-playspace
 /build-output.txt
 Avalonia.Licensing.Local.props
+/mongo-data-playspace3
