@@ -171,6 +171,66 @@ public class StreamingPersistenceMiddlewareTests
     }
 
     [Fact]
+    public async Task CancellationOfConsumer_DoesNotAbortInFlightPersistence()
+    {
+        // Arrange: three role-alternating updates forming three messages.
+        //   u0: assistant FunctionCallContent("c0") → message[0]
+        //   u1: tool    FunctionResultContent("c0") → message[1]   (stableCount=1 after u1 → message[0] persisted)
+        //   u2: assistant text "final" (will not arrive — consumer cancels first)
+        //
+        // When u1 is processed by the middleware, message[0] is stable and is persisted using
+        // CancellationToken.None. The consumer then cancels its token. The next MoveNextAsync
+        // on the inner enumerator throws OperationCanceledException. Message[0] is already in
+        // the store and must not be removed by the cancellation.
+        var spyStore = new SpyAgentPersistenceStore();
+        var updates = new ChatResponseUpdate[]
+        {
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c0", "tool", null)] },
+            new() { Role = ChatRole.Tool,      Contents = [new FunctionResultContent("c0", "result")] },
+            new() { Role = ChatRole.Assistant, Contents = [new TextContent("final")], FinishReason = ChatFinishReason.Stop },
+        };
+
+        var provider = CreateProvider(spyStore);
+        var inner = new StaticChatClient(updates);
+        var middleware = new StreamingPersistenceMiddleware(inner, provider, spyStore);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+
+        using var cts = new CancellationTokenSource();
+
+        var enumerator = middleware.GetStreamingResponseAsync([], null, cts.Token)
+            .GetAsyncEnumerator(cts.Token);
+
+        // Consume u0 — 1 message, stableCount = 0, nothing persisted yet.
+        await enumerator.MoveNextAsync();
+        Assert.Equal(0, spyStore.StoreCallCount);
+
+        // Consume u1 — 2 messages, stableCount = 1; message[0] is persisted with CancellationToken.None.
+        await enumerator.MoveNextAsync();
+        Assert.Single(spyStore.StoredMessages);
+
+        // Cancel the consumer token — the already-persisted message must remain in the store.
+        await cts.CancelAsync();
+
+        try
+        {
+            // Next iteration respects cancellationToken in StaticChatClient and throws.
+            await enumerator.MoveNextAsync();
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            await enumerator.DisposeAsync();
+        }
+
+        // message[0] (FunctionCallContent) is still in the store: CancellationToken.None means
+        // StoreAsync cannot be aborted retroactively by the consumer's cancellation token.
+        Assert.Single(spyStore.StoredMessages);
+        Assert.Equal(ChatRole.Assistant, spyStore.StoredMessages[0].Role);
+        Assert.Contains(spyStore.StoredMessages[0].Contents, c => c is FunctionCallContent fc && fc.CallId == "c0");
+    }
+
+    [Fact]
     public async Task NullStore_NoException()
     {
         var nullStore = NullAgentPersistenceStore.Instance;

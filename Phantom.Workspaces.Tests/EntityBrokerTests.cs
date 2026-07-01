@@ -894,7 +894,7 @@ public sealed class EntityBrokerTests
             """
             {
               "entity-id": "d1d1d1d1-0000-0000-0000-000000000001",
-              "entity-types": ["entity", "git-worktree"],
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
               "names": [["dup-test", "alias-one"], ["dup-test", "alias-two"]],
               "display-name": { "default": "Worktree" }
             }
