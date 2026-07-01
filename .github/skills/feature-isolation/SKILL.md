@@ -233,6 +233,16 @@ git commit -m "Fix #<NUMBER>: <short description>
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
+## Step 10b — Validate implementation
+
+Spawn a `verify-closed-issue` subagent for this issue. In the subagent prompt, specify:
+
+- **Working directory:** the current worktree path (e.g. `C:\dev\phantom.workspaces-design\worktrees\<N>`)
+- **Branch under review:** the feature branch name (e.g. `fix/…` or `feat/…`)
+- Instruct the subagent to `cd` into the worktree and use the branch-diff commands from Step 2 of `verify-closed-issue` to identify commits and file changes unique to this branch before searching for implementation
+
+If the subagent concludes `failed-verification`, fix all identified gaps and re-run validation before continuing. **Do not proceed to Step 11 if validation fails.**
+
 ## Step 11 — Post a resolution comment
 
 After the commit SHA is known, post a comment that makes the issue thread a self-contained record of the fix:
@@ -314,3 +324,4 @@ Pop-Location
 14. If there are open questions, assign back to the reporter and stop — do not guess.
 15. Always include the `Co-authored-by: Copilot` trailer in every commit message.
 16. The full-solution `dotnet build --no-incremental` (Step 9a) must report zero `error ` lines before `run-tests.ps1` is invoked. A passing test run does not substitute for a clean build — library projects with no test assembly will not be compiled by the test runner.
+17. After committing (Step 10), validation via a `verify-closed-issue` subagent must pass before posting the resolution comment or closing the issue.

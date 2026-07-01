@@ -154,6 +154,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 runningAgentChats,
                 this.GetAllAgentTabs,
                 this.ActivateTabById,
+                sessionKey =>
+                {
+                    var entityId = runningAgentChats.RunningSessions
+                        .FirstOrDefault(s => string.Equals(s.SessionKey, sessionKey, StringComparison.Ordinal))
+                        ?.EntityId;
+                    if (entityId is not null)
+                    {
+                        _ = this.OpenEntityByIdAsync(entityId);
+                    }
+                },
                 action => Dispatcher.UIThread.Post(action));
         }
     }
@@ -780,6 +790,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SetBrushResource(resources, "Theme.Surface.EntityCard.HoverBorder", theme.Surfaces.EntityCard.HoverBorder);
         SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBackground", theme.Surfaces.EntityCard.SelectedBackground);
         SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBorder", theme.Surfaces.EntityCard.SelectedBorder);
+
+        SetBrushResource(resources, "Theme.Surface.Popup.Background", theme.Surfaces.Popup.Background);
+        SetBrushResource(resources, "Theme.Surface.Popup.Border", theme.Surfaces.Popup.Border);
 
         var classNames = new[] { "normal", "heading", "section-title", "caption", "muted", "accent" };
         foreach (var className in classNames)

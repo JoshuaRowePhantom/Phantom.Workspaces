@@ -54,6 +54,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         // while still allowing the same session to be open in multiple panes simultaneously,
         // sharing a single AgentChat via RunningAgentChatTable.
         var paneId = mainWindowViewModel.SelectedWorkspacePane?.Id;
+
+        string? agentSessionId = null;
+        if (entityViewModel.Data is System.Text.Json.JsonElement entityDataElement
+            && entityDataElement.TryGetProperty("agent-session-id", out var agentSidEl)
+            && agentSidEl.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            agentSessionId = agentSidEl.GetString();
+        }
+
         var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
             Id = paneId is not null ? $"{paneId}-{entityViewModel.EntityId}" : entityViewModel.EntityId.ToString(),
@@ -61,7 +70,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             DockRegion = "full",
             Entity = entityViewModel,
             NotificationService = mainWindowViewModel.NotificationService,
-            AgentSessionId = entityViewModel.EntityId.ToString(),
+            AgentSessionId = agentSessionId,
         };
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
@@ -224,7 +233,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         {
             lease = await this.runningAgentChatTable.AcquireAsync(
                 agentSessionId!,
-                () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel));
+                () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel),
+                agentSessionEntity.DisplayName,
+                agentSessionEntity.EntityId.ToString());
             agentChat = lease.AgentChat;
         }
         else

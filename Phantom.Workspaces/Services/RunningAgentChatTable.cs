@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Services;
@@ -20,28 +21,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, Entry> entries = new(StringComparer.Ordinal);
+    private readonly ObservableCollection<RunningAgentChat> runningSessions = [];
 
     /// <inheritdoc/>
-    public event EventHandler? SessionsChanged;
+    public ObservableCollection<RunningAgentChat> RunningSessions => this.runningSessions;
 
-    /// <inheritdoc/>
-    public int SessionCount
-    {
-        get
-        {
-            this.gate.Wait();
-            try
-            {
-                return this.entries.Count;
-            }
-            finally
-            {
-                this.gate.Release();
-            }
-        }
-    }
-
-    public async Task<RunningAgentChatLease> AcquireAsync(string sessionKey, Func<Task<AgentChat>> factory)
+    public async Task<RunningAgentChatLease> AcquireAsync(string sessionKey, Func<Task<AgentChat>> factory, string entityName = "", string? entityId = null)
     {
         bool sessionAdded;
         RunningAgentChatLease lease;
@@ -67,10 +52,31 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
         if (sessionAdded)
         {
-            this.SessionsChanged?.Invoke(this, EventArgs.Empty);
+            this.runningSessions.Add(new RunningAgentChat(this, sessionKey, entityName, entityId));
         }
 
         return lease;
+    }
+
+    internal async Task<RunningAgentChatLease> AcquireLeaseForExistingSessionAsync(string sessionKey)
+    {
+        await this.gate.WaitAsync();
+        try
+        {
+            if (!this.entries.TryGetValue(sessionKey, out var entry))
+            {
+                throw new InvalidOperationException($"No active session for key '{sessionKey}'.");
+            }
+
+            var agentChat = await entry.ChatTask;
+            var lease = new RunningAgentChatLease(this, sessionKey, agentChat);
+            entry.AddLease(lease);
+            return lease;
+        }
+        finally
+        {
+            this.gate.Release();
+        }
     }
 
     internal async Task ReleaseAsync(string sessionKey, RunningAgentChatLease lease)
@@ -111,7 +117,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
         if (sessionRemoved)
         {
-            this.SessionsChanged?.Invoke(this, EventArgs.Empty);
+            for (var i = this.runningSessions.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(this.runningSessions[i].SessionKey, sessionKey, StringComparison.Ordinal))
+                {
+                    this.runningSessions.RemoveAt(i);
+                    break;
+                }
+            }
         }
     }
 }
