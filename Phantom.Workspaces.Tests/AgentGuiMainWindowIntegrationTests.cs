@@ -38,14 +38,19 @@ public sealed class AgentGuiMainWindowIntegrationTests
         await using var viewModel = await MainWindowViewModel.CreateAsync(parseResult);
         var window = new global::Phantom.Workspaces.Agent.Gui.MainWindow(viewModel);
         window.Show();
+        try
+        {
+            var inputQueueControl = window.GetVisualDescendants().OfType<AgentChatInputQueueControl>().Single();
+            var outputControl = window.GetVisualDescendants().OfType<AgentChatOutputControl>().Single();
 
-        var inputQueueControl = window.GetVisualDescendants().OfType<AgentChatInputQueueControl>().Single();
-        var outputControl = window.GetVisualDescendants().OfType<AgentChatOutputControl>().Single();
-
-        Assert.IsType<InputQueueViewModel>(inputQueueControl.DataContext);
-        Assert.IsType<AgentViewModel>(outputControl.DataContext);
-
-        window.Close();
+            Assert.IsType<InputQueueViewModel>(inputQueueControl.DataContext);
+            Assert.IsType<AgentViewModel>(outputControl.DataContext);
+        }
+        finally
+        {
+            window.Close();
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { });
+        }
     }
 
 }

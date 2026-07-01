@@ -2435,6 +2435,12 @@ public sealed class MainWindowIntegrationTests
         return tcs.Task;
     }
 
+    private static async Task CloseWindowAsync(Window window)
+    {
+        window.Close();
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_CalledTwice_CurrentViewPopulationContainsEntitiesOnce()
     {
@@ -2557,49 +2563,54 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        await WaitForLayoutAsync(window);
+        try
+        {
+            await WaitForLayoutAsync(window);
 
-        // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
-        var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
-        Assert.NotEmpty(tabStrips);
+            // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
+            var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
+            Assert.NotEmpty(tabStrips);
 
-        // Diagnostic: check DataContext types on all tab strips and DockControls
-        var allDockControls = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DockControl>().ToList();
+            // Diagnostic: check DataContext types on all tab strips and DockControls
+            var allDockControls = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DockControl>().ToList();
 
-        var contentTabStrip = tabStrips.FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
-        Assert.NotNull(contentTabStrip);
+            var contentTabStrip = tabStrips.FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
+            Assert.NotNull(contentTabStrip);
 
-        // Diagnostic: check the full chain from DocumentControl → DocumentTabStrip → PART_HeaderPresenter
-        var documentControl = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DocumentControl>()
-            .FirstOrDefault(dc => dc.GetVisualDescendants().Contains(contentTabStrip));
-        Assert.NotNull(documentControl);
+            // Diagnostic: check the full chain from DocumentControl → DocumentTabStrip → PART_HeaderPresenter
+            var documentControl = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DocumentControl>()
+                .FirstOrDefault(dc => dc.GetVisualDescendants().Contains(contentTabStrip));
+            Assert.NotNull(documentControl);
 
-        // Both DocumentControl and DocumentTabStrip should have our ContentControl DataTemplate, not Dock's default.
-        var dcHeaderTemplateTypeName = documentControl!.HeaderTemplate?.GetType().Name ?? "(null)";
-        var dcHeaderTemplateDataType = (documentControl!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
-        var tsHeaderTemplateTypeName = contentTabStrip!.HeaderTemplate?.GetType().Name ?? "(null)";
-        var tsHeaderTemplateDataType = (contentTabStrip!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
+            // Both DocumentControl and DocumentTabStrip should have our ContentControl DataTemplate, not Dock's default.
+            var dcHeaderTemplateTypeName = documentControl!.HeaderTemplate?.GetType().Name ?? "(null)";
+            var dcHeaderTemplateDataType = (documentControl!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
+            var tsHeaderTemplateTypeName = contentTabStrip!.HeaderTemplate?.GetType().Name ?? "(null)";
+            var tsHeaderTemplateDataType = (contentTabStrip!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
 
-        var tabStripItems = contentTabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
-        Assert.NotEmpty(tabStripItems);
+            var tabStripItems = contentTabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+            Assert.NotEmpty(tabStripItems);
 
-        var headerPresenter = tabStripItems[0]
-            .GetVisualDescendants()
-            .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
-            .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
-        Assert.NotNull(headerPresenter);
+            var headerPresenter = tabStripItems[0]
+                .GetVisualDescendants()
+                .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
+            Assert.NotNull(headerPresenter);
 
-        // The child of PART_HeaderPresenter should be a ContentControl (our template), not a TextBlock.
-        // If this fails, check: dcHeaderTemplate={dcHeaderTemplateTypeName}, tsHeaderTemplate={tsHeaderTemplateTypeName}
-        var headerChild = headerPresenter!.GetVisualChildren().FirstOrDefault();
-        Assert.NotNull(headerChild);
-        Assert.True(
-            headerChild is Avalonia.Controls.ContentControl,
-            $"Expected ContentControl but got {headerChild!.GetType().Name}. " +
-            $"DC.HeaderTemplate={dcHeaderTemplateTypeName}(DataType={dcHeaderTemplateDataType}), " +
-            $"TS.HeaderTemplate={tsHeaderTemplateTypeName}(DataType={tsHeaderTemplateDataType})");
-
-        window.Close();
+            // The child of PART_HeaderPresenter should be a ContentControl (our template), not a TextBlock.
+            // If this fails, check: dcHeaderTemplate={dcHeaderTemplateTypeName}, tsHeaderTemplate={tsHeaderTemplateTypeName}
+            var headerChild = headerPresenter!.GetVisualChildren().FirstOrDefault();
+            Assert.NotNull(headerChild);
+            Assert.True(
+                headerChild is Avalonia.Controls.ContentControl,
+                $"Expected ContentControl but got {headerChild!.GetType().Name}. " +
+                $"DC.HeaderTemplate={dcHeaderTemplateTypeName}(DataType={dcHeaderTemplateDataType}), " +
+                $"TS.HeaderTemplate={tsHeaderTemplateTypeName}(DataType={tsHeaderTemplateDataType})");
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
@@ -2917,15 +2928,20 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3054,14 +3070,18 @@ public sealed class MainWindowIntegrationTests
         // Alt+1 must activate the first tab of pane 2, not pane 1.
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
-
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("adc-alt1-pane2-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("adc-alt1-pane2-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3233,15 +3253,20 @@ public sealed class MainWindowIntegrationTests
         // Shell tab is now active (last opened).
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("kb-alt1-shell-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("kb-alt1-shell-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3258,15 +3283,20 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal(documentDock!.VisibleDockables![9], documentDock.ActiveDockable);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal(documentDock!.VisibleDockables![9], documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3282,17 +3312,22 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        var activeBefore = documentDock!.ActiveDockable;
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            var activeBefore = documentDock!.ActiveDockable;
 
-        window.KeyPressQwerty(PhysicalKey.Digit9, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit9, RawInputModifiers.Alt);
 
-        Assert.Equal(activeBefore, documentDock.ActiveDockable);
-
-        window.Close();
+            Assert.Equal(activeBefore, documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3336,15 +3371,19 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
 
-        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
-        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt | RawInputModifiers.Shift);
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt | RawInputModifiers.Shift);
-
-        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
-
-        window.Close();
+            Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3388,12 +3427,16 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
 
-        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
-
-        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
-
-        window.Close();
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3404,15 +3447,20 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        var selectedBefore = viewModel.SelectedWorkspacePane;
+            var selectedBefore = viewModel.SelectedWorkspacePane;
 
-        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Alt | RawInputModifiers.Shift);
+            window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Alt | RawInputModifiers.Shift);
 
-        Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
-
-        window.Close();
+            Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3709,15 +3757,20 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
+            window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("ctrl-f7-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("ctrl-f7-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3736,15 +3789,20 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
+            window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("ctrl-f8-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("ctrl-f8-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3757,26 +3815,30 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            // Register a bubble-phase handler with handledEventsToo: true so it still fires
+            // even after the tunnel handler has already set e.Handled = true.
+            bool handledByTunnel = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.F7 && e.KeyModifiers == KeyModifiers.Control)
+                        handledByTunnel = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        // Register a bubble-phase handler with handledEventsToo: true so it still fires
-        // even after the tunnel handler has already set e.Handled = true.
-        bool handledByTunnel = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.F7 && e.KeyModifiers == KeyModifiers.Control)
-                    handledByTunnel = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            // With no unread notifications the command is a no-op, but the key must still be handled.
+            window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
 
-        // With no unread notifications the command is a no-op, but the key must still be handled.
-        window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
-
-        Assert.True(handledByTunnel);
-
-        window.Close();
+            Assert.True(handledByTunnel);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3789,23 +3851,27 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handledByTunnel = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.F8 && e.KeyModifiers == KeyModifiers.Control)
+                        handledByTunnel = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handledByTunnel = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.F8 && e.KeyModifiers == KeyModifiers.Control)
-                    handledByTunnel = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
 
-        window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
-
-        Assert.True(handledByTunnel);
-
-        window.Close();
+            Assert.True(handledByTunnel);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3821,25 +3887,29 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handledByTunnel = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                        handledByTunnel = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handledByTunnel = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
-                    handledByTunnel = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control | RawInputModifiers.Shift);
 
-        window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control | RawInputModifiers.Shift);
+            Assert.True(handledByTunnel);
 
-        Assert.True(handledByTunnel);
-
-        Assert.Equal(2, viewModel.SelectedWorkspacePane.Tabs.Count);
-
-        window.Close();
+            Assert.Equal(2, viewModel.SelectedWorkspacePane.Tabs.Count);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3854,12 +3924,16 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
 
-        window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
-
-        Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
-
-        window.Close();
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3874,10 +3948,16 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-
-        // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
-        // and interprets animation keyframes. The bug caused a throw here.
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
+            // and interprets animation keyframes. The bug caused a throw here.
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     // ── IsAltHeld / Alt-badge tests ──────────────────────────────────────────
@@ -3912,12 +3992,16 @@ public sealed class MainWindowIntegrationTests
         await viewModel.InitializeAsync();
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
 
-        window.KeyPressQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
-
-        Assert.True(viewModel.IsAltHeld);
-
-        window.Close();
+            Assert.True(viewModel.IsAltHeld);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -3927,13 +4011,17 @@ public sealed class MainWindowIntegrationTests
         await viewModel.InitializeAsync();
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            viewModel.IsAltHeld = true;
+            window.KeyReleaseQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
 
-        viewModel.IsAltHeld = true;
-        window.KeyReleaseQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
-
-        Assert.False(viewModel.IsAltHeld);
-
-        window.Close();
+            Assert.False(viewModel.IsAltHeld);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -4013,14 +4101,18 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            Assert.True(agentViewModel.AutoScrollEnabled);
 
-        Assert.True(agentViewModel.AutoScrollEnabled);
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.False(agentViewModel.AutoScrollEnabled);
-
-        window.Close();
+            Assert.False(agentViewModel.AutoScrollEnabled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -4039,13 +4131,17 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.True(agentViewModel.AutoScrollEnabled);
-
-        window.Close();
+            Assert.True(agentViewModel.AutoScrollEnabled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -4064,23 +4160,27 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handled = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.Scroll)
+                        handled = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handled = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.Scroll)
-                    handled = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.True(handled);
-
-        window.Close();
+            Assert.True(handled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -4094,23 +4194,27 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handled = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.Scroll)
+                        handled = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handled = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.Scroll)
-                    handled = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.False(handled);
-
-        window.Close();
+            Assert.False(handled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     // ── WebViewModel and AgentSessionTab accelerator-key wiring ─────────────────

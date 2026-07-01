@@ -293,74 +293,62 @@ public class AgentFactoryTests
     [Fact]
     public void CreateChatClient_GitHubProvider_ReturnsOpenAiChatClient()
     {
-        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
-        try
-        {
-            var agent = AgentDefinitionLoader.LoadAgentFromJson(
-                """
-                {
-                  "kind": "prompt",
-                  "name": "github-models-agent",
-                  "model": {
-                    "id": "gpt-4.1-mini",
-                    "provider": "github-models",
-                    "apiType": "OpenAI",
-                    "connection": {
-                      "kind": "key",
-                      "endpoint": "https://models.github.ai/inference",
-                      "apiKey": "${GITHUB_TOKEN}"
-                    }
-                  },
-                  "tools": []
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-models-agent",
+              "model": {
+                "id": "gpt-4.1-mini",
+                "provider": "github-models",
+                "apiType": "OpenAI",
+                "connection": {
+                  "kind": "key",
+                  "endpoint": "https://models.github.ai/inference",
+                  "apiKey": "${GITHUB_TOKEN}"
                 }
-                """);
+              },
+              "tools": []
+            }
+            """);
 
-            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+        var (client, displayName) = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
 
-            Assert.NotNull(client);
-            Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
-        }
+        Assert.NotNull(client);
+        Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
     }
 
     [Fact]
     public void CreateChatClient_GitHubProvider_WithNoEndpoint_UsesDefaultEndpoint()
     {
-        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
-        try
-        {
-            var agent = AgentDefinitionLoader.LoadAgentFromJson(
-                """
-                {
-                  "kind": "prompt",
-                  "name": "github-models-agent",
-                  "model": {
-                    "id": "gpt-4.1-mini",
-                    "provider": "github-models",
-                    "apiType": "OpenAI",
-                    "connection": {
-                      "kind": "key",
-                      "apiKey": "${GITHUB_TOKEN}"
-                    }
-                  },
-                  "tools": []
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-models-agent",
+              "model": {
+                "id": "gpt-4.1-mini",
+                "provider": "github-models",
+                "apiType": "OpenAI",
+                "connection": {
+                  "kind": "key",
+                  "apiKey": "${GITHUB_TOKEN}"
                 }
-                """);
+              },
+              "tools": []
+            }
+            """);
 
-            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+        var (client, displayName) = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
 
-            Assert.NotNull(client);
-            Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
-        }
+        Assert.NotNull(client);
+        Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
     }
 
     [Fact]
@@ -427,38 +415,32 @@ public class AgentFactoryTests
     [Fact]
     public void CreateChatClient_GitHubCopilotProvider_ReturnsCopilotSdkClient()
     {
-        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
-        try
-        {
-            var agent = AgentDefinitionLoader.LoadAgentFromJson(
-                """
-                {
-                  "kind": "prompt",
-                  "name": "github-copilot-agent",
-                  "model": {
-                    "id": "gpt-4.1-mini",
-                    "provider": "github-copilot",
-                    "apiType": "OpenAI",
-                    "connection": {
-                      "kind": "key",
-                      "apiKey": "${GITHUB_TOKEN}"
-                    }
-                  },
-                  "tools": []
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-copilot-agent",
+              "model": {
+                "id": "gpt-4.1-mini",
+                "provider": "github-copilot",
+                "apiType": "OpenAI",
+                "connection": {
+                  "kind": "key",
+                  "apiKey": "${GITHUB_TOKEN}"
                 }
-                """);
+              },
+              "tools": []
+            }
+            """);
 
-            var (client, displayName) = AgentFactory.CreateChatClient(agent);
+        var (client, displayName) = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
 
-            Assert.NotNull(client);
-            Assert.IsType<CopilotSdkChatClient>(client);
-            Assert.Equal("GitHub Copilot (gpt-4.1-mini)", displayName);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
-        }
+        Assert.NotNull(client);
+        Assert.IsType<CopilotSdkChatClient>(client);
+        Assert.Equal("GitHub Copilot (gpt-4.1-mini)", displayName);
     }
 
     [Fact]
@@ -1216,5 +1198,10 @@ public class AgentFactoryTests
             Interlocked.Increment(ref this.readCalls);
             return ValueTask.FromResult(Array.Empty<ChatMessage>());
         }
+    }
+
+    private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
+    {
+        public string ResolveApiKey(string? apiKeyValue, string? serverName) => key;
     }
 }
