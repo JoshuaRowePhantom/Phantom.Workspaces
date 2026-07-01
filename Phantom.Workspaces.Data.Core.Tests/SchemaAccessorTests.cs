@@ -86,6 +86,30 @@ public sealed class SchemaAccessorTests
     }
 
     [Fact]
+    public async Task BuildSchemaRegistryAsync_IsSafeUnderConcurrentAccessAcrossInstances()
+    {
+        // Multiple SchemaAccessor instances building their registry simultaneously used to corrupt
+        // NJsonSchema's process-wide static Dictionary inside JsonSchema.BuildImpl because the
+        // per-instance registryGate did not serialise calls across instances.
+        var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();
+
+        const int workerCount = 8;
+        using var startBarrier = new Barrier(workerCount);
+
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(_ => Task.Run(async () =>
+            {
+                var schemaAccessor = new SchemaAccessor(dataAccessLayer);
+                startBarrier.SignalAndWait();
+                var registry = await schemaAccessor.BuildSchemaRegistryAsync();
+                Assert.NotNull(registry);
+            }))
+            .ToArray();
+
+        await Task.WhenAll(workers);
+    }
+
+    [Fact]
     public async Task BuildSchemaRegistryAsync_ReturnsCachedRegistryInstance()
     {
         var dataAccessLayer = await CreatePopulatedDataAccessLayerAsync();

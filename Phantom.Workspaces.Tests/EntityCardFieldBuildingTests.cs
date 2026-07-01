@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardFieldBuildingTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsMarkdownEditorForNoteContent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -42,7 +42,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Contains("Body text here.", markdownEditor.TextContent, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_RendersNoteContentInline()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -87,7 +87,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.True(markdownEditor.ShowChrome);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_RendersNoFields_WhenEntityTypeViewHasEmptyFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -113,7 +113,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Empty(fieldEditors);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_RendersAllFields_WhenEntityTypeViewOmitsFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -139,7 +139,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.NotEmpty(fieldEditors);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsEntityListEditorForEntityIdListFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -180,7 +180,7 @@ public sealed class EntityCardFieldBuildingTests
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_ResolvesEntityIdListIndependentOfEntityTypeOrder()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -220,7 +220,7 @@ public sealed class EntityCardFieldBuildingTests
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsBooleanToggleEditorForPausedField()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -255,7 +255,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Contains(fieldEditors, editor => editor.FieldName == "last-started");
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsBooleanToggleEditor_DefaultsFalse_WhenPausedAbsent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(

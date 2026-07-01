@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Agent.Gui.Controls;
@@ -24,7 +24,7 @@ public sealed class AgentGuiMainWindowIntegrationTests
             }
             """);
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AgentGuiMainWindow_Constructs_WithExpectedChildDataContexts()
     {
         var parseResult = new AgentDefinitionParseResult(

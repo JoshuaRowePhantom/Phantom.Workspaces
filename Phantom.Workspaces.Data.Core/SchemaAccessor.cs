@@ -9,6 +9,10 @@ public sealed class SchemaAccessor : ISchemaAccessor
 {
     private const string SchemaEntityType = "json-schema";
 
+    // NJsonSchema's internal static Dictionary is not thread-safe; serialise all
+    // JsonSchema.FromText calls process-wide to prevent concurrent corruption.
+    private static readonly SemaphoreSlim buildGate = new(1, 1);
+
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Dictionary<string, JsonElement> requestSchemasByName;
     private readonly ConcurrentDictionary<string, JsonElement?> schemasByReference = new(StringComparer.Ordinal);
@@ -134,38 +138,46 @@ public sealed class SchemaAccessor : ISchemaAccessor
                 requestSchemasById[schemaId] = schemaEntity;
             }
 
-            foreach (var pair in requestSchemasById)
+            await buildGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                if (!Uri.TryCreate(pair.Key, UriKind.Absolute, out var schemaUri))
+                foreach (var pair in requestSchemasById)
                 {
-                    continue;
+                    if (!Uri.TryCreate(pair.Key, UriKind.Absolute, out var schemaUri))
+                    {
+                        continue;
+                    }
+
+                    _ = JsonSchema.FromText(
+                        GetSchemaText(pair.Value),
+                        new BuildOptions
+                        {
+                            SchemaRegistry = schemaRegistry,
+                            Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
+                        },
+                        schemaUri);
                 }
 
-                _ = JsonSchema.FromText(
-                    GetSchemaText(pair.Value),
-                    new BuildOptions
+                foreach (var pair in this.schemaEntitiesById!)
+                {
+                    if (requestSchemasById.ContainsKey(pair.Key))
                     {
-                        SchemaRegistry = schemaRegistry,
-                        Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
-                    },
-                    schemaUri);
+                        continue;
+                    }
+
+                    _ = JsonSchema.FromText(
+                        GetSchemaText(pair.Value),
+                        new BuildOptions
+                        {
+                            SchemaRegistry = schemaRegistry,
+                            Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
+                        },
+                        new Uri(pair.Key, UriKind.Absolute));
+                }
             }
-
-            foreach (var pair in this.schemaEntitiesById!)
+            finally
             {
-                if (requestSchemasById.ContainsKey(pair.Key))
-                {
-                    continue;
-                }
-
-                _ = JsonSchema.FromText(
-                    GetSchemaText(pair.Value),
-                    new BuildOptions
-                    {
-                        SchemaRegistry = schemaRegistry,
-                        Dialect = WorkspacesSchemaDialect.AllowingUnknownKeywords,
-                    },
-                    new Uri(pair.Key, UriKind.Absolute));
+                buildGate.Release();
             }
 
             this.schemaRegistry = schemaRegistry;

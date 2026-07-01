@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void SetItems_OrdersByOrderAndPreservesHierarchyLevel()
     {
         var list = new EntityListViewModel();
@@ -35,7 +35,7 @@ public sealed class EntityListViewModelTests
         Assert.True(list.Items[0].IsExpanded);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void TreeNode_CornerRadiusAndVisibility_TrackChildExpansionState()
     {
         var parent = new EntityListNodeViewModel(
@@ -61,7 +61,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▴", parent.ExpandArrow);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void EntityListNodeViewModel_ToggleExpandCommand_TogglesExpansionState()
     {
         var parent = new EntityListNodeViewModel(
@@ -96,7 +96,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▾", parent.ExpandArrow);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void EntityListNodeViewModel_ToggleExpandCommand_DisabledWhenNoChildren()
     {
         var node = new EntityListNodeViewModel(
@@ -109,7 +109,7 @@ public sealed class EntityListViewModelTests
         Assert.False(node.ToggleExpandCommand.CanExecute(null));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void EntityListNodeViewModel_SetChildren_EnablesToggleExpandCommand()
     {
         var parent = new EntityListNodeViewModel(
