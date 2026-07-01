@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrowserWorkspaceTabViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_TracksParentChildMetadataAndExpansion()
     {
         var broker = await CreateBrokerAsync();
@@ -99,7 +99,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Null(childItem.StickyRow);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_FolderItem_ExpandsViaItemToggleCommand()
     {
         var broker = await CreateBrokerAsync();
@@ -176,7 +176,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Equal(folderItem.ItemKey, childItem.ParentItemKey);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -246,7 +246,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Equal("# Heading\n\nBody", markdownEditor.TextContent);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsLocalizedMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -316,7 +316,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Equal("# Heading\n\nBody", markdownEditor.TextContent);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_UsesJsonSchemaFieldEditor_ForSchemaField()
     {
         var broker = await CreateBrokerAsync();

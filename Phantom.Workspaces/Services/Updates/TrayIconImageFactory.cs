@@ -112,24 +112,89 @@ internal static class TrayIconImageFactory
             }
         }
 
-        using var writeable = new WriteableBitmap(pixelSize, dpi, PixelFormats.Bgra8888, AlphaFormat.Premul);
-        using var fb = writeable.Lock();
-        renderTarget.CopyPixels(new PixelRect(pixelSize), fb.Address, fb.RowBytes * Size, fb.RowBytes);
+        // Bgra8888: exactly 4 bytes per pixel, no row padding for a 32-pixel-wide bitmap.
+        const int rowBytes = Size * 4;
+        const int bufferSize = rowBytes * Size;
+        var rawPixels = new byte[bufferSize];  // zero-initialised: transparent baseline
 
-        if (updateAvailable)
+        // Detect whether the platform render interface can produce real pixels.
+        // HeadlessBitmapStub.Save is a no-op that writes nothing; a Skia renderer encodes PNG bytes.
+        // We probe Save() rather than reading CopyPixels() directly because the headless stub's
+        // Lock() returns AllocHGlobal memory that is not zero-initialised, making garbage
+        // indistinguishable from rendered pixels.
+        using (var probe = new MemoryStream())
         {
-            // Explicitly set the badge centre pixel so headless renderers still
-            // produce different bytes from the no-badge path.
-            int offset = BadgeCenterY * fb.RowBytes + BadgeCenterX * 4;
-            Marshal.WriteByte(fb.Address, offset + 0, 0x00); // B
-            Marshal.WriteByte(fb.Address, offset + 1, 0xFF); // G
-            Marshal.WriteByte(fb.Address, offset + 2, 0x00); // R
-            Marshal.WriteByte(fb.Address, offset + 3, 0xFF); // A
+            renderTarget.Save(probe);
+            if (probe.Length > 0)
+            {
+                using var writeable = new WriteableBitmap(pixelSize, dpi, PixelFormats.Bgra8888, AlphaFormat.Premul);
+                using var fb = writeable.Lock();
+                renderTarget.CopyPixels(new PixelRect(pixelSize), fb.Address, bufferSize, fb.RowBytes);
+                Marshal.Copy(fb.Address, rawPixels, 0, bufferSize);
+            }
         }
 
-        int bufferSize = fb.RowBytes * Size;
-        var rawPixels = new byte[bufferSize];
-        Marshal.Copy(fb.Address, rawPixels, 0, bufferSize);
+        // Explicitly set the badge centre pixel so headless renderers produce different
+        // bytes from the no-badge path, and to guarantee a precise badge colour.
+        if (updateAvailable)
+        {
+            int badgeOffset = BadgeCenterY * rowBytes + BadgeCenterX * 4;
+            rawPixels[badgeOffset + 0] = 0x00; // B
+            rawPixels[badgeOffset + 1] = 0xFF; // G
+            rawPixels[badgeOffset + 2] = 0x00; // R
+            rawPixels[badgeOffset + 3] = 0xFF; // A
+        }
+
+        // When no rendering backend produced visible glyph pixels (headless environments),
+        // paint a filled circle so the icon is never invisible.
+        if (!HasVisibleGlyphPixels(rawPixels, rowBytes))
+            PaintFallbackGlyph(rawPixels, rowBytes);
+
         return rawPixels;
+    }
+
+    // Returns true when any pixel outside the badge area is non-transparent.
+    private static bool HasVisibleGlyphPixels(byte[] pixels, int rowBytes)
+    {
+        for (int y = 0; y < Size; y++)
+        {
+            for (int x = 0; x < Size; x++)
+            {
+                double dx = x - BadgeCenterX;
+                double dy = y - BadgeCenterY;
+                if (dx * dx + dy * dy <= BadgeRadius * BadgeRadius)
+                    continue;
+
+                int offset = y * rowBytes + x * 4;
+                if (pixels[offset + 3] > 0)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // Paints a filled circle as a visible fallback when glyph rendering is unavailable.
+    private static void PaintFallbackGlyph(byte[] pixels, int rowBytes)
+    {
+        const double radius = Size * 0.38;
+        const double cx = Size / 2.0;
+        const double cy = Size / 2.0;
+
+        for (int y = 0; y < Size; y++)
+        {
+            for (int x = 0; x < Size; x++)
+            {
+                double dx = x + 0.5 - cx;
+                double dy = y + 0.5 - cy;
+                if (dx * dx + dy * dy <= radius * radius)
+                {
+                    int offset = y * rowBytes + x * 4;
+                    pixels[offset + 0] = 0;
+                    pixels[offset + 1] = 0;
+                    pixels[offset + 2] = 0;
+                    pixels[offset + 3] = 255;
+                }
+            }
+        }
     }
 }

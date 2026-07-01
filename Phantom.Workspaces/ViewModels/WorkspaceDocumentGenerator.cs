@@ -24,18 +24,14 @@ public sealed class WorkspaceDocumentGenerator : DockItemContainerGenerator
 
     public override IDockable? CreateDocumentContainer(IItemsSourceDock dock, object item, int index)
     {
-        return item is WorkspaceTabViewModel tab ? new WorkspaceDocument(tab) : null;
+        return item is WorkspaceTabViewModel ? new WorkspaceDocument() : null;
     }
 
     public override void PrepareDocumentContainer(IItemsSourceDock dock, IDockable container, object item, int index)
     {
         if (container is WorkspaceDocument doc && item is WorkspaceTabViewModel tab)
         {
-            // Set Context so FindGeneratedDocument can match item → document for removal.
-            doc.Context = item;
-            doc.Id = tab.Id;
-            doc.Title = tab.Title;
-            doc.CanClose = true;
+            doc.Initialize(tab);
             this.onPrepared?.Invoke(doc);
         }
     }

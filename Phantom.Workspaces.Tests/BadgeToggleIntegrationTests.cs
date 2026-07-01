@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class BadgeToggleIntegrationTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_AppliesInterest()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -37,7 +37,7 @@ public sealed class BadgeToggleIntegrationTests
             && types.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && type.GetString() == "actionable"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_WhenUpdateFails_ThrowsException()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -68,7 +68,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.NotNull(exception);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_RemovesExistingInterest()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -105,7 +105,7 @@ public sealed class BadgeToggleIntegrationTests
             && types.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && type.GetString() == "actionable"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task EntityListNodeViewModel_BadgeCommand_CanExecute_WhenEntityExists()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -137,7 +137,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.True(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void EntityListNodeViewModel_BadgeCommand_CannotExecute_WhenEntityIsNull()
     {
         // Create a card node without an entity (display-only node)

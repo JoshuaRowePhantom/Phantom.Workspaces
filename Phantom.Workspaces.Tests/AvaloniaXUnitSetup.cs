@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Markup.Xaml.Styling;
+using Avalonia.Skia;
 using Avalonia.Themes.Fluent;
 using Dock.Avalonia.Themes.Fluent;
 using Phantom.Workspaces.Templates;
@@ -20,8 +21,9 @@ public static class AvaloniaTestAppBuilder
             .UseHeadless(
                 new AvaloniaHeadlessPlatformOptions
                 {
-                    UseHeadlessDrawing = true,
-                });
+                    UseHeadlessDrawing = false,
+                })
+            .UseSkia();
     }
 
     private sealed class TestApplication : Application

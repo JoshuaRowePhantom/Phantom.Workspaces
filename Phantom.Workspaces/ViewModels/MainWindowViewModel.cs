@@ -2236,21 +2236,31 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         JsonNode? dockLayout = null;
         if (workspacePane.ContentLayout is not null)
         {
+            this.dockFactory.DockState.Save(workspacePane.ContentLayout);
+
+            // DockSerializer uses ReferenceHandler.Preserve + $type discriminators.
+            // STJ cannot emit both $ref and $type on the same object, so cycle detection
+            // fails and Owner back-references hit the 64-level depth limit.
+            // Fix: clear every Owner link before serialization and restore it after.
+            // WorkspaceDockTypeInfoResolver additionally removes Type-typed properties
+            // (e.g. Avalonia StyledElement.StyleKey) that STJ cannot serialize.
+            var savedOwners = CaptureAndClearOwners(workspacePane.ContentLayout);
+            string layoutJson;
             try
             {
-                var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
-                using var ms = new MemoryStream();
-                serializer.Save(ms, workspacePane.ContentLayout);
-                ms.Position = 0;
-                var layoutJson = new StreamReader(ms).ReadToEnd();
-                if (!string.IsNullOrWhiteSpace(layoutJson))
-                {
-                    dockLayout = JsonNode.Parse(layoutJson);
-                }
+                var serializer = new DockSerializer(
+                    typeof(System.Collections.ObjectModel.ObservableCollection<>),
+                    new WorkspaceDockTypeInfoResolver());
+                layoutJson = serializer.Serialize(workspacePane.ContentLayout);
             }
-            catch
+            finally
             {
-                // Silently ignore dock layout serialization failures.
+                RestoreOwners(savedOwners);
+            }
+
+            if (!string.IsNullOrWhiteSpace(layoutJson))
+            {
+                dockLayout = JsonNode.Parse(layoutJson);
             }
         }
 
@@ -2455,6 +2465,60 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Recursively enumerates every <see cref="WorkspaceDocument"/> in a dock layout tree.
+    /// Walks the entire <see cref="IDock.VisibleDockables"/> hierarchy so that documents
+    /// inside split panes are discovered, not just those in the primary content dock.
+    /// </summary>
+    internal static IEnumerable<WorkspaceDocument> EnumerateAllDocuments(IDockable dockable)
+    {
+        if (dockable is WorkspaceDocument doc)
+        {
+            yield return doc;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                foreach (var found in EnumerateAllDocuments(child))
+                {
+                    yield return found;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Captures the <see cref="IDockable.Owner"/> of every dockable reachable from
+    /// <paramref name="root"/> and sets them to <c>null</c>. Returns the captured
+    /// values so they can be restored via <see cref="RestoreOwners"/>.
+    /// </summary>
+    internal static Dictionary<IDockable, IDockable?> CaptureAndClearOwners(IDockable root)
+    {
+        var saved = new Dictionary<IDockable, IDockable?>(ReferenceEqualityComparer.Instance);
+        CaptureAndClearOwnersCore(root, saved);
+        return saved;
+    }
+
+    private static void CaptureAndClearOwnersCore(IDockable dockable, Dictionary<IDockable, IDockable?> saved)
+    {
+        if (saved.ContainsKey(dockable)) return;
+        saved[dockable] = dockable.Owner;
+        dockable.Owner = null;
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables.ToList())
+                CaptureAndClearOwnersCore(child, saved);
+        }
+    }
+
+    internal static void RestoreOwners(Dictionary<IDockable, IDockable?> saved)
+    {
+        foreach (var (dockable, owner) in saved)
+            dockable.Owner = owner;
     }
 
     internal string? FindWorkspacePaneIdForTab(string tabId)
@@ -2729,7 +2793,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         IRootDock? layout;
         try
         {
-            var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+            var serializer = new DockSerializer(
+                typeof(System.Collections.ObjectModel.ObservableCollection<>),
+                new WorkspaceDockTypeInfoResolver());
             layout = serializer.Deserialize<IRootDock>(dockLayoutJson);
         }
         catch
@@ -2739,15 +2805,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (layout is null) return false;
 
-        // Only restore the simple case: a single WorkspaceContentDock in the layout
-        var contentDock = this.FindDocumentDock(layout) as WorkspaceContentDock;
-        if (contentDock is null) return false;
-
-        // Extract stub documents that have a Descriptor (identity info)
-        var stubs = contentDock.VisibleDockables?
-            .OfType<WorkspaceDocument>()
+        // Walk the entire layout tree to find all stub documents (handles split layouts)
+        var stubs = EnumerateAllDocuments(layout)
             .Where(d => d.Descriptor is not null)
-            .ToList() ?? [];
+            .ToList();
 
         if (stubs.Count == 0) return false;
 
@@ -2761,20 +2822,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (!this.WorkspacePanes.Contains(workspacePane)) return;
 
-            // Remove stub documents and re-wire ItemsSource so future tab adds/removes work
-            contentDock.VisibleDockables?.Clear();
-            contentDock.ItemsSource = workspacePane.Tabs;
-            contentDock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
-                doc => this.dockFactory.RegisterDocument(doc.Id, doc),
-                id => this.dockFactory.UnregisterDocument(id));
+            // Populate ContextLocator for every stub before calling InitLayout so
+            // base.InitDockable wires each stub's Context from the locator.
+            this.dockFactory.ContextLocator ??= new Dictionary<string, Func<object?>>();
+            for (int i = 0; i < stubs.Count; i++)
+            {
+                var tabVm = tabResults[i];
+                if (tabVm is null) continue;
+                var stubId = stubs[i].Id;
+                this.dockFactory.ContextLocator[stubId] = () => tabVm;
+            }
 
-            // Switch from the generator-created layout to the restored layout
+            // Switch to the restored layout and wire Owner/Factory/Context for every node
             this.UnsubscribeFromInnerDockChanges(workspacePane);
             workspacePane.ContentLayout = layout;
             this.dockFactory.InitLayout(layout);
+            this.dockFactory.DockState.Restore(layout);
             this.SubscribeToInnerDockChanges(workspacePane);
 
-            // Add tab VMs — the generator creates dock documents in the content dock
+            // Find the primary ContentDock and configure it for future dynamic tab management.
+            // The split structure (sibling ContentDocks in a ProportionalDock) is preserved
+            // because we only replace the primary dock's VisibleDockables.
+            var contentDock = this.FindDocumentDock(layout) as WorkspaceContentDock;
+            if (contentDock is not null)
+            {
+                contentDock.VisibleDockables?.Clear();
+                contentDock.ItemsSource = workspacePane.Tabs;
+                contentDock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
+                    doc => this.dockFactory.RegisterDocument(doc.Id, doc),
+                    id => this.dockFactory.UnregisterDocument(id));
+            }
+
+            // Add tab VMs; the generator creates dock documents in the primary content dock
             bool workspaceClosed = false;
             for (int i = 0; i < stubs.Count; i++)
             {

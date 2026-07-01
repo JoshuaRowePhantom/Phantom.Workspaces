@@ -16,7 +16,7 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class InterestViewQueryTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task WorkstreamsView_AssemblesHierarchy_OfAssignedTasksRelatedMembersAndContextualParents()
     {
         var dataAccessLayer = (await EntityRepository.CreateAsync(new UnknownRepositorySource())).DataAccessLayer;
@@ -331,7 +331,7 @@ public sealed class InterestViewQueryTests
             """);
 
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task InboxView_PopulatesViewModels_WithCurrentUsersActionableItems()
     {
         var dataAccessLayer = (await EntityRepository.CreateAsync(new UnknownRepositorySource())).DataAccessLayer;

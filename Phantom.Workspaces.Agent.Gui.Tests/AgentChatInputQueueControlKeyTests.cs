@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Avalonia.Input;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
@@ -274,7 +274,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("/working-directory", composer.InputText);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task HandleInputKey_AcceptingCompletion_SetsNewText()
     {
         await using var chat = await CreateChatAsync();
@@ -291,7 +291,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("/working-directory", newText);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task HandleInputKey_AcceptingCompletion_MovesCursorToEnd()
     {
         await using var chat = await CreateChatAsync();

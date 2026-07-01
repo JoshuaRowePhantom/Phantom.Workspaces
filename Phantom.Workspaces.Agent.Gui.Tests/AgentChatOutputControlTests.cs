@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,7 +25,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("e.preventDefault()", html, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_RaisesUrlNavigationRequested()
     {
         // Verify that when the browser posts an "openUrl" JSON message, the control
@@ -46,7 +46,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("https://example.com", receivedUrl);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_WithEmptyUrl_DoesNotRaiseEvent()
     {
         var control = new AgentChatOutputControl();
@@ -62,7 +62,7 @@ public sealed class AgentChatOutputControlTests
         Assert.False(raised);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_UnknownMessageType_DoesNotThrow()
     {
         var control = new AgentChatOutputControl();
@@ -74,7 +74,7 @@ public sealed class AgentChatOutputControlTests
         browser.FireMessage("""{"type":"unknownType","data":"anything"}""");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void ActualThemeVariantChanged_PostsThemeCommandToBrowser()
     {
         // Verify that when the actual theme variant changes, the control re-posts a "theme"
@@ -134,7 +134,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(0, readyCount);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OnBrowserReady_PostsThemeCommand()
     {
         var control = new AgentChatOutputControl();
@@ -159,7 +159,7 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'theme' command to be posted when the browser reports ready.");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_SpuriousReload_PostsThemeCommandAgain()
     {
         // Verify that a spontaneous reload (Ready firing without HtmlShell being reassigned)
@@ -231,7 +231,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("}</style></head>", result, StringComparison.OrdinalIgnoreCase);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AttachOutputModel_HtmlShellAlreadyContainsInjectedThemeStyle()
     {
         // Verify that HtmlShell is set with the theme <style> block baked in before Ready fires
@@ -261,7 +261,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("<style>:root{", browser.HtmlShell, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_AfterHtmlShellSet_StillPostsThemeCommand()
     {
         // Even after the theme is baked into HtmlShell, OnBrowserReady must still post
@@ -351,7 +351,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, browser.BatchCount);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_InitialHistoryWithMessages_UsesOneBatch()
     {
         // Verify that when OnBrowserReady fires with existing history, the entire initial
@@ -396,7 +396,7 @@ public sealed class AgentChatOutputControlTests
             "Expected at least one 'update' command for the initial history items.");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_IncrementalMessageAfterInitial_DoesNotStartNewBatch()
     {
         // Verify that messages appended after the initial load are not batched —
@@ -431,7 +431,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollsToBottom_AfterInitialContentLoad()
     {
         // Arrange: attach a view model with existing history, then trigger OnBrowserReady.
@@ -471,7 +471,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()
     {
         // Arrange: attach a view model with AutoScrollEnabled = false, then trigger OnBrowserReady.
@@ -494,7 +494,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_DoesNotDoubleScroll_WhenSettingAutoScrollEnabled()
     {
         // Arrange: attach a view model, trigger OnBrowserReady.
@@ -532,7 +532,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollIsPostedAfterAllBatchMessages()
     {
         // Verify that the "scroll" command appears in PostedMessages AFTER all "update" messages.
@@ -584,7 +584,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AutoScrollEnabled_SetToTrue_PostsScrollCommandToBrowser()
     {
         // Arrange: attach a view model, then disable auto-scroll and clear messages so we
@@ -627,7 +627,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AutoScrollEnabled_SetToFalse_DoesNotPostScrollCommand()
     {
         // Arrange: attach a view model (AutoScrollEnabled starts true after OnBrowserReady).
@@ -667,7 +667,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AutoScrollEnabled_SetToTrue_WhenSuppressed_DoesNotPostScrollCommand()
     {
         // Arrange: attach a view model, disable auto-scroll, and clear messages.
