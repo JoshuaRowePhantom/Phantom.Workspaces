@@ -29,6 +29,11 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <None Update="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat.yaml" Link="qwen-local-chat.yaml" />
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat.json" Link="qwen-local-chat.json" />
     <EmbeddedResource Include="..\docs\examples\qwen-local-chat-thinking.json" Link="qwen-local-chat-thinking.json" />
