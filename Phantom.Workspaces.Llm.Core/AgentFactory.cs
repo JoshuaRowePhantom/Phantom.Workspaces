@@ -185,8 +185,11 @@ public static class AgentFactory
     public static ChatClientResult CreateChatClient(
         AgentDefinition agent,
         AgentServices? services,
-        AgentInputQueueManager? queueManager = null)
+        AgentInputQueueManager? queueManager = null,
+        IApiKeyResolver? apiKeyResolver = null)
     {
+        var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
+
         var model = (agent as PromptAgent)?.Model;
         if (model is null || string.IsNullOrEmpty(model.Id))
         {
@@ -202,8 +205,8 @@ public static class AgentFactory
         return provider switch
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
-            "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model), queueManager),
-            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager),
+            "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
+            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
@@ -235,9 +238,10 @@ public static class AgentFactory
     private static ChatClientResult CreateGitHubCopilotResult(
         Model model,
         AgentServices? services,
-        AgentInputQueueManager? queueManager)
+        AgentInputQueueManager? queueManager,
+        IApiKeyResolver resolver)
     {
-        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager);
+        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver);
         return new ChatClientResult(client, displayName);
     }
 
@@ -456,7 +460,7 @@ public static class AgentFactory
         }
     }
 
-    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model)
+    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model, IApiKeyResolver resolver)
     {
         var connection = model.Connection as ApiKeyConnection
             ?? throw new InvalidOperationException("GitHub provider requires an ApiKeyConnection.");
@@ -465,7 +469,7 @@ public static class AgentFactory
             ? GitHubModelsInferenceEndpoint
             : connection.Endpoint;
 
-        var apiKey = ResolveApiKey(connection.ApiKey, "github-models");
+        var apiKey = resolver.ResolveApiKey(connection.ApiKey, "github-models");
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub provider requires a model id.");
 
@@ -493,8 +497,11 @@ public static class AgentFactory
     private static (IChatClient client, string displayName) CreateGitHubCopilotClient(
         Model model,
         AgentServices? services,
-        AgentInputQueueManager? queueManager = null)
+        AgentInputQueueManager? queueManager = null,
+        IApiKeyResolver? resolver = null)
     {
+        resolver ??= EnvironmentApiKeyResolver.Instance;
+
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub Copilot provider requires a model id.");
 
@@ -507,7 +514,7 @@ public static class AgentFactory
             // BYOK mode: a custom endpoint is supplied — authenticate to that endpoint, not GitHub.
             var resolvedApiKey = string.IsNullOrWhiteSpace(conn.ApiKey)
                 ? null
-                : ResolveApiKey(conn.ApiKey, "github-copilot");
+                : resolver.ResolveApiKey(conn.ApiKey, "github-copilot");
 
             // Optional BYOK configuration fields come from options.additionalProperties in the
             // manifest because AgentSchema.ApiKeyConnection does not carry an AdditionalProperties
@@ -553,7 +560,7 @@ public static class AgentFactory
             gitHubToken = model.Connection switch
             {
                 ApiKeyConnection apiKeyConn when !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey)
-                    => ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
+                    => resolver.ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
                 _ => null,
             };
             displayName = $"GitHub Copilot ({modelId})";
