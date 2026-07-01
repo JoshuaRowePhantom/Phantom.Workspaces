@@ -7,13 +7,15 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class GitWorktreeWatcher : IDisposable
 {
     private readonly string repositoryRootPath;
+    private readonly TimeSpan debounceInterval;
     private FileSystemWatcher? watcher;
     private DispatcherTimer? debounceTimer;
     private bool disposed;
 
-    public GitWorktreeWatcher(string repositoryRootPath)
+    public GitWorktreeWatcher(string repositoryRootPath, TimeSpan debounceInterval = default)
     {
         this.repositoryRootPath = repositoryRootPath;
+        this.debounceInterval = debounceInterval == default ? TimeSpan.FromMilliseconds(300) : debounceInterval;
     }
 
     public event EventHandler? Changed;
@@ -27,7 +29,7 @@ public sealed class GitWorktreeWatcher : IDisposable
 
         this.debounceTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(300),
+            Interval = this.debounceInterval,
         };
         this.debounceTimer.Tick += this.OnDebounceTimerTick;
 
