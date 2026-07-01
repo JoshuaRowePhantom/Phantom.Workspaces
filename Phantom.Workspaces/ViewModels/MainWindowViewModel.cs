@@ -781,6 +781,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBackground", theme.Surfaces.EntityCard.SelectedBackground);
         SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBorder", theme.Surfaces.EntityCard.SelectedBorder);
 
+        SetBrushResource(resources, "Theme.Surface.Popup.Background", theme.Surfaces.Popup.Background);
+        SetBrushResource(resources, "Theme.Surface.Popup.Border", theme.Surfaces.Popup.Border);
+
         var classNames = new[] { "normal", "heading", "section-title", "caption", "muted", "accent" };
         foreach (var className in classNames)
         {
