@@ -1982,6 +1982,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.dockFactory.SetActiveDockable(existingDocument);
                 this.notificationService.MarkRead(tab.Id);
                 this.dockFactory.SetFocusedDockable(documentDock, existingDocument);
+                // Set SelectedTab directly so GoToPane notification-read works even when the
+                // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
+                targetPane.SelectedTab = existingDocument.TabViewModel;
                 if (!this.navigatingViaHistory)
                 {
                     this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
@@ -2015,6 +2018,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         this.dockFactory.SetActiveDockable(newDocument);
                         this.dockFactory.SetFocusedDockable(documentDock, newDocument);
                     }
+                    // Set SelectedTab directly so GoToPane notification-read works even when the
+                    // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
+                    targetPane.SelectedTab = tab;
                     if (!this.navigatingViaHistory)
                     {
                         this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
@@ -2038,6 +2044,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.dockFactory.SetActiveDockable(appendedDocument);
                 this.dockFactory.SetFocusedDockable(documentDock, appendedDocument);
             }
+            // Set SelectedTab directly so GoToPane notification-read works even when the
+            // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
+            targetPane.SelectedTab = tab;
             if (!this.navigatingViaHistory)
             {
                 this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
