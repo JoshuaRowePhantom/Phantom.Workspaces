@@ -1448,6 +1448,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var workspaceSnapshot = await this.LoadSingleEntitySnapshotAsync(workspaceRequest);
         if (workspaceSnapshot?.Data is not JsonElement workspaceData)
         {
+            this.DismissLoadingPane(loadingWorkspacePane);
             return;
         }
 
@@ -1482,6 +1483,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var workspaceEntity = workspaceEntities.FirstOrDefault(e => e.EntityId == workspaceSnapshot.EntityId);
         if (workspaceEntity is null)
         {
+            this.DismissLoadingPane(loadingWorkspacePane);
             return;
         }
 
@@ -1505,6 +1507,38 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Phase 2: populate tabs asynchronously (fire and forget)
         _ = this.PopulateWorkspacePaneTabsAsync(workspacePane, workspaceEntity, workspaceData);
+    }
+
+    /// <summary>
+    /// Removes a transient loading pane from <see cref="WorkspacePanes"/> when the workspace
+    /// entity could not be loaded (not found or missing data). Restores the default placeholder
+    /// if no workspace panes remain.
+    /// </summary>
+    private void DismissLoadingPane(WorkspacePaneViewModel loadingPane)
+    {
+        var paneIndex = this.WorkspacePanes.IndexOf(loadingPane);
+        if (paneIndex < 0)
+        {
+            return;
+        }
+
+        this.WorkspacePanes.RemoveAt(paneIndex);
+
+        if (this.SelectedWorkspacePane != loadingPane)
+        {
+            return;
+        }
+
+        if (this.WorkspacePanes.Count > 0)
+        {
+            this.SelectedWorkspacePane = this.WorkspacePanes[Math.Min(paneIndex, this.WorkspacePanes.Count - 1)];
+        }
+        else
+        {
+            var placeholder = this.CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.");
+            this.WorkspacePanes.Add(placeholder);
+            this.SelectedWorkspacePane = placeholder;
+        }
     }
 
     private void AddWorkspacePaneToDock(WorkspacePaneViewModel workspacePane)
