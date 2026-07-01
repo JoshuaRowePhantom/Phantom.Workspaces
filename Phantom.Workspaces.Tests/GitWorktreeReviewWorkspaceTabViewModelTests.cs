@@ -81,7 +81,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         };
     }
 
-    [AvaloniaFact(Timeout = 10_000)]
+    [PhantomAvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMainWhenBranchExists()
     {
         this.InitRepoWithBranch("main");
@@ -103,7 +103,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [AvaloniaFact(Timeout = 10_000)]
+    [PhantomAvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMasterWhenMainAbsent()
     {
         this.InitRepoWithBranch("master");
@@ -125,7 +125,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [AvaloniaFact(Timeout = 10_000)]
+    [PhantomAvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchReadFromEntityDataWhenPresent()
     {
         var vm = CreateViewModel("""
@@ -144,7 +144,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [AvaloniaFact(Timeout = 10_000)]
+    [PhantomAvaloniaFact(Timeout = 10_000)]
     public async Task ChangingTargetBranchTriggersCommitListRefresh()
     {
         // Use no valid repo path so RefreshAsync completes quickly.
@@ -200,7 +200,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [AvaloniaFact(Timeout = 10_000)]
+    [PhantomAvaloniaFact(Timeout = 10_000)]
     public async Task DisposeAsyncStopsWatcher()
     {
         this.InitRepoWithBranch("main");

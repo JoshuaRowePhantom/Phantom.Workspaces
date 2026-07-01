@@ -318,7 +318,7 @@ public sealed class TabHeaderViewModelTests
 
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -329,7 +329,7 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -342,7 +342,7 @@ public sealed class TabHeaderViewModelTests
 
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
     {
         var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();

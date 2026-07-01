@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ShortcutManagerTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Shortcut_OperatorEquality_MatchesByValue()
     {
         var openShortcutByValue = new Shortcut("Open", "↗");
@@ -19,7 +19,7 @@ public sealed class ShortcutManagerTests
         Assert.False(openShortcutByValue != Shortcut.Open);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void GetShortcutsFor_ReturnsOpen_WhenAHandlerApplies()
     {
         var shortcutManager = new ShortcutManager();
@@ -35,7 +35,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal("↗", openShortcut.Label);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task HandleShortcutAsync_StopsAfterFirstSuccessfulHandler()
     {
         var first = new TestShortcutHandler(shouldApply: true, handleResult: true);
@@ -54,7 +54,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal(0, second.HandleCallCount);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ViewEntityViewModel_PopulatesShortcuts_FromShortcutManager()
     {
         var shortcutManager = new ShortcutManager();
@@ -74,7 +74,7 @@ public sealed class ShortcutManagerTests
         Assert.Same(shortcutManager, shortcutViewModel.ShortcutManager);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ViewEntityViewModel_ProvidesSharedEntityCardNode_WithJsonAndDeleteActions()
     {
         var shortcutManager = new ShortcutManager();
@@ -92,7 +92,7 @@ public sealed class ShortcutManagerTests
         Assert.True(cardNode.Card.ShowDeleteButton);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ViewEntityViewModel_EntityCardNode_UsesShortcutButtonsWhenAvailable()
     {
         var shortcutManager = new ShortcutManager();
@@ -119,7 +119,7 @@ public sealed class ShortcutManagerTests
         Assert.False(cardNode.Card.ShowDeleteButton);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task EntityShortcutViewModel_HandleAsync_UsesShortcutManager()
     {
         var handler = new TestShortcutHandler(shouldApply: true, handleResult: true);
@@ -140,7 +140,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal(1, handler.HandleCallCount);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void GetShortcutsFor_ReturnsDelete_WhenDeleteHandlerApplies()
     {
         var shortcutManager = new ShortcutManager();
@@ -154,7 +154,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal(Shortcut.Delete, deleteShortcut);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task HandleShortcutAsync_TogglesJsonShortcutVisibility()
     {
         var shortcutManager = new ShortcutManager();

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardControlInteractionTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void EntityCardControl_WhenTappedEventAlreadyHandled_DoesNotOpenEntity()
     {
         // Reproduces issue #85: an interactive child (e.g. a Button or CheckBox) sets e.Handled=true
@@ -22,7 +22,7 @@ public sealed class EntityCardControlInteractionTests
         Assert.Equal(0, card.ActivateCardCallCount);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void EntityCardControl_WhenTappedOnBackground_OpensEntity()
     {
         // A tap on a non-interactive area (e.g. the title TextBlock or empty card space) arrives

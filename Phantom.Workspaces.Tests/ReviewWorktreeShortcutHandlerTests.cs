@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -41,7 +41,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         Assert.False(handler.ShouldApplyTo(vm, Shortcut.Review, entity));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensGitWorktreeReviewTabWithCorrectId()
     {
         var vm = new MainWindowViewModel(new UnknownRepositorySource());
@@ -66,7 +66,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await reviewTab.DisposeAsync();
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_DeduplicatesTabWhenAlreadyOpen()
     {
         var vm = new MainWindowViewModel(new UnknownRepositorySource());

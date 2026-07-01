@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class NotificationsStylesTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void NotificationIndicator_ApplyingClassToProgressBar_DoesNotThrow()
     {
         var styles = LoadNotificationsStyles();

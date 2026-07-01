@@ -9,7 +9,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class InterestToggleTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ToggleAsync_AddsThenRemovesTheInterestRelationship()
     {
         var ct = TestContext.Current.CancellationToken;

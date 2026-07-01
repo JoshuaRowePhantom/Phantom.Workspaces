@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -16,7 +16,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class StartShellOnProfileShortcutHandlerTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfile_OpensShellTabViewModel()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -44,7 +44,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.NotNull(shellTab);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfile_CreatesNoEntityOrRelationship()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -68,7 +68,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.Equal(entityCountBefore, snapshotsAfter.Count);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfile_TabTitleContainsCommandAndHost()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -98,7 +98,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.Contains(profileEntity.DisplayName, shellTab.Title, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfile_SessionOpenerReceivesLocalClientInstance()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -123,7 +123,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.Equal(".", receivedClientInstance);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfile_CallsSelectExecutorWithLocalClientInstance()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -153,7 +153,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.True(receivedProfile!.AllowsClientInstance(TrustProfile.LocalClientInstance));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnNonLocalProfile_CallsSelectExecutorWithProfileEntityId()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -192,7 +192,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.Equal(nonLocalEntityId.ToString(), receivedInstance);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_WhenEntityHasHomeDirectory_PassesHomeDirectoryAsWorkingDirectoryToSessionOpener()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -220,7 +220,7 @@ public sealed class StartShellOnProfileShortcutHandlerTests
         Assert.Equal(@"C:\Users\tester", receivedWorkingDirectory);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_WhenEntityHasNoHomeDirectory_PassesNullWorkingDirectoryToSessionOpener()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

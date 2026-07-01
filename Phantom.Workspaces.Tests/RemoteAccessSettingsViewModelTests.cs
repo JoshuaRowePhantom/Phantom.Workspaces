@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class RemoteAccessSettingsViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToDevTunnelConfiguration_PreservesBaseFields_AndUpdatesEditable()
     {
         var existing = new DevTunnelConfiguration
@@ -33,7 +33,7 @@ public sealed class RemoteAccessSettingsViewModelTests
         Assert.Equal(DevTunnelAccessMode.Anonymous, projected.AccessMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LegacyTokenMode_MigratedToPrivate_InConstructor()
     {
         // A DevTunnelConfiguration loaded from an old config file may have AccessMode=Token (1).
@@ -46,7 +46,7 @@ public sealed class RemoteAccessSettingsViewModelTests
         Assert.Equal(DevTunnelAccessMode.Private, viewModel.DevTunnelAccessMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void AvailableAccessModes_DoesNotIncludeTokenMode()
     {
         // Token mode is retired and must not be offered to new users.
@@ -57,7 +57,7 @@ public sealed class RemoteAccessSettingsViewModelTests
             RemoteAccessSettingsViewModel.AvailableAccessModes);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToRemoteHostingSettings_ProjectsHostingState()
     {
         var viewModel = new RemoteAccessSettingsViewModel
@@ -74,7 +74,7 @@ public sealed class RemoteAccessSettingsViewModelTests
         Assert.True(settings.AcceptReverseExecution);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void AcceptReverseExecution_DefaultsOff_AndRoundTripsFromSettings()
     {
         Assert.False(new RemoteAccessSettingsViewModel().AcceptReverseExecution);
@@ -86,7 +86,7 @@ public sealed class RemoteAccessSettingsViewModelTests
         Assert.True(viewModel.AcceptReverseExecution);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void UserComputerProfileOverride_RoundTripsFromConstructor()
     {
         var viewModel = new RemoteAccessSettingsViewModel(
