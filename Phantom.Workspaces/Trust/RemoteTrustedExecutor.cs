@@ -93,7 +93,7 @@ public sealed class RemoteTrustedExecutor : ITrustedExecutor
         return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentDefinition = request.AgentDefinition,
-            AgentSessionId = request.AgentSessionId,
+            AgentSessionId = agentSessionId,
             AgentServices = services,
         });
     }
