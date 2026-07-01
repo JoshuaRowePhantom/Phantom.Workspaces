@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Interfaces\Phantom.Workspaces.Llm.Interfaces.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

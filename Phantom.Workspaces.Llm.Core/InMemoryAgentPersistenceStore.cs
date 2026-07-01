@@ -14,6 +14,8 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
 
     private readonly ConcurrentDictionary<string, SessionData> sessions = new(StringComparer.Ordinal);
 
+    internal void Reset() => this.sessions.Clear();
+
     public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Agent.AgentSessionId);

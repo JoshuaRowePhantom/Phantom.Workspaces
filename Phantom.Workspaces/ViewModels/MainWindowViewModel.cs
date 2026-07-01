@@ -154,6 +154,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 runningAgentChats,
                 this.GetAllAgentTabs,
                 this.ActivateTabById,
+                sessionKey =>
+                {
+                    var entityId = runningAgentChats.RunningSessions
+                        .FirstOrDefault(s => string.Equals(s.SessionKey, sessionKey, StringComparison.Ordinal))
+                        ?.EntityId;
+                    if (entityId is not null)
+                    {
+                        _ = this.OpenEntityByIdAsync(entityId);
+                    }
+                },
                 action => Dispatcher.UIThread.Post(action));
         }
     }
