@@ -989,11 +989,15 @@ public sealed class AgentChatTests
     [Fact]
     public async Task EnqueueUserMessage_ToQueuedQueue_PublishesImmediatelyWhenIdle()
     {
-        await using var chat = CreateChat();
+        // CreateChat() with an empty streaming response produces no assistant item in History
+        // (empty streams leave History with only the user message — see EmptyStream_HistoryEmpty_AfterTurnEnd).
+        // Use a non-empty response so that History.Count >= 2 is satisfiable.
+        await using var chat = CreateChat(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("ok")] });
         var queue = chat.QueueManager.CreateInputQueue();
 
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
         chat.EnqueueUserMessage("queued later", queue);
-        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "queued message to publish to history");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "queued message to publish to history", cts.Token);
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued later", GetText(chat.History[0].Contents));
