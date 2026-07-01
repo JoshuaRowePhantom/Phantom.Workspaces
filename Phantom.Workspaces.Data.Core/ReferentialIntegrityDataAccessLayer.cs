@@ -18,8 +18,14 @@ public class ReferentialIntegrityDataAccessLayer : SchemaValidatingDataAccessLay
     private const string FolderSchema = "https://schemas.workspaces.phantom.to/workspaces/data/core/folder.json";
 
     public ReferentialIntegrityDataAccessLayer(
-        IDataAccessLayer underlyingDataAccessLayer)
-        : base(underlyingDataAccessLayer)
+        IDataAccessLayer underlyingDataAccessLayer,
+        SchemaAccessor schemaAccessor)
+        : base(underlyingDataAccessLayer, schemaAccessor)
+    {
+    }
+
+    public ReferentialIntegrityDataAccessLayer(IDataAccessLayer underlyingDataAccessLayer)
+        : this(underlyingDataAccessLayer, new SchemaAccessor(underlyingDataAccessLayer))
     {
     }
 
