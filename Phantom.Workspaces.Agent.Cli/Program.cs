@@ -19,7 +19,7 @@ rootCommand.SetAction(async (parseResult, ct) =>
 
 await rootCommand.Parse(args).InvokeAsync();
 
-internal sealed class AgentCliApp : IDisposable
+public sealed class AgentCliApp : IDisposable
 {
     private readonly object consoleLock = new();
     private readonly AgentChat agentChat;

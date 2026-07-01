@@ -17,7 +17,7 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 
 - Read the full body and all comments.
 - Note the reporter's login — needed if there are open questions.
-- Check for linked design docs under `c:\dev\phantom.workspaces-design\docs\design\`.
+- Check for linked design docs under `docs/design/`.
 
 ## Step 2 — Check for open questions (main agent)
 
@@ -41,8 +41,8 @@ Launch a `general-purpose` sub-agent with a prompt that includes the full issue 
 
 The sub-agent prompt must include:
 - The full issue text (copy it in verbatim).
-- The repository path: `c:\dev\phantom.workspaces-llm`.
-- The design doc path if referenced: `c:\dev\phantom.workspaces-design\docs\design\`.
+   - The repository path: e.g. `c:\dev\phantom.workspaces-design\worktrees\1`.
+   - The design doc path: e.g. `c:\dev\phantom.workspaces-design\worktrees\1\docs\design\`.
 - The implementation protocol (phases 1–5 below).
 
 ---
@@ -62,7 +62,7 @@ Post a comment on the issue summarising:
 gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Design\n\n..."
 ```
 
-Update any relevant design doc in `c:\dev\phantom.workspaces-design\docs\design\` if the change affects documented design.
+Update any relevant design doc in `docs/design/` if the change affects documented design.
 
 ### Phase 2 — Plan and document tests
 
@@ -96,9 +96,10 @@ Make the minimal changes to make the tests pass. Do not fix unrelated issues.
 
 ### Phase 5 — Run tests and commit
 
-Always run the fast suite:
+Always run the fast suite from within the worktree, unless the only changes you are making are .md file changes, in which case there is no need to run tests:
+
 ```powershell
-.\scripts\run-tests.ps1 -Mode fast
+c:\dev\phantom.workspaces-design\worktrees\1\scripts\run-tests.ps1 -Mode fast
 ```
 
 Read `scripts\test-results.log`. All suites must show `Failed: 0`. Fix any failures before committing.

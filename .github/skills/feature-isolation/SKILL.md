@@ -17,7 +17,7 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 
 - Read the full body and all comments.
 - Note the reporter's login — needed if there are open questions.
-- Check for linked design docs under `c:\dev\phantom.workspaces-design\docs\design\`.
+- Check for linked design docs under `docs/design`.
 
 ## Step 2 — Check for open questions
 
@@ -35,25 +35,7 @@ If the issue is ambiguous or missing information needed to implement safely:
 
 If the issue is clear, continue to Step 3.
 
-## Step 3 — Create a branch from `features`
-
-`C:\dev\phantom.workspaces-design` must stay in **detached HEAD** state at all times — never check out `features` or any feature branch there. Create the new branch directly from the detached HEAD (which must be at the `features` tip):
-
-```powershell
-cd C:\dev\phantom.workspaces-design
-git checkout -b <branch-name>
-git checkout --detach   # immediately re-detach; the branch now exists but HEAD is detached
-```
-
-If the main directory is not at the `features` tip, sync it first without checking out the branch:
-
-```powershell
-git fetch origin features:features   # update the features ref without checking it out
-```
-
-Choose a short, descriptive branch name (e.g. `fix/tab-icons`, `feat/default-workspace`).
-
-## Step 4 — Create or reuse a worktree in `worktrees/`
+## Step 3 — Create or reuse a worktree in `worktrees/`
 
 Worktrees are named with plain numbers: `1`, `2`, `3`, etc. Pick the lowest-numbered worktree that has **no associated branch** (i.e. is checked out to `features` or detached HEAD — meaning it is free to use).
 
@@ -83,6 +65,17 @@ All subsequent work runs from inside the worktree:
 Push-Location C:\dev\phantom.workspaces-design\worktrees\<N>
 ```
 
+## Step 4 — Create a branch from `features`
+
+The current working directory must stay in **detached HEAD** state at all times — never check out `features` or any feature branch there. Create the new branch directly from the features branch:
+
+Choose a short, descriptive branch name that includes the bug number (e.g. `fix/555-tab-icons`, `feat/104-default-workspace`).
+
+```powershell
+cd worktree-directory-name-here
+git checkout -b <branch-name> features
+```
+
 ## Step 5 — Design and document
 
 Post a comment on the issue summarising:
@@ -94,7 +87,7 @@ Post a comment on the issue summarising:
 gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Design`n`n..."
 ```
 
-Update any relevant design doc in `c:\dev\phantom.workspaces-design\docs\design\` if the change affects documented design.
+Update any relevant design doc in `docs/design` within the worktree if the change affects documented design.
 
 ## Step 6 — Plan and document tests
 

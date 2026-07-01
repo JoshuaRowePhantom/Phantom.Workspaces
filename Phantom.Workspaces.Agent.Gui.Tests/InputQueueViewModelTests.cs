@@ -558,4 +558,46 @@ public sealed class InputQueueViewModelTests
             collection.CollectionChanged -= OnCollectionChanged;
         }
     }
+
+    /// <summary>
+    /// Regression test for issues #268 #449: concurrent calls to Refresh() must not throw
+    /// ArgumentOutOfRangeException or InvalidOperationException from the ObservableCollection.
+    /// </summary>
+    [Fact]
+    public async Task InputQueueGroupViewModel_Refresh_ConcurrentCalls_DoNotThrow()
+    {
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+
+        // Hold the queue so messages stay in the queue and give Refresh() items to display.
+        chat.QueueManager.SetQueueImmediacy(chat.DefaultInputQueue, AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(chat.DefaultInputQueue, "item1");
+        viewModel.AppendToQueue(chat.DefaultInputQueue, "item2");
+
+        var groupViewModel = viewModel.Queues[0];
+        Assert.NotNull(groupViewModel);
+
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        var tasks = Enumerable.Range(0, 20).Select(_ => Task.Run(() =>
+        {
+            for (var i = 0; i < 50; i++)
+            {
+                try
+                {
+                    groupViewModel.Refresh();
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            }
+        })).ToArray();
+
+        await Task.WhenAll(tasks);
+        Assert.Empty(exceptions);
+
+        viewModel.Dispose();
+    }
 }
