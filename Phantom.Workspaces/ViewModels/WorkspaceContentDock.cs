@@ -1,5 +1,6 @@
 using Dock.Model.Avalonia.Controls;
 using Dock.Model.Core;
+using System.Text.Json.Serialization;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -11,6 +12,24 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public class WorkspaceContentDock : DocumentDock
 {
+    /// <summary>
+    /// Shadows the inherited [DataMember] Owner to break the serialization cycle
+    /// (Owner → RootDock → VisibleDockables → ContentDock).
+    /// </summary>
+    [JsonIgnore]
+    public new IDockable? Owner
+    {
+        get => base.Owner;
+        set => base.Owner = value;
+    }
+
+    /// <summary>
+    /// Shadows the Avalonia StyledElement.StyleKey (System.Type) which STJ cannot serialize.
+    /// The shadow has no [JsonPropertyName] on the base, so [JsonIgnore] takes full effect.
+    /// </summary>
+    [JsonIgnore]
+    public new Type? StyleKey => base.StyleKey;
+
     /// <summary>
     /// Adds the document to the dock. If there is already an active document, the new document
     /// is added without stealing focus. This prevents background population tasks (e.g.

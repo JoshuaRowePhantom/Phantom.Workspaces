@@ -1,4 +1,6 @@
 using Dock.Model.Avalonia.Controls;
+using Dock.Model.Core;
+using System.Text.Json.Serialization;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -10,4 +12,20 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public class WorkspacesPaneDock : DocumentDock
 {
+    /// <summary>
+    /// Shadows the inherited [DataMember] Owner to break the serialization cycle
+    /// (Owner → RootDock → VisibleDockables → WorkspacesPaneDock).
+    /// </summary>
+    [JsonIgnore]
+    public new IDockable? Owner
+    {
+        get => base.Owner;
+        set => base.Owner = value;
+    }
+
+    /// <summary>
+    /// Shadows the Avalonia StyledElement.StyleKey (System.Type) which STJ cannot serialize.
+    /// </summary>
+    [JsonIgnore]
+    public new Type? StyleKey => base.StyleKey;
 }

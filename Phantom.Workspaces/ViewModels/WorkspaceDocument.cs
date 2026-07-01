@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json.Serialization;
+using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -45,7 +46,7 @@ public class WorkspaceDocument : Document
 
     private void InitializeCore(WorkspaceTabViewModel tabViewModel)
     {
-        this.TabViewModel = tabViewModel;
+        base.Context = tabViewModel;
         this.Id = tabViewModel.Id;
         this.baseTitle = ComputeBaseTitle(tabViewModel);
         this.Title = this.baseTitle;
@@ -150,8 +151,31 @@ public class WorkspaceDocument : Document
         return title.Length > 20 ? title[..17] + "..." : title;
     }
 
+    /// <summary>
+    /// Shadows the inherited [DataMember] Owner to break the serialization cycle
+    /// (Owner → ContentDock → VisibleDockables → Document).
+    /// </summary>
     [JsonIgnore]
-    public WorkspaceTabViewModel? TabViewModel { get; private set; }
+    public new IDockable? Owner
+    {
+        get => base.Owner;
+        set => base.Owner = value;
+    }
+
+    /// <summary>
+    /// Shadows the inherited [DataMember] Context so the tab view-model graph is
+    /// never written into the dock-layout JSON. At runtime, base.Context holds the
+    /// <see cref="WorkspaceTabViewModel"/> wired by the generator or ContextLocator.
+    /// </summary>
+    [JsonIgnore]
+    public new object? Context
+    {
+        get => base.Context;
+        set => base.Context = value;
+    }
+
+    [JsonIgnore]
+    public WorkspaceTabViewModel? TabViewModel => base.Context as WorkspaceTabViewModel;
 
     /// <summary>
     /// Serializable descriptor embedded in the dock-layout JSON. Set at construction time

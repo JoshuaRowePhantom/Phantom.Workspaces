@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
+using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -51,6 +52,17 @@ public class WorkspacePaneDocument : Document
 
     [JsonIgnore]
     public WorkspacePaneViewModel WorkspacePane { get; }
+
+    /// <summary>
+    /// Shadows the inherited [DataMember] Owner to break the serialization cycle
+    /// (Owner → dock container → VisibleDockables → Document).
+    /// </summary>
+    [JsonIgnore]
+    public new IDockable? Owner
+    {
+        get => base.Owner;
+        set => base.Owner = value;
+    }
 
     /// <summary>
     /// Header model for this workspace-pane tab. Contains running and notification
