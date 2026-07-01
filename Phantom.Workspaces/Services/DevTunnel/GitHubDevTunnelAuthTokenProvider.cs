@@ -38,9 +38,7 @@ public sealed class GitHubDevTunnelAuthTokenProvider : IDevTunnelAuthTokenProvid
         }
 
         // Step 4: GitHub Device Flow.
-        // TODO: Register a GitHub OAuth app for Phantom.Workspaces and embed the client ID here.
-        //       The device flow does not require a client secret for public clients.
-        //       See: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
+        // See #546
         throw new InvalidOperationException(
             "Could not resolve a GitHub token for dev tunnel management. " +
             "Set GITHUB_TOKEN or sign in with 'gh auth login'. " +
@@ -54,10 +52,7 @@ public sealed class GitHubDevTunnelAuthTokenProvider : IDevTunnelAuthTokenProvid
     /// </summary>
     private static string? TryGetCachedDeviceFlowToken()
     {
-        // TODO: Implement Windows Credential Manager read (CredRead / Windows.Security.Credentials.PasswordVault)
-        //       and equivalent on macOS (Keychain) / Linux (libsecret / keyutils).
-        //       Returning null here means the device flow is always attempted when steps 1-2 fail,
-        //       until a real keychain implementation is added.
+        // See #545
         return null;
     }
 }
