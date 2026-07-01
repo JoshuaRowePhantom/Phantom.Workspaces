@@ -38,6 +38,21 @@
       "type": "object",
       "description": "Parameter values supplied when this session was created. Keyed by parameter name; all values are strings. The well-known key `working-directory` (kind: string) sets the working directory forwarded to the agent process; supported by the `github-copilot` and `workspaces` manifests.",
       "additionalProperties": { "type": "string" }
+    },
+    "auto-resume": {
+      "type": "object",
+      "description": "When present, the identified trusted executor will automatically resume this agent session on startup, sending the configured resume prompt as the opening message.",
+      "properties": {
+        "trusted-executor": {
+          "type": "string",
+          "description": "Identifier of the trusted executor that should resume this session. Use '.' for the local executor, or a UUID string for a remote executor identified by its user-computer-profile entity-id."
+        },
+        "resume-prompt": {
+          "type": "string",
+          "description": "Prompt sent to the agent when it is auto-resumed. When absent, a default prompt is used."
+        }
+      },
+      "required": ["trusted-executor"]
     }
   },
   "required": [

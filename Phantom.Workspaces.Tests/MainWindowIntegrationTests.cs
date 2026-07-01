@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Microsoft.Extensions.AI;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
@@ -5238,6 +5239,213 @@ public sealed class MainWindowIntegrationTests
             .OfType<WorkspaceDocument>()
             .FirstOrDefault(d => d.Id == "items-source-remove-tab");
         Assert.Null(docAfterRemoval);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_SlashCommandContext_WithLocalSession_ExecuteAutoResume_UpdatesEntityWithTrustedExecutorDot()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ac010001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ac010001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "slash-cmd-ctx-echo"]],
+              "display-name": { "default": "Slash Cmd Context Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "slash-cmd-ctx-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+
+        // Execute /auto-resume — if TrustedExecutorIdentifier and UpdateAutoResumeAsync are wired,
+        // the entity is updated with auto-resume.trusted-executor = "."
+        var interceptor = agentTab.Agent!.InputQueue.DefaultComposer.SlashCommandInterceptorAsync;
+        Assert.NotNull(interceptor);
+        await interceptor!("/auto-resume");
+
+        // Wait a tick so the async update completes
+        await Task.Delay(50);
+
+        // Reload the entity and verify auto-resume was persisted
+        var updatedEntities = await entityBroker.GetEntitiesAsync([agentSessionEntity!.EntityId]);
+        var updatedEntity = updatedEntities.FirstOrDefault(e => e.EntityId == agentSessionEntity!.EntityId);
+        Assert.NotNull(updatedEntity);
+        var updatedData = Assert.IsType<JsonElement>(updatedEntity!.Data);
+        Assert.True(updatedData.TryGetProperty("auto-resume", out var autoResumeEl));
+        Assert.True(autoResumeEl.TryGetProperty("trusted-executor", out var executorEl));
+        Assert.Equal(TrustProfile.LocalClientInstance, executorEl.GetString());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_SlashCommandContext_WithAutoResumeAlreadyEnabled_ExecuteAutoResume_RemovesAutoResume()
+    {
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ac020001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ac020001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "slash-cmd-ctx-toggle-echo"]],
+              "display-name": { "default": "Slash Cmd Context Toggle Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "slash-cmd-ctx-toggle-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+
+        var interceptor = agentTab.Agent!.InputQueue.DefaultComposer.SlashCommandInterceptorAsync;
+        Assert.NotNull(interceptor);
+
+        // Enable auto-resume first
+        await interceptor!("/auto-resume");
+        await Task.Delay(50);
+
+        // Execute again — CurrentAutoResume should now be non-null so the toggle disables it
+        await interceptor!("/auto-resume");
+        await Task.Delay(50);
+
+        var updatedEntities = await entityBroker.GetEntitiesAsync([agentSessionEntity!.EntityId]);
+        var updatedEntity = updatedEntities.FirstOrDefault(e => e.EntityId == agentSessionEntity!.EntityId);
+        Assert.NotNull(updatedEntity);
+        var updatedData = Assert.IsType<JsonElement>(updatedEntity!.Data);
+        Assert.False(updatedData.TryGetProperty("auto-resume", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryStartAutoResumeAsync_WithMatchingLocalSession_AcquiresLeaseAndEnqueuesResumePrompt()
+    {
+        var table = new RunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("ac030001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "ac030001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "auto-resume-start-echo"]],
+              "display-name": { "default": "Auto Resume Start Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "auto-resume-start-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        const string agentSessionId = "ac030001-session-for-auto-resume-test";
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), table);
+
+        const string resumePrompt = "Resume the task where you left off.";
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var lease = await Task.Run(() =>
+            handler.TryStartAutoResumeAsync(viewModel, agentSessionEntity!, resumePrompt, foregroundScheduler));
+
+        try
+        {
+            Assert.NotNull(lease);
+            Assert.Single(table.RunningSessions);
+
+            // Verify the resume prompt was enqueued — wait for it to appear in history
+            await WaitForChatHistoryAsync(lease!.AgentChat, resumePrompt);
+
+            Assert.Contains(
+                lease.AgentChat.History,
+                item => item.Role == ChatRole.User
+                    && item.Contents.OfType<TextContent>().Any(c => c.Text == resumePrompt));
+        }
+        finally
+        {
+            if (lease is not null)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+    }
+
+    private static async Task WaitForChatHistoryAsync(AgentChat agentChat, string expectedUserMessage)
+    {
+        bool IsPresent() => agentChat.History.Any(
+            item => item.Role == ChatRole.User
+                && item.Contents.OfType<TextContent>().Any(c => c.Text == expectedUserMessage));
+
+        if (IsPresent())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<AgentChatHistoryItem> onTurnCompleted = (_, _) =>
+        {
+            if (IsPresent())
+            {
+                signal.TrySetResult();
+            }
+        };
+
+        agentChat.TurnCompleted += onTurnCompleted;
+        try
+        {
+            if (!IsPresent())
+            {
+                await signal.Task;
+            }
+        }
+        finally
+        {
+            agentChat.TurnCompleted -= onTurnCompleted;
+        }
     }
 
     private sealed class FakeShellSession : ITerminalSession

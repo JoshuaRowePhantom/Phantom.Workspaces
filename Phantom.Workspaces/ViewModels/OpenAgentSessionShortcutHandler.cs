@@ -146,6 +146,86 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         return loadingTab;
     }
 
+    /// <summary>
+    /// Creates an agent chat for the given session in the <see cref="IRunningAgentChatTable"/>,
+    /// enqueues <paramref name="resumePrompt"/> as the first user message, and returns the
+    /// acquired lease. Returns <see langword="null"/> when the table is unavailable or the
+    /// entity data is missing required fields.
+    /// </summary>
+    internal async Task<RunningAgentChatLease?> TryStartAutoResumeAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        string resumePrompt,
+        TaskScheduler foregroundScheduler)
+    {
+        if (this.runningAgentChatTable is null)
+        {
+            return null;
+        }
+
+        if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
+            || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
+            || agentSessionIdElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(agentSessionIdElement.GetString())
+            || (!agentSessionEntityData.TryGetProperty("agent-source-entity-id", out var agentDefinitionEntityIdElement)
+                && !agentSessionEntityData.TryGetProperty("agent-definition-entity-id", out agentDefinitionEntityIdElement))
+            || agentDefinitionEntityIdElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(agentDefinitionEntityIdElement.GetString())
+            || !Guid.TryParse(agentDefinitionEntityIdElement.GetString(), out var agentDefinitionEntityIdValue))
+        {
+            return null;
+        }
+
+        var agentSessionId = agentSessionIdElement.GetString();
+        var agentDefinitionEntityId = new EntityId(agentDefinitionEntityIdValue);
+        var parameterValues = agentSessionEntityData.TryGetProperty("parameter-values", out var pvElement)
+            ? ReadStringDictionary(pvElement)
+            : null;
+        var agentDefinitionEntity = (await mainWindowViewModel.EntityBroker.GetEntitiesAsync([agentDefinitionEntityId]))
+            .FirstOrDefault();
+        if (agentDefinitionEntity?.Data is not JsonElement agentSourceEntityData)
+        {
+            return null;
+        }
+
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
+
+        CreateAgentChatRequest createAgentChatRequest;
+        if (agentSourceEntityData.TryGetProperty("definition", out var definitionElement))
+        {
+            createAgentChatRequest = new CreateAgentChatRequest
+            {
+                AgentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText()),
+                AgentSessionId = agentSessionId,
+                AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
+            };
+        }
+        else if (agentSourceEntityData.TryGetProperty("manifest", out var manifestElement))
+        {
+            createAgentChatRequest = new CreateAgentChatRequest
+            {
+                AgentManifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText()),
+                Parameters = parameterValues,
+                ToolResourceFactory = agentServices.ToolResourceFactory,
+                AgentSessionId = agentSessionId,
+                AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
+            };
+        }
+        else
+        {
+            return null;
+        }
+
+        var lease = await this.runningAgentChatTable.AcquireAsync(
+            agentSessionId!,
+            () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel));
+
+        lease.AgentChat.EnqueueUserMessage(resumePrompt);
+        return lease;
+    }
+
     public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
@@ -245,11 +325,25 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 
         var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
 
+        var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
+        var trustedExecutorIdentifier = createAgentChatRequest.AgentDefinition is not null
+            && owningProfileEntityId != default
+            && owningProfileEntityId != localProfileEntityId
+            ? owningProfileEntityId.ToString()
+            : TrustProfile.LocalClientInstance;
+
         agent.ConfigureSlashCommands(
             () => new SlashCommandContext
             {
                 AgentChat = agentChat,
                 AgentSessionEntityId = agentSessionEntity.EntityId.ToString(),
+                TrustedExecutorIdentifier = trustedExecutorIdentifier,
+                CurrentAutoResume = agentSessionEntity.Data is JsonElement entityDataSnapshot
+                    ? AutoResumeService.ReadFromEntityData(entityDataSnapshot)
+                    : null,
+                UpdateAutoResumeAsync = (newSettings, ct) =>
+                    UpdateAutoResumeInEntityAsync(mainWindowViewModel, agentSessionEntity, newSettings),
                 CurrentParameterValues = ReadStringDictionary(
                     agentSessionEntity.Data is JsonElement d
                     && d.TryGetProperty("parameter-values", out var pv) ? pv : default),
@@ -392,6 +486,58 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     {
                         EntityChangeMode = EntityChangeMode.Replace,
                         Data = mergedDoc.RootElement.Clone(),
+                    },
+                ],
+            });
+    }
+
+    private static async Task UpdateAutoResumeInEntityAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AutoResumeSettings? newSettings)
+    {
+        if (agentSessionEntity.Data is not JsonElement currentData)
+        {
+            return;
+        }
+
+        var node = JsonNode.Parse(currentData.GetRawText())!.AsObject();
+        if (newSettings is null)
+        {
+            node.Remove("auto-resume");
+        }
+        else
+        {
+            var autoResumeNode = new JsonObject
+            {
+                ["trusted-executor"] = newSettings.TrustedExecutor,
+            };
+            if (newSettings.ResumePrompt is not null)
+            {
+                autoResumeNode["resume-prompt"] = newSettings.ResumePrompt;
+            }
+
+            node["auto-resume"] = autoResumeNode;
+        }
+
+        var updated = JsonSerializer.SerializeToElement(node);
+        await mainWindowViewModel.EntityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = $"Update auto-resume for {agentSessionEntity.DisplayName}.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        ConcurrencyTag = agentSessionEntity.ConcurrencyTag,
+                        Data = updated,
                     },
                 ],
             });

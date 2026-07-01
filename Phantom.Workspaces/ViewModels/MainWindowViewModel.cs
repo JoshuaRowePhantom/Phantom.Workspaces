@@ -78,6 +78,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> tabsWriteBackSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
+    private readonly List<RunningAgentChatLease> autoResumeLeases = [];
 
     public MainWindowViewModel(
         RepositorySource repositorySource,
@@ -527,6 +528,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
         await this.InitializeScheduledToolsAsync();
+        await this.InitializeAutoResumeAsync();
     }
 
     /// <summary>
@@ -580,6 +582,43 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             hostNameComponents,
             pollInterval: TimeSpan.FromMinutes(1));
         this.scheduledToolRunner.Start();
+    }
+
+    private async Task InitializeAutoResumeAsync()
+    {
+        if (this.entityBroker is not { } broker || this.openAgentSessionShortcutHandler is null)
+        {
+            return;
+        }
+
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var sessions = await AutoResumeService.FindMatchingSessionsAsync(
+            dataAccessLayer, Llm.Trust.TrustProfile.LocalClientInstance);
+
+        if (sessions.Count == 0)
+        {
+            return;
+        }
+
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+
+        foreach (var session in sessions)
+        {
+            var entities = await broker.GetEntitiesAsync([session.EntityId]);
+            var entity = entities.FirstOrDefault(e => e.EntityId == session.EntityId);
+            if (entity is null)
+            {
+                continue;
+            }
+
+            var lease = await this.openAgentSessionShortcutHandler.TryStartAutoResumeAsync(
+                this, entity, session.ResumePrompt, foregroundScheduler);
+
+            if (lease is not null)
+            {
+                this.autoResumeLeases.Add(lease);
+            }
+        }
     }
 
     private async Task<IReadOnlyList<string>> ResolveHostNameComponentsAsync(EntityId hostEntityId)
@@ -3597,6 +3636,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ConnectionStatus?.Dispose();
         this.interestCatalog?.Dispose();
         this.entityTypeCatalog?.Dispose();
+
+        foreach (var lease in this.autoResumeLeases)
+        {
+            await lease.DisposeAsync();
+        }
     }
 }
 
