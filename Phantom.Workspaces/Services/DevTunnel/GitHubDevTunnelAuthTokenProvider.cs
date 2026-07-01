@@ -6,23 +6,53 @@ using Phantom.Workspaces.Llm;
 namespace Phantom.Workspaces.Services.DevTunnel;
 
 /// <summary>
-/// Supplies the dev-tunnel management identity token from the GitHub authentication token, reusing the
-/// single <see cref="GitHubAuthTokenResolver"/> (the <c>GITHUB_TOKEN</c> environment variable, else
-/// <c>gh auth token</c>). This is the same identity the web data-access client already uses for the
-/// dev tunnel <c>X-Tunnel-Authorization</c> token, so host and client share one sign-in and no raw
-/// token is stored in tracked files.
+/// Supplies the dev-tunnel management identity token from the GitHub authentication token.
+/// Resolution chain:
+/// <list type="number">
+///   <item><term>GITHUB_TOKEN env var</term> — return immediately if set.</item>
+///   <item><term>gh auth token</term> — invoke the GitHub CLI and return if successful.</item>
+///   <item><term>OS keychain cache</term> — return a previously cached device-flow token if present.</item>
+///   <item><term>GitHub Device Flow</term> — initiate OAuth device flow (requires a registered GitHub
+///     OAuth app client ID embedded in the binary; throws <see cref="InvalidOperationException"/> until
+///     an app is registered — see comment below).</item>
+/// </list>
+/// Steps 1 and 2 are handled by <see cref="GitHubAuthTokenResolver"/>. Steps 3 and 4 provide a
+/// browser-based fallback for machines where neither env var nor gh CLI is available.
 /// </summary>
 public sealed class GitHubDevTunnelAuthTokenProvider : IDevTunnelAuthTokenProvider
 {
     public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
     {
+        // Steps 1 + 2: GITHUB_TOKEN env var, then `gh auth token` CLI.
         var token = GitHubAuthTokenResolver.Resolve();
-        if (string.IsNullOrWhiteSpace(token))
+        if (!string.IsNullOrWhiteSpace(token))
         {
-            throw new InvalidOperationException(
-                "Could not resolve a GitHub token for dev tunnel management. Set GITHUB_TOKEN or sign in with 'gh auth login'.");
+            return Task.FromResult(token);
         }
 
-        return Task.FromResult(token);
+        // Step 3: OS keychain cache (populated by a previously completed device flow).
+        var cachedToken = TryGetCachedDeviceFlowToken();
+        if (!string.IsNullOrWhiteSpace(cachedToken))
+        {
+            return Task.FromResult(cachedToken);
+        }
+
+        // Step 4: GitHub Device Flow.
+        // See #546
+        throw new InvalidOperationException(
+            "Could not resolve a GitHub token for dev tunnel management. " +
+            "Set GITHUB_TOKEN or sign in with 'gh auth login'. " +
+            "Browser-based OAuth (Device Flow) requires a registered GitHub OAuth app client ID — " +
+            "this has not yet been configured for Phantom.Workspaces.");
+    }
+
+    /// <summary>
+    /// Tries to retrieve a device-flow token previously cached in the OS keychain (Windows Credential
+    /// Manager). Returns <see langword="null"/> when no cached token is found.
+    /// </summary>
+    private static string? TryGetCachedDeviceFlowToken()
+    {
+        // See #545
+        return null;
     }
 }

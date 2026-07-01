@@ -44,3 +44,9 @@ Run targeted tests by name (`FullyQualifiedName` contains match):
 6. Do not prefix the script invocation with `&`.
 7. For targeted runs, use `.\scripts\run-tests.ps1 -TestNames ...`.
 8. Only run slow Git tests (`-Mode full`) when changes affect the filesystem or Git repository layers; otherwise use fast mode.
+
+---
+
+## Hang dumps
+
+If the test host crashes or times out, the test runner may produce a `.dmp` file in `TestResults/` or the working directory. When a `.dmp` is present after a run, invoke the `diagnose-hang-dump` skill before attempting a rerun.
