@@ -91,7 +91,8 @@ public sealed class AgentChatTests
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
-        string description)
+        string description,
+        CancellationToken cancellationToken = default)
     {
         // The agent mutates its observable collections on its foreground scheduler and raises
         // CollectionChanged on that thread, so evaluating the predicate from within the handler is
@@ -117,7 +118,7 @@ public sealed class AgentChatTests
                 return;
             }
 
-            await signal.Task;
+            await signal.Task.WaitAsync(cancellationToken);
         }
         finally
         {
@@ -195,11 +196,14 @@ public sealed class AgentChatTests
     [Fact]
     public async Task EnqueueUserContents_AcceptsTextAndImageContent()
     {
-        await using var chat = CreateChat();
+        // Use a non-empty response so History reaches [user, assistant] and the condition resolves.
+        await using var chat = CreateChat(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("ok")] });
 
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var image = new DataContent(new byte[] { 0x01, 0x02 }, "image/png");
         chat.EnqueueUserContents([new TextContent("hello"), image]);
-        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "history to contain user and assistant placeholder");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "history to contain user and assistant placeholder", timeout.Token);
 
         Assert.Equal(2, chat.History.Count);
         var userHistory = chat.History[0];
