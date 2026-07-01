@@ -185,6 +185,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         catch (LibGit2SharpException)
         {
         }
+        catch (ArgumentException)
+        {
+        }
 
         // Update in place
         this.FileDiffs.Clear();

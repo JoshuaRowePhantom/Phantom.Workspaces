@@ -58,6 +58,9 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
         catch (LibGit2SharpException)
         {
         }
+        catch (ArgumentException)
+        {
+        }
 
         // Preserve selection state by OID
         var selectedOids = new System.Collections.Generic.HashSet<string>(

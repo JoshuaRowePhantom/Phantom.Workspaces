@@ -631,7 +631,7 @@ public sealed class WorkspaceGuiContextProviderTests
         var webDoc = documentDock!.VisibleDockables!
             .OfType<WorkspaceDocument>()
             .Single(doc => string.Equals(doc.Id, tabId, StringComparison.Ordinal));
-        Assert.Equal("My Custom Title", webDoc.TabViewModel.Title);
+        Assert.Equal("My Custom Title", webDoc.TabViewModel!.Title);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -775,7 +775,7 @@ public sealed class WorkspaceGuiContextProviderTests
         var shellDoc = documentDock!.VisibleDockables!
             .OfType<WorkspaceDocument>()
             .Single(doc => string.Equals(doc.Id, tabId, StringComparison.Ordinal));
-        Assert.Equal("My Shell Tab", shellDoc.TabViewModel.Title);
+        Assert.Equal("My Shell Tab", shellDoc.TabViewModel!.Title);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

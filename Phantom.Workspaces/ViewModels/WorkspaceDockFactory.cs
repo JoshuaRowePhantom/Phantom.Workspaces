@@ -42,6 +42,12 @@ public class WorkspaceDockFactory : Factory
         => this.documentsByTabId.Remove(tabId);
 
     /// <summary>
+    /// Registers a document for the given tab ID (called when restoring from dock-layout JSON).
+    /// </summary>
+    public void RegisterDocument(string tabId, WorkspaceDocument document)
+        => this.documentsByTabId[tabId] = document;
+
+    /// <summary>
     /// Returns the <see cref="WorkspacePaneDocument"/> registered for the given pane ID, or null if none.
     /// </summary>
     public WorkspacePaneDocument? GetPaneDocument(string paneId)

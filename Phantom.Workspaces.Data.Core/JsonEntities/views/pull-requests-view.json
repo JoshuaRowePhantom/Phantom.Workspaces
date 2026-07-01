@@ -19,19 +19,14 @@
       "query": {
         "clauses": [
           {
-            "clause-identifier": { "value": "repositories" },
+            "clause-identifier": { "value": "pull-requests" },
             "clause": {
               "clause-type": "entity-type",
-              "entity-type-names": { "values": ["repository"] }
+              "entity-type-names": { "values": ["pull-request"] }
             }
           }
         ]
-      },
-      "relationships-to-return": [
-        {
-          "relationship-type-names": ["related"]
-        }
-      ]
+      }
     }
   ]
 }
