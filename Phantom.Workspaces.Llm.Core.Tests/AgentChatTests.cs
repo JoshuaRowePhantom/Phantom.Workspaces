@@ -614,8 +614,15 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task StreamingInProgress_SurfacesToolCallAndResultInRunningItemBeforeCompletion()
+    public async Task StreamingInProgress_SurfacesToolCallAndResultInHistoryBeforeCompletion()
     {
+        // Mid-turn promotion (fix #305) promotes stable items to History as soon as a role
+        // boundary makes them stable. Once the tool result arrives, CoalesceAsync appends a blank
+        // assistant placeholder, making both the FunctionCallContent turn and the tool-result turn
+        // stable (stableCount = 2). Both are promoted to History immediately, while only the blank
+        // placeholder remains as the active tail in RunningItems.
+        // This test verifies that both items are observable in History before the final "Done."
+        // update is released, i.e. while the run is still in progress.
         var client = new DeterministicTestChatClient();
         var stream = client.EnqueueStreamingResponse();
         stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Let me check. "));
@@ -636,19 +643,24 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
         chat.EnqueueUserMessage("search please");
 
-        // While the run is still in progress (before the final update is released), the tool call and
-        // result should already have streamed into the running item.
-        await WaitForConditionAsync(
-            chat.RunningItems,
-            () => RunningItemContents(chat).OfType<FunctionCallContent>().Any(content => content.CallId == "call-1")
-                && RunningItemContents(chat).OfType<FunctionResultContent>().Any(content => content.CallId == "call-1"),
-            "tool call and result to stream into the running item before completion");
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
 
+        // Both stable items (assistant turn with FunctionCallContent, and the tool-result turn)
+        // are promoted to History mid-stream once the tool result arrives. Verify they appear in
+        // History before the gated final update is released.
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(h => h.Contents.OfType<FunctionCallContent>().Any(c => c.CallId == "call-1"))
+                && chat.History.Any(h => h.Contents.OfType<FunctionResultContent>().Any(c => c.CallId == "call-1")),
+            "tool call and result to be promoted to history before final update is released",
+            cts.Token);
+
+        // The running item should hold only the blank assistant placeholder (the active tail).
         Assert.Single(chat.RunningItems);
 
         blockedFinal.MarkReady();
         blockedComplete.MarkReady();
-        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to complete");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to complete", cts.Token);
     }
 
     [Fact]
@@ -977,11 +989,15 @@ public sealed class AgentChatTests
     [Fact]
     public async Task EnqueueUserMessage_ToQueuedQueue_PublishesImmediatelyWhenIdle()
     {
-        await using var chat = CreateChat();
+        // CreateChat() with an empty streaming response produces no assistant item in History
+        // (empty streams leave History with only the user message — see EmptyStream_HistoryEmpty_AfterTurnEnd).
+        // Use a non-empty response so that History.Count >= 2 is satisfiable.
+        await using var chat = CreateChat(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("ok")] });
         var queue = chat.QueueManager.CreateInputQueue();
 
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
         chat.EnqueueUserMessage("queued later", queue);
-        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "queued message to publish to history");
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "queued message to publish to history", cts.Token);
 
         Assert.Equal(2, chat.History.Count);
         Assert.Equal("queued later", GetText(chat.History[0].Contents));
