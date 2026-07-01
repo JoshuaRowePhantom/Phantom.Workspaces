@@ -166,7 +166,6 @@
       },
       "required": [
         "tab-id",
-        "title",
         "kind",
         "content",
         "dock"
