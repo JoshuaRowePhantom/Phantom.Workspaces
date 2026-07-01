@@ -3448,7 +3448,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
 
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
@@ -3496,7 +3496,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         Assert.Contains(
@@ -3507,7 +3507,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
 
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
