@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Linq;
+using System.Text.Json.Serialization;
 using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -69,8 +70,10 @@ public class WorkspaceDocument : Document
     /// <see cref="StatusTabHeaderItemViewModel"/> as the last item,
     /// preceded by any icon items from <see cref="WorkspaceTabViewModel.TabHeader"/>.
     /// </summary>
+    [JsonIgnore]
     public TabHeaderViewModel EffectiveTabHeader => this.cachedTabHeader;
 
+    [JsonIgnore]
     public bool HasUnreadNotification
     {
         get => this.hasUnreadNotification;
@@ -116,5 +119,6 @@ public class WorkspaceDocument : Document
         return title.Length > 20 ? title[..17] + "..." : title;
     }
 
+    [JsonIgnore]
     public WorkspaceTabViewModel TabViewModel { get; }
 }
