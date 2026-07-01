@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
+             xmlns:sharedControls="using:Phantom.Workspaces.Gui.Shared.Controls"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatInputQueueControl"
              x:CompileBindings="False"
              x:DataType="vm:InputQueueViewModel"
@@ -76,9 +77,9 @@
                                                         <KeyBinding Gesture="F2"
                                                                     Command="{Binding EditCommand}"/>
                                                     </Button.KeyBindings>
-                                                    <SelectableTextBlock Text="{Binding Text}"
-                                                                         TextWrapping="Wrap"
-                                                                         Classes="terminal-mono terminal-content queue-entry-content"/>
+                                                    <sharedControls:SafeSelectableTextBlock Text="{Binding Text}"
+                                                                                          TextWrapping="Wrap"
+                                                                                          Classes="terminal-mono terminal-content queue-entry-content"/>
                                                 </Button>
 
                                                 <ItemsControl Grid.Row="1"
