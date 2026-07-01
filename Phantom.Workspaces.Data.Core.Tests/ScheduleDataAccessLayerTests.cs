@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -73,17 +72,15 @@ public sealed class ScheduleDataAccessLayerTests
     }
 
     [Fact]
-    public async Task GetAsync_DefaultScheduler_RunsOffCallingThread()
+    public async Task GetAsync_DefaultScheduler_UsesTaskSchedulerDefault()
     {
-        var callingThreadId = Environment.CurrentManagedThreadId;
-        var capturedThreadIds = new ConcurrentBag<int>();
-        var recordingDal = new RecordingThreadIdDataAccessLayer(capturedThreadIds);
-        var dal = new ScheduleDataAccessLayer(recordingDal);
+        TaskScheduler? capturedScheduler = null;
+        var capturingDal = new CapturingTaskSchedulerDataAccessLayer(() => capturedScheduler = TaskScheduler.Current);
+        var dal = new ScheduleDataAccessLayer(capturingDal);
 
         await dal.GetAsync(new GetRequest { Entities = [] });
 
-        var captured = Assert.Single(capturedThreadIds);
-        Assert.NotEqual(callingThreadId, captured);
+        Assert.Equal(TaskScheduler.Default, capturedScheduler);
     }
 
     private sealed class TrackingTaskScheduler : TaskScheduler
@@ -103,18 +100,18 @@ public sealed class ScheduleDataAccessLayerTests
         protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
     }
 
-    private sealed class RecordingThreadIdDataAccessLayer : IDataAccessLayer
+    private sealed class CapturingTaskSchedulerDataAccessLayer : IDataAccessLayer
     {
-        private readonly ConcurrentBag<int> threadIds;
+        private readonly Action onGetAsync;
 
-        public RecordingThreadIdDataAccessLayer(ConcurrentBag<int> threadIds)
+        public CapturingTaskSchedulerDataAccessLayer(Action onGetAsync)
         {
-            this.threadIds = threadIds;
+            this.onGetAsync = onGetAsync;
         }
 
         public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
         {
-            this.threadIds.Add(Environment.CurrentManagedThreadId);
+            this.onGetAsync();
             return Task.FromResult(new GetResult { Batches = [] });
         }
 
