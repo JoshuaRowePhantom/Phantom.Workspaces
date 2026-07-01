@@ -29,9 +29,21 @@ public class PhantomAvaloniaFactDiscoverer : AvaloniaFactDiscoverer
     }
 }
 
-internal sealed class PhantomAvaloniaTestCase(IXunitTestCase inner)
-    : ISelfExecutingXunitTestCase, IAsyncDisposable
+internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXunitSerializable, IAsyncDisposable
 {
+    private IXunitTestCase _inner;
+
+    [Obsolete("Called by the de-serializer; should only be called by deserializers")]
+    public PhantomAvaloniaTestCase() { _inner = null!; }
+
+    public PhantomAvaloniaTestCase(IXunitTestCase inner) { _inner = inner; }
+
+    void IXunitSerializable.Serialize(IXunitSerializationInfo info)
+        => info.AddValue("Inner", _inner, _inner.GetType());
+
+    void IXunitSerializable.Deserialize(IXunitSerializationInfo info)
+        => _inner = (IXunitTestCase)info.GetValue("Inner")!;
+
     public async ValueTask<RunSummary> Run(
         ExplicitOption explicitOption,
         IMessageBus messageBus,
@@ -39,7 +51,7 @@ internal sealed class PhantomAvaloniaTestCase(IXunitTestCase inner)
         ExceptionAggregator aggregator,
         CancellationTokenSource cancellationTokenSource)
     {
-        var summary = await ((ISelfExecutingXunitTestCase)inner).Run(
+        var summary = await ((ISelfExecutingXunitTestCase)_inner).Run(
             explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
 
         // Force Gen2 GC after application.Dispose() has released the visual tree,
@@ -52,50 +64,50 @@ internal sealed class PhantomAvaloniaTestCase(IXunitTestCase inner)
     }
 
     // IXunitTestCase — all members delegated to inner
-    Type[]? IXunitTestCase.SkipExceptions => inner.SkipExceptions;
-    string? IXunitTestCase.SkipReason => inner.SkipReason;
-    Type? IXunitTestCase.SkipType => inner.SkipType;
-    string? IXunitTestCase.SkipUnless => inner.SkipUnless;
-    string? IXunitTestCase.SkipWhen => inner.SkipWhen;
-    IXunitTestClass IXunitTestCase.TestClass => inner.TestClass;
-    int IXunitTestCase.TestClassMetadataToken => inner.TestClassMetadataToken;
-    string IXunitTestCase.TestClassName => inner.TestClassName;
-    string IXunitTestCase.TestClassSimpleName => inner.TestClassSimpleName;
-    IXunitTestCollection IXunitTestCase.TestCollection => inner.TestCollection;
-    IXunitTestMethod IXunitTestCase.TestMethod => inner.TestMethod;
-    int IXunitTestCase.TestMethodMetadataToken => inner.TestMethodMetadataToken;
-    string IXunitTestCase.TestMethodName => inner.TestMethodName;
-    string[] IXunitTestCase.TestMethodParameterTypesVSTest => inner.TestMethodParameterTypesVSTest;
-    string IXunitTestCase.TestMethodReturnTypeVSTest => inner.TestMethodReturnTypeVSTest;
-    int IXunitTestCase.Timeout => inner.Timeout;
-    ValueTask<IReadOnlyCollection<IXunitTest>> IXunitTestCase.CreateTests() => inner.CreateTests();
-    void IXunitTestCase.PostInvoke() => inner.PostInvoke();
-    void IXunitTestCase.PreInvoke() => inner.PreInvoke();
+    Type[]? IXunitTestCase.SkipExceptions => _inner.SkipExceptions;
+    string? IXunitTestCase.SkipReason => _inner.SkipReason;
+    Type? IXunitTestCase.SkipType => _inner.SkipType;
+    string? IXunitTestCase.SkipUnless => _inner.SkipUnless;
+    string? IXunitTestCase.SkipWhen => _inner.SkipWhen;
+    IXunitTestClass IXunitTestCase.TestClass => _inner.TestClass;
+    int IXunitTestCase.TestClassMetadataToken => _inner.TestClassMetadataToken;
+    string IXunitTestCase.TestClassName => _inner.TestClassName;
+    string IXunitTestCase.TestClassSimpleName => _inner.TestClassSimpleName;
+    IXunitTestCollection IXunitTestCase.TestCollection => _inner.TestCollection;
+    IXunitTestMethod IXunitTestCase.TestMethod => _inner.TestMethod;
+    int IXunitTestCase.TestMethodMetadataToken => _inner.TestMethodMetadataToken;
+    string IXunitTestCase.TestMethodName => _inner.TestMethodName;
+    string[] IXunitTestCase.TestMethodParameterTypesVSTest => _inner.TestMethodParameterTypesVSTest;
+    string IXunitTestCase.TestMethodReturnTypeVSTest => _inner.TestMethodReturnTypeVSTest;
+    int IXunitTestCase.Timeout => _inner.Timeout;
+    ValueTask<IReadOnlyCollection<IXunitTest>> IXunitTestCase.CreateTests() => _inner.CreateTests();
+    void IXunitTestCase.PostInvoke() => _inner.PostInvoke();
+    void IXunitTestCase.PreInvoke() => _inner.PreInvoke();
 
     // ITestCase — explicit impls for base-interface members hidden by IXunitTestCase
-    ITestClass? ITestCase.TestClass => inner.TestClass;
-    ITestCollection ITestCase.TestCollection => inner.TestCollection;
-    ITestMethod? ITestCase.TestMethod => inner.TestMethod;
+    ITestClass? ITestCase.TestClass => _inner.TestClass;
+    ITestCollection ITestCase.TestCollection => _inner.TestCollection;
+    ITestMethod? ITestCase.TestMethod => _inner.TestMethod;
 
     // ITestCaseMetadata — explicit impls for members that IXunitTestCase overrides with narrower types
-    bool ITestCaseMetadata.Explicit => inner.Explicit;
-    string? ITestCaseMetadata.SkipReason => inner.SkipReason;
-    string? ITestCaseMetadata.SourceFilePath => inner.SourceFilePath;
-    int? ITestCaseMetadata.SourceLineNumber => inner.SourceLineNumber;
-    string ITestCaseMetadata.TestCaseDisplayName => inner.TestCaseDisplayName;
-    int? ITestCaseMetadata.TestClassMetadataToken => inner.TestClassMetadataToken;
-    string? ITestCaseMetadata.TestClassName => inner.TestClassName;
-    string? ITestCaseMetadata.TestClassNamespace => inner.TestClassNamespace;
-    string? ITestCaseMetadata.TestClassSimpleName => inner.TestClassSimpleName;
-    int? ITestCaseMetadata.TestMethodArity => inner.TestMethodArity;
-    int? ITestCaseMetadata.TestMethodMetadataToken => inner.TestMethodMetadataToken;
-    string? ITestCaseMetadata.TestMethodName => inner.TestMethodName;
-    string[]? ITestCaseMetadata.TestMethodParameterTypesVSTest => inner.TestMethodParameterTypesVSTest;
-    string? ITestCaseMetadata.TestMethodReturnTypeVSTest => inner.TestMethodReturnTypeVSTest;
-    IReadOnlyDictionary<string, IReadOnlyCollection<string>> ITestCaseMetadata.Traits => inner.Traits;
-    string ITestCaseMetadata.UniqueID => inner.UniqueID;
+    bool ITestCaseMetadata.Explicit => _inner.Explicit;
+    string? ITestCaseMetadata.SkipReason => _inner.SkipReason;
+    string? ITestCaseMetadata.SourceFilePath => _inner.SourceFilePath;
+    int? ITestCaseMetadata.SourceLineNumber => _inner.SourceLineNumber;
+    string ITestCaseMetadata.TestCaseDisplayName => _inner.TestCaseDisplayName;
+    int? ITestCaseMetadata.TestClassMetadataToken => _inner.TestClassMetadataToken;
+    string? ITestCaseMetadata.TestClassName => _inner.TestClassName;
+    string? ITestCaseMetadata.TestClassNamespace => _inner.TestClassNamespace;
+    string? ITestCaseMetadata.TestClassSimpleName => _inner.TestClassSimpleName;
+    int? ITestCaseMetadata.TestMethodArity => _inner.TestMethodArity;
+    int? ITestCaseMetadata.TestMethodMetadataToken => _inner.TestMethodMetadataToken;
+    string? ITestCaseMetadata.TestMethodName => _inner.TestMethodName;
+    string[]? ITestCaseMetadata.TestMethodParameterTypesVSTest => _inner.TestMethodParameterTypesVSTest;
+    string? ITestCaseMetadata.TestMethodReturnTypeVSTest => _inner.TestMethodReturnTypeVSTest;
+    IReadOnlyDictionary<string, IReadOnlyCollection<string>> ITestCaseMetadata.Traits => _inner.Traits;
+    string ITestCaseMetadata.UniqueID => _inner.UniqueID;
 
     // IAsyncDisposable
     ValueTask IAsyncDisposable.DisposeAsync() =>
-        inner is IAsyncDisposable d ? d.DisposeAsync() : ValueTask.CompletedTask;
+        _inner is IAsyncDisposable d ? d.DisposeAsync() : ValueTask.CompletedTask;
 }
