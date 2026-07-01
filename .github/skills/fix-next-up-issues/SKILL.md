@@ -27,8 +27,8 @@ For each issue in the list (in ascending number order):
 2. Launch a `general-purpose` sub-agent in **background** mode with:
    - A clear statement at the top of the prompt: **"Fix issue #NUMBER only. Do not fetch the next-up label list."**
    - The full issue text pasted verbatim into the prompt.
-   - The repository path: `c:\dev\phantom.workspaces-llm`.
-   - The design doc path: `c:\dev\phantom.workspaces-design\docs\design\`.
+   - The repository worktree path: e.g. `c:\dev\phantom.workspaces-design\worktrees\1`.
+   - The design doc worktree path: e.g. `c:\dev\phantom.workspaces-design\worktrees\1\docs\design\`.
    - The full fix-github-issue sub-agent protocol (phases 1–5 from that skill).
 
 3. **Wait for the sub-agent to complete** before starting the next one. Do not run issues in parallel — each fix must be committed and verified before the next begins.
