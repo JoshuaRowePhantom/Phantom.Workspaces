@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Serialization;
 using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -48,11 +49,13 @@ public class WorkspacePaneDocument : Document
         }
     }
 
+    [JsonIgnore]
     public WorkspacePaneViewModel WorkspacePane { get; }
 
     /// <summary>
     /// Header model for this workspace-pane tab. Contains running and notification
     /// indicator items that mirror the pane's aggregated tab state.
     /// </summary>
+    [JsonIgnore]
     public TabHeaderViewModel EffectiveTabHeader => this.cachedTabHeader;
 }
