@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityFieldEditorViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void StringEditor_TogglesBetweenReadAndEditModes()
     {
         var editor = new StringFieldEditorViewModel("title", "Getting Started");
@@ -22,7 +22,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.False(editor.IsEditMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void MimeAttachmentEditor_UpdatesMarkdownModeVisibilityForReadAndEdit()
     {
         var editor = new MarkdownMimeAttachmentFieldEditorViewModel(
@@ -43,7 +43,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.False(editor.ShowPlainTextEditMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void MimeAttachmentClone_PreservesMarkdownSpecificEditorType()
     {
         var markdownEditor = new MarkdownMimeAttachmentFieldEditorViewModel(
@@ -64,7 +64,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.IsType<PlainMimeAttachmentFieldEditorViewModel>(plainClone);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void NodeEditMode_PropagatesToNestedEditors()
     {
         var childEditor = new StringFieldEditorViewModel("text", "hello");
@@ -88,7 +88,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.True(childEditor.IsReadMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void NodeDiscardEditMode_RevertsFieldValues()
     {
         var titleEditor = new StringFieldEditorViewModel("title", "Before");
@@ -109,7 +109,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.False(node.Card.IsEditMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void NodeSaveEditMode_PersistsFieldValuesInCurrentEditors()
     {
         var titleEditor = new StringFieldEditorViewModel("title", "Before");
@@ -130,7 +130,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.False(node.Card.IsEditMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void JsonSchemaEditor_PrettyPrintsAndFormatsMarkdownCodeBlock()
     {
         var editor = new JsonSchemaFieldEditorViewModel("schema", "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}");
@@ -140,7 +140,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.EndsWith("```", editor.MarkdownText, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalStringEditor_UsesCurrentLocaleAndFallsBackToDefault()
     {
         var localizedValues = new[]
@@ -154,7 +154,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.Equal("Localized value", editor.Value);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalStringEditor_AddLocale_MigratesToDefaultLocale()
     {
         var editor = new LocalStringFieldEditorViewModel("title", "Simple value");
@@ -167,7 +167,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.Equal("Simple value", editor.Value);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalizedMimeEditor_AddLocale_MigratesToDefaultLocale()
     {
         var editor = new LocalizedMimeAttachmentFieldEditorViewModel(
@@ -183,7 +183,7 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.Contains(editor.OtherLocalizedValues, value => string.Equals(value.Locale, "new-locale", StringComparison.Ordinal));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalizedMimeEditor_UsesCurrentLocaleAndFallsBackToDefault()
     {
         var editor = new LocalizedMimeAttachmentFieldEditorViewModel(

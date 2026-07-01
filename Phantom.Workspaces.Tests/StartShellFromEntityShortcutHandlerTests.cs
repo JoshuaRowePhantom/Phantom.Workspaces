@@ -18,7 +18,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
 {
     // ---- ShouldApplyTo -----------------------------------------------------------------------
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithPathField_ReturnsTrue()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -31,7 +31,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.True(handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithHomeDirectoryField_ReturnsTrue()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -44,7 +44,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.True(handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithoutPathOrHomeDirectory_ReturnsFalse()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -59,7 +59,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
 
     // ---- Handle: working directory -----------------------------------------------------------
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithPathField_OpensShellTabViewModel()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -78,7 +78,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.NotNull(shellTab);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithPathField_PassesPathAsWorkingDirectory()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -100,7 +100,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal("/test/repo", receivedWorkingDirectory);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithHomeDirectoryField_PassesHomeDirectoryAsWorkingDirectory()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -122,7 +122,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(@"C:\Users\tester", receivedWorkingDirectory);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithBothPathAndHomeDirectory_PrefersPathAsWorkingDirectory()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -146,7 +146,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
 
     // ---- Handle: client instance routing -----------------------------------------------------
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfileEntity_UsesLocalClientInstance()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -170,7 +170,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(".", receivedClientInstance);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnGitWorktreeEntityBelongingToLocalProfile_UsesLocalClientInstance()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -229,7 +229,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(".", receivedClientInstance);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnGitWorktreeEntityWithNoProfileName_FallsBackToLocalClientInstance()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

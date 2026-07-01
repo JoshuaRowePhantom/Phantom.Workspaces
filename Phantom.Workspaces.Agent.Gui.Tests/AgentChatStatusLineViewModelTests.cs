@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
@@ -58,7 +58,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.False(statusLine.IsThinking);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task TokensDisplay_FormatsOnlyWhenBothTotalsArePresent()
     {
         using var loggerFactory = new ObservableLoggerFactory();

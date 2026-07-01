@@ -241,7 +241,10 @@ Spawn a `verify-closed-issue` subagent for this issue. In the subagent prompt, s
 - **Branch under review:** the feature branch name (e.g. `fix/…` or `feat/…`)
 - Instruct the subagent to `cd` into the worktree and use the branch-diff commands from Step 2 of `verify-closed-issue` to identify commits and file changes unique to this branch before searching for implementation
 
-If the subagent concludes `failed-verification`, fix all identified gaps and re-run validation before continuing. **Do not proceed to Step 11 if validation fails.**
+The subagent will report its outcome as `OUTCOME: verified`, `OUTCOME: failed-verification`, or `OUTCOME: superseded`. **No labels will be applied to the issue** — `verify-closed-issue` is read-only in this context; labels are applied by `verify-closed-issues` after the issue is closed.
+
+- If the subagent reports `OUTCOME: verified` → proceed to Step 11.
+- If the subagent reports `OUTCOME: failed-verification` → fix all identified gaps and re-run validation before continuing. **Do not proceed to Step 11 if validation fails.**
 
 ## Step 11 — Post a resolution comment
 

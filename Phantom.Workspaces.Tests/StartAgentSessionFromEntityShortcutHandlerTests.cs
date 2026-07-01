@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class StartAgentSessionFromEntityShortcutHandlerTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasPathField_ReturnsTrue()
     {
         var handler = CreateHandler();
@@ -20,7 +20,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.True(result);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasHomeDirectoryField_ReturnsTrue()
     {
         var handler = CreateHandler();
@@ -32,7 +32,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.True(result);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasNeitherField_ReturnsFalse()
     {
         var handler = CreateHandler();
@@ -44,7 +44,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.False(result);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ShouldApplyTo_WhenShortcutIsNotStartAgentSession_ReturnsFalse()
     {
         var handler = CreateHandler();
@@ -56,7 +56,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.False(result);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ShouldApplyTo_WhenEntityDataIsNull_ReturnsFalse()
     {
         var handler = CreateHandler();
@@ -74,7 +74,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.False(result);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Handle_WhenEntityHasPathField_OpensStartAgentSessionTab()
     {
         var handler = CreateHandler();
@@ -87,7 +87,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.True(handled);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Handle_WhenEntityHasHomeDirectoryField_OpensStartAgentSessionTab()
     {
         var handler = CreateHandler();

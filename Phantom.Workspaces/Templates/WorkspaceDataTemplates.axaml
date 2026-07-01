@@ -104,7 +104,7 @@
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
-        <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+        <controls:SafeSelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:EntityReferenceFieldEditorViewModel">
@@ -242,7 +242,7 @@
               ColumnDefinitions="200,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
-            <SelectableTextBlock Grid.Column="1"
+            <controls:SafeSelectableTextBlock Grid.Column="1"
                          Text="{Binding MarkdownText}"
                          TextWrapping="Wrap"
                          IsVisible="{Binding IsReadMode}"
@@ -303,7 +303,7 @@
 
     <DataTemplate DataType="vm:MarkdownMimeAttachmentFieldEditorViewModel">
         <Panel>
-            <SelectableTextBlock Text="{Binding TextContent}"
+            <controls:SafeSelectableTextBlock Text="{Binding TextContent}"
                          TextWrapping="Wrap"
                          Classes="workspace-markdown-viewer"
                          IsVisible="{Binding ShowInlineMarkdownReadMode}" />
@@ -339,7 +339,7 @@
                           ColumnDefinitions="200,*"
                           IsVisible="{Binding ShowMarkdownReadMode}">
                         <TextBlock Text="content.text" Classes="muted workspace-field-label" />
-                        <SelectableTextBlock Grid.Column="1"
+                        <controls:SafeSelectableTextBlock Grid.Column="1"
                                      Text="{Binding TextContent}"
                                      TextWrapping="Wrap"
                                      Classes="workspace-markdown-viewer" />
@@ -348,7 +348,7 @@
                           ColumnDefinitions="200,*"
                           IsVisible="{Binding ShowMarkdownEditMode}">
                         <TextBlock Text="content.text" Classes="muted workspace-field-label" />
-                        <SelectableTextBlock Grid.Column="1"
+                        <controls:SafeSelectableTextBlock Grid.Column="1"
                                      Text="{Binding TextContent, Mode=TwoWay}"
                                      TextWrapping="Wrap"
                                      Classes="workspace-markdown-editor" />

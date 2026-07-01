@@ -5,7 +5,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityRepositoryTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task TryGetEntityByName_FindsSeededMainView()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -22,7 +22,7 @@ public sealed class EntityRepositoryTests
         Assert.NotNull(mainView);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ExportEntitySnapshotsAsync_ReturnsLatestEntityVersion()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -63,7 +63,7 @@ public sealed class EntityRepositoryTests
         Assert.Contains("Version 2", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task CreateAsync_InitializesWorkspaceEntitySessionDiscoveryEntities()
     {
         var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());

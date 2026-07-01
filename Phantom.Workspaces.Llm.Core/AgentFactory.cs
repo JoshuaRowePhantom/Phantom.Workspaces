@@ -498,23 +498,73 @@ public static class AgentFactory
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub Copilot provider requires a model id.");
 
-        // The GitHub Copilot SDK authenticates either with an explicit GitHub token or with
-        // the logged-in Copilot user. A token is optional: when the connection provides one
-        // (typically via a ${GITHUB_TOKEN} reference) it is used, otherwise the SDK falls back
-        // to the logged-in user.
-        string? gitHubToken = model.Connection switch
-        {
-            ApiKeyConnection apiKeyConnection when !string.IsNullOrWhiteSpace(apiKeyConnection.ApiKey)
-                => ResolveApiKey(apiKeyConnection.ApiKey, "github-copilot"),
-            _ => null,
-        };
+        string? gitHubToken = null;
+        CopilotByokOptions? byokOptions = null;
+        string displayName;
 
-        var displayName = $"GitHub Copilot ({modelId})";
+        if (model.Connection is ApiKeyConnection conn && !string.IsNullOrWhiteSpace(conn.Endpoint))
+        {
+            // BYOK mode: a custom endpoint is supplied — authenticate to that endpoint, not GitHub.
+            var resolvedApiKey = string.IsNullOrWhiteSpace(conn.ApiKey)
+                ? null
+                : ResolveApiKey(conn.ApiKey, "github-copilot");
+
+            // Optional BYOK configuration fields come from options.additionalProperties in the
+            // manifest because AgentSchema.ApiKeyConnection does not carry an AdditionalProperties
+            // bag; extra JSON fields in the connection object are silently dropped by the parser.
+            var additionalProps = model.Options?.AdditionalProperties;
+            string? providerType = null;
+            string? wireApi = null;
+            string? wireModel = null;
+            if (additionalProps is not null)
+            {
+                if (additionalProps.TryGetValue("providerType", out var ptv)) providerType = ptv as string;
+                if (additionalProps.TryGetValue("wireApi", out var wav)) wireApi = wav as string;
+                if (additionalProps.TryGetValue("wireModel", out var wmv)) wireModel = wmv as string;
+            }
+
+            IReadOnlyDictionary<string, string>? headers = null;
+            if (additionalProps is not null
+                && additionalProps.TryGetValue("headers", out var headersObj)
+                && headersObj is IDictionary<string, object> rawHeaders)
+            {
+                headers = rawHeaders
+                    .Where(static kvp => kvp.Value is string)
+                    .ToDictionary(static kvp => kvp.Key, static kvp => (string)kvp.Value!);
+            }
+
+            byokOptions = new CopilotByokOptions
+            {
+                BaseUrl      = conn.Endpoint,
+                ApiKey       = resolvedApiKey,
+                ProviderType = providerType ?? "openai",
+                WireApi      = wireApi      ?? "chat-completions",
+                WireModel    = wireModel,
+                Headers      = headers,
+            };
+
+            // gitHubToken stays null — no GitHub auth required in BYOK mode.
+            displayName = $"GitHub Copilot BYOK ({modelId} @ {conn.Endpoint})";
+        }
+        else
+        {
+            // Standard mode: authenticate as a Copilot user, optionally with an explicit GitHub
+            // token. When no token is provided the SDK falls back to the logged-in Copilot user.
+            gitHubToken = model.Connection switch
+            {
+                ApiKeyConnection apiKeyConn when !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey)
+                    => ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
+                _ => null,
+            };
+            displayName = $"GitHub Copilot ({modelId})";
+        }
+
         var client = new CopilotSdkChatClient(
             modelId,
             displayName,
             gitHubToken,
             services?.LoggerFactory,
+            byokOptions: byokOptions,
             queueManager: queueManager,
             modelOptions: model.Options);
 

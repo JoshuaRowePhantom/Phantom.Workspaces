@@ -63,6 +63,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal event Action<string>? SessionEstablished;
 
     /// <summary>
+    /// The BYOK options this client was constructed with, or <see langword="null"/> when in
+    /// standard Copilot auth mode. Exposed internally for factory wiring tests.
+    /// </summary>
+    internal CopilotByokOptions? ByokOptions => this.byokOptions;
+
+    /// <summary>
+    /// The GitHub token this client was constructed with, or <see langword="null"/> when no
+    /// explicit token was provided (SDK falls back to the logged-in Copilot user). Exposed
+    /// internally for factory wiring tests.
+    /// </summary>
+    internal string? GitHubToken => this.gitHubToken;
+
+    /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
     /// </summary>
     /// <param name="modelId">The Copilot model identifier (for example, <c>gpt-5</c>).</param>

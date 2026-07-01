@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class RunningIndicatorStylesTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_ApplyingClassToProgressBar_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -24,7 +24,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_WhenIdle_OpacityIsZero()
     {
         var styles = LoadSharedStyles();
@@ -42,7 +42,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(0.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_WhenIndeterminate_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -60,7 +60,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(1.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_WhenSucceeded_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -79,7 +79,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(1.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_WhenFailed_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -98,7 +98,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(1.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicator_WhenIndeterminate_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -114,7 +114,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicatorAgent_WhenIndeterminate_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -131,7 +131,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicatorAgent_WhenIndeterminate_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -150,7 +150,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(1.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicatorAgent_WhenIdle_OpacityIsZero()
     {
         var styles = LoadSharedStyles();
@@ -169,7 +169,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(0.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicatorAgent_WhenSucceeded_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -189,7 +189,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(1.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void RunningIndicatorAgent_WhenFailed_OpacityIsOne()
     {
         var styles = LoadSharedStyles();
@@ -209,7 +209,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(1.0, progressBar.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicator_Width_Is22()
     {
         var styles = LoadSharedStyles();
@@ -228,7 +228,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(22.0, progressBar.Width);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicator_Height_Is22()
     {
         var styles = LoadSharedStyles();
@@ -247,7 +247,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(22.0, progressBar.Height);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorPulsatingBrain_ApplyingClassToProgressBar_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -264,7 +264,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorPulsatingBrain_WhenIdle_GlyphOpacityIs0Point25()
     {
         var styles = LoadSharedStyles();
@@ -285,7 +285,7 @@ public sealed class RunningIndicatorStylesTests
         Assert.Equal(0.25, glyph.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorPulsatingBrain_WhenIndeterminate_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -302,7 +302,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorVibratingAlarmClock_ApplyingClassToProgressBar_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -319,7 +319,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorVibratingAlarmClock_WhenIndeterminate_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -336,7 +336,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorVibratingAlarmClock_WhenPaused_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -354,7 +354,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorVibratingAlarmClock_WhenFailed_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -372,7 +372,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorSwingingBell_ApplyingClassToProgressBar_DoesNotThrow()
     {
         var styles = LoadSharedStyles();
@@ -389,7 +389,7 @@ public sealed class RunningIndicatorStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void GlyphIndicatorSwingingBell_WhenIndeterminate_DoesNotThrow()
     {
         var styles = LoadSharedStyles();

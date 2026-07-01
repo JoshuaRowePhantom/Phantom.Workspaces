@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class AgentChatStatusLineStylesTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineBrain_Default_OpacityIsZero()
     {
         var styles = LoadAgentChatStatusLineStyles();
@@ -26,7 +26,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.Equal(0.0, textBlock.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineBrain_WhenIdle_OpacityIs0Point25()
     {
         var styles = LoadAgentChatStatusLineStyles();
@@ -45,7 +45,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.Equal(0.25, textBlock.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineBrain_WhenThinking_OpacityIsOne()
     {
         var styles = LoadAgentChatStatusLineStyles();
@@ -64,7 +64,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.Equal(1.0, textBlock.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineBrain_WhenThinking_HasPulsatingAnimation()
     {
         var styles = LoadAgentChatStatusLineStyles();
@@ -86,7 +86,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.Single(thinkingStyle.Animations);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineBrain_WhenThinking_ApplyingClassToTextBlock_DoesNotThrow()
     {
         var styles = LoadAgentChatStatusLineStyles();
@@ -103,7 +103,7 @@ public sealed class AgentChatStatusLineStylesTests
         host.Arrange(new Rect(0, 0, 1000, 1000));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineValue_WhenStyleApplied_HasNonZeroLeftMargin()
     {
         // Issue #401: agent-chat-status-line-value must carry its own left margin
@@ -123,7 +123,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.True(textBlock.Margin.Left > 0);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineLabel_WhenStyleApplied_HasNonZeroLeftMargin()
     {
         // Issue #401: agent-chat-status-line-label must carry its own left margin
@@ -143,7 +143,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.True(textBlock.Margin.Left > 0);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatAutoscrollToggle_WhenStyleApplied_HasNonZeroLeftMargin()
     {
         // Issue #512: agent-chat-autoscroll-toggle must carry its own left margin.
@@ -162,7 +162,7 @@ public sealed class AgentChatStatusLineStylesTests
         Assert.True(checkBox.Margin.Left > 0);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatReasoningToggle_WhenStyleApplied_HasNonZeroLeftMargin()
     {
         // Issue #512: agent-chat-status-line-reasoning-toggle must carry its own left margin.
