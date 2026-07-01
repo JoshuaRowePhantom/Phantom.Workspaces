@@ -165,15 +165,13 @@ public sealed class SchemaAccessor : ISchemaAccessor
             return preloadedEntity;
         }
 
-        if (!TryParseEntityName(schemaReference, out var parsedSchemaName))
-        {
-            return null;
-        }
-
+        // Entity-type schemas not in the preloaded index are stored under a two-component
+        // name ["entity-types","<reference>"], so use that as the canonical lookup key.
+        var entityName = new EntityName("entity-types", schemaReference);
         var getResult = await this.dataAccessLayer.GetAsync(
             new GetRequest
             {
-                Entities = [new GetEntityRequest { EntityName = parsedSchemaName }],
+                Entities = [new GetEntityRequest { EntityName = entityName }],
                 Timestamps = new Timestamp?[] { null },
             },
             cancellationToken).ConfigureAwait(false);
@@ -252,7 +250,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
         foreach (var (schemaId, schemaEntity) in schemaEntitiesById)
         {
             result.TryAdd(schemaId, schemaEntity);
-            foreach (var name in GetEntityTypeNames(schemaEntity))
+            foreach (var name in GetEntityDefinedTypeNames(schemaEntity))
             {
                 result.TryAdd(name, schemaEntity);
             }
@@ -278,7 +276,7 @@ public sealed class SchemaAccessor : ISchemaAccessor
                 schemas[schemaId] = data;
             }
 
-            foreach (var name in GetEntityTypeNames(data))
+            foreach (var name in GetEntityDefinedTypeNames(data))
             {
                 schemas.TryAdd(name, data);
             }
@@ -287,28 +285,40 @@ public sealed class SchemaAccessor : ISchemaAccessor
         return schemas;
     }
 
-    private static IEnumerable<string> GetEntityTypeNames(JsonElement entityData)
+    /// <summary>
+    /// Returns the entity-type names that this schema entity defines, extracted from
+    /// <c>["entity-types","X"]</c> entries in the <c>names</c> property. Includes both
+    /// the plain entity-type name (e.g., <c>agent-manifest</c>) and the canonical JSON
+    /// array format (e.g., <c>["entity-types","agent-manifest"]</c>) so that callers
+    /// using either convention can resolve schemas.
+    /// </summary>
+    private static IEnumerable<string> GetEntityDefinedTypeNames(JsonElement entityData)
     {
         var doc = SchemaEntityDocument.Deserialize(entityData);
-        return doc?.GetExplicitEntityTypeNames() ?? (IEnumerable<string>)Array.Empty<string>();
+        if (doc?.Names is not { Length: > 0 } names)
+        {
+            return Array.Empty<string>();
+        }
+
+        var result = new List<string>();
+        foreach (var n in names)
+        {
+            if (n is { Length: 2 }
+                && string.Equals(n[0], "entity-types", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(n[1]))
+            {
+                result.Add(n[1]);
+                result.Add(System.Text.Json.JsonSerializer.Serialize(n));
+            }
+        }
+
+        return result;
     }
 
     private static bool IsSchemaEntity(JsonElement entityObject)
     {
         var schemaEntityDocument = SchemaEntityDocument.Deserialize(entityObject);
         return schemaEntityDocument is not null && schemaEntityDocument.IsSchemaEntity();
-    }
-
-    private static bool TryParseEntityName(string name, out EntityName entityName)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            entityName = default;
-            return false;
-        }
-
-        entityName = new EntityName(name);
-        return true;
     }
 
     public static bool TryGetSchemaPayloadId(JsonElement schemaEntity, out string schemaId)
