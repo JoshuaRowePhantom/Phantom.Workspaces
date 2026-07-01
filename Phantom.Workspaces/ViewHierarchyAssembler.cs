@@ -149,6 +149,15 @@ public sealed class ViewHierarchyAssembler
         IReadOnlyList<SubscribedEntityViewModel> roots,
         CancellationToken cancellationToken = default)
     {
+        if (roots.Count > 0)
+        {
+            var groupByParent = await this.TryGetGroupByParentConfigAsync(roots[0], cancellationToken).ConfigureAwait(false);
+            if (groupByParent is not null)
+            {
+                return await this.AssembleWithGroupByParentAsync(roots, groupByParent.Value, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         var rootNodes = new List<ViewHierarchyNode>(roots.Count);
         foreach (var root in roots)
         {
@@ -198,7 +207,110 @@ public sealed class ViewHierarchyAssembler
     }
 
     /// <summary>
-    /// Reads <c>traversed-entity-display-disposition</c> from the entity-type-views for the given entity.
+    /// Assembles a flat list of leaf entities into a parent→child hierarchy by reading the entity-id
+    /// referenced in each leaf's <c>field-path</c> field. Entities with no such field (or an unresolvable
+    /// entity-id) are placed at root level ungrouped.
+    /// </summary>
+    private async Task<IReadOnlyList<ViewHierarchyNode>> AssembleWithGroupByParentAsync(
+        IReadOnlyList<SubscribedEntityViewModel> leaves,
+        JsonElement groupByParent,
+        CancellationToken cancellationToken)
+    {
+        var fieldPath = ReadStringArray(groupByParent, "field-path");
+        var result = new List<ViewHierarchyNode>();
+        var parentNodesById = new Dictionary<EntityId, ViewHierarchyNode>();
+
+        foreach (var leaf in leaves)
+        {
+            var parentEntityId = TryReadEntityIdField(leaf, fieldPath);
+            if (parentEntityId is null)
+            {
+                result.Add(new ViewHierarchyNode(leaf));
+                continue;
+            }
+
+            if (!parentNodesById.TryGetValue(parentEntityId.Value, out var parentNode))
+            {
+                var parentEntities = await this.entityBroker
+                    .GetEntitiesAsync([parentEntityId.Value], cancellationToken)
+                    .ConfigureAwait(false);
+                var parentEntity = parentEntities.FirstOrDefault();
+                if (parentEntity is null)
+                {
+                    result.Add(new ViewHierarchyNode(leaf));
+                    continue;
+                }
+
+                parentNodesById[parentEntityId.Value] = parentNode = new ViewHierarchyNode(parentEntity);
+                result.Add(parentNode);
+            }
+
+            parentNode.Children.Add(new ViewHierarchyNode(leaf));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the first <c>group-by-parent</c> JSON object found in any entity-type-view for the
+    /// given entity's types, or <see langword="null"/> if none declare it.
+    /// </summary>
+    private async Task<JsonElement?> TryGetGroupByParentConfigAsync(
+        SubscribedEntityViewModel entity,
+        CancellationToken cancellationToken)
+    {
+        foreach (var entityTypeName in ReadEntityTypes(entity))
+        {
+            var entityTypeView = await this.GetEntityTypeViewAsync(entityTypeName, cancellationToken)
+                .ConfigureAwait(false);
+            if (entityTypeView?.Snapshot.Data is not { } viewData)
+            {
+                continue;
+            }
+
+            if (viewData.TryGetProperty("group-by-parent", out var groupByParent)
+                && groupByParent.ValueKind == JsonValueKind.Object)
+            {
+                return groupByParent;
+            }
+        }
+
+        return null;
+    }
+
+    private static EntityId? TryReadEntityIdField(SubscribedEntityViewModel entity, string[] fieldPath)
+    {
+        if (entity.Snapshot.Data is not { } data || data.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var current = data;
+        foreach (var segment in fieldPath)
+        {
+            if (!current.TryGetProperty(segment, out var next) || next.ValueKind == JsonValueKind.Undefined)
+            {
+                return null;
+            }
+
+            current = next;
+        }
+
+        if (current.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var raw = current.GetString();
+        if (raw is null || !Guid.TryParse(raw, out var guid))
+        {
+            return null;
+        }
+
+        return new EntityId(guid);
+    }
+
+
     /// Returns <see langword="false"/> when any entity-type-view declares <c>"collapsed"</c>;
     /// returns <see langword="true"/> otherwise (the default when the field is absent).
     /// </summary>
