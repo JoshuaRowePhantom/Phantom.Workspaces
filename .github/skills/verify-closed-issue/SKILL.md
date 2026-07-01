@@ -5,21 +5,9 @@ description: Use this skill to verify that a single closed GitHub issue is corre
 
 # Skill: Verify closed issue
 
-Inspect the `features` branch to confirm that a closed GitHub issue has a correct implementation and passing tests. Apply `failed-verification` or `superseded` labels when gaps are found.
+Inspect the `features` branch to confirm that a closed GitHub issue has a correct implementation and passing tests. Reports the outcome to the caller — does **not** apply labels or post verification-outcome comments.
 
----
-
-## Prerequisites — ensure labels exist
-
-Before running, confirm all required labels exist in the repository. Create any that are missing:
-
-```powershell
-gh label create failed-verification --repo JoshuaRowePhantom/Phantom.Workspaces --description "Bug failed automated verification" --color "d93f0b"
-gh label create superseded --repo JoshuaRowePhantom/Phantom.Workspaces --description "Issue superseded by a later work item" --color "cfd3d7"
-gh label create verified --repo JoshuaRowePhantom/Phantom.Workspaces --description "Issue implementation verified" --color "0e8a16"
-```
-
-(These commands are idempotent — they fail silently if the label already exists.)
+> **Note for callers:** This skill is read-only with respect to the subject issue (except for informational superseder comments in Step 4). All label writes and verification-outcome comments are the responsibility of the caller (see `verify-closed-issues` for the bulk caller that handles labelling).
 
 ---
 
@@ -96,8 +84,6 @@ Apply the **Verify behaviour** section from `.github/skills/shared/CODE-VERIFICA
 
 ## Step 4 — Search for superseding work items (only on failure)
 
-## Step 4 — Search for superseding work items (only on failure)
-
 If Step 3 concluded failure, search for open or closed issues that supersede this one:
 
 ```powershell
@@ -112,50 +98,32 @@ A credible superseding issue is one that:
 
 **If a credible superseding issue is found:**
 
-1. Post a comment on the original issue:
+1. Post an informational comment on the original issue:
    ```powershell
    gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "Verification note: this issue appears to be superseded by #<SUPERSEDER> — <brief reason>."
    ```
-2. Apply the `superseded` label:
-   ```powershell
-   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "superseded"
+2. **Report outcome and stop:**
    ```
-3. **Report outcome: `superseded`.** Stop here.
+   OUTCOME: superseded — superseded by #<SUPERSEDER>
+   ```
 
 ---
 
-## Step 5 — Apply `failed-verification` label (only on failure with no superseder)
+## Step 5 — Report failed-verification (only on failure with no superseder)
 
-If verification failed and no superseding item was found:
+If verification failed and no superseding item was found, report the outcome to the caller with enough detail for them to act:
 
-1. Post a comment summarising what was checked, what was found, and what is missing:
-   ```powershell
-   gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Verification failed
+```
+OUTCOME: failed-verification
 
-   **Checked:** <describe what files/commits/tests were inspected>
+**Checked:** <describe what files/commits/tests were inspected>
 
-   **Found:** <describe what was present>
+**Found:** <describe what was present>
 
-   **Missing:** <describe the specific gap — code not found / behaviour not implemented / tests missing>"
-   ```
-2. Apply the label:
-   ```powershell
-   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "failed-verification"
-   ```
-3. File a new `next-up` bug describing what is missing:
-   ```powershell
-   gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
-     --title "Bug: issue #<NUMBER> failed verification — <specific gap>" `
-     --label "bug,next-up" `
-     --body "## Missing implementation
+**Missing:** <describe the specific gap — code not found / behaviour not implemented / tests missing>
+```
 
-   **Original issue:** #<NUMBER> — <title>
-
-   **Verification gap:** <code not found / behaviour not implemented / tests missing>
-
-   **Detail:** <describe exactly what was checked and what is absent>"
-   ```
-4. **Report outcome: `failed-verification`.** Stop here.
+Stop here. The caller is responsible for applying labels, posting a verification-outcome comment, and filing a follow-up bug.
 
 ---
 
@@ -163,11 +131,7 @@ If verification failed and no superseding item was found:
 
 If Steps 2–3 all pass (code found, behaviour implemented, all fail-verification criteria satisfied):
 
-1. Apply the `verified` label:
-   ```powershell
-   gh issue edit <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --add-label "verified"
-   ```
-2. If any code-duplication instances were noted in Step 3, file a new bug for each:
+1. If any code-duplication instances were noted in Step 3, file a new bug for each (these are new artifacts, not labels on the subject issue):
    ```powershell
    gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
      --title "Refactor: duplicated logic in <description>" `
@@ -178,17 +142,16 @@ If Steps 2–3 all pass (code found, behaviour implemented, all fail-verificatio
 
    **Detail:** <describe exactly which files/methods contain the duplicated logic and what should be extracted>"
    ```
-3. Post a comment summarising what was verified and which follow-up bugs were filed (if any):
-   ```powershell
-   gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Verification passed
+2. **Report outcome:**
+   ```
+   OUTCOME: verified
 
    **Checked:** <describe what files/commits/tests were inspected>
 
    **Result:** Implementation found, all verification criteria satisfied.
 
-   <If duplication bugs were filed:> **Follow-up bugs filed:** #<N>, ..."
+   <If duplication bugs were filed:> **Follow-up bugs filed:** #<N>, ...
    ```
-4. **Report outcome: `✅ Verified — implementation found and criteria satisfied`.**
 
 ---
 
@@ -196,7 +159,7 @@ If Steps 2–3 all pass (code found, behaviour implemented, all fail-verificatio
 
 1. Never modify source code — this skill is read-only.
 2. Never push (`git push`).
-3. Always check for superseding issues before applying `failed-verification`.
-4. Ensure `failed-verification`, `superseded`, and `verified` labels exist before attempting to apply them (see Prerequisites).
-5. When filing a `next-up` bug in Step 5, be precise: name the specific file, method, or test class that is missing.
-6. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.
+3. Always check for superseding issues before reporting `failed-verification`.
+4. When reporting `failed-verification`, include enough detail (checked files, found items, specific gap) for the caller to write an accurate comment and file a useful bug.
+5. The skill receives exactly one input: the issue number. Issue selection is the caller's responsibility.
+6. Never apply labels or post verification-outcome comments — these are the caller's responsibility.
