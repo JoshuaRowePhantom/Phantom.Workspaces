@@ -1738,10 +1738,12 @@ public sealed class MainWindowIntegrationTests
         var handler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
 
+        var paneId = viewModel.SelectedWorkspacePane.Id;
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
-        Assert.Equal(agentSessionEntity!.EntityId.ToString(), tab.Id);
+        var expectedTabId = $"{paneId}-{agentSessionEntity!.EntityId}";
+        Assert.Equal(expectedTabId, tab.Id);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
