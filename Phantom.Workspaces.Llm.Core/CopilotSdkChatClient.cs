@@ -39,6 +39,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly string? cliPath;
     private readonly ModelOptions? modelOptions;
     private readonly AgentInputQueueManager? queueManager;
+    private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
@@ -98,6 +99,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Optional model-level options from the agent definition (for example <c>working-directory</c>).
     /// These are fixed for the lifetime of the client and are read at session creation time.
     /// </param>
+    /// <param name="subAgentChatRegistry">
+    /// Optional registry for sub-agent chat sessions. When supplied, sub-agent lifecycle events
+    /// (<c>SubagentStartedEvent</c>, <c>SubagentCompletedEvent</c>, <c>SubagentFailedEvent</c>) are
+    /// forwarded to the corresponding child <see cref="ISubAgentChat"/> sink.
+    /// </param>
     public CopilotSdkChatClient(
         string modelId,
         string displayName,
@@ -106,7 +112,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         CopilotByokOptions? byokOptions = null,
         string? cliPath = null,
         AgentInputQueueManager? queueManager = null,
-        ModelOptions? modelOptions = null)
+        ModelOptions? modelOptions = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -119,6 +126,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? null : cliPath;
         this.queueManager = queueManager;
         this.modelOptions = modelOptions;
+        this.subAgentChatRegistry = subAgentChatRegistry;
     }
 
     /// <summary>
@@ -370,43 +378,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 SingleWriter = true,
             });
 
-            var eventSubscription = session.On(sessionEvent =>
-            {
-                switch (sessionEvent)
-                {
-                    case AssistantMessageDeltaEvent delta when !string.IsNullOrEmpty(delta.Data.DeltaContent):
-                        channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, delta.Data.DeltaContent));
-                        break;
-                    case AssistantReasoningDeltaEvent reasoningDelta when !string.IsNullOrEmpty(reasoningDelta.Data.DeltaContent):
-                        channel.Writer.TryWrite(new ChatResponseUpdate
-                        {
-                            Role = ChatRole.Assistant,
-                            Contents = [new TextReasoningContent(reasoningDelta.Data.DeltaContent)],
-                        });
-                        break;
-                    case ToolExecutionStartEvent toolStart:
-                        channel.Writer.TryWrite(new ChatResponseUpdate
-                        {
-                            Role = ChatRole.Assistant,
-                            Contents = [CopilotToolEventMapper.MapToolStart(toolStart)],
-                        });
-                        break;
-                    case ToolExecutionCompleteEvent toolComplete:
-                        channel.Writer.TryWrite(new ChatResponseUpdate
-                        {
-                            Role = ChatRole.Tool,
-                            Contents = [CopilotToolEventMapper.MapToolComplete(toolComplete)],
-                        });
-                        break;
-                    case SessionErrorEvent error:
-                        channel.Writer.TryComplete(new InvalidOperationException(
-                            $"GitHub Copilot session error: {error.Data.Message}"));
-                        break;
-                    case SessionIdleEvent:
-                        channel.Writer.TryComplete();
-                        break;
-                }
-            });
+            var dispatcher = new CopilotSdkTurnEventDispatcher(channel.Writer, this.subAgentChatRegistry);
+            var eventSubscription = session.On(sessionEvent => _ = dispatcher.DispatchAsync(sessionEvent));
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
