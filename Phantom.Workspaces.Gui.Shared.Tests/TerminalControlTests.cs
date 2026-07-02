@@ -282,8 +282,26 @@ public sealed class TerminalControlTests
         Assert.Null(ex);
     }
 
-    // ── ResolveFg / ResolveBgColor – null RGB guard ───────────────────────────────────────────
+    // ── TerminalControl – Terminal.Background resource override ──────────────────────────────
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_TerminalBackgroundResource_OverridesDefaultBackground()
+    {
+        var overrideBrush = new SolidColorBrush(Colors.HotPink);
+        var control = new TerminalControl();
+        control.Resources["Terminal.Background"] = overrideBrush;
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        // Invoke TryFindBrush via reflection to verify the resource is resolved.
+        var tryFindBrush = typeof(TerminalControl)
+            .GetMethod("TryFindBrush", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var resolved = (IBrush?)tryFindBrush.Invoke(control, ["Terminal.Background"]);
+
+        Assert.Same(overrideBrush, resolved);
+    }
+
+    // ── ResolveFg / ResolveBgColor – null RGB guard ───────────────────────────────────────────
     [Fact]
     public void TerminalControl_ResolveFg_WhenForegroundRgbIsNull_ReturnsDefaultForeground()
     {
