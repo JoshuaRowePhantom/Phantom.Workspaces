@@ -773,6 +773,7 @@ public sealed class EntityBrokerTests
 
         var weakRef = await CreateCollectedSubscribedGetAsync(broker, request, ct);
 
+        await Task.Yield(); // flush inline async state machines off the call stack before GC
         while (IsWeakReferenceAlive(weakRef))
         {
             ForceGarbageCollection();
@@ -807,6 +808,7 @@ public sealed class EntityBrokerTests
 
         var weakRef = await CreateCollectedSubscribedQueryAsync(broker, request, ct);
 
+        await Task.Yield(); // flush inline async state machines off the call stack before GC
         while (IsWeakReferenceAlive(weakRef))
         {
             ForceGarbageCollection();
