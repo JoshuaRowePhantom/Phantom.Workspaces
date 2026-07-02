@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Services;
 
@@ -8,15 +9,13 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     private sealed class Entry
     {
         public Task<AgentChat> ChatTask { get; }
-        private readonly List<RunningAgentChatLease> leases = [];
+        private int leaseCount;
 
         public Entry(Task<AgentChat> chatTask) => this.ChatTask = chatTask;
 
-        public void AddLease(RunningAgentChatLease lease) => this.leases.Add(lease);
+        public void AddLease() => this.leaseCount++;
 
-        public bool RemoveLease(RunningAgentChatLease lease) => this.leases.Remove(lease);
-
-        public bool HasLeases => this.leases.Count > 0;
+        public bool RemoveLease() => --this.leaseCount == 0;
     }
 
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -42,8 +41,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             }
 
             var agentChat = await entry!.ChatTask;
-            lease = new RunningAgentChatLease(this, sessionKey, agentChat);
-            entry.AddLease(lease);
+            entry.AddLease();
+            lease = new RunningAgentChatLease(new AgentSessionId(sessionKey), agentChat, () => new ValueTask(this.ReleaseAsync(sessionKey)));
         }
         finally
         {
@@ -69,9 +68,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             }
 
             var agentChat = await entry.ChatTask;
-            var lease = new RunningAgentChatLease(this, sessionKey, agentChat);
-            entry.AddLease(lease);
-            return lease;
+            entry.AddLease();
+            return new RunningAgentChatLease(new AgentSessionId(sessionKey), agentChat, () => new ValueTask(this.ReleaseAsync(sessionKey)));
         }
         finally
         {
@@ -79,7 +77,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         }
     }
 
-    internal async Task ReleaseAsync(string sessionKey, RunningAgentChatLease lease)
+    private async Task ReleaseAsync(string sessionKey)
     {
         AgentChat? chatToDispose = null;
         bool sessionRemoved;
@@ -92,9 +90,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 return;
             }
 
-            entry.RemoveLease(lease);
-
-            if (!entry.HasLeases)
+            if (entry.RemoveLease())
             {
                 this.entries.Remove(sessionKey);
                 chatToDispose = await entry.ChatTask;

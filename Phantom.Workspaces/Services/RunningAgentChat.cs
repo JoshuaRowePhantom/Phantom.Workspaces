@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Llm;
+
 namespace Phantom.Workspaces.Services;
 
 /// <summary>

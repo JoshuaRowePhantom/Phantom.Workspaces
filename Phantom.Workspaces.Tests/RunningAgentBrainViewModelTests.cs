@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
 using Xunit;

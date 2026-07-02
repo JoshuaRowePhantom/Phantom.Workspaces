@@ -19,6 +19,7 @@ using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
