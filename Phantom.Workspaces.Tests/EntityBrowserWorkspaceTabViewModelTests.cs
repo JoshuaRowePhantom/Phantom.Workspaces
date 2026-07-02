@@ -98,6 +98,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Equal(0, rootItem.StickyRow);
         Assert.Equal(1, parentItem.StickyRow);
         Assert.Null(childItem.StickyRow);
+
+        await viewModel.DisposeAsync();
     }
 
     [PhantomAvaloniaFact]
@@ -175,6 +177,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             viewModel,
             item => string.Equals(item.ItemKey, "[\"tools\",\"git-workspace-scan\"]", StringComparison.Ordinal));
         Assert.Equal(folderItem.ItemKey, childItem.ParentItemKey);
+
+        await viewModel.DisposeAsync();
     }
 
     [PhantomAvaloniaFact]
@@ -245,6 +249,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
         Assert.Equal("# Heading\n\nBody", markdownEditor.TextContent);
+
+        await viewModel.DisposeAsync();
     }
 
     [PhantomAvaloniaFact]
@@ -315,6 +321,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
         Assert.Equal("# Heading\n\nBody", markdownEditor.TextContent);
+
+        await viewModel.DisposeAsync();
     }
 
     [PhantomAvaloniaFact]
@@ -383,6 +391,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var schemaField = Assert.Single(noteTypeItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "schema");
         var schemaEditor = Assert.IsType<JsonSchemaFieldEditorViewModel>(schemaField);
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
+
+        await viewModel.DisposeAsync();
     }
 
     // Regression test for #644: when many SubscribeChildPathAsync completions fire concurrent
@@ -447,6 +457,8 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
                 viewModel,
                 item => string.Equals(item.ItemKey, folderKey, StringComparison.Ordinal));
         }
+
+        await viewModel.DisposeAsync();
     }
 
     [PhantomAvaloniaFact]
