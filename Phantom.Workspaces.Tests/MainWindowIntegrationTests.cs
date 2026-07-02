@@ -2143,17 +2143,8 @@ public sealed class MainWindowIntegrationTests
         var pane = viewModel.SelectedWorkspacePane;
         Assert.NotNull(pane.ContentLayout);
 
-        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(pane.ContentLayout!);
-        string layoutJson;
-        try
-        {
-            var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
-            layoutJson = serializer.Serialize(pane.ContentLayout!);
-        }
-        finally
-        {
-            MainWindowViewModel.RestoreOwners(savedOwners);
-        }
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
 
         // The serialized layout must contain the Descriptor property
         Assert.Contains("Descriptor", layoutJson, StringComparison.Ordinal);
