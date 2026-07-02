@@ -29,7 +29,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAsyncDisposable
+public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunningSubAgent
 {
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
@@ -69,6 +69,17 @@ public sealed class AgentChat : IAsyncDisposable
     private CancellationTokenSource? activeRunCancellation;
     private int disposeStarted;
 
+    // Sub-agent registry
+    private readonly Dictionary<string, (AgentChat Chat, SubAgentChatClient Client)> subAgentMap =
+        new(StringComparer.Ordinal);
+    private readonly object subAgentsLock = new();
+    private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
+    private SubAgentChatClient? subAgentChatClientSource;
+    private string agentId = string.Empty;
+    private AgentChat? parentAgent;
+    private bool acceptsUserInput = true;
+    private DateTime lastUpdatedAt = DateTime.UtcNow;
+
     // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
     // are injected into the active PartialResponseConflator so they appear at the tool-result
     // boundary where they were sent to the agent, not before or after the full turn.
@@ -100,6 +111,7 @@ public sealed class AgentChat : IAsyncDisposable
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
        this.ownedResources = request.OwnedResources?.ToList() ?? [];
        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
+       this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgent>(this.subAgentItems);
        this.foregroundScheduler = request.ForegroundScheduler
            ?? (SynchronizationContext.Current is not null
                ? TaskScheduler.FromCurrentSynchronizationContext()
@@ -144,9 +156,17 @@ public sealed class AgentChat : IAsyncDisposable
            : AgentFactory.CreateChatClient(
                resolvedAgentDefinition,
                this.request.AgentServices,
-               queueManager: this.queueManager);
+               queueManager: this.queueManager,
+               subAgentChatRegistry: this);
        var resolvedClient = clientInfo.ChatClient;
-       var useProvidedChatClientAsIs = this.request.OverrideUseProvidedChatClientAsIs
+       this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
+       if (resolvedClient is SubAgentChatClient sac)
+       {
+           this.subAgentChatClientSource = sac;
+           sac.ActivityChanged += (s, e) => this.ActivityChanged?.Invoke(s, e);
+       }
+
+       var useProvidedChatClientAsIs= this.request.OverrideUseProvidedChatClientAsIs
            ?? ResolveUseProvidedChatClientAsIs(
                this.request.ClientOverride is not null,
                resolvedClient);
@@ -294,6 +314,34 @@ public sealed class AgentChat : IAsyncDisposable
     public AgentChatQueueManager QueueManager => this.chatQueueManager;
 
     public bool IsBusy => this.isBusy;
+
+    /// <summary>The agent ID used to identify this chat within its parent's sub-agent registry.</summary>
+    public string AgentId => this.agentId;
+
+    /// <summary>The parent chat that spawned this sub-agent, or <see langword="null"/> for root agents.</summary>
+    public AgentChat? ParentAgent => this.parentAgent;
+
+    /// <summary>True when the underlying chat client accepts direct user input; false for hosted sub-agents.</summary>
+    public bool AcceptsUserInput => this.acceptsUserInput;
+
+    /// <summary>Completion state of this sub-agent chat. Always <see cref="AgentChatCompletionState.Running"/> for root agents.</summary>
+    public AgentChatCompletionState CompletionState =>
+        this.subAgentChatClientSource?.CompletionState ?? AgentChatCompletionState.Running;
+
+    /// <summary>The last time this chat's state was updated.</summary>
+    public DateTime LastUpdatedAt => this.lastUpdatedAt;
+
+    /// <summary>Child sub-agent chats spawned by this chat during the current session.</summary>
+    public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; }
+
+    IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => this.SubAgents;
+
+    /// <summary>Recent activity lines from the underlying sub-agent stream, or an empty list for root agents.</summary>
+    public IReadOnlyList<SubAgentActivityLine> RecentActivity =>
+        this.subAgentChatClientSource?.RecentActivity ?? [];
+
+    /// <summary>Raised when sub-agent activity changes (text or tool call received).</summary>
+    public event EventHandler? ActivityChanged;
 
     public string DisplayName { get; private set; } = string.Empty;
 
@@ -658,6 +706,73 @@ public sealed class AgentChat : IAsyncDisposable
         }
     }
 
+    /// <inheritdoc/>
+    public ISubAgentChat? TryGet(string agentId)
+    {
+        lock (this.subAgentsLock)
+        {
+            return this.subAgentMap.TryGetValue(agentId, out var entry) ? entry.Client : null;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<ISubAgentChat> GetOrCreateAsync(
+        string agentId,
+        AgentDefinition subAgentDefinition,
+        string parentToolCallId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (this.subAgentsLock)
+        {
+            if (this.subAgentMap.TryGetValue(agentId, out var existing))
+            {
+                return existing.Client;
+            }
+        }
+
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId);
+        var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = subAgentDefinition,
+            ConfiguredStore = this.request.ConfiguredStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = subAgentDefinition.Name ?? agentId,
+            CancellationToken = cancellationToken,
+        });
+        childChat.agentId = agentId;
+        childChat.parentAgent = this;
+
+        AgentChat? toDispose = null;
+        ISubAgentChat result;
+        lock (this.subAgentsLock)
+        {
+            if (this.subAgentMap.TryGetValue(agentId, out var racing))
+            {
+                toDispose = childChat;
+                result = racing.Client;
+            }
+            else
+            {
+                this.subAgentMap[agentId] = (childChat, chatClient);
+                result = chatClient;
+            }
+        }
+
+        if (toDispose is not null)
+        {
+            _ = toDispose.DisposeAsync();
+            return result;
+        }
+
+        await Task.Factory.StartNew(
+            () => this.subAgentItems.Add(childChat),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+
+        return result;
+    }
+
     public void SetAgentSessionId(string agentSessionId)
     {
         if (string.IsNullOrWhiteSpace(agentSessionId))
@@ -720,6 +835,18 @@ public sealed class AgentChat : IAsyncDisposable
         foreach (var resource in resourcesToDispose)
         {
             await resource.DisposeAsync();
+        }
+
+        List<AgentChat> childChats;
+        lock (this.subAgentsLock)
+        {
+            childChats = [.. this.subAgentMap.Values.Select(static v => v.Chat)];
+            this.subAgentMap.Clear();
+        }
+
+        foreach (var childChat in childChats)
+        {
+            await childChat.DisposeAsync();
         }
     }
 

@@ -186,7 +186,8 @@ public static class AgentFactory
         AgentDefinition agent,
         AgentServices? services,
         AgentInputQueueManager? queueManager = null,
-        IApiKeyResolver? apiKeyResolver = null)
+        IApiKeyResolver? apiKeyResolver = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
 
@@ -206,7 +207,7 @@ public static class AgentFactory
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
             "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
-            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver),
+            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
@@ -239,9 +240,10 @@ public static class AgentFactory
         Model model,
         AgentServices? services,
         AgentInputQueueManager? queueManager,
-        IApiKeyResolver resolver)
+        IApiKeyResolver resolver,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
-        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver);
+        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver, subAgentChatRegistry);
         return new ChatClientResult(client, displayName);
     }
 
@@ -498,7 +500,8 @@ public static class AgentFactory
         Model model,
         AgentServices? services,
         AgentInputQueueManager? queueManager = null,
-        IApiKeyResolver? resolver = null)
+        IApiKeyResolver? resolver = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
         resolver ??= EnvironmentApiKeyResolver.Instance;
 
@@ -573,7 +576,8 @@ public static class AgentFactory
             services?.LoggerFactory,
             byokOptions: byokOptions,
             queueManager: queueManager,
-            modelOptions: model.Options);
+            modelOptions: model.Options,
+            subAgentChatRegistry: subAgentChatRegistry);
 
         return (client, displayName);
     }
