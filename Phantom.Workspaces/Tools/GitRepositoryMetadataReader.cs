@@ -82,6 +82,45 @@ public static class GitRepositoryMetadataReader
     }
 
     /// <summary>
+    /// Opens the root repository at <paramref name="rootRepoPath"/> and invokes <paramref name="onLinkedWorktree"/>
+    /// for each linked worktree found. Exceptions from LibGit2Sharp are caught and logged at Debug level.
+    /// </summary>
+    public static void EnumerateLinkedWorktrees(
+        string rootRepoPath,
+        ILogger? logger,
+        Action<string> onLinkedWorktree)
+    {
+        try
+        {
+            using var repository = new Repository(rootRepoPath);
+            foreach (var worktree in repository.Worktrees)
+            {
+                try
+                {
+                    using var worktreeRepo = worktree.WorktreeRepository;
+                    var worktreePath = Path.GetFullPath(
+                        worktreeRepo.Info.WorkingDirectory.TrimEnd(
+                            Path.DirectorySeparatorChar,
+                            Path.AltDirectorySeparatorChar));
+                    onLinkedWorktree(worktreePath);
+                }
+                catch (LibGit2SharpException ex)
+                {
+                    logger?.LogDebug(ex, "Could not open linked worktree '{WorktreeName}' of '{RootRepoPath}'.", worktree.Name, rootRepoPath);
+                }
+            }
+        }
+        catch (RepositoryNotFoundException ex)
+        {
+            logger?.LogDebug(ex, "Path '{RootRepoPath}' could not be opened to enumerate linked worktrees.", rootRepoPath);
+        }
+        catch (LibGit2SharpException ex)
+        {
+            logger?.LogDebug(ex, "Path '{RootRepoPath}' could not be opened to enumerate linked worktrees.", rootRepoPath);
+        }
+    }
+
+    /// <summary>
     /// Opens the repository at <paramref name="repositoryPath"/> and returns its current metadata,
     /// or <see langword="null"/> if the repository cannot be opened (logged at Debug level).
     /// </summary>
