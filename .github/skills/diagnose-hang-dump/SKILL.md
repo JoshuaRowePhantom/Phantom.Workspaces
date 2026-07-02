@@ -1,6 +1,6 @@
 ---
 name: diagnose-hang-dump
-description: Use this read-only skill to analyse a .dmp hang dump produced by a test run. Runs dotnet-dump to collect async state machines, parallel stacks, and hung-thread stacks; synthesises a root-cause hypothesis; searches for a related existing bug (adding a comment if found) or files a new one; then deletes the dump file.
+description: Use this read-only skill to analyse a .dmp hang dump produced by a test run. Runs dotnet-dump to collect async state machines, parallel stacks, and hung-thread stacks; synthesises a root-cause hypothesis; searches for a related existing bug (adding a comment if found) or files a new one; archives the dump to dumps\<bugnumber>\; then deletes the original dump file.
 ---
 
 # Skill: Diagnose hang dump
@@ -100,21 +100,28 @@ $existing = gh issue list --repo JoshuaRowePhantom/Phantom.Workspaces `
     --json number,title | ConvertFrom-Json | Select-Object -First 5
 ```
 
-- **If a matching open issue is found:** add a comment to it with the dump analysis (async state machines output, parallel stacks output, and root-cause hypothesis). Do **not** file a new issue. Proceed to Step 8.
+- **If a matching open issue is found:** add a comment to it. Do **not** file a new issue. Include the following in the comment:
+  - The root-cause hypothesis.
+  - If the async state machines or parallel stacks show a meaningfully different call pattern from what is already documented in the existing issue: include the complete `dumpasync --completed false` output and the full `threads` + `clrstack` output for every thread of interest, plus the archived dump path (see Step 8 for the path).
+  - If the pattern is identical to prior occurrences: note "Pattern consistent with prior occurrence — no new call stacks" and omit the full dump output. Still include the archived dump path.
+  - Proceed to Step 8 using `$bugNumber = $existing[0].number`.
 - **If no matching issue is found:** proceed to Step 7.
 
 ---
 
 ## Step 7 — File a new bug (only if no existing issue was found)
 
+Include the complete `dumpasync --completed false` output and the full `threads` + `clrstack` output for every thread of interest — not a truncated summary. The archived dump path (see Step 8) must also appear in the body.
+
 ```powershell
-gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
+$newIssue = gh issue create --repo JoshuaRowePhantom/Phantom.Workspaces `
     --title "Hang: <stuck-class> stuck at <await-expression>" `
     --label "bug,next-up" `
     --body "## Hang dump analysis
 
 **Test:** <FullyQualifiedTestName>
-**Dump file:** <filename> (deleted after analysis)
+**Dump file:** <filename>
+**Archived dump:** ``<full path to dumps\<bugnumber>\<filename>.dmp>``
 **Observed during:** <branch / issue context>
 
 ### Async state machines (dumpasync --completed false)
@@ -129,17 +136,51 @@ $asyncOut
 $stacksOut
 ``````
 
+### Thread list and hung-thread stacks
+
+``````
+$threadsOut
+``````
+
+``````
+$stackOut
+``````
+
 ### Root cause hypothesis
 
 <synthesised from the above — which await is blocked and why>
-"
+" | ConvertFrom-Json
+$bugNumber = $newIssue.number
 ```
 
 ---
 
-## Step 8 — Delete the dump file
+## Step 8 — Archive the dump and update .gitignore
 
-Dump files can be hundreds of MB. Always delete after analysis to avoid disk pressure:
+After the bug number is known, copy the dump to a dedicated directory keyed by the bug number, then ensure `dumps/` is in `.gitignore`:
+
+```powershell
+$dumpArchiveDir = Join-Path (git rev-parse --show-toplevel) "dumps\$bugNumber"
+New-Item -ItemType Directory -Force -Path $dumpArchiveDir | Out-Null
+Copy-Item $dump.FullName -Destination $dumpArchiveDir
+$archivedDumpPath = Join-Path $dumpArchiveDir (Split-Path $dump.FullName -Leaf)
+Write-Host "Archived dump to: $archivedDumpPath"
+
+$gitignorePath = Join-Path (git rev-parse --show-toplevel) ".gitignore"
+$gitignoreContent = Get-Content $gitignorePath -Raw -ErrorAction SilentlyContinue
+if ($gitignoreContent -notmatch '(?m)^dumps/$') {
+    Add-Content $gitignorePath "`ndumps/"
+    Write-Host "Added dumps/ to .gitignore"
+}
+```
+
+If the issue was filed in Step 7, update the body to replace the `<full path to dumps\…>` placeholder with `$archivedDumpPath` (the issue body template already contains the placeholder; use `gh issue edit` to patch it if needed).
+
+---
+
+## Step 9 — Delete the original dump file
+
+Dump files can be hundreds of MB. Always delete the original after archiving to avoid disk pressure:
 
 ```powershell
 Remove-Item $dump.FullName -Force
