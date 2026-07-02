@@ -74,54 +74,6 @@ public sealed class SubAgentChatClientTests
     }
 
     [Fact]
-    public void Push_UpdatesRecentActivity_ToolCall()
-    {
-        var sut = CreateClient();
-        sut.Push(ToolCallUpdate("call-1", "my_tool"));
-
-        var line = Assert.Single(sut.RecentActivity);
-        Assert.Equal(SubAgentActivityKind.ToolCall, line.Kind);
-        Assert.Equal("my_tool", line.Text);
-    }
-
-    [Fact]
-    public void Push_UpdatesRecentActivity_AgentText()
-    {
-        var sut = CreateClient();
-        sut.Push(TextUpdate("some output"));
-
-        var line = Assert.Single(sut.RecentActivity);
-        Assert.Equal(SubAgentActivityKind.AgentText, line.Kind);
-        Assert.Equal("some output", line.Text);
-    }
-
-    [Fact]
-    public void Push_RecentActivity_CappedAtFive()
-    {
-        var sut = CreateClient();
-
-        for (var i = 1; i <= 6; i++)
-            sut.Push(TextUpdate($"line {i}"));
-
-        Assert.Equal(5, sut.RecentActivity.Count);
-        Assert.Equal("line 2", sut.RecentActivity[0].Text);
-        Assert.Equal("line 6", sut.RecentActivity[4].Text);
-    }
-
-    [Fact]
-    public void Push_RaisesActivityChanged()
-    {
-        var sut = CreateClient();
-        var fired = 0;
-        sut.ActivityChanged += (_, _) => fired++;
-
-        sut.Push(TextUpdate("hello"));
-        sut.Push(TextUpdate("world"));
-
-        Assert.Equal(2, fired);
-    }
-
-    [Fact]
     public void AcceptsUserInput_False_ViaIHostedAgentChatClient()
     {
         var sut = CreateClient();

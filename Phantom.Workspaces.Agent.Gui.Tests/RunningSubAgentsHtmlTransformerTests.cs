@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
 using Xunit;
@@ -14,7 +15,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     [Fact]
     public void RunningSubAgentsPanel_AppendedAfterChatHistory_WhenSubAgentStarts()
     {
-        var subAgents = new ObservableCollection<IRunningSubAgent>();
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
         var sink = new RecordingSink();
         using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
 
@@ -33,7 +34,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     public void RunningSubAgentsPanel_RemovedFromDom_WhenLastSubAgentCompletes()
     {
         var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
-        var subAgents = new ObservableCollection<IRunningSubAgent> { agent };
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
         var sink = new RecordingSink();
         using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
 
@@ -50,7 +51,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     public void RunningSubAgentsPanel_PanelHidden_WhenNoSubAgentsRunning()
     {
         var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Succeeded);
-        var subAgents = new ObservableCollection<IRunningSubAgent> { agent };
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
         var sink = new RecordingSink();
         using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
 
@@ -151,9 +152,9 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     [Fact]
     public void RunningSubAgentsPanel_AncestryChain_ShowsFromRootToCurrentAgent()
     {
-        var root = new StubSubAgent("root-id", "RootAgent", AgentChatCompletionState.Running);
-        var mid = new StubSubAgent("mid-id", "MidAgent", AgentChatCompletionState.Running);
-        var current = new StubSubAgent("cur-id", "CurrentAgent", AgentChatCompletionState.Running);
+        var root = new StubRunningSubAgent("root-id", "RootAgent");
+        var mid = new StubRunningSubAgent("mid-id", "MidAgent");
+        var current = new StubRunningSubAgent("cur-id", "CurrentAgent");
         var ancestors = new List<IRunningSubAgent> { root, mid, current };
 
         var agent = new StubSubAgent("a1", "Worker", AgentChatCompletionState.Running);
@@ -170,8 +171,8 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     [Fact]
     public void RunningSubAgentsPanel_AncestryChain_EachAncestor_IsClickable()
     {
-        var root = new StubSubAgent("root-id", "RootAgent", AgentChatCompletionState.Running);
-        var current = new StubSubAgent("cur-id", "CurrentAgent", AgentChatCompletionState.Running);
+        var root = new StubRunningSubAgent("root-id", "RootAgent");
+        var current = new StubRunningSubAgent("cur-id", "CurrentAgent");
         var ancestors = new List<IRunningSubAgent> { root, current };
 
         var agent = new StubSubAgent("a1", "Worker", AgentChatCompletionState.Running);
@@ -185,7 +186,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     public void RunningSubAgentsPanel_UpdatedInPlace_WhenPanelAlreadyPresent()
     {
         var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
-        var subAgents = new ObservableCollection<IRunningSubAgent> { agent };
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
         var sink = new RecordingSink();
         using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
 
@@ -247,37 +248,50 @@ public sealed class RunningSubAgentsHtmlTransformerTests
             => this.Operations.Add(new Operation("scroll", string.Empty, ChatOutputUpdateLocation.Replace, string.Empty));
     }
 
-    private sealed class StubSubAgent : IRunningSubAgent
+    private sealed class StubSubAgent : IRunningSubAgentDisplay
     {
         private AgentChatCompletionState completionState;
+        private readonly IReadOnlyList<IRunningSubAgentDisplay> subAgents;
 
         public StubSubAgent(
             string agentId,
             string displayName,
             AgentChatCompletionState completionState,
             IReadOnlyList<SubAgentActivityLine>? activity = null,
-            IReadOnlyList<IRunningSubAgent>? subAgents = null,
-            DateTime? lastUpdatedAt = null)
+            IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null)
         {
             this.AgentId = agentId;
             this.DisplayName = displayName;
             this.completionState = completionState;
             this.RecentActivity = activity ?? [];
-            this.SubAgents = subAgents ?? [];
-            this.LastUpdatedAt = lastUpdatedAt ?? DateTime.UtcNow;
+            this.subAgents = subAgents ?? [];
         }
 
         public string AgentId { get; }
         public string DisplayName { get; }
         public AgentChatCompletionState CompletionState => this.completionState;
-        public DateTime LastUpdatedAt { get; }
         public IReadOnlyList<SubAgentActivityLine> RecentActivity { get; }
-        public IReadOnlyList<IRunningSubAgent> SubAgents { get; }
+        public IReadOnlyList<IRunningSubAgentDisplay> SubAgents => this.subAgents;
 
         public event EventHandler? ActivityChanged;
 
         public void SetCompletionState(AgentChatCompletionState state) => this.completionState = state;
 
         public void RaiseActivityChanged() => this.ActivityChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private sealed class StubRunningSubAgent : IRunningSubAgent
+    {
+        public StubRunningSubAgent(string agentId, string displayName)
+        {
+            this.AgentId = agentId;
+            this.DisplayName = displayName;
+        }
+
+        public string AgentId { get; }
+        public string DisplayName { get; }
+        public AgentChatCompletionState CompletionState => AgentChatCompletionState.Running;
+        public DateTime LastUpdatedAt => DateTime.UtcNow;
+        public IReadOnlyList<IRunningSubAgent> SubAgents => [];
     }
 }

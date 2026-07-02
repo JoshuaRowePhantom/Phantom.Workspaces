@@ -875,7 +875,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
-        IReadOnlyList<IRunningSubAgent>? subAgents = null,
+        IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null,
         IReadOnlyList<IRunningSubAgent>? ancestors = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);

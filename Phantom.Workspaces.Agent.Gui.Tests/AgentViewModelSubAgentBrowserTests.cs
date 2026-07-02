@@ -232,8 +232,6 @@ public sealed class AgentViewModelSubAgentBrowserTests
         public string DisplayName { get; } = displayName;
         public AgentChatCompletionState CompletionState { get; } = completionState;
         public DateTime LastUpdatedAt { get; } = lastUpdatedAt;
-        public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];
         public IReadOnlyList<IRunningSubAgent> SubAgents => [];
-        public event EventHandler? ActivityChanged { add { } remove { } }
     }
 }

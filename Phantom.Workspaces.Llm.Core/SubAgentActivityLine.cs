@@ -1,4 +1,1 @@
-namespace Phantom.Workspaces.Llm;
-
-public sealed record SubAgentActivityLine(SubAgentActivityKind Kind, string Text);
-public enum SubAgentActivityKind { ToolCall, AgentText, SubAgent }
+// Display types moved to Phantom.Workspaces.Agent.Gui.ViewModels (SubAgentActivityLine.cs).

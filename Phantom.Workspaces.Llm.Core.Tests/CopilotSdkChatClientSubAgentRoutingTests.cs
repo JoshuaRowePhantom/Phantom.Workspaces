@@ -293,9 +293,7 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         public DateTime LastUpdatedAt { get; private set; } = DateTime.UtcNow;
         public Exception? FailureException { get; private set; }
         public List<ChatResponseUpdate> ReceivedUpdates { get; } = new();
-        public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];
         public IReadOnlyList<IRunningSubAgent> SubAgents => [];
-        public event EventHandler? ActivityChanged { add { } remove { } }
 
         public FakeSubAgentChat(string agentId, string displayName)
         {

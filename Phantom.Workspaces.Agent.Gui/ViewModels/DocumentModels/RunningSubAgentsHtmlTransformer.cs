@@ -22,13 +22,13 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     internal const int MaxActivityLines = 5;
 
     private readonly IChatOutputHtmlSink sink;
-    private readonly IReadOnlyList<IRunningSubAgent> subAgents;
+    private readonly IReadOnlyList<IRunningSubAgentDisplay> subAgents;
     private readonly IReadOnlyList<IRunningSubAgent> ancestors;
-    private readonly Dictionary<IRunningSubAgent, EventHandler> activityHandlers = new(ReferenceEqualityComparer<IRunningSubAgent>.Instance);
+    private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> activityHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
     private bool isPanelPresent;
 
     public RunningSubAgentsHtmlTransformer(
-        IReadOnlyList<IRunningSubAgent> subAgents,
+        IReadOnlyList<IRunningSubAgentDisplay> subAgents,
         IReadOnlyList<IRunningSubAgent> ancestors,
         IChatOutputHtmlSink sink)
     {
@@ -113,7 +113,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     /// verify rendered content without instantiating the transformer.
     /// </summary>
     internal static string BuildPanelHtml(
-        IReadOnlyList<IRunningSubAgent> subAgents,
+        IReadOnlyList<IRunningSubAgentDisplay> subAgents,
         IReadOnlyList<IRunningSubAgent> ancestors)
     {
         var sb = new StringBuilder();
@@ -165,7 +165,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         sb.Append("</div>");
     }
 
-    private static void AppendSubAgentRow(StringBuilder sb, IRunningSubAgent agent, int depth)
+    private static void AppendSubAgentRow(StringBuilder sb, IRunningSubAgentDisplay agent, int depth)
     {
         if (depth > 0)
         {

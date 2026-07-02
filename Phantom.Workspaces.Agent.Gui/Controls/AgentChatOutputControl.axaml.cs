@@ -263,7 +263,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 toolFactory: DefaultToolFactory,
                 statusSink: this,
                 resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
-                subAgents: vm.AgentChat.SubAgents,
+                subAgents: vm.SubAgentDisplays,
                 ancestors: BuildAncestors(vm.AgentChat));
             this.browser.EndBatch();
             this.suppressSinkScroll = false;

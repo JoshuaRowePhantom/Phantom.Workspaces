@@ -166,7 +166,6 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
        if (resolvedClient is SubAgentChatClient sac)
        {
            this.subAgentChatClientSource = sac;
-           sac.ActivityChanged += (s, e) => this.ActivityChanged?.Invoke(s, e);
        }
 
        var useProvidedChatClientAsIs= this.request.OverrideUseProvidedChatClientAsIs
@@ -346,13 +345,6 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
     public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; }
 
     IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => this.SubAgents;
-
-    /// <summary>Recent activity lines from the underlying sub-agent stream, or an empty list for root agents.</summary>
-    public IReadOnlyList<SubAgentActivityLine> RecentActivity =>
-        this.subAgentChatClientSource?.RecentActivity ?? [];
-
-    /// <summary>Raised when sub-agent activity changes (text or tool call received).</summary>
-    public event EventHandler? ActivityChanged;
 
     public string DisplayName { get; private set; } = string.Empty;
 

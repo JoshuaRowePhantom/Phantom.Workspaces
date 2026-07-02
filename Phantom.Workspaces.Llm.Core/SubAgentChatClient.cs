@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
@@ -14,7 +13,6 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     private readonly Channel<ChatResponseUpdate> channel =
         Channel.CreateUnbounded<ChatResponseUpdate>();
 
-    private readonly List<SubAgentActivityLine> recentActivity = [];
     private volatile AgentChatCompletionState completionState = AgentChatCompletionState.Running;
     private DateTime lastUpdatedAt = DateTime.UtcNow;
 
@@ -25,11 +23,8 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
 
     public DateTime LastUpdatedAt => lastUpdatedAt;
 
-    public IReadOnlyList<SubAgentActivityLine> RecentActivity => recentActivity;
-
     public IReadOnlyList<IRunningSubAgent> SubAgents => [];
 
-    public event EventHandler? ActivityChanged;
     public event EventHandler? CompletionStateChanged;
 
     public SubAgentChatClient(string agentId, string displayName)
@@ -41,7 +36,6 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public void Push(ChatResponseUpdate update)
     {
         channel.Writer.TryWrite(update);
-        UpdateRecentActivity(update);
     }
 
     public void Complete()
@@ -78,29 +72,4 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public object? GetService(Type serviceType, object? key = null) => null;
 
     public void Dispose() { }
-
-    private void UpdateRecentActivity(ChatResponseUpdate update)
-    {
-        SubAgentActivityLine? line = null;
-
-        if (update.Contents.OfType<FunctionCallContent>().Any())
-        {
-            var call = update.Contents.OfType<FunctionCallContent>().First();
-            line = new SubAgentActivityLine(SubAgentActivityKind.ToolCall, call.Name ?? string.Empty);
-        }
-        else if (!string.IsNullOrEmpty(update.Text))
-        {
-            line = new SubAgentActivityLine(SubAgentActivityKind.AgentText, update.Text);
-        }
-
-        if (line is null)
-            return;
-
-        if (recentActivity.Count == 5)
-            recentActivity.RemoveAt(0);
-
-        recentActivity.Add(line);
-        lastUpdatedAt = DateTime.UtcNow;
-        ActivityChanged?.Invoke(this, EventArgs.Empty);
-    }
 }

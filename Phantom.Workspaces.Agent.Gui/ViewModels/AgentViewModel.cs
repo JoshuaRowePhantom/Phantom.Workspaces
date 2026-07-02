@@ -25,6 +25,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly DiagnosticInspectorViewModel diagnosticsDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
+    private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
@@ -47,6 +48,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.diagnosticsDetail = new DiagnosticInspectorViewModel(agentChat.History);
+        this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
@@ -130,6 +132,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     /// <summary>The sub-agents container (browser card + cached sub-agent slots).</summary>
     public SubAgentsContainerViewModel SubAgentsContainer => this.subAgentsContainerDetail;
+
+    /// <summary>UI-layer display wrappers for each direct child sub-agent, in the order they were created.</summary>
+    public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgentDisplays { get; }
 
     public ICommand InterruptCommand { get; }
 
@@ -483,6 +488,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             await subAgentViewModel.DisposeViewResourcesAsync();
         }
+
+        foreach (var display in this.subAgentDisplayItems)
+        {
+            if (display is IDisposable d)
+                d.Dispose();
+        }
+
         await Task.CompletedTask;
     }
 
@@ -516,6 +528,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
         var subAgentChat = (AgentChat)subAgent;
+        var display = new RunningSubAgentDisplay(subAgentChat);
+        this.subAgentDisplayItems.Add(display);
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
         this.subAgentViewModels.Add(subAgentViewModel);
         this.subAgentsContainerDetail.AddSlot(subAgent.AgentId, subAgentViewModel);
