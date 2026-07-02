@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -267,5 +268,121 @@ public abstract class AgentPersistenceStoreContractTests
                 }
                 """),
         };
+    }
+
+    [Fact]
+    public async Task ReadSubAgentManifestAsync_WhenNoEntriesWritten_ReturnsEmpty()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        var entries = await store.ReadSubAgentManifestAsync("parent-manifest-1", CancellationToken.None);
+
+        Assert.Empty(entries);
+    }
+
+    [Fact]
+    public async Task WriteSubAgentManifestEntryAsync_ThenReadSubAgentManifestAsync_RoundTrips()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        var entry = new SubAgentManifestEntry
+        {
+            SessionId = "child-session-1",
+            AgentDefinitionJson = BsonDocument.Parse("""{"kind":"prompt","name":"child-agent-1"}"""),
+            CompletionState = AgentChatCompletionState.Running,
+            LastUpdatedAt = new DateTime(2025, 1, 15, 10, 0, 0, DateTimeKind.Utc),
+        };
+
+        await store.WriteSubAgentManifestEntryAsync("parent-manifest-2", entry, CancellationToken.None);
+        var entries = await store.ReadSubAgentManifestAsync("parent-manifest-2", CancellationToken.None);
+
+        var returned = Assert.Single(entries);
+        Assert.Equal(entry.SessionId, returned.SessionId);
+        Assert.Equal(entry.AgentDefinitionJson.ToJson(), returned.AgentDefinitionJson.ToJson());
+        Assert.Equal(entry.CompletionState, returned.CompletionState);
+        Assert.Equal(entry.LastUpdatedAt, returned.LastUpdatedAt);
+    }
+
+    [Fact]
+    public async Task WriteSubAgentManifestEntryAsync_SameChildSessionId_UpdatesExistingEntry()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        var firstEntry = new SubAgentManifestEntry
+        {
+            SessionId = "child-session-update-1",
+            AgentDefinitionJson = BsonDocument.Parse("""{"kind":"prompt","name":"child-agent"}"""),
+            CompletionState = AgentChatCompletionState.Running,
+            LastUpdatedAt = new DateTime(2025, 1, 15, 10, 0, 0, DateTimeKind.Utc),
+        };
+        var updatedEntry = firstEntry with
+        {
+            CompletionState = AgentChatCompletionState.Succeeded,
+            LastUpdatedAt = new DateTime(2025, 1, 15, 11, 0, 0, DateTimeKind.Utc),
+        };
+
+        await store.WriteSubAgentManifestEntryAsync("parent-manifest-3", firstEntry, CancellationToken.None);
+        await store.WriteSubAgentManifestEntryAsync("parent-manifest-3", updatedEntry, CancellationToken.None);
+
+        var entries = await store.ReadSubAgentManifestAsync("parent-manifest-3", CancellationToken.None);
+
+        var returned = Assert.Single(entries);
+        Assert.Equal(AgentChatCompletionState.Succeeded, returned.CompletionState);
+        Assert.Equal(new DateTime(2025, 1, 15, 11, 0, 0, DateTimeKind.Utc), returned.LastUpdatedAt);
+    }
+
+    [Fact]
+    public async Task WriteSubAgentManifestEntryAsync_MultipleEntries_AllReturned()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        var entry1 = new SubAgentManifestEntry
+        {
+            SessionId = "child-session-multi-1",
+            AgentDefinitionJson = BsonDocument.Parse("""{"kind":"prompt","name":"agent-1"}"""),
+            CompletionState = AgentChatCompletionState.Running,
+            LastUpdatedAt = new DateTime(2025, 1, 15, 10, 0, 0, DateTimeKind.Utc),
+        };
+        var entry2 = new SubAgentManifestEntry
+        {
+            SessionId = "child-session-multi-2",
+            AgentDefinitionJson = BsonDocument.Parse("""{"kind":"prompt","name":"agent-2"}"""),
+            CompletionState = AgentChatCompletionState.Succeeded,
+            LastUpdatedAt = new DateTime(2025, 1, 15, 11, 0, 0, DateTimeKind.Utc),
+        };
+
+        await store.WriteSubAgentManifestEntryAsync("parent-manifest-4", entry1, CancellationToken.None);
+        await store.WriteSubAgentManifestEntryAsync("parent-manifest-4", entry2, CancellationToken.None);
+
+        var entries = await store.ReadSubAgentManifestAsync("parent-manifest-4", CancellationToken.None);
+
+        Assert.Equal(2, entries.Length);
+        Assert.Contains(entries, e => e.SessionId == "child-session-multi-1");
+        Assert.Contains(entries, e => e.SessionId == "child-session-multi-2");
+    }
+
+    [Fact]
+    public async Task ReadSubAgentManifestAsync_DoesNotReturnEntriesForOtherParents()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        var entry = new SubAgentManifestEntry
+        {
+            SessionId = "child-session-isolation-1",
+            AgentDefinitionJson = BsonDocument.Parse("""{"kind":"prompt","name":"agent-isolation"}"""),
+            CompletionState = AgentChatCompletionState.Running,
+            LastUpdatedAt = new DateTime(2025, 1, 15, 10, 0, 0, DateTimeKind.Utc),
+        };
+
+        await store.WriteSubAgentManifestEntryAsync("parent-manifest-5a", entry, CancellationToken.None);
+
+        var otherParentEntries = await store.ReadSubAgentManifestAsync("parent-manifest-5b", CancellationToken.None);
+
+        Assert.Empty(otherParentEntries);
     }
 }

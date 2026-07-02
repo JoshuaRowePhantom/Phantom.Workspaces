@@ -1628,6 +1628,12 @@ public sealed class AgentChatTests
             ReadMessagesRequest request,
             CancellationToken cancellationToken = default)
             => this.inner.ReadMessagesAsync(request, cancellationToken);
+
+        public ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => this.inner.ReadSubAgentManifestAsync(parentSessionId, cancellationToken);
+
+        public ValueTask WriteSubAgentManifestEntryAsync(string parentSessionId, SubAgentManifestEntry entry, CancellationToken cancellationToken = default)
+            => this.inner.WriteSubAgentManifestEntryAsync(parentSessionId, entry, cancellationToken);
     }
 
 }

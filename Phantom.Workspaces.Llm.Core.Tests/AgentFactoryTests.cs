@@ -1198,6 +1198,12 @@ public class AgentFactoryTests
             Interlocked.Increment(ref this.readCalls);
             return ValueTask.FromResult(Array.Empty<ChatMessage>());
         }
+
+        public ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Array.Empty<SubAgentManifestEntry>());
+
+        public ValueTask WriteSubAgentManifestEntryAsync(string parentSessionId, SubAgentManifestEntry entry, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
     }
 
     private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver

@@ -13,8 +13,13 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
     }
 
     private readonly ConcurrentDictionary<string, SessionData> sessions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string ParentSessionId, string ChildSessionId), SubAgentManifestEntry> subAgentManifest = new();
 
-    internal void Reset() => this.sessions.Clear();
+    internal void Reset()
+    {
+        this.sessions.Clear();
+        this.subAgentManifest.Clear();
+    }
 
     public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
     {
@@ -71,5 +76,32 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
         {
             return ValueTask.FromResult(session.Messages.ToArray());
         }
+    }
+
+    public ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+
+        var entries = this.subAgentManifest
+            .Where(kvp => string.Equals(kvp.Key.ParentSessionId, parentSessionId, StringComparison.Ordinal))
+            .Select(static kvp => kvp.Value)
+            .ToArray();
+
+        return ValueTask.FromResult(entries);
+    }
+
+    public ValueTask WriteSubAgentManifestEntryAsync(
+        string parentSessionId,
+        SubAgentManifestEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entry.SessionId);
+
+        this.subAgentManifest[(parentSessionId, entry.SessionId)] = entry;
+
+        return ValueTask.CompletedTask;
     }
 }

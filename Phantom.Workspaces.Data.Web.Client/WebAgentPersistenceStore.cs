@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Data.Web.Client;
@@ -82,6 +83,43 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
         return result?.Messages ?? [];
     }
 
+    public async ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await this.httpClient
+            .PostAsJsonAsync(
+                "/agent/persistence/sub-agent-manifest/read",
+                new ReadSubAgentManifestRequest { ParentSessionId = parentSessionId },
+                SerializerOptions,
+                cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content
+            .ReadFromJsonAsync<ReadSubAgentManifestResponse>(SerializerOptions, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result?.Entries.Select(FromDto).ToArray() ?? [];
+    }
+
+    public async ValueTask WriteSubAgentManifestEntryAsync(
+        string parentSessionId,
+        SubAgentManifestEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        var dto = new WriteSubAgentManifestEntryRequest
+        {
+            ParentSessionId = parentSessionId,
+            Entry = ToDto(entry),
+        };
+
+        using var response = await this.httpClient
+            .PostAsJsonAsync("/agent/persistence/sub-agent-manifest/write", dto, SerializerOptions, cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+    }
+
     private static PersistedAgentDto ToDto(PersistedAgent agent) => new()
     {
         AgentSessionId = agent.AgentSessionId,
@@ -104,5 +142,21 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
             ? null
             : BsonDocument.Parse(dto.AgentDefinitionJson.Value.GetRawText()),
         CopilotSdkSessionId = dto.CopilotSdkSessionId,
+    };
+
+    private static SubAgentManifestEntryDto ToDto(SubAgentManifestEntry entry) => new()
+    {
+        SessionId = entry.SessionId,
+        AgentDefinitionJson = JsonDocument.Parse(entry.AgentDefinitionJson.ToJson()).RootElement,
+        CompletionState = entry.CompletionState,
+        LastUpdatedAt = entry.LastUpdatedAt,
+    };
+
+    private static SubAgentManifestEntry FromDto(SubAgentManifestEntryDto dto) => new()
+    {
+        SessionId = dto.SessionId,
+        AgentDefinitionJson = BsonDocument.Parse(dto.AgentDefinitionJson.GetRawText()),
+        CompletionState = dto.CompletionState,
+        LastUpdatedAt = dto.LastUpdatedAt,
     };
 }

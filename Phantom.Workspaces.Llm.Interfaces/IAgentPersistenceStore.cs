@@ -2,6 +2,7 @@ using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Llm.Interfaces;
 
@@ -15,6 +16,15 @@ public interface IAgentPersistenceStore
 
     ValueTask<ChatMessage[]> ReadMessagesAsync(
         ReadMessagesRequest request,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default);
+
+    ValueTask WriteSubAgentManifestEntryAsync(
+        string parentSessionId,
+        SubAgentManifestEntry entry,
         CancellationToken cancellationToken = default);
 }
 
@@ -49,4 +59,15 @@ public readonly record struct RestoreRequest
 public readonly record struct ReadMessagesRequest
 {
     public required string AgentSessionId { get; init; }
+}
+
+public readonly record struct SubAgentManifestEntry
+{
+    public required string SessionId { get; init; }
+
+    public required BsonDocument AgentDefinitionJson { get; init; }
+
+    public required AgentChatCompletionState CompletionState { get; init; }
+
+    public required DateTime LastUpdatedAt { get; init; }
 }
