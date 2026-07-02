@@ -226,7 +226,27 @@ git commit -m "Fix #<NUMBER>: <short description>
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-## Step 10b — Validate implementation
+## Step 10b — Merge `features` and validate
+
+Pull any upstream changes from `features` before verifying or merging back:
+
+```powershell
+git merge features --no-edit
+dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
+.\scripts\run-tests.ps1 -Mode fast
+```
+
+Resolve any conflicts, then verify the build and tests:
+
+All `error ` lines from the build must be zero. Read `scripts\test-results.log`. If either the build or any tests fail:
+1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
+2. If the failure is unrelated to the merge or your changes (pre-existing flaky test), apply the root cause analysis process from Step 9 — read the failure, confirm it is clearly unrelated, attempt a second run, and document the specific root cause in a filed next-up bug before proceeding. Otherwise fix the failing test or code.
+3. Run tests again.
+4. Repeat until `Failed: 0` across all suites.
+
+**Do not proceed to Step 10c until all tests pass.**
+
+## Step 10c — Validate implementation
 
 Spawn a `verify-closed-issue` subagent for this issue. In the subagent prompt, specify:
 
@@ -258,30 +278,7 @@ gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "##
 **Commit:** $sha"
 ```
 
-## Step 12 — Merge `features` into the branch
-
-Pull any upstream changes from `features` before merging back:
-
-```powershell
-git merge features --no-edit
-```
-
-Resolve any conflicts, then **build the full solution and run the fast test suite**:
-
-```powershell
-dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
-.\scripts\run-tests.ps1 -Mode fast
-```
-
-All `error ` lines from the build must be zero. Read `scripts\test-results.log`. If either the build or any tests fail:
-1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
-2. If the failure is unrelated to the merge or your changes (pre-existing flaky test), apply the root cause analysis process from Step 9 — read the failure, confirm it is clearly unrelated, attempt a second run, and document the specific root cause in a filed next-up bug before proceeding. Otherwise fix the failing test or code.
-3. Run tests again.
-4. Repeat until `Failed: 0` across all suites.
-
-**Do not proceed to Step 13 until all tests pass.**
-
-## Step 13 — Fast-forward `features` to the feature branch
+## Step 12 — Fast-forward `features` to the feature branch
 
 Use `git fetch` to fast-forward the `features` ref without checking it out, so other worktrees remain free to update it:
 
@@ -298,7 +295,7 @@ git checkout --detach
 Pop-Location
 ```
 
-`git fetch . <branch>:features` fast-forwards `features` to the tip of the feature branch without a checkout. It fails (non-fast-forward) if `features` is not a direct ancestor — if that happens, return to step 12.
+`git fetch . <branch>:features` fast-forwards `features` to the tip of the feature branch without a checkout. It fails (non-fast-forward) if `features` is not a direct ancestor — if that happens, return to step 10b.
 
 ---
 
@@ -310,9 +307,9 @@ Pop-Location
 4. All work (file edits, builds, tests, commits) runs from inside the worktree directory. Never edit files directly in `C:\dev\phantom.workspaces-design`.
 5. `C:\dev\phantom.workspaces-design` must always remain in **detached HEAD** state. Never check out `features` or any feature branch there.
 6. Tests must pass before committing (step 9 before step 10).
-7. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
-8. Use `git fetch . "<branch>:features"` to update the `features` ref (step 13); if it fails (non-fast-forward), return to step 12.
-9. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
+7. After merging `features` into the branch (step 10b), always build the full solution and run tests; fix any failures before verifying or fast-forwarding.
+8. Use `git fetch . "<branch>:features"` to update the `features` ref (step 12); if it fails (non-fast-forward), return to step 10b.
+9. At the end of step 12, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
 10. Do not push any branch unless explicitly instructed.
 11. Never commit without passing tests.
 12. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
@@ -320,4 +317,4 @@ Pop-Location
 14. If there are open questions, assign back to the reporter and stop — do not guess.
 15. Always include the `Co-authored-by: Copilot` trailer in every commit message.
 16. The full-solution `dotnet build --no-incremental` (Step 9a) must report zero `error ` lines before `run-tests.ps1` is invoked. A passing test run does not substitute for a clean build — library projects with no test assembly will not be compiled by the test runner.
-17. After committing (Step 10), validation via a `verify-closed-issue` subagent must pass before posting the resolution comment or closing the issue.
+17. After merging `features` (Step 10b), validation via a `verify-closed-issue` subagent (Step 10c) must pass before posting the resolution comment or closing the issue.
