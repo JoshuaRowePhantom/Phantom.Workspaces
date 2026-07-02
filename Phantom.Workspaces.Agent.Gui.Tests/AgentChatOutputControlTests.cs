@@ -457,8 +457,9 @@ public sealed class AgentChatOutputControlTests
         isAttachedField!.SetValue(control, true);
 
         control.DataContext = viewModel;
+        await control.HistoryLoaded;
 
-        // The initial DataContext assignment drives OnBrowserReady; collect all posted messages.
+        // The scroll is posted by the model after the first history chunk, not synchronously.
         Assert.True(
             browser.PostedMessages.Any(msg =>
             {
@@ -499,11 +500,13 @@ public sealed class AgentChatOutputControlTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_DoesNotDoubleScroll_WhenSettingAutoScrollEnabled()
     {
-        // Arrange: attach a view model, trigger OnBrowserReady.
+        // Arrange: attach a view model with history so Phase B delivers a scroll.
         // Assert: exactly one "scroll" command is posted — the suppressScrollOnEnable guard
-        // prevents the PropertyChanged side-effect from emitting a second scroll.
+        // prevents the PropertyChanged side-effect from emitting a second scroll, and
+        // the suppressSinkScroll flag prevents any spurious scroll during Phase A.
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
@@ -519,6 +522,7 @@ public sealed class AgentChatOutputControlTests
         isAttachedField!.SetValue(control, true);
 
         control.DataContext = viewModel;
+        await control.HistoryLoaded;
 
         var scrollCount = browser.PostedMessages.Count(msg =>
         {
@@ -745,6 +749,226 @@ public sealed class AgentChatOutputControlTests
         var diagnosticsNode = root.Children.FirstOrDefault(c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
         Assert.NotNull(diagnosticsNode);
         Assert.IsType<DiagnosticInspectorViewModel>(diagnosticsNode!.DetailContent);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 30_000)]
+    public async Task OnBrowserReady_500ItemHistory_BrowserReceivesMultipleBatches()
+    {
+        // Control with a 500-item history receives multiple history batches, not one giant batch.
+        // With HistoryChunkSize = 200, 500 items → 3 chunks, so:
+        //   BatchCount = 1 (Phase A running-items) + 3 (history chunks) = 4 minimum.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        for (var i = 0; i < 500; i++)
+        {
+            chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent($"msg {i}")] });
+        }
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        // 3 history chunks + 1 Phase-A running-items batch = 4 batches minimum.
+        Assert.True(
+            browser.BatchCount >= 4,
+            $"Expected at least 4 batches for 500 history items (Phase A + 3 history chunks), got {browser.BatchCount}.");
+    }
+
+    [PhantomAvaloniaFact(Timeout = 30_000)]
+    public async Task OnBrowserReady_AllPostMessageCallsAreOnUIThread()
+    {
+        // All PostMessageToJavaScript calls must arrive on the Avalonia UI thread,
+        // including those dispatched from the background history-loading task.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        for (var i = 0; i < 300; i++)
+        {
+            chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent($"msg {i}")] });
+        }
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        Assert.True(browser.PostedMessages.Count > 0, "Expected at least one posted message.");
+        Assert.True(
+            browser.PostedOnUIThread.All(onUI => onUI),
+            "All PostMessageToJavaScript calls must be on the UI thread.");
+    }
+
+    [PhantomAvaloniaFact(Timeout = 30_000)]
+    public async Task OnBrowserReady_SuppressSinkScroll_TrueDuringLoadingFalseAfterFirstChunk()
+    {
+        // suppressSinkScroll is set to true before constructing the model and cleared by
+        // ScrollToBottom() when the model delivers the first (newest) history chunk.
+        // After HistoryLoaded it must be false, and exactly one scroll command must exist.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        for (var i = 0; i < 300; i++)
+        {
+            chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent($"msg {i}")] });
+        }
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        // After loading, suppressSinkScroll must be false.
+        var suppressField = typeof(AgentChatOutputControl)
+            .GetField("suppressSinkScroll", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(suppressField);
+        Assert.False((bool)suppressField!.GetValue(control)!, "suppressSinkScroll must be false after HistoryLoaded.");
+
+        // Exactly one scroll command must have been posted (by the newest history chunk).
+        var scrollCount = browser.PostedMessages.Count(msg =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(msg);
+                return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "scroll";
+            }
+            catch (JsonException) { return false; }
+        });
+
+        Assert.Equal(1, scrollCount);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 30_000)]
+    public async Task OnBrowserReady_DisposingControlDuringBackgroundLoad_DoesNotCrash()
+    {
+        // Disposing the control (via DataContext = null) while the background history-loading task
+        // is mid-flight must not throw. The CancellationToken cancels the task cleanly.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        for (var i = 0; i < 500; i++)
+        {
+            chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent($"msg {i}")] });
+        }
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+
+        // Capture HistoryLoaded before disposal so we can await it even after the model is gone.
+        var historyLoaded = control.HistoryLoaded;
+
+        // Dispose the model by detaching the view model — simulates the control being reused or
+        // the DataContext being cleared while background loading is mid-flight.
+        control.DataContext = null;
+
+        // Awaiting must complete without throwing (OperationCanceledException is swallowed).
+        await historyLoaded;
+    }
+
+    [PhantomAvaloniaFact(Timeout = 30_000)]
+    public async Task OnBrowserReady_RunningItemsDeliveredSynchronouslyInInitialBatch()
+    {
+        // The Phase-A BeginBatch/EndBatch (running-items) completes synchronously within
+        // OnBrowserReady. History update commands arrive in later batches (Phase B).
+        // Verify: CompletedBatches[0] (Phase A) contains no 'update' commands targeting the
+        // history container; CompletedBatches[1+] contain history update commands.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        // There must be at least 2 completed batches: Phase A and at least one history chunk.
+        Assert.True(browser.CompletedBatches.Count >= 2, $"Expected at least 2 batches, got {browser.CompletedBatches.Count}.");
+
+        // Phase A batch (index 0) must not contain any 'update' commands — running items are
+        // empty in this test, so the batch is empty.
+        var phaseABatch = browser.CompletedBatches[0];
+        var phaseAUpdateCount = phaseABatch.Count(msg =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(msg);
+                return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "update";
+            }
+            catch (JsonException) { return false; }
+        });
+
+        Assert.Equal(0, phaseAUpdateCount);
+
+        // History batches (index 1+) must contain 'update' commands for the 2 history items.
+        var historyUpdateCount = browser.CompletedBatches
+            .Skip(1)
+            .SelectMany(batch => batch)
+            .Count(msg =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(msg);
+                    return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "update";
+                }
+                catch (JsonException) { return false; }
+            });
+
+        Assert.True(historyUpdateCount > 0, "Expected 'update' commands in history batches.");
     }
 
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()

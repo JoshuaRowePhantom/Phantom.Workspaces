@@ -925,8 +925,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
         this.SyncRunningItemSubscriptions();
 
+        // Capture the token before Task.Run so that if Dispose() is called synchronously
+        // after construction (before the thread pool lambda starts), the lambda does not
+        // throw ObjectDisposedException when accessing loadCts.Token.
+        var loadToken = this.loadCts.Token;
+
         // Fire off background history load; HistoryLoaded completes when Phase C finishes.
-        this.HistoryLoaded = Task.Run(() => this.LoadHistoryChunksAsync(snapshot, this.loadCts.Token));
+        this.HistoryLoaded = Task.Run(() => this.LoadHistoryChunksAsync(snapshot, loadToken));
     }
 
     private async Task LoadHistoryChunksAsync(
