@@ -141,7 +141,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_InitializeAsync_ReplacesDefaultAndLoadingWorkspacePanes()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         Assert.NotEmpty(viewModel.WorkspacePanes);
