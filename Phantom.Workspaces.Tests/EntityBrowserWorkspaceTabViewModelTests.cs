@@ -384,6 +384,70 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
     }
 
+    // Regression test for #644: when many SubscribeChildPathAsync completions fire concurrent
+    // RebuildTreeAsync() calls, the coalescing loop must ensure all entities become visible
+    // without a test-host timeout caused by N×M parallel rebuilds.
+    [PhantomAvaloniaFact]
+    public async Task BrowserList_CoalescesRebuildRequests_WhenManySubscriptionsComplete()
+    {
+        var broker = await CreateBrokerAsync();
+
+        // Seed several entities at distinct paths so that BuildChildrenAsync triggers a
+        // SubscribeChildPathAsync call for each, causing multiple concurrent RebuildTreeAsync()
+        // fire-and-forget calls during the initial build.
+        for (int i = 1; i <= 6; i++)
+        {
+            var id = new EntityId($"{i:D8}-{i:D4}-{i:D4}-{i:D4}-{i:D12}");
+            await SeedSnapshotAsync(
+                broker,
+                CreateSnapshot(
+                    id,
+                    new Timestamp(DateTimeOffset.UtcNow, i.ToString()),
+                    $$"""
+                    {
+                      "entity-id": "{{id}}",
+                      "entity-types": ["entity", "folder"],
+                      "names": [["folder-{{i}}"]]
+                    }
+                    """));
+        }
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-tab-coalesce",
+            Title = "Entity Browser",
+        };
+
+        // All six folders must become visible; concurrent rebuild coalescing ensures this
+        // completes without the test-host timeout that the pre-fix N×M cascade caused.
+        for (int i = 1; i <= 6; i++)
+        {
+            var folderKey = $"[\"folder-{i}\"]";
+            await WaitForItemAsync(
+                viewModel,
+                item => string.Equals(item.ItemKey, folderKey, StringComparison.Ordinal));
+        }
+    }
+
     private static Task<EntityBroker> CreateBrokerAsync()
     {
         return EntityBroker.CreateInitializedAsync(

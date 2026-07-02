@@ -22,6 +22,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingSubscriptions = new(StringComparer.Ordinal);
     private bool isRebuilding;
+    private bool isRebuildPending;
 
     public EntityBrowserWorkspaceTabViewModel(
         EntityBroker entityBroker,
@@ -47,22 +48,35 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 
     private async Task RebuildTreeAsync()
     {
+        if (this.isRebuilding)
+        {
+            this.isRebuildPending = true;
+            return;
+        }
+
         this.isRebuilding = true;
         try
         {
-            var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
-            foreach (var item in this.entityList.Items)
+            do
             {
-                expansionStateByPath[item.ItemKey] = item.IsExpanded;
-            }
+                this.isRebuildPending = false;
 
-            var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
-            var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
-            this.entityList.SetItems(items);
+                var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
+                foreach (var item in this.entityList.Items)
+                {
+                    expansionStateByPath[item.ItemKey] = item.IsExpanded;
+                }
+
+                var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
+                var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
+                this.entityList.SetItems(items);
+            }
+            while (this.isRebuildPending);
         }
         finally
         {
             this.isRebuilding = false;
+            this.isRebuildPending = false;
         }
     }
 
@@ -139,7 +153,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 else
                 {
                     // Node is collapsed, build immediate children as simple leaf nodes (no recursion)
-                    node.SetChildren(await this.BuildChildrenNonRecursiveAsync(node.NameComponents, childGet.Results));
+                    node.SetChildren(this.BuildChildrenNonRecursive(node.NameComponents, childGet.Results));
                 }
             }
             // If subscription isn't ready yet, leave children empty
@@ -156,12 +170,14 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             .ToArray();
     }
 
-    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenNonRecursiveAsync(
+    private IReadOnlyCollection<EntityListNodeViewModel> BuildChildrenNonRecursive(
         IReadOnlyCollection<string> parentPath,
         IReadOnlyCollection<SubscribedEntityViewModel> entities)
     {
-        // Build immediate children as leaf nodes without any recursion
-        // This is used for collapsed nodes where we just need to show the immediate children
+        // Build immediate children as leaf nodes without any recursion or field-editor resolution.
+        // Field editors are intentionally omitted: these children are inside a collapsed folder and
+        // are not visible, so resolving their field types (which hits the thread pool and schema DAL)
+        // would be wasted work. Field editors are built in BuildChildrenAsync when the node is expanded.
         var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
         foreach (var entity in entities)
         {
@@ -197,19 +213,10 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     entity,
                     nameComponents,
                     sortKey,
-                    await this.BuildFieldEditorsAsync(entity),
                     cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
                 
-                // Set expansion callback so user can expand this node later
                 node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
-                
-                // Subscribe to this node's children so we can determine HasChildren for the expander arrow
-                // When the subscription completes, it will set Children to the results automatically
                 this.EnsureChildSubscription(nameComponents, sortKey);
-                
-                // Don't populate children yet - just mark as empty for now
-                // Once the subscription completes, CollectionChanged will trigger a rebuild
-                // At that point, HasChildren will be true and the expander will appear
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
                 
                 children.Add(sortKey, node);
@@ -370,9 +377,11 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         EntityListNodeViewModel node,
         bool isExpanded)
     {
-        // Don't trigger rebuild during tree rebuild
+        // Don't trigger rebuild during tree rebuild — mark pending so the current rebuild
+        // loop runs another iteration and picks up the new expansion state.
         if (this.isRebuilding)
         {
+            this.isRebuildPending = true;
             return;
         }
         
