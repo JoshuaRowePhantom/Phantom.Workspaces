@@ -11,6 +11,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
@@ -254,7 +255,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 isDiagnosticsVisible: () => vm.IsDiagnosticsVisible,
                 toolFactory: DefaultToolFactory,
                 statusSink: this,
-                resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId);
+                resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
+                subAgents: vm.AgentChat.SubAgents,
+                ancestors: BuildAncestors(vm.AgentChat));
             this.browser.EndBatch();
             this.suppressSinkScroll = false;
 
@@ -391,4 +394,22 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         => color.A == 255
             ? $"#{color.R:x2}{color.G:x2}{color.B:x2}"
             : $"rgba({color.R}, {color.G}, {color.B}, {(color.A / 255.0):0.###})";
+
+    /// <summary>
+    /// Builds the ancestry chain from the root agent down to <paramref name="agentChat"/> (inclusive),
+    /// for use as the breadcrumb in the running sub-agents panel.
+    /// </summary>
+    private static IReadOnlyList<IRunningSubAgent> BuildAncestors(AgentChat agentChat)
+    {
+        var chain = new List<IRunningSubAgent>();
+        AgentChat? current = agentChat;
+        while (current is not null)
+        {
+            chain.Add(current);
+            current = current.ParentAgent;
+        }
+
+        chain.Reverse();
+        return chain;
+    }
 }

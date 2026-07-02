@@ -808,6 +808,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly IReadOnlyList<AgentChatRunningItem> runningItems;
     private readonly ChatMessageHtmlTransformer historyTransformer;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
+    private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
     private readonly List<RenderSlot> historySlots = [];
     private readonly List<RunningChatItemHtmlModel> runningModels = [];
     private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = [];
@@ -821,7 +822,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
-        Func<string, string?>? resolveSubAgentId = null)
+        Func<string, string?>? resolveSubAgentId = null,
+        IReadOnlyList<IRunningSubAgent>? subAgents = null,
+        IReadOnlyList<IRunningSubAgent>? ancestors = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
@@ -852,6 +855,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
             isDiagnosticsVisible,
             toolFactory,
             statusSink);
+
+        if (subAgents is not null)
+        {
+            this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink);
+        }
 
         // Subscribe AFTER the transformers so, for any one collection-changed event, the DOM
         // operations are emitted (by the transformer) before the trailing scroll request.
@@ -923,6 +931,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.runningItemHandlers.Clear();
+        this.subAgentsTransformer?.Dispose();
         this.runningTransformer.Dispose();
         this.historyTransformer.Dispose();
     }
