@@ -6,6 +6,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
+using RunningAgentChat = Phantom.Workspaces.Services.RunningAgentChat;
 
 namespace Phantom.Workspaces.Tests;
 
