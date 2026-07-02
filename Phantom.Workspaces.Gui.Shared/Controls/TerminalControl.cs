@@ -51,8 +51,8 @@ public partial class TerminalControl : Control
     // ── Cell metrics ──────────────────────────────────────────────────────────────────────────
 
     private static readonly FontFamily MonoFamily =
-        new FontFamily("Cascadia Code,Cascadia Mono,Consolas,Courier New,monospace");
-    private const double TermFontSize = 13.0;
+        new FontFamily("Cascadia Mono,Cascadia Code,Consolas,Courier New,monospace");
+    private const double TermFontSize = 12.0;
 
     private double _cellWidth;
     private double _cellHeight;
@@ -63,29 +63,8 @@ public partial class TerminalControl : Control
 
     // ── ANSI color tables ─────────────────────────────────────────────────────────────────────
 
-    private static readonly Color[] DimAnsi =
-    [
-        Color.FromRgb(0, 0, 0),       // 0 Black
-        Color.FromRgb(170, 0, 0),     // 1 Red
-        Color.FromRgb(0, 170, 0),     // 2 Green
-        Color.FromRgb(170, 170, 0),   // 3 Yellow
-        Color.FromRgb(0, 0, 170),     // 4 Blue
-        Color.FromRgb(170, 0, 170),   // 5 Magenta
-        Color.FromRgb(0, 170, 170),   // 6 Cyan
-        Color.FromRgb(170, 170, 170), // 7 White
-    ];
-
-    private static readonly Color[] BrightAnsi =
-    [
-        Color.FromRgb(85, 85, 85),    // 0 Bright Black
-        Color.FromRgb(255, 85, 85),   // 1 Bright Red
-        Color.FromRgb(85, 255, 85),   // 2 Bright Green
-        Color.FromRgb(255, 255, 85),  // 3 Bright Yellow
-        Color.FromRgb(85, 85, 255),   // 4 Bright Blue
-        Color.FromRgb(255, 85, 255),  // 5 Bright Magenta
-        Color.FromRgb(85, 255, 255),  // 6 Bright Cyan
-        Color.FromRgb(255, 255, 255), // 7 Bright White
-    ];
+    private static readonly Color[] DimAnsi    = CampbellColorScheme.Dim;
+    private static readonly Color[] BrightAnsi = CampbellColorScheme.Bright;
 
     // ── Static constructor ────────────────────────────────────────────────────────────────────
 
@@ -218,7 +197,7 @@ public partial class TerminalControl : Control
         var bounds = new Rect(Bounds.Size);
 
         // Background
-        var bgBrush = TryFindBrush("Terminal.Background") ?? Brushes.Black;
+        var bgBrush = TryFindBrush("Terminal.Background") ?? new SolidColorBrush(CampbellColorScheme.Background);
         context.FillRectangle(bgBrush, bounds);
 
         if (_vtc is null)
@@ -230,7 +209,7 @@ public partial class TerminalControl : Control
         var visRows = _vtc.VisibleRows;
         var visCols = _vtc.VisibleColumns;
 
-        var defaultFg = TryFindBrush("Terminal.Foreground");
+        var defaultFg = TryFindBrush("Terminal.Foreground") ?? new SolidColorBrush(CampbellColorScheme.Foreground);
         var cursorBrush = TryFindBrush("Terminal.Cursor") ?? Brushes.White;
 
         var normalTypeface = new Typeface(MonoFamily);
