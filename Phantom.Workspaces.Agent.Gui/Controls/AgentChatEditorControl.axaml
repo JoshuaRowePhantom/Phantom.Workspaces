@@ -85,7 +85,8 @@
                     </StackPanel>
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
-                                                     DataContext="{Binding InputQueue}"/>
+                                                     DataContext="{Binding InputQueue}"
+                                                     IsVisible="{Binding Agent.AcceptsUserInput}"/>
                 <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </DataTemplate>
@@ -159,6 +160,67 @@
                            Classes="muted"
                            TextWrapping="Wrap"/>
             </StackPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:SubAgentBrowserViewModel">
+            <DockPanel Margin="12">
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <TextBlock Text="Sub-agents"
+                               Classes="agent-section-title"
+                               DockPanel.Dock="Left"
+                               VerticalAlignment="Center"/>
+                    <CheckBox DockPanel.Dock="Right"
+                              Content="Hide completed"
+                              IsChecked="{Binding HideCompleted}"
+                              VerticalAlignment="Center"
+                              HorizontalAlignment="Right"/>
+                </DockPanel>
+                <ItemsControl ItemsSource="{Binding VisibleItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Classes="agent-surface compact"
+                                    Margin="0,2">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               Text="✔"
+                                               Classes="muted"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsSucceeded}}"/>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               Text="✘"
+                                               Classes="muted"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsFailed}}"/>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               Text="⟳"
+                                               VerticalAlignment="Center"
+                                               IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsRunning}}"/>
+                                    <TextBlock Text="{Binding DisplayName}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="No sub-agents yet."
+                           Classes="muted"
+                           IsVisible="{Binding !VisibleItems.Count}"
+                           TextWrapping="Wrap"/>
+            </DockPanel>
+        </DataTemplate>
+        <DataTemplate DataType="vm:SubAgentsContainerViewModel">
+            <Panel>
+                <ContentControl Content="{Binding Browser}"
+                                IsVisible="{Binding IsShowingBrowser}"/>
+                <ItemsControl ItemsSource="{Binding Slots}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:SubAgentSlotViewModel">
+                            <controls:AgentChatEditorControl DataContext="{Binding SubAgentViewModel}"
+                                                             IsVisible="{Binding IsSelected}"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Panel>
         </DataTemplate>
         <DataTemplate DataType="vm:DiagnosticInspectorViewModel">
             <DockPanel>

@@ -290,6 +290,7 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         public string AgentId { get; }
         public string DisplayName { get; }
         public AgentChatCompletionState CompletionState { get; private set; } = AgentChatCompletionState.Running;
+        public DateTime LastUpdatedAt { get; private set; } = DateTime.UtcNow;
         public Exception? FailureException { get; private set; }
         public List<ChatResponseUpdate> ReceivedUpdates { get; } = new();
         public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];
@@ -304,7 +305,11 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
 
         public void Push(ChatResponseUpdate update) => ReceivedUpdates.Add(update);
 
-        public void Complete() => CompletionState = AgentChatCompletionState.Succeeded;
+        public void Complete()
+        {
+            CompletionState = AgentChatCompletionState.Succeeded;
+            LastUpdatedAt = DateTime.UtcNow;
+        }
 
         public void Fail(Exception ex)
         {

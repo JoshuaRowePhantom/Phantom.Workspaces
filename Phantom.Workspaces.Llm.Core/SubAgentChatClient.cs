@@ -16,11 +16,14 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
 
     private readonly List<SubAgentActivityLine> recentActivity = [];
     private volatile AgentChatCompletionState completionState = AgentChatCompletionState.Running;
+    private DateTime lastUpdatedAt = DateTime.UtcNow;
 
     public string AgentId { get; }
     public string DisplayName { get; }
 
     public AgentChatCompletionState CompletionState => completionState;
+
+    public DateTime LastUpdatedAt => lastUpdatedAt;
 
     public IReadOnlyList<SubAgentActivityLine> RecentActivity => recentActivity;
 
@@ -44,6 +47,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public void Complete()
     {
         completionState = AgentChatCompletionState.Succeeded;
+        lastUpdatedAt = DateTime.UtcNow;
         channel.Writer.TryComplete();
         CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -51,6 +55,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public void Fail(Exception ex)
     {
         completionState = AgentChatCompletionState.Failed;
+        lastUpdatedAt = DateTime.UtcNow;
         channel.Writer.TryComplete(ex);
         CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -95,6 +100,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
             recentActivity.RemoveAt(0);
 
         recentActivity.Add(line);
+        lastUpdatedAt = DateTime.UtcNow;
         ActivityChanged?.Invoke(this, EventArgs.Empty);
     }
 }

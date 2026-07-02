@@ -256,18 +256,21 @@ public sealed class RunningSubAgentsHtmlTransformerTests
             string displayName,
             AgentChatCompletionState completionState,
             IReadOnlyList<SubAgentActivityLine>? activity = null,
-            IReadOnlyList<IRunningSubAgent>? subAgents = null)
+            IReadOnlyList<IRunningSubAgent>? subAgents = null,
+            DateTime? lastUpdatedAt = null)
         {
             this.AgentId = agentId;
             this.DisplayName = displayName;
             this.completionState = completionState;
             this.RecentActivity = activity ?? [];
             this.SubAgents = subAgents ?? [];
+            this.LastUpdatedAt = lastUpdatedAt ?? DateTime.UtcNow;
         }
 
         public string AgentId { get; }
         public string DisplayName { get; }
         public AgentChatCompletionState CompletionState => this.completionState;
+        public DateTime LastUpdatedAt { get; }
         public IReadOnlyList<SubAgentActivityLine> RecentActivity { get; }
         public IReadOnlyList<IRunningSubAgent> SubAgents { get; }
 
