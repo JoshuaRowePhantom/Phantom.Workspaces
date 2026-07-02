@@ -803,6 +803,9 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 /// </summary>
 public sealed class ChatOutputHtmlModel : IDisposable
 {
+    /// <summary>Maximum number of history items processed in a single off-thread generation chunk.</summary>
+    public const int HistoryChunkSize = 200;
+
     private readonly IChatOutputHtmlSink sink;
     private readonly IReadOnlyList<AgentChatHistoryItem> historyItems;
     private readonly IReadOnlyList<AgentChatRunningItem> runningItems;
@@ -911,6 +914,50 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Generates HTML commands for a slice of history items, callable off the UI thread.
+    /// Creates a <see cref="RecordingChatOutputHtmlSink"/>, runs a <see cref="ChatMessageHtmlTransformer"/>
+    /// over <paramref name="chunk"/>, and returns the recorded commands together with the id of the
+    /// first top-level element the transformer inserted into <see cref="ChatOutputHtmlRenderer.HistoryContainerId"/>.
+    /// </summary>
+    /// <param name="chunk">A read-only slice of history items to render.</param>
+    /// <param name="idBox">
+    /// A single-element array used as a shared mutable id counter. <c>idBox[0]</c> is read and
+    /// incremented by the id factory so successive chunk calls advance a global counter without
+    /// id collisions across chunks.
+    /// </param>
+    /// <param name="isReasoningVisible">Controls whether reasoning content is included.</param>
+    /// <param name="isDiagnosticsVisible">Controls whether diagnostic content is included; null means always visible.</param>
+    /// <param name="toolFactory">Optional tool visualizer factory; may be null.</param>
+    /// <param name="statusSink">Optional agent-status sink; may be null.</param>
+    /// <returns>
+    /// The recorded <see cref="SinkCommand"/> list and the element id of the first top-level DOM node
+    /// inserted by the transformer (<see langword="null"/> when <paramref name="chunk"/> is empty).
+    /// </returns>
+    internal static (IReadOnlyList<SinkCommand> Commands, string? FirstElementId)
+        GenerateHistoryChunk(
+            IReadOnlyList<AgentChatHistoryItem> chunk,
+            int[] idBox,
+            Func<bool> isReasoningVisible,
+            Func<bool>? isDiagnosticsVisible,
+            IToolVisualizerFactory? toolFactory,
+            IAgentStatusSink? statusSink)
+    {
+        var recording = new RecordingChatOutputHtmlSink();
+        var slots = new List<RenderSlot>();
+        using var transformer = new ChatMessageHtmlTransformer(
+            chunk, slots, recording,
+            isReasoningVisible, () => idBox[0]++,
+            ChatOutputHtmlRenderer.HistoryContainerId,
+            isDiagnosticsVisible, toolFactory, statusSink);
+
+        string? firstElementId = slots.Count > 0
+            ? (slots[0].Group?.GroupId ?? slots[0].Model.ElementId)
+            : null;
+
+        return (recording.Commands, firstElementId);
     }
 
     public void Dispose()

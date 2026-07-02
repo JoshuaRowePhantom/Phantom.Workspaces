@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
@@ -1007,5 +1008,122 @@ public sealed class ChatOutputHtmlModelTests
 
         // The content block must have the correct id so the bridge can reference it back.
         Assert.Contains($"id=\"{expectedContentId}\"", op.Content);
+    }
+
+    // ── GenerateHistoryChunk tests ────────────────────────────────────────────
+
+    [Fact]
+    public void HistoryChunkSize_IsExactly200()
+    {
+        Assert.Equal(200, ChatOutputHtmlModel.HistoryChunkSize);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_EmptyChunk_ReturnsNoCommandsAndNullFirstElementId()
+    {
+        var idBox = new int[1];
+        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            [], idBox, () => true, null, null, null);
+
+        Assert.Empty(commands);
+        Assert.Null(firstElementId);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_SingleTextItem_ReturnsAppendCommandAndFirstElementId()
+    {
+        var chunk = new List<AgentChatHistoryItem> { TextMessage(ChatRole.User, "hello world") };
+        var idBox = new int[1];
+
+        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, idBox, () => true, null, null, null);
+
+        Assert.NotEmpty(commands);
+        Assert.NotNull(firstElementId);
+
+        // The first element id for a standalone text message is msg-0.
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), firstElementId);
+
+        // There must be an Append into HistoryContainerId for the message element.
+        Assert.Contains(commands, cmd =>
+            cmd.Location == ChatOutputUpdateLocation.Append &&
+            cmd.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_TwoConsecutiveToolCallItems_FirstElementIdIsGroupId()
+    {
+        var chunk = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var idBox = new int[1];
+
+        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, idBox, () => true, null, null, null);
+
+        Assert.NotNull(firstElementId);
+        // Two consecutive tool-call items are promoted into a group; firstElementId is the group id.
+        Assert.StartsWith("grp-", firstElementId);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_200Items_IdBoxAdvancedByExpectedAmount()
+    {
+        var chunk = Enumerable
+            .Range(0, 200)
+            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
+            .ToList();
+        var idBox = new int[1];
+
+        var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, idBox, () => true, null, null, null);
+
+        // 200 text items each consume exactly one id (msg-N); no grouping.
+        Assert.Equal(200, idBox[0]);
+        Assert.Equal(200, commands.Count);
+
+        // All element ids referenced in Append commands must be unique.
+        var appendPaths = commands
+            .Where(c => c.Location == ChatOutputUpdateLocation.Append || c.Location == ChatOutputUpdateLocation.After)
+            .Select(c => c.Content)
+            .ToList();
+        Assert.Equal(200, appendPaths.Distinct().Count());
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_ContentMatchesRenderer_ForSimpleTextItem()
+    {
+        const string messageText = "simple text";
+        var item = TextMessage(ChatRole.Assistant, messageText);
+        var chunk = new List<AgentChatHistoryItem> { item };
+        var idBox = new int[1];
+
+        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, idBox, () => true, null, null, null);
+
+        var appendCmds = commands
+            .Where(c => c.Location == ChatOutputUpdateLocation.Append && c.Path == ChatOutputHtmlRenderer.HistoryContainerId)
+            .ToList();
+
+        var appendCmd = Assert.Single(appendCmds);
+        Assert.Contains("chat-message", appendCmd.Content);
+        Assert.Contains("chat-assistant-message", appendCmd.Content);
+        Assert.Contains(messageText, appendCmd.Content);
+        Assert.Contains($"id=\"{firstElementId}\"", appendCmd.Content);
+    }
+
+    [Fact]
+    public async Task GenerateHistoryChunk_CanBeCalledOffUIThread()
+    {
+        var chunk = new List<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "off-thread") };
+        var idBox = new int[1];
+
+        var (commands, firstElementId) = await Task.Run(() =>
+            ChatOutputHtmlModel.GenerateHistoryChunk(chunk, idBox, () => true, null, null, null));
+
+        Assert.NotEmpty(commands);
+        Assert.NotNull(firstElementId);
     }
 }
