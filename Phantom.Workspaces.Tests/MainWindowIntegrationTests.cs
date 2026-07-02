@@ -2106,9 +2106,10 @@ public sealed class MainWindowIntegrationTests
         var documentDock = GetDocumentDock(viewModel);
         Assert.NotNull(documentDock);
 
-        var agentTabIndex = documentDock!.VisibleDockables!
-            .Select((d, i) => (d, i))
-            .First(x => x.d.Id == agentTab.Id).i;
+        var targetPane = viewModel.SelectedWorkspacePane;
+        var agentTabIndex = targetPane.Tabs
+            .Select((t, i) => (t, i))
+            .First(x => x.t.Id == agentTab.Id).i;
 
         // Invoke the URL handler — new tab should be inserted right after the agent session tab
         const string testUrl = "https://url-insert.example.com";
@@ -2116,9 +2117,9 @@ public sealed class MainWindowIntegrationTests
 
         await WaitForWorkspaceTabAsync(documentDock!, $"web-{testUrl}");
 
-        var webTabIndex = documentDock!.VisibleDockables!
-            .Select((d, i) => (d, i))
-            .First(x => x.d.Id == $"web-{testUrl}").i;
+        var webTabIndex = targetPane.Tabs
+            .Select((t, i) => (t, i))
+            .First(x => x.t.Id == $"web-{testUrl}").i;
 
         Assert.Equal(agentTabIndex + 1, webTabIndex);
     }
