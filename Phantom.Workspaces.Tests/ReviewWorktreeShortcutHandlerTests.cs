@@ -12,30 +12,30 @@ namespace Phantom.Workspaces.Tests;
 public sealed class ReviewWorktreeShortcutHandlerTests
 {
     [Fact]
-    public void ShouldApplyTo_ReturnsTrueForReviewShortcutOnGitWorktreeEntity()
+    public async Task ShouldApplyTo_ReturnsTrueForReviewShortcutOnGitWorktreeEntity()
     {
         var handler = new ReviewWorktreeShortcutHandler();
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateGitWorktreeEntity();
 
         Assert.True(handler.ShouldApplyTo(vm, Shortcut.Review, entity));
     }
 
     [Fact]
-    public void ShouldApplyTo_ReturnsFalseForOpenShortcutOnGitWorktreeEntity()
+    public async Task ShouldApplyTo_ReturnsFalseForOpenShortcutOnGitWorktreeEntity()
     {
         var handler = new ReviewWorktreeShortcutHandler();
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateGitWorktreeEntity();
 
         Assert.False(handler.ShouldApplyTo(vm, Shortcut.Open, entity));
     }
 
     [Fact]
-    public void ShouldApplyTo_ReturnsFalseForReviewShortcutOnOtherEntityType()
+    public async Task ShouldApplyTo_ReturnsFalseForReviewShortcutOnOtherEntityType()
     {
         var handler = new ReviewWorktreeShortcutHandler();
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateNoteEntity();
 
         Assert.False(handler.ShouldApplyTo(vm, Shortcut.Review, entity));
@@ -44,7 +44,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensGitWorktreeReviewTabWithCorrectId()
     {
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         await vm.InitializeAsync();
 
         var handler = new ReviewWorktreeShortcutHandler();
@@ -69,7 +69,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_DeduplicatesTabWhenAlreadyOpen()
     {
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         await vm.InitializeAsync();
 
         var handler = new ReviewWorktreeShortcutHandler();

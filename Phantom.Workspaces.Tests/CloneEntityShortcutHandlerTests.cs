@@ -12,10 +12,10 @@ namespace Phantom.Workspaces.Tests;
 public sealed class CloneEntityShortcutHandlerTests
 {
     [Fact]
-    public void ShouldApplyTo_ReturnsFalse_WhenShortcutIsNotClone()
+    public async Task ShouldApplyTo_ReturnsFalse_WhenShortcutIsNotClone()
     {
         var handler = new CloneEntityShortcutHandler();
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateCloneableEntity();
 
         Assert.False(handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, entity));
@@ -24,20 +24,20 @@ public sealed class CloneEntityShortcutHandlerTests
     }
 
     [Fact]
-    public void ShouldApplyTo_ReturnsFalse_WhenEntityCannotBeEdited()
+    public async Task ShouldApplyTo_ReturnsFalse_WhenEntityCannotBeEdited()
     {
         var handler = new CloneEntityShortcutHandler();
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateNonEditableEntity();
 
         Assert.False(handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
     }
 
     [Fact]
-    public void ShouldApplyTo_ReturnsTrue_WhenCloneShortcutAndCanEditEntity()
+    public async Task ShouldApplyTo_ReturnsTrue_WhenCloneShortcutAndCanEditEntity()
     {
         var handler = new CloneEntityShortcutHandler();
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateCloneableEntity();
 
         Assert.True(handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
@@ -46,7 +46,7 @@ public sealed class CloneEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensCloneEntityWorkspaceTabViewModel_WithoutCreatingEntity()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var handler = new CloneEntityShortcutHandler();

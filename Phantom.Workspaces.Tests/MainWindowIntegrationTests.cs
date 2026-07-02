@@ -34,7 +34,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ThemeResources_UseFontFamilyType()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         Assert.True(Avalonia.Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
@@ -106,9 +106,9 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void MainWindowViewModel_ThemeSelectionIsDataDriven()
+    public async Task MainWindowViewModel_ThemeSelectionIsDataDriven()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         Assert.Contains("dark", viewModel.ThemeNames);
         Assert.Contains("light", viewModel.ThemeNames);
         viewModel.SelectedThemeName = "light";
@@ -123,11 +123,11 @@ public sealed class MainWindowIntegrationTests
         {
             var store = new ProfileStore(profilePath);
 
-            var vm1 = CreateTestMainWindowViewModel(profileStore: store);
+            await using var vm1 = CreateTestMainWindowViewModel(profileStore: store);
             await vm1.InitializeAsync();
             await vm1.SetThemeAsync("light");
 
-            var vm2 = CreateTestMainWindowViewModel(profileStore: store);
+            await using var vm2 = CreateTestMainWindowViewModel(profileStore: store);
             await vm2.InitializeAsync();
 
             Assert.Equal("light", vm2.SelectedThemeName);
@@ -141,7 +141,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_InitializeAsync_ReplacesDefaultAndLoadingWorkspacePanes()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         Assert.NotEmpty(viewModel.WorkspacePanes);
@@ -154,7 +154,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WhenAlreadyOpening_SecondRequestIsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -192,7 +192,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithExternalEntityTab_PopulatesTabAsynchronously()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -268,7 +268,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateTabFromEntityAsync_ExternalEntityNonDefaultUrlKey_SetsTitleToUrlKeyAndFixesTitle()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -347,7 +347,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_CloseWhileTabsLoading_DoesNotCrash()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -428,7 +428,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var sessionsView = Assert.Single(
@@ -453,7 +453,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ViewEntityViewModel_TraversedEntitiesCollapsed_WhenDispositionIsCollapsed()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -541,9 +541,9 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void MainWindow_ConstructsWithoutTemplateCastErrors()
+    public async Task MainWindow_ConstructsWithoutTemplateCastErrors()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         var window = new MainWindow(viewModel);
 
         Assert.NotNull(window);
@@ -553,7 +553,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePane_DoesNotInjectFallbackCenterRegion_WhenWorkspaceHasNoRegions()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
         
         using var workspaceDocument = JsonDocument.Parse(
@@ -604,7 +604,7 @@ public sealed class MainWindowIntegrationTests
     public async Task OpenAgentDefinitionShortcutHandler_LocalEchoDefinition_CreatesAgentSessionTab()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -646,7 +646,7 @@ public sealed class MainWindowIntegrationTests
     public async Task OpenAgentManifestShortcutHandler_LocalEchoManifest_CreatesAgentSessionTab()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -690,7 +690,7 @@ public sealed class MainWindowIntegrationTests
     public async Task OpenAgentManifestShortcutHandler_ManifestWithParameters_ShowsLaunchpadNotAutoStarted()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -737,7 +737,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -784,7 +784,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePaneAsync_WithAgentSessionTab_CreatesAgentSessionWorkspaceTabViewModel()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -881,7 +881,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePaneAsync_WithAgentSessionTabButMissingDefinition_FallsBackToEntityWorkspaceTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -988,7 +988,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseActiveTabCommand_WithTwoTabs_ClosesActiveTabAndLeavesOther()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
@@ -1011,7 +1011,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabForwardCommand_WithThreeTabs_WrapsAroundForward()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
@@ -1043,7 +1043,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabBackwardCommand_WithThreeTabs_WrapsAroundBackward()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
@@ -1075,7 +1075,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabForwardCommand_WithSingleTab_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a-single", Title = "Tab A" };
@@ -1111,7 +1111,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_WithThreeTabs_ActivatesCorrectTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "goto-tab-a", Title = "Tab A" };
@@ -1132,7 +1132,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "goto-oob-a", Title = "Tab A" };
@@ -1152,7 +1152,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithMultiplePanes_ActivatesCorrectPane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1199,7 +1199,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var selectedBefore = viewModel.SelectedWorkspacePane;
@@ -1212,7 +1212,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1292,7 +1292,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInCurrentPaneHasUnreadNotification_OnlyMarksTargetPaneTabRead()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1367,7 +1367,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithFocusedTabId_ActivatesFocusedTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1427,7 +1427,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithAbsentFocusedTabId_DoesNotCrash()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1478,7 +1478,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNonMatchingFocusedTabId_DoesNotCrash()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1530,7 +1530,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateAgentSessionEntityAsync_WithOwningProfileEntityId_StoresOwningProfileEntityIdInData()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1569,7 +1569,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithLocalProfileOwner_RoutesToLocalExecutorSuccessfully()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1614,7 +1614,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithNoOwningProfile_DefaultsToLocalExecution()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1659,7 +1659,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithRemoteProfileOwner_SetsFailedWhenNoConnectionAvailable()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1708,7 +1708,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_UsesEntityIdAsTabId()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1747,7 +1747,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_SameEntityOpenedTwice_DeduplicatesTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1794,7 +1794,7 @@ public sealed class MainWindowIntegrationTests
     public async Task OpenAgentSessionShortcutHandler_Handle_WithRunningAgentChatTable_AcrossTwoWorkspacePanes_SharesAgentChat()
     {
         var runningAgentChatTable = new RunningAgentChatTable();
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1876,7 +1876,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_WhenAgentChatIsInNonSelectedPane_OpensTabInAgentChatPane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1975,7 +1975,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_WhenAgentChatIsInSelectedPane_OpensTabInSamePane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2060,7 +2060,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_InsertsNewTabAfterAgentSessionTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2129,7 +2129,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThenWriteBack_DockLayoutJsonContainsDockTabDescriptor()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://descriptor-test.example.com")
@@ -2157,7 +2157,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThenWriteBack_DockLayoutDoesNotContainTabViewModelData()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://no-vm-test.example.com")
@@ -2186,7 +2186,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithSavedDockLayout_RestoresTabsFromDescriptors()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2235,7 +2235,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_FallsBackToTabsArray_WhenDockLayoutAbsent()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2291,7 +2291,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Arrange: capture a real dock-layout JSON from an open tab, then open a new
         // workspace entity that carries that dock-layout.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://restore-layout-present.example.com")
@@ -2343,7 +2343,7 @@ public sealed class MainWindowIntegrationTests
     {
         // After the fix, pane.Tabs.CollectionChanged is NOT subscribed for write-back.
         // Dock-order changes (Move/Reset from dock animations) must NOT trigger entity updates.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://no-write-a.example.com") { Id = "nw-a", Title = "A" };
@@ -2380,7 +2380,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Explicit WriteBackWorkspaceTabs persists dock-layout JSON that contains
         // Descriptor data for each open tab.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://save-layout-test.example.com")
@@ -2418,7 +2418,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Verify serialize → deserialize round-trip: the Descriptor survives and the
         // layout structure is intact (no exceptions, correct types).
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://roundtrip-test.example.com")
@@ -2623,7 +2623,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Regression for issue #104: concurrent ApplySelectedViewAsync invocations must not
         // double-populate the entity list.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var sessionsView = Assert.Single(
@@ -2652,7 +2652,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_EachCall_CreatesNewCurrentViewPopulationInstance()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var firstPopulation = viewModel.CurrentViewPopulation;
@@ -2670,7 +2670,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_PreviousPopulationDisposed_ItsEntitiesNotModifiedAfterSwap()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var sessionsView = Assert.Single(
@@ -2698,7 +2698,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_ViewSwitchedTwice_CurrentViewPopulationReflectsSecondView()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var applyMethod = typeof(MainWindowViewModel).GetMethod(
@@ -2732,7 +2732,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
         // set so tab icons and notification indicators are rendered via EffectiveTabHeader.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com") { Id = "header-tmpl-test", Title = "Header Test" };
@@ -2905,7 +2905,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ExistingTab_PushesNavigationEntry()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "nav-push-a", Title = "Tab A" };
@@ -2929,7 +2929,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateBack_AfterMultipleToolDrivenNavigations_TraversesAllEntries()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "multi-nav-a", Title = "Tab A" };
@@ -2957,7 +2957,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithMultipleBrowserTabs_TabsAppearInDeclarationOrder()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3030,7 +3030,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithUnresolvableMiddleTab_SkipsNullAndPreservesOrder()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3104,7 +3104,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-a", Title = "Tab A" };
@@ -3135,7 +3135,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_UpdatesSelectedWorkspacePane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3192,7 +3192,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_ThenAlt1_ActivatesTabInNewPane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3275,7 +3275,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_PushesNavigationEntry()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3352,7 +3352,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_WhenNavigatingViaHistory_DoesNotPushExtraEntry()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3429,7 +3429,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_WithShellTabActive_ActivatesFirstContentTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-shell-a", Title = "Tab A" };
@@ -3460,7 +3460,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         for (var i = 0; i < 10; i++)
@@ -3490,7 +3490,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt-oob-a", Title = "Tab A" };
@@ -3521,7 +3521,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShift1_ActivatesFirstWorkspacePane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3577,7 +3577,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShift2_ActivatesSecondWorkspacePane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3630,7 +3630,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShiftDigit_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
@@ -3654,7 +3654,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
 
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
@@ -3702,7 +3702,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
         await viewModel.InitializeAsync();
 
         Assert.Contains(
@@ -3713,7 +3713,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
 
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
@@ -3803,7 +3803,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigatePreviousNotificationCommand_NavigatesToUnreadTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "nav-prev-a", Title = "Tab A" };
@@ -3824,7 +3824,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_NavigatesToUnreadTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "nav-next-a", Title = "Tab A" };
@@ -3845,7 +3845,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3888,7 +3888,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPaneWithWorkspaceIdHint_SwitchesWorkspacePane()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3932,7 +3932,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f7-prev-a", Title = "Tab A" };
@@ -3964,7 +3964,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f8-next-a", Title = "Tab A" };
@@ -3998,7 +3998,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
         // preventing child controls such as WebView2 from seeing the keystroke.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
@@ -4034,7 +4034,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
         // preventing child controls such as WebView2 from seeing the keystroke.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
@@ -4067,7 +4067,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Verifies that Ctrl+Shift+K fires DuplicateBrowserTabCommand and marks the event as
         // handled so that child controls such as WebView2 do not receive the keystroke.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-shift-k-tab", Title = "Browser" };
@@ -4104,7 +4104,7 @@ public sealed class MainWindowIntegrationTests
     public async Task OnPreviewKeyDown_CtrlK_WithoutShift_DoesNotDuplicateTab()
     {
         // Verifies that Ctrl+K alone (missing Shift) does not trigger DuplicateBrowserTabCommand.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-k-no-dup", Title = "Browser" };
@@ -4131,7 +4131,7 @@ public sealed class MainWindowIntegrationTests
         // setters (e.g. Value="rotate(-18deg)"). Avalonia's XAML IL compiler does not apply
         // type converters inside KeyFrame.Setter, so the value arrived as a boxed string with
         // no registered animator, throwing InvalidOperationException on first style application.
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
@@ -4151,16 +4151,16 @@ public sealed class MainWindowIntegrationTests
     // ── IsAltHeld / Alt-badge tests ──────────────────────────────────────────
 
     [Fact]
-    public void IsAltHeld_DefaultIsFalse()
+    public async Task IsAltHeld_DefaultIsFalse()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         Assert.False(viewModel.IsAltHeld);
     }
 
     [Fact]
-    public void IsAltHeld_SetToTrue_RaisesPropertyChanged()
+    public async Task IsAltHeld_SetToTrue_RaisesPropertyChanged()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         var raised = false;
         viewModel.PropertyChanged += (_, e) =>
         {
@@ -4176,7 +4176,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
         var window = new MainWindow(viewModel);
         window.Show();
@@ -4195,7 +4195,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
         var window = new MainWindow(viewModel);
         window.Show();
@@ -4215,7 +4215,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_Execute_DoesNotClearIsAltHeld()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "alt-clear-a", Title = "Tab A" };
@@ -4230,7 +4230,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "alt-label-a", Title = "Tab A" };
@@ -4252,7 +4252,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseTab_ByIndex_RefreshesAltShortcutLabels()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "alt-close-a", Title = "Tab A" };
@@ -4276,7 +4276,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -4306,7 +4306,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -4335,7 +4335,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_IsHandledInTunnelPhase()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -4374,7 +4374,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var plainTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-noop", Title = "NoAgent" };
@@ -4410,7 +4410,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_WebViewModel_AltKeyStateChanged_SetsIsAltHeld()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var webVm = new WebViewModel("https://example.com") { Id = "wv-alt-held", Title = "Tab" };
@@ -4424,7 +4424,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_WebViewModel_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "wv-goto-a", Title = "Tab A" };
@@ -4444,7 +4444,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_AgentSessionTab_AltKeyStateChanged_SetsIsAltHeld()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "agent-alt-held", Title = "Agent" };
@@ -4458,7 +4458,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_AgentSessionTab_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "agent-goto-a", Title = "Agent A" };
@@ -4478,7 +4478,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_ShowsRelatedEntityNestedUnderWorkspace()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
 
         var workspaceId = new EntityId("a2b3c4d5-0001-4000-8000-000000000001");
@@ -4545,7 +4545,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_WorkspaceWithNoRelatedEntities_ShowsWorkspaceFlatOnly()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
 
         var workspaceId = new EntityId("a2b3c4d5-0002-4000-8000-000000000001");
@@ -4587,9 +4587,9 @@ public sealed class MainWindowIntegrationTests
     // ── Single-window guard tests (issue #240) ────────────────────────────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void OnOpenScheduledTasksClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
+    public async Task OnOpenScheduledTasksClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         var mainWindow = new MainWindow(viewModel);
 
         var trackingField = typeof(MainWindow).GetField(
@@ -4611,9 +4611,9 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void OnOpenScheduledTasksClicked_TrackingField_InitiallyNull()
+    public async Task OnOpenScheduledTasksClicked_TrackingField_InitiallyNull()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         var mainWindow = new MainWindow(viewModel);
 
         var trackingField = typeof(MainWindow).GetField(
@@ -4626,7 +4626,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_RunVsCodeTunnelTool_IsRegistered()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var hostField = typeof(MainWindowViewModel).GetField(
@@ -4642,7 +4642,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_GitWorkspaceDiscoveryTool_IsRegistered()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var hostField = typeof(MainWindowViewModel).GetField(
@@ -4657,7 +4657,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_WorkspaceWithChildren_ShowsExpandAffordance()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4726,7 +4726,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_ToggleExpand_HidesAndShowsChildren()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4838,7 +4838,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4925,7 +4925,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5046,7 +5046,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5092,7 +5092,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5159,7 +5159,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5222,7 +5222,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5299,7 +5299,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ActivateTabById_WhenWorkspacePaneNotInWorkspacePanes_OpensWorkspaceAndActivatesTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5367,7 +5367,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithTopLevelTabsArray_PopulatesPaneTabsInSavedOrder()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5429,7 +5429,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithLegacyRegions_FlattensToSingleDock()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5505,7 +5505,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNoTabsAndNoRegions_OpensDefaultEntityTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5543,7 +5543,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithTopLevelTabsAndActiveTabId_ActivatesSpecifiedTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5595,7 +5595,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_SetsItemsSourceToPaneTabs()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5633,7 +5633,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_AddingTabToPaneTabs_CreatesWorkspaceDocumentInDock()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5681,7 +5681,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_RemovingTabFromPaneTabs_RemovesWorkspaceDocumentFromDock()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabToRemove = new WebViewModel("https://remove.example.com")
@@ -5708,7 +5708,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_SlashCommandContext_WithLocalSession_ExecuteAutoResume_UpdatesEntityWithTrustedExecutorDot()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5761,7 +5761,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_SlashCommandContext_WithAutoResumeAlreadyEnabled_ExecuteAutoResume_RemovesAutoResume()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5816,7 +5816,7 @@ public sealed class MainWindowIntegrationTests
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
