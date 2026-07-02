@@ -27,6 +27,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public IReadOnlyList<IRunningSubAgent> SubAgents => [];
 
     public event EventHandler? ActivityChanged;
+    public event EventHandler? CompletionStateChanged;
 
     public SubAgentChatClient(string agentId, string displayName)
     {
@@ -44,12 +45,14 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     {
         completionState = AgentChatCompletionState.Succeeded;
         channel.Writer.TryComplete();
+        CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void Fail(Exception ex)
     {
         completionState = AgentChatCompletionState.Failed;
         channel.Writer.TryComplete(ex);
+        CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

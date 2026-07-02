@@ -74,11 +74,13 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
         new(StringComparer.Ordinal);
     private readonly object subAgentsLock = new();
     private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
+    private readonly List<AgentChat> restoredSubAgentChats = [];
     private SubAgentChatClient? subAgentChatClientSource;
     private string agentId = string.Empty;
     private AgentChat? parentAgent;
     private bool acceptsUserInput = true;
     private DateTime lastUpdatedAt = DateTime.UtcNow;
+    private AgentChatCompletionState? completionStateOverride;
 
     // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
     // are injected into the active PartialResponseConflator so they appear at the tool-result
@@ -270,6 +272,12 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
        this.LoadInitialHistory(persistedMessages);
        this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
        this.SetAgentSessionId(resolvedAgentSessionId);
+
+       if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+       {
+           await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+       }
+
        this.StartProcessingLoop();
 
        await this.InitializeMcpToolsAsync(this.request.CancellationToken);
@@ -326,7 +334,9 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
 
     /// <summary>Completion state of this sub-agent chat. Always <see cref="AgentChatCompletionState.Running"/> for root agents.</summary>
     public AgentChatCompletionState CompletionState =>
-        this.subAgentChatClientSource?.CompletionState ?? AgentChatCompletionState.Running;
+        this.completionStateOverride
+        ?? this.subAgentChatClientSource?.CompletionState
+        ?? AgentChatCompletionState.Running;
 
     /// <summary>The last time this chat's state was updated.</summary>
     public DateTime LastUpdatedAt => this.lastUpdatedAt;
@@ -770,6 +780,33 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
 
+        var parentSessionId = this.agentSessionId;
+        var childSessionId = childChat.AgentSessionId;
+        var agentDefJson = MongoDB.Bson.BsonDocument.Parse(subAgentDefinition.ToJson());
+
+        chatClient.CompletionStateChanged += (_, _) =>
+        {
+            var entry = new SubAgentManifestEntry
+            {
+                SessionId = childSessionId,
+                AgentDefinitionJson = agentDefJson,
+                CompletionState = chatClient.CompletionState,
+                LastUpdatedAt = DateTime.UtcNow,
+            };
+            _ = this.request.ConfiguredStore.WriteSubAgentManifestEntryAsync(parentSessionId, entry);
+        };
+
+        await this.request.ConfiguredStore.WriteSubAgentManifestEntryAsync(
+            parentSessionId,
+            new SubAgentManifestEntry
+            {
+                SessionId = childSessionId,
+                AgentDefinitionJson = agentDefJson,
+                CompletionState = AgentChatCompletionState.Running,
+                LastUpdatedAt = DateTime.UtcNow,
+            },
+            cancellationToken);
+
         return result;
     }
 
@@ -788,6 +825,45 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
         this.agentSessionId = agentSessionId;
 
         this.AgentSessionIdChanged?.Invoke(this, agentSessionId);
+    }
+
+    internal void SetCompletionState(AgentChatCompletionState state)
+    {
+        this.completionStateOverride = state;
+    }
+
+    private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
+    {
+        var manifest = await this.request.ConfiguredStore.ReadSubAgentManifestAsync(
+            this.agentSessionId, cancellationToken);
+
+        foreach (var entry in manifest)
+        {
+            var agentDef = AgentDefinition.FromJson(entry.AgentDefinitionJson.ToJson());
+            var noOpClient = new NoOpHostedAgentChatClient();
+
+            var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = agentDef,
+                AgentSessionId = entry.SessionId,
+                ConfiguredStore = this.request.ConfiguredStore,
+                ClientOverride = noOpClient,
+                DisplayNameOverride = agentDef?.Name,
+                CancellationToken = cancellationToken,
+            });
+
+            childChat.SetCompletionState(entry.CompletionState);
+            childChat.parentAgent = this;
+            childChat.agentId = entry.SessionId;
+
+            this.restoredSubAgentChats.Add(childChat);
+
+            await Task.Factory.StartNew(
+                () => this.subAgentItems.Add(childChat),
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                this.foregroundScheduler);
+        }
     }
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
@@ -848,6 +924,13 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
         {
             await childChat.DisposeAsync();
         }
+
+        foreach (var restoredChat in this.restoredSubAgentChats)
+        {
+            await restoredChat.DisposeAsync();
+        }
+
+        this.restoredSubAgentChats.Clear();
     }
 
     // Drains a conflator while suppressing coalesce faults so a secondary failure during teardown
