@@ -13,9 +13,9 @@ namespace Phantom.Workspaces.Tests;
 
 /// <summary>
 /// Verifies that DockSerializer.Save never walks into the deep view-model/entity-data graph.
-/// Properties like TabViewModel are excluded via [JsonIgnore]. Owner links are excluded via
-/// <see cref="MainWindowViewModel.CaptureAndClearOwners"/> (the [JsonIgnore] shadow on new Owner
-/// does not override the base [DataMember] Owner in DockModelPolymorphicTypeResolver).
+/// Properties like TabViewModel are excluded via [JsonIgnore]. Owner back-references are
+/// handled by ReferenceHandler.Preserve ($ref markers) — no shadow property is needed.
+/// Context is excluded via [IgnoreDataMember] on the base DockableBase class.
 /// StyleKey (System.Type) is stripped by <see cref="WorkspaceDockTypeInfoResolver"/>.
 /// </summary>
 public sealed class WorkspaceDocumentSerializationTests
@@ -208,22 +208,27 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.Same(tab, doc.TabViewModel);
     }
 
-    // ── [JsonIgnore] shadow properties break Owner → ContentDock cycle ────────
+    // ── Owner shadow is absent; ReferenceHandler.Preserve handles cycles ────────
 
     [Fact]
-    public void WorkspaceDocument_JsonIgnore_OwnerNotSerialized()
+    public void WorkspaceDocument_DoesNotDeclareOwnerShadow()
     {
-        var prop = typeof(WorkspaceDocument).GetProperty(nameof(WorkspaceDocument.Owner));
-        Assert.NotNull(prop);
-        Assert.NotNull(prop!.GetCustomAttribute<JsonIgnoreAttribute>());
+        // Owner must NOT be declared on WorkspaceDocument — only the base DockableBase
+        // defines it. Absence of the shadow lets ReferenceHandler.Preserve detect
+        // Owner → ContentDock → Document back-reference cycles correctly.
+        var prop = typeof(WorkspaceDocument).GetProperty(
+            nameof(WorkspaceDocument.Owner),
+            System.Reflection.BindingFlags.DeclaredOnly | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        Assert.Null(prop);
     }
 
     [Fact]
-    public void WorkspacePaneDocument_JsonIgnore_OwnerNotSerialized()
+    public void WorkspacePaneDocument_DoesNotDeclareOwnerShadow()
     {
-        var prop = typeof(WorkspacePaneDocument).GetProperty(nameof(WorkspacePaneDocument.Owner));
-        Assert.NotNull(prop);
-        Assert.NotNull(prop!.GetCustomAttribute<JsonIgnoreAttribute>());
+        var prop = typeof(WorkspacePaneDocument).GetProperty(
+            nameof(WorkspacePaneDocument.Owner),
+            System.Reflection.BindingFlags.DeclaredOnly | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        Assert.Null(prop);
     }
 
     [Fact]
@@ -232,31 +237,15 @@ public sealed class WorkspaceDocumentSerializationTests
         var tab = new StubWorkspaceTab("tab-cycle", "Cycle Tab");
         var doc = new WorkspaceDocument(tab);
 
-        // Simulate post-InitLayout state where Owner points to a parent dock.
-        // The production fix is CaptureAndClearOwners (not [JsonIgnore] shadow), because STJ
-        // picks the base [DataMember] Owner property rather than the derived shadow.
+        // Wire the Owner back-reference to simulate post-InitLayout state.
+        // ReferenceHandler.Preserve (used by DockSerializer) emits $ref for cycles;
+        // no CaptureAndClearOwners is needed.
         var fakeDock = new WorkspaceContentDock { Id = "fake-parent" };
         doc.Owner = fakeDock;
 
-        Assert.Same(fakeDock, doc.Owner);
-
-        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(doc);
-        try
-        {
-            var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
-            var json = serializer.Serialize(doc);
-
-            // Owner is null after CaptureAndClearOwners; WhenWritingNull → absent from JSON.
-            Assert.DoesNotContain("\"Owner\"", json);
-            Assert.DoesNotContain("fake-parent", json);
-        }
-        finally
-        {
-            MainWindowViewModel.RestoreOwners(savedOwners);
-        }
-
-        // Owner is restored correctly after serialization.
-        Assert.Same(fakeDock, doc.Owner);
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var ex = Record.Exception(() => serializer.Serialize(doc));
+        Assert.Null(ex);
     }
 
     // ── AgentSession descriptor round-trip ────────────────────────────────────
@@ -337,25 +326,13 @@ public sealed class WorkspaceDocumentSerializationTests
         root.DefaultDockable = contentDock;
 
         // Wire Owner back-references (as InitLayout would do at runtime).
+        // ReferenceHandler.Preserve handles the cycle via $ref — no workaround needed.
         doc.Owner = contentDock;
         contentDock.Owner = root;
 
-        // CaptureAndClearOwners is the fix: clear Owner before serialization, restore after.
-        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(root);
-        try
-        {
-            var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
-            var ex = Record.Exception(() => serializer.Serialize(root));
-            Assert.Null(ex);
-        }
-        finally
-        {
-            MainWindowViewModel.RestoreOwners(savedOwners);
-        }
-
-        // Owner is restored correctly after serialization.
-        Assert.Same(contentDock, doc.Owner);
-        Assert.Same(root, contentDock.Owner);
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var ex = Record.Exception(() => serializer.Serialize(root));
+        Assert.Null(ex);
     }
 
     // ── DockLayout round-trips through save/load without losing descriptor data ─
@@ -423,20 +400,12 @@ public sealed class WorkspaceDocumentSerializationTests
             VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { contentDock },
         };
         root.ActiveDockable = contentDock;
+        // Wire Owner back-references; ReferenceHandler.Preserve handles cycles via $ref.
         doc.Owner = contentDock;
         contentDock.Owner = root;
 
-        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(root);
-        string json;
-        try
-        {
-            var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
-            json = serializer.Serialize(root);
-        }
-        finally
-        {
-            MainWindowViewModel.RestoreOwners(savedOwners);
-        }
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var json = serializer.Serialize(root);
 
         // Required structural fields must be present
         Assert.Contains("\"Id\"", json);
@@ -450,6 +419,32 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.DoesNotContain("HasUnreadNotification", json);
         Assert.DoesNotContain("EntitySnapshot", json);
         Assert.DoesNotContain("WorkspacePane", json);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_IsSerialized_ByDockSerializer()
+    {
+        // Verifies the complete chain: Descriptor is populated at construction, survives
+        // DockSerializer.Serialize, and is reconstructed by DockSerializer.Deserialize.
+        var descriptor = new EntityDockTabDescriptor("ffffffff-ffff-4fff-ffff-ffffffffffff", "Open");
+        var doc = new WorkspaceDocument(new StubWorkspaceTab("tab-isd", "ISD Tab"))
+        {
+            Descriptor = descriptor,
+        };
+        doc.Owner = new WorkspaceContentDock { Id = "parent-isd" };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var json = serializer.Serialize(doc);
+
+        Assert.Contains("Descriptor", json);
+        Assert.Contains("entity", json);
+        Assert.Contains("ffffffff-ffff-4fff-ffff-ffffffffffff", json);
+
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<EntityDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("ffffffff-ffff-4fff-ffff-ffffffffffff", restoredDesc.EntityId);
+        Assert.Equal("Open", restoredDesc.ShortcutName);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

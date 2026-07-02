@@ -2143,17 +2143,8 @@ public sealed class MainWindowIntegrationTests
         var pane = viewModel.SelectedWorkspacePane;
         Assert.NotNull(pane.ContentLayout);
 
-        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(pane.ContentLayout!);
-        string layoutJson;
-        try
-        {
-            var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
-            layoutJson = serializer.Serialize(pane.ContentLayout!);
-        }
-        finally
-        {
-            MainWindowViewModel.RestoreOwners(savedOwners);
-        }
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
 
         // The serialized layout must contain the Descriptor property
         Assert.Contains("Descriptor", layoutJson, StringComparison.Ordinal);
@@ -2179,17 +2170,13 @@ public sealed class MainWindowIntegrationTests
         var pane = viewModel.SelectedWorkspacePane;
         Assert.NotNull(pane.ContentLayout);
 
-        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(pane.ContentLayout!);
-        string layoutJson;
-        try
-        {
-            var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
-            layoutJson = serializer.Serialize(pane.ContentLayout!);
-        }
-        finally
-        {
-            MainWindowViewModel.RestoreOwners(savedOwners);
-        }
+        // Diagnostic: assert Owner is null before serialization
+        Assert.Null(pane.ContentLayout!.Owner);
+
+        // Use WorkspaceDockTypeInfoResolver to match production serialization (it strips
+        // Type-typed Avalonia properties and handles Owner back-references via ReferenceHandler.Preserve)
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
 
         // Content-bearing properties must NOT appear in the serialized layout
         Assert.DoesNotContain("TabViewModel", layoutJson, StringComparison.Ordinal);
@@ -2299,7 +2286,178 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
     }
 
-    private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel) where T : class
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task PopulateWorkspacePaneTabsAsync_RestoresFromDockLayout_WhenPresent()
+    {
+        // Arrange: capture a real dock-layout JSON from an open tab, then open a new
+        // workspace entity that carries that dock-layout.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://restore-layout-present.example.com")
+        {
+            Id = "rlp-tab",
+            Title = "Restore Layout Present",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+
+        // Wait for ItemContainerGenerator to populate VisibleDockables
+        var rlpContentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(rlpContentDock);
+        await WaitForWorkspaceTabAsync(rlpContentDock!, "rlp-tab");
+
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+        Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("e570ee01-0000-4000-8000-000000000001");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "e570ee01-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Restore Layout Present WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+
+        // Allow async restore to propagate
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.NotEmpty(restoredPane!.Tabs);
+        Assert.Contains(restoredPane.Tabs, t => t is WebViewModel);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WriteBackWorkspaceTabs_IsNotCalledOnDockLayoutChange()
+    {
+        // After the fix, pane.Tabs.CollectionChanged is NOT subscribed for write-back.
+        // Dock-order changes (Move/Reset from dock animations) must NOT trigger entity updates.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://no-write-a.example.com") { Id = "nw-a", Title = "A" };
+        var tabB = new WebViewModel("https://no-write-b.example.com") { Id = "nw-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var pane = viewModel.SelectedWorkspacePane;
+
+        // Capture entity snapshot BEFORE dock layout mutation
+        var before = (await entityBroker.GetEntitiesAsync([pane.Entity.EntityId]))
+            .FirstOrDefault(e => e.EntityId == pane.Entity.EntityId);
+
+        // Simulate a dock Move/Reset by reordering pane.Tabs directly (the same operation
+        // SyncPaneTabsOrderFromDock performs). With the CollectionChanged subscription removed,
+        // this must NOT trigger WriteBackWorkspaceTabs.
+        pane.Tabs.Move(0, 1);
+
+        // Give any async callbacks a chance to run
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var after = (await entityBroker.GetEntitiesAsync([pane.Entity.EntityId]))
+            .FirstOrDefault(e => e.EntityId == pane.Entity.EntityId);
+
+        // Entity must not have changed — no dock-layout key written
+        var beforeJson = before?.Data is System.Text.Json.JsonElement be ? be.GetRawText() : "null";
+        var afterJson = after?.Data is System.Text.Json.JsonElement ae ? ae.GetRawText() : "null";
+        Assert.Equal(beforeJson, afterJson);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task SaveWorkspaceLayoutAsync_PersistsDockLayoutWithDescriptors()
+    {
+        // Explicit WriteBackWorkspaceTabs persists dock-layout JSON that contains
+        // Descriptor data for each open tab.
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://save-layout-test.example.com")
+        {
+            Id = "slt-tab",
+            Title = "Save Layout Test",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Wait for ItemContainerGenerator to populate VisibleDockables before write-back
+        var saveContentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(saveContentDock);
+        await WaitForWorkspaceTabAsync(saveContentDock!, "slt-tab");
+
+        // Explicitly trigger write-back (simulates explicit save) and await completion
+        await viewModel.WriteBackWorkspaceTabs(pane);
+
+        var entities = await entityBroker.GetEntitiesAsync([pane.Entity.EntityId]);
+        var updated = entities.FirstOrDefault(e => e.EntityId == pane.Entity.EntityId);
+        Assert.NotNull(updated);
+
+        var data = Assert.IsType<System.Text.Json.JsonElement>(updated!.Data);
+        Assert.True(data.TryGetProperty("dock-layout", out var dockLayoutEl));
+        var dockLayoutJson = dockLayoutEl.GetRawText();
+        Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
+        Assert.Contains("browser", dockLayoutJson, StringComparison.Ordinal);
+        Assert.Contains("save-layout-test.example.com", dockLayoutJson, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DockLayoutRoundTrip_PreservesSplitPositionsAndDescriptors()
+    {
+        // Verify serialize → deserialize round-trip: the Descriptor survives and the
+        // layout structure is intact (no exceptions, correct types).
+        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://roundtrip-test.example.com")
+        {
+            Id = "rt-tab",
+            Title = "Round-trip Test",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane.ContentLayout);
+
+        // Wait for ItemContainerGenerator to populate VisibleDockables
+        var rtContentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(rtContentDock);
+        await WaitForWorkspaceTabAsync(rtContentDock!, "rt-tab");
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+
+        // Serialize
+        var layoutJson = serializer.Serialize(pane.ContentLayout!);
+        Assert.Contains("Descriptor", layoutJson, StringComparison.Ordinal);
+        Assert.Contains("browser", layoutJson, StringComparison.Ordinal);
+        Assert.Contains("roundtrip-test.example.com", layoutJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("TabViewModel", layoutJson, StringComparison.Ordinal);
+
+        // Deserialize
+        var restored = serializer.Deserialize<Dock.Model.Controls.IRootDock>(layoutJson);
+        Assert.NotNull(restored);
+
+        var docs = MainWindowViewModel.EnumerateAllDocuments(restored!).ToList();
+        Assert.NotEmpty(docs);
+        Assert.Contains(docs, d => d.Descriptor is BrowserDockTabDescriptor b
+            && b.Url == "https://roundtrip-test.example.com");
+    }
+
+    private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel)
     {
         var field = typeof(MainWindowViewModel)
             .GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic);
