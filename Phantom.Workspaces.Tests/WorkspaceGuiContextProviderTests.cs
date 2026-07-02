@@ -417,7 +417,8 @@ public sealed class WorkspaceGuiContextProviderTests
             CancellationToken.None);
 
         var resultJson = Assert.IsType<JsonElement>(result);
-        Assert.True(resultJson.TryGetProperty("error", out _));
+        Assert.True(resultJson.TryGetProperty("error", out var errorElement));
+        Assert.Contains("Review", errorElement.GetString(), StringComparison.Ordinal);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -434,6 +435,70 @@ public sealed class WorkspaceGuiContextProviderTests
 
         var resultJson = Assert.IsType<JsonElement>(result);
         Assert.True(resultJson.TryGetProperty("error", out _));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_Review_OnGitWorktreeEntity_ReturnsHandledTrue()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("ff440001-ff44-4ff4-ff44-ff4400000001");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "review-shortcut-1"]],
+              "display-name": { "default": "Review Shortcut Test Worktree" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"Review\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_Review_OnNonGitWorktreeEntity_ReturnsHandledFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("ff440002-ff44-4ff4-ff44-ff4400000002");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tests", "tasks", "review-shortcut-2"]],
+              "display-name": { "default": "Review Shortcut Test Task" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"Review\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.False(resultJson.GetProperty("handled").GetBoolean());
     }
 
     // ── ProvideAIContextAsync instructions tests ──────────────────────────────
@@ -815,6 +880,16 @@ public sealed class WorkspaceGuiContextProviderTests
         {
             MainWindowViewModel = viewModel,
             ShortcutManager = new ShortcutManager(),
+        };
+        return await GetToolWithContextAsync(context, toolName);
+    }
+
+    private static async Task<AIFunction> GetToolWithViewModelShortcutManagerAsync(MainWindowViewModel viewModel, string toolName)
+    {
+        var context = new WorkspaceGuiContext
+        {
+            MainWindowViewModel = viewModel,
+            ShortcutManager = viewModel.ShortcutManager,
         };
         return await GetToolWithContextAsync(context, toolName);
     }

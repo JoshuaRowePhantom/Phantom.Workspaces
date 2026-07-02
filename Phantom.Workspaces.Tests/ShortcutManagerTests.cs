@@ -169,6 +169,50 @@ public sealed class ShortcutManagerTests
         Assert.True(entity.IsRawJsonVisible);
     }
 
+    [PhantomAvaloniaFact]
+    public async Task GetShortcutsFor_GitWorktreeEntity_IncludesReviewShortcut()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
+
+        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entity = CreateEntity("git-worktree");
+
+        var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
+
+        Assert.Contains(shortcuts, s => s == Shortcut.Review);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetShortcutsFor_NonGitWorktreeEntity_DoesNotIncludeReviewShortcut()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
+
+        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var entity = CreateEntity("task");
+
+        var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
+
+        Assert.DoesNotContain(shortcuts, s => s == Shortcut.Review);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HandleShortcutAsync_ReviewOnGitWorktree_OpensReviewTab()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
+
+        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await mainWindowViewModel.InitializeAsync();
+
+        var entity = CreateEntity("git-worktree");
+
+        var handled = await shortcutManager.HandleShortcutAsync(mainWindowViewModel, Shortcut.Review, entity);
+
+        Assert.True(handled);
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
         => new UnknownRepositorySource();
 
