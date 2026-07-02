@@ -709,6 +709,41 @@ public sealed class AgentChatOutputControlTests
             "Expected no 'scroll' command when AutoScrollEnabled is re-enabled via SetAutoScrollFromPage (atBottom suppression).");
     }
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void InspectMessage_ForDiagnosticContent_OpensUnifiedInspector()
+    {
+        // Verify that an "inspect" message from the browser raises InspectorRequested on the
+        // control — confirming that diagnostic items use the same AIContentInspectorWindow path.
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        string? receivedContentId = null;
+        control.InspectorRequested += (_, id) => receivedContentId = id;
+
+        browser.FireMessage("""{"type":"inspect","contentId":"diag-0","contentJson":"{\"$type\":\"text\",\"text\":\"error occurred\"}"}""");
+
+        Assert.Equal("diag-0", receivedContentId);
+    }
+
+    [Fact]
+    public async Task DiagnosticSidebarPanel_ShowsIndividualItems_NotJustCounts()
+    {
+        // Verify that the "chat-diagnostics" nav node's detail content is DiagnosticInspectorViewModel
+        // (the per-item list) not the old AgentChatDiagnosticsDetailViewModel aggregate counts panel.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var diagnosticsNode = root.Children.FirstOrDefault(c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
+        Assert.NotNull(diagnosticsNode);
+        Assert.IsType<DiagnosticInspectorViewModel>(diagnosticsNode!.DetailContent);
+    }
+
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
     {
         var field = typeof(AgentChatOutputControl)

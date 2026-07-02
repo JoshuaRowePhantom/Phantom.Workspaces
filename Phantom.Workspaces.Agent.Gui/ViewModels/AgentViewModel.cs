@@ -22,7 +22,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentChatToolsDetailViewModel toolsDetail;
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
-    private readonly AgentChatDiagnosticsDetailViewModel diagnosticsDetail;
+    private readonly DiagnosticInspectorViewModel diagnosticsDetail;
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
@@ -45,7 +45,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsDetail = new AgentChatPlaceholderDetailViewModel(
             "Sub-agents",
             "Sub-agent model coming later.");
-        this.diagnosticsDetail = new AgentChatDiagnosticsDetailViewModel(this);
+        this.diagnosticsDetail = new DiagnosticInspectorViewModel(agentChat.History);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
@@ -121,6 +121,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public ICommand RequestOpenLogWindowCommand { get; }
 
     public InputQueueViewModel InputQueue { get; }
+
+    public DiagnosticInspectorViewModel DiagnosticsInspector => this.diagnosticsDetail;
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
