@@ -2286,7 +2286,7 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_RestoresFromDockLayout_WhenPresent()
     {
         // Arrange: capture a real dock-layout JSON from an open tab, then open a new
@@ -2338,7 +2338,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(restoredPane.Tabs, t => t is WebViewModel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WriteBackWorkspaceTabs_IsNotCalledOnDockLayoutChange()
     {
         // After the fix, pane.Tabs.CollectionChanged is NOT subscribed for write-back.
@@ -2375,7 +2375,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(beforeJson, afterJson);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task SaveWorkspaceLayoutAsync_PersistsDockLayoutWithDescriptors()
     {
         // Explicit WriteBackWorkspaceTabs persists dock-layout JSON that contains
@@ -2413,7 +2413,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("save-layout-test.example.com", dockLayoutJson, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DockLayoutRoundTrip_PreservesSplitPositionsAndDescriptors()
     {
         // Verify serialize → deserialize round-trip: the Descriptor survives and the
