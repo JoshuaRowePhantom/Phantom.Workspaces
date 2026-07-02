@@ -1126,4 +1126,117 @@ public sealed class ChatOutputHtmlModelTests
         Assert.NotEmpty(commands);
         Assert.NotNull(firstElementId);
     }
+
+    // ── ComputeChunkRanges / SnapCutPoint tests ───────────────────────────────
+
+    [Fact]
+    public void ComputeChunkRanges_SnapCutBoundaryInsideTool3Run_SnapsToBeforeRun()
+    {
+        // 400 items: 0-197=text, 198-200=tool-call, 201-399=text.
+        // rawStart=200; snapshot[199]=tool-call → k=199, snapshot[198]=tool-call → k=198, snapshot[197]=text → stop.
+        var items = Enumerable.Range(0, 198).Select(_ => TextMessage(ChatRole.User, "text"))
+            .Concat(Enumerable.Range(0, 3).Select(i => ToolCallMessage($"t{i}", $"c{i}")))
+            .Concat(Enumerable.Range(0, 199).Select(_ => TextMessage(ChatRole.User, "text")))
+            .ToList();
+        Assert.Equal(400, items.Count);
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Equal(2, ranges.Count);
+        Assert.Equal((198, 400), ranges[0]); // all three tool-call items in the same (newer) chunk
+        Assert.Equal((0, 198), ranges[1]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_SnapCutBetweenToolCallAndResult_SnapsToBeforeToolCall()
+    {
+        // 400 items: 0-198=text, 199=tool-call, 200=tool-result, 201-399=text.
+        // rawStart=200; snapshot[199]=tool-call-only → snap to 199; snapshot[198]=text → stop.
+        var items = Enumerable.Range(0, 199).Select(_ => TextMessage(ChatRole.User, "text"))
+            .Append(ToolCallMessage("tool", "c1"))
+            .Append(ToolResultMessage("c1"))
+            .Concat(Enumerable.Range(0, 199).Select(_ => TextMessage(ChatRole.User, "text")))
+            .ToList();
+        Assert.Equal(400, items.Count);
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Equal(2, ranges.Count);
+        Assert.Equal((199, 400), ranges[0]); // tool-call and its result are in the same (newer) chunk
+        Assert.Equal((0, 199), ranges[1]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_SnapCutImmediatelyAfterToolRun_NoSnap()
+    {
+        // 399 items: 0-198=text, 199-201=tool-calls, 202-398=text.
+        // rawStart=199; snapshot[198]=text → no snap; tool items 199-201 stay in newer chunk.
+        var items = Enumerable.Range(0, 199).Select(_ => TextMessage(ChatRole.User, "text"))
+            .Concat(Enumerable.Range(0, 3).Select(i => ToolCallMessage($"t{i}", $"c{i}")))
+            .Concat(Enumerable.Range(0, 197).Select(_ => TextMessage(ChatRole.User, "text")))
+            .ToList();
+        Assert.Equal(399, items.Count);
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Equal(2, ranges.Count);
+        Assert.Equal((199, 399), ranges[0]);
+        Assert.Equal((0, 199), ranges[1]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_500Items_Produces3Chunks()
+    {
+        var items = Enumerable.Range(0, 500).Select(_ => TextMessage(ChatRole.User, "text")).ToList();
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Equal(3, ranges.Count);
+        Assert.Equal((300, 500), ranges[0]);
+        Assert.Equal((100, 300), ranges[1]);
+        Assert.Equal((0, 100), ranges[2]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_AllToolCalls300Items_ProducesOneChunk()
+    {
+        // All 300 items are tool-call-only. HistoryChunkSize=200: rawStart=100, snap walks back to 0.
+        var items = Enumerable.Range(0, 300).Select(i => ToolCallMessage($"t{i}", $"c{i}")).ToList();
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Single(ranges);
+        Assert.Equal((0, 300), ranges[0]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_ToolRunSpanning201Items_ProducesOneChunk()
+    {
+        // 201 tool-call items: rawStart=1, snap(1): snapshot[0]=tool-call → k=0. One chunk (0,201).
+        var items = Enumerable.Range(0, 201).Select(i => ToolCallMessage($"t{i}", $"c{i}")).ToList();
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Single(ranges);
+        Assert.Equal((0, 201), ranges[0]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_ExactlyHistoryChunkSizeItems_ProducesOneChunk()
+    {
+        var items = Enumerable.Range(0, 200).Select(_ => TextMessage(ChatRole.User, "text")).ToList();
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Single(ranges);
+        Assert.Equal((0, 200), ranges[0]);
+    }
+
+    [Fact]
+    public void ComputeChunkRanges_EmptySnapshot_ProducesNoChunks()
+    {
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges([]);
+
+        Assert.Empty(ranges);
+    }
 }

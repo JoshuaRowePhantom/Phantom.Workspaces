@@ -960,6 +960,61 @@ public sealed class ChatOutputHtmlModel : IDisposable
         return (recording.Commands, firstElementId);
     }
 
+    /// <summary>
+    /// Returns a list of <c>(Start, End)</c> index ranges for chunks of <paramref name="snapshot"/>,
+    /// newest-first. Each raw cut point (a multiple of <see cref="HistoryChunkSize"/> from the end)
+    /// is snapped backward past any contiguous tool-related run it falls inside, ensuring that tool-call
+    /// groups and their results are never split across independently generated chunks.
+    ///
+    /// <para>In pathological cases (e.g. a conversation consisting entirely of tool calls), snapping may
+    /// produce a single chunk covering the entire snapshot. This is intentional: the whole run must be
+    /// processed together for correct grouping.</para>
+    /// </summary>
+    internal static IReadOnlyList<(int Start, int End)> ComputeChunkRanges(
+        IReadOnlyList<AgentChatHistoryItem> snapshot)
+    {
+        var chunks = new List<(int Start, int End)>();
+        var i = snapshot.Count;
+        while (i > 0)
+        {
+            var rawStart = Math.Max(0, i - HistoryChunkSize);
+            var start = SnapCutPoint(snapshot, rawStart);
+            chunks.Add((start, i));
+            i = start;
+        }
+
+        return chunks;
+    }
+
+    private static int SnapCutPoint(IReadOnlyList<AgentChatHistoryItem> snapshot, int rawCut)
+    {
+        var k = rawCut;
+        while (k > 0 && IsToolRelated(snapshot[k - 1]))
+        {
+            k--;
+        }
+
+        return k;
+    }
+
+    private static bool IsToolRelated(AgentChatHistoryItem item)
+    {
+        if (item.Contents.Count == 0)
+        {
+            return false;
+        }
+
+        var allCalls = true;
+        var allResults = true;
+        foreach (var content in item.Contents)
+        {
+            if (content is not FunctionCallContent) { allCalls = false; }
+            if (content is not FunctionResultContent) { allResults = false; }
+        }
+
+        return allCalls || allResults;
+    }
+
     public void Dispose()
     {
         if (this.historyItems is INotifyCollectionChanged historyChanged)
