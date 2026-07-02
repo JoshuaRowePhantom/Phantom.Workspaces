@@ -352,6 +352,18 @@ internal sealed class ToolCallGroupHtmlModel
             ChatOutputUpdateLocation.Replace,
             ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.groupId, this.lastToolName, this.callCount));
     }
+
+    /// <summary>
+    /// Updates group state (call count, last tool name, and <see cref="ChatMessageHtmlModel.IsInserted"/>)
+    /// without emitting any sink operations. Used during initial population for items already in the DOM
+    /// (rendered by the chunk loader, so DOM calls are suppressed via <c>skipInitialItems</c>).
+    /// </summary>
+    internal void AppendItemStateOnly(ChatMessageHtmlModel model, string toolName)
+    {
+        this.callCount++;
+        this.lastToolName = toolName;
+        model.IsInserted = true;
+    }
 }
 
 /// <summary>
@@ -382,6 +394,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
+    private readonly int skipInitialItems;
+    private bool inInitialTransform;
 
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
@@ -393,7 +407,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
-        Func<string, string?>? resolveSubAgentId = null)
+        Func<string, string?>? resolveSubAgentId = null,
+        int skipInitialItems = 0)
         : base(source, target)
     {
         this.sink = sink;
@@ -404,7 +419,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
         this.resolveSubAgentId = resolveSubAgentId;
+        this.skipInitialItems = skipInitialItems;
+        this.inInitialTransform = true;
         this.ApplyInitialTransform();
+        this.inInitialTransform = false;
     }
 
     protected override RenderSlot Create(AgentChatHistoryItem sourceItem)
@@ -416,6 +434,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     protected override void OnInsert(int index, RenderSlot slot)
     {
         var sourceItem = this.Source[index];
+        var suppressSink = this.inInitialTransform && index < this.skipInitialItems;
 
         // If the new item contains only FunctionResultContent items, try to inject each result into
         // the preceding slot that owns the matching FunctionCallContent. When any result is injected
@@ -458,7 +477,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 if (prevSlot.Group is { } existingGroup)
                 {
                     // Extend the existing group: no new top-level DOM element needed.
-                    existingGroup.AppendItem(slot.Model, toolName);
+                    if (!suppressSink)
+                        existingGroup.AppendItem(slot.Model, toolName);
+                    else
+                        existingGroup.AppendItemStateOnly(slot.Model, toolName);
                     slot.Group = existingGroup;
                     return;
                 }
@@ -471,13 +493,17 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     var group = new ToolCallGroupHtmlModel(groupId, this.sink, prevToolName);
 
                     // Replace the previous standalone message with the group that wraps it.
-                    this.sink.UpdateContent(
-                        prevSlot.Model.ElementId,
-                        ChatOutputUpdateLocation.Replace,
-                        group.BuildHtml(prevSlot.Model.BuildHtml()));
+                    if (!suppressSink)
+                        this.sink.UpdateContent(
+                            prevSlot.Model.ElementId,
+                            ChatOutputUpdateLocation.Replace,
+                            group.BuildHtml(prevSlot.Model.BuildHtml()));
                     prevSlot.Group = group;
 
-                    group.AppendItem(slot.Model, toolName);
+                    if (!suppressSink)
+                        group.AppendItem(slot.Model, toolName);
+                    else
+                        group.AppendItemStateOnly(slot.Model, toolName);
                     slot.Group = group;
                     return;
                 }
@@ -485,14 +511,17 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         // Standalone insert (non-tool-call, or first/isolated tool call with no adjacent group).
-        var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
-            this.Target,
-            index,
-            this.containerPath,
-            static s => s.Model.IsInserted,
-            static s => s.Group?.GroupId ?? s.Model.ElementId);
-        this.sink.UpdateContent(reference, location, slot.Model.BuildHtml());
-        slot.Model.IsInserted = true;
+        if (!suppressSink)
+        {
+            var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
+                this.Target,
+                index,
+                this.containerPath,
+                static s => s.Model.IsInserted,
+                static s => s.Group?.GroupId ?? s.Model.ElementId);
+            this.sink.UpdateContent(reference, location, slot.Model.BuildHtml());
+            slot.Model.IsInserted = true;
+        }
     }
 
     protected override void OnRemoveAt(int index, RenderSlot slot)

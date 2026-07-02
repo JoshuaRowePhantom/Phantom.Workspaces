@@ -1239,4 +1239,128 @@ public sealed class ChatOutputHtmlModelTests
 
         Assert.Empty(ranges);
     }
+
+    // ── ChatMessageHtmlTransformer.skipInitialItems tests (issue #630) ──────────
+
+    private static ChatMessageHtmlTransformer MakeTransformer(
+        ObservableCollection<AgentChatHistoryItem> source,
+        RecordingSink sink,
+        int skipInitialItems = 0)
+    {
+        var slots = new List<RenderSlot>();
+        var idCounter = 0;
+        return new ChatMessageHtmlTransformer(
+            source,
+            slots,
+            sink,
+            () => true,
+            () => idCounter++,
+            ChatOutputHtmlRenderer.HistoryContainerId,
+            skipInitialItems: skipInitialItems);
+    }
+
+    [Fact]
+    public void ChatMessageHtmlTransformer_SkipInitialItems_Zero_EmitsAllItems()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "a"),
+            TextMessage(ChatRole.Assistant, "b"),
+            TextMessage(ChatRole.User, "c"),
+        };
+        var sink = new RecordingSink();
+
+        using var _ = MakeTransformer(source, sink, skipInitialItems: 0);
+
+        Assert.Equal(3, sink.ContentOperations.Count);
+    }
+
+    [Fact]
+    public void ChatMessageHtmlTransformer_SkipInitialItems_DoesNotEmitCommandsForSkippedItems()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "skip-0"),
+            TextMessage(ChatRole.User, "skip-1"),
+            TextMessage(ChatRole.Assistant, "render-2"),
+            TextMessage(ChatRole.Assistant, "render-3"),
+        };
+        var sink = new RecordingSink();
+
+        using var _ = MakeTransformer(source, sink, skipInitialItems: 2);
+
+        var ops = sink.ContentOperations;
+        Assert.Equal(2, ops.Count);
+        Assert.All(ops, op => Assert.DoesNotContain("skip-", op.Content));
+        Assert.Contains(ops, op => op.Content.Contains("render-2"));
+        Assert.Contains(ops, op => op.Content.Contains("render-3"));
+    }
+
+    [Fact]
+    public void ChatMessageHtmlTransformer_SkipInitialItems_GreaterThanSourceCount_EmitsNothing()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "item"),
+        };
+        var sink = new RecordingSink();
+
+        using var _ = MakeTransformer(source, sink, skipInitialItems: 5);
+
+        Assert.Empty(sink.ContentOperations);
+    }
+
+    [Fact]
+    public void ChatMessageHtmlTransformer_SkipInitialItems_SubscribesToFutureItems()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "existing"),
+        };
+        var sink = new RecordingSink();
+
+        using var transformer = MakeTransformer(source, sink, skipInitialItems: 1);
+
+        // Constructor: 1 item skipped → no ops
+        Assert.Empty(sink.ContentOperations);
+
+        // Live add after the skip range
+        source.Add(TextMessage(ChatRole.Assistant, "new-item"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Contains("new-item", op.Content);
+    }
+
+    [Fact]
+    public void ChatMessageHtmlTransformer_SkipInitialItems_ToolCallGroupingStillCorrect()
+    {
+        // Items 0 and 1 are tool-call-only and are skipped — they form a group in internal state.
+        // Item 2 is also tool-call-only and NOT skipped — it must extend that group.
+        // Adding item 3 (tool-call-only) must further extend the group, not create a standalone element.
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c0"),
+            ToolCallMessage("tool_b", "c1"),
+            ToolCallMessage("tool_c", "c2"),
+        };
+        var sink = new RecordingSink();
+
+        using var transformer = MakeTransformer(source, sink, skipInitialItems: 2);
+
+        // Only item 2 was rendered — it must have extended the group established by items 0-1.
+        // Since items 0-1 form a group and item 2 extends it, we expect an Append-into-body op.
+        var initialOps = sink.ContentOperations.ToList();
+        Assert.Contains(initialOps, op =>
+            op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        sink.Operations.Clear();
+
+        // Live add of item 3 — must extend the same group
+        source.Add(ToolCallMessage("tool_d", "c3"));
+
+        var liveOps = sink.ContentOperations;
+        Assert.DoesNotContain(liveOps, op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group-body"));
+        Assert.Contains(liveOps, op =>
+            op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+    }
 }
