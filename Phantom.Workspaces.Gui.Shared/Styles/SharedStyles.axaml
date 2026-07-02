@@ -846,6 +846,15 @@
     </Style>
     <Style Selector="ProgressBar.glyph-indicator.vibrating-alarm-clock.failed">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Status.Bad}" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock x:Name="Glyph" Text="⏰" FontSize="14"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
     </Style>
 
     <!-- swinging-bell: 🔔 static idle → pendulum from top-centre when :indeterminate -->
