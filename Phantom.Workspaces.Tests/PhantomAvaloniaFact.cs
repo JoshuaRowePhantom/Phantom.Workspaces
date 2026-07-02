@@ -51,8 +51,27 @@ internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXu
         ExceptionAggregator aggregator,
         CancellationTokenSource cancellationTokenSource)
     {
-        var summary = await ((ISelfExecutingXunitTestCase)_inner).Run(
-            explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
+        // AvaloniaTestCase.Run intentionally blocks its calling thread (via Task.Run + .GetResult())
+        // to hold xunit's concurrency throttle slot. The correct pattern (per Xunit.StaFact PR #55)
+        // is to do that blocking on a dedicated non-thread-pool thread, not a pool thread, to
+        // avoid starving the pool when test execution itself needs thread pool threads.
+        var tcs = new TaskCompletionSource<RunSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var task = ((ISelfExecutingXunitTestCase)_inner).Run(
+                    explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
+                tcs.SetResult(task.AsTask().GetAwaiter().GetResult());
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        }) { IsBackground = true };
+        thread.Start();
+
+        var summary = await tcs.Task;
 
         // Force Gen2 GC after application.Dispose() has released the visual tree,
         // preventing catastrophic allocations from cascading into the next test.
