@@ -2642,6 +2642,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Collect tab declarations: prefer new tabs[] array, fall back to legacy regions[].tabs
         var tabDeclarations = CollectTabDeclarations(workspaceData);
 
+        // Determine the active/focused tab id before any async work so it is available inside InvokeAsync.
+        // Prefer new active-tab-id property, falling back to legacy focused-tab-id.
+        string? activeTabId = null;
+        if (workspaceData.TryGetProperty("active-tab-id", out var activeTabIdElement)
+            && activeTabIdElement.ValueKind == JsonValueKind.String)
+        {
+            activeTabId = activeTabIdElement.GetString();
+        }
+        else if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
+            && focusedTabIdElement.ValueKind == JsonValueKind.String)
+        {
+            activeTabId = focusedTabIdElement.GetString();
+        }
+
         // Load all tabs in parallel, preserving declaration order
         var tabAdded = false;
         if (tabDeclarations.Count > 0)
@@ -2650,6 +2664,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 tabDeclarations.Select(tabDecl => this.TryFetchWorkspaceTabAsync(tabDecl)));
 
             // Add to pane.Tabs on the UI thread; WorkspaceDocumentGenerator creates dock documents automatically.
+            // Activate the saved active tab in the same dispatcher frame: PrepareDocumentContainer fires
+            // synchronously during Tabs.Add, so GetDocumentForTab is reliable immediately after Add.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var workspaceClosed = false;
@@ -2667,6 +2683,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
                     workspacePane.Tabs.Add(workspaceTab);
                     tabAdded = true;
+                }
+
+                if (tabAdded && !workspaceClosed && !string.IsNullOrEmpty(activeTabId))
+                {
+                    var focusedDoc = this.dockFactory.GetDocumentForTab(activeTabId);
+                    if (focusedDoc is not null)
+                    {
+                        this.dockFactory.SetActiveDockable(focusedDoc);
+                    }
                 }
             });
         }
@@ -2691,37 +2716,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
 
                 workspacePane.Tabs.Add(defaultTab);
-            });
-        }
-
-        // Activate the saved active/focused tab (new active-tab-id property, falling back to legacy focused-tab-id)
-        string? activeTabId = null;
-        if (workspaceData.TryGetProperty("active-tab-id", out var activeTabIdElement)
-            && activeTabIdElement.ValueKind == JsonValueKind.String)
-        {
-            activeTabId = activeTabIdElement.GetString();
-        }
-        else if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
-            && focusedTabIdElement.ValueKind == JsonValueKind.String)
-        {
-            activeTabId = focusedTabIdElement.GetString();
-        }
-
-        if (!string.IsNullOrEmpty(activeTabId))
-        {
-            var tabIdToActivate = activeTabId;
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!this.WorkspacePanes.Contains(workspacePane))
-                {
-                    return;
-                }
-
-                var focusedDoc = this.dockFactory.GetDocumentForTab(tabIdToActivate);
-                if (focusedDoc is not null)
-                {
-                    this.dockFactory.SetActiveDockable(focusedDoc);
-                }
             });
         }
     }
