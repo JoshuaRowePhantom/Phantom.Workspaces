@@ -323,6 +323,132 @@ public sealed class ChatOutputBrowserIntegrationTests
             + $"<div class=\"chat-content chat-text\" data-copy-target id=\"{id}-c0\">{text}</div>"
             + "</div></div>";
 
+    private static string MessageWithTimestamp(string id, string utcIso)
+        => $"<div class=\"chat-message\" id=\"{id}\">"
+            + $"<div class=\"chat-header\" id=\"{id}-header\">"
+            + $"<span data-utc=\"{utcIso}\" id=\"{id}-ts\"></span>"
+            + "</div>"
+            + $"<div class=\"chat-contents\" id=\"{id}-contents\"></div>"
+            + "</div>";
+
+    [Fact]
+    public Task TimestampFormatter_InitOrder_NoTypeError()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var result = await EvalAsync(web, "typeof TimestampFormatter");
+                Assert.Equal("\"object\"", result);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_SameDay_FormatsTimeOnly()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var nowIso = await EvalAsync(web, "new Date().toISOString()");
+                // nowIso is JSON-encoded, strip surrounding quotes
+                var iso = nowIso.Trim('"');
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-0", iso)));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-0-ts').textContent");
+                // Same-day format contains only a time component (colon between digits), no month names
+                Assert.Matches(@"\d{1,2}:\d{2}", text.Trim('"'));
+                Assert.DoesNotMatch(@"[A-Za-z]{3}", text.Trim('"'));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_DifferentDay_FormatsDateAndTime()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                // Year 2000 is guaranteed to be a different day from now
+                var oldIso = "2000-06-15T10:30:00.000Z";
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-1", oldIso)));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-1-ts').textContent");
+                var stripped = text.Trim('"');
+                // Different-day format contains a short month abbreviation
+                Assert.Matches(@"[A-Za-z]{3}", stripped);
+                // And a time component
+                Assert.Matches(@"\d{1,2}:\d{2}", stripped);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_InvalidDate_IsIgnored()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-2", "not-a-date")));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-2-ts').textContent");
+                // Formatter skips invalid dates; span has no original text content
+                Assert.Equal("\"\"", text);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_StreamingUpdate_FormatsNewSpan()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var oldIso = "2000-06-15T10:30:00.000Z";
+                // Dynamically appended via the streaming update path - MutationObserver must format it
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-3", oldIso)));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-3-ts').textContent");
+                var stripped = text.Trim('"');
+                // If the MutationObserver is registered, the span is formatted (non-empty, contains month)
+                Assert.NotEmpty(stripped);
+                Assert.Matches(@"[A-Za-z]{3}", stripped);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static string LoadShellHtml()
     {
         var assembly = typeof(ChatOutputBrowserCommands).Assembly;

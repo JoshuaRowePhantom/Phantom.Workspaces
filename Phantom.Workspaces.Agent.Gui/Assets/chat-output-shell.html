@@ -582,6 +582,42 @@
     })();
   </script>
   <script>
+    /* timestamp-formatter.js — formats [data-utc] spans in local time.
+     * Same day as now: shows HH:MM only. Different day: shows Mon D HH:MM.
+     * A MutationObserver keeps watching for spans added by streaming updates.
+     */
+    var TimestampFormatter = (function () {
+      "use strict";
+
+      function formatTimestamp(el) {
+        var d = new Date(el.getAttribute("data-utc"));
+        if (isNaN(d.getTime())) { return; }
+        var now = new Date();
+        var sameDay = d.toDateString() === now.toDateString();
+        el.textContent = sameDay
+          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+            d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function init(root) {
+        root.querySelectorAll("[data-utc]").forEach(formatTimestamp);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-utc")) { formatTimestamp(node); }
+              node.querySelectorAll("[data-utc]").forEach(formatTimestamp);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      return { init: init };
+    })();
+  </script>
+  <script>
     (function () {
       "use strict";
 
@@ -685,42 +721,6 @@
       DetailsGutter.init(document);
       InspectGutter.init(document);
       TimestampFormatter.init(document);
-    })();
-  </script>
-  <script>
-    /* timestamp-formatter.js — formats [data-utc] spans in local time.
-     * Same day as now: shows HH:MM only. Different day: shows Mon D HH:MM.
-     * A MutationObserver keeps watching for spans added by streaming updates.
-     */
-    var TimestampFormatter = (function () {
-      "use strict";
-
-      function formatTimestamp(el) {
-        var d = new Date(el.getAttribute("data-utc"));
-        if (isNaN(d.getTime())) { return; }
-        var now = new Date();
-        var sameDay = d.toDateString() === now.toDateString();
-        el.textContent = sameDay
-          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
-            d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      }
-
-      function init(root) {
-        root.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-        var observer = new MutationObserver(function (mutations) {
-          mutations.forEach(function (mutation) {
-            mutation.addedNodes.forEach(function (node) {
-              if (node.nodeType !== 1) { return; }
-              if (node.hasAttribute("data-utc")) { formatTimestamp(node); }
-              node.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-            });
-          });
-        });
-        observer.observe(root, { childList: true, subtree: true });
-      }
-
-      return { init: init };
     })();
   </script>
   <script>
