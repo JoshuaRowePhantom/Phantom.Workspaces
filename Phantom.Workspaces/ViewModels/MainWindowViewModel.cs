@@ -76,7 +76,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private bool isAltHeld;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
-    private readonly Dictionary<string, NotifyCollectionChangedEventHandler> tabsWriteBackSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
     private readonly List<RunningAgentChatLease> autoResumeLeases = [];
 
@@ -2184,14 +2183,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.innerDockSubscriptions[workspacePane.Id] = handler;
 
         RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
-
-        // Subscribe to pane.Tabs changes for write-back to the workspace entity.
-        NotifyCollectionChangedEventHandler writeBackHandler = (_, _) =>
-        {
-            this.WriteBackWorkspaceTabs(workspacePane);
-        };
-        workspacePane.Tabs.CollectionChanged += writeBackHandler;
-        this.tabsWriteBackSubscriptions[workspacePane.Id] = writeBackHandler;
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
@@ -2203,23 +2194,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
         if (documentDock?.VisibleDockables is INotifyCollectionChanged collection)
             collection.CollectionChanged -= handler;
-
-        if (this.tabsWriteBackSubscriptions.TryGetValue(workspacePane.Id, out var writeBackHandler))
-        {
-            this.tabsWriteBackSubscriptions.Remove(workspacePane.Id);
-            workspacePane.Tabs.CollectionChanged -= writeBackHandler;
-        }
     }
 
     /// <summary>
     /// Writes the current visual tab order and dock layout back to the workspace entity.
-    /// Called whenever <see cref="WorkspacePaneViewModel.Tabs"/> changes (add, remove, reorder).
+    /// Call explicitly after user-initiated tab changes (open, close).
+    /// Returns the underlying update task so callers can await completion when needed.
     /// </summary>
-    private void WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
+    internal Task WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
     {
-        if (this.entityBroker is null) return;
+        if (this.entityBroker is null) return Task.CompletedTask;
         var entityData = workspacePane.Entity.Data;
-        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return;
+        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return Task.CompletedTask;
 
         // Build tabs array as workspace-tab-descriptors
         var tabDescriptors = new JsonArray();
@@ -2232,31 +2218,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        // Serialize dock layout
+        // Serialize dock layout: DockState.Save captures split proportions and active-dockable
+        // state into the layout tree. Owner back-references are handled by ReferenceHandler.Preserve
+        // ($ref markers); WorkspaceDockTypeInfoResolver strips Type-typed properties that STJ cannot
+        // serialize (e.g. Avalonia StyledElement.StyleKey).
         JsonNode? dockLayout = null;
         if (workspacePane.ContentLayout is not null)
         {
             this.dockFactory.DockState.Save(workspacePane.ContentLayout);
 
-            // DockSerializer uses ReferenceHandler.Preserve + $type discriminators.
-            // STJ cannot emit both $ref and $type on the same object, so cycle detection
-            // fails and Owner back-references hit the 64-level depth limit.
-            // Fix: clear every Owner link before serialization and restore it after.
-            // WorkspaceDockTypeInfoResolver additionally removes Type-typed properties
-            // (e.g. Avalonia StyledElement.StyleKey) that STJ cannot serialize.
-            var savedOwners = CaptureAndClearOwners(workspacePane.ContentLayout);
-            string layoutJson;
-            try
-            {
-                var serializer = new DockSerializer(
-                    typeof(System.Collections.ObjectModel.ObservableCollection<>),
-                    new WorkspaceDockTypeInfoResolver());
-                layoutJson = serializer.Serialize(workspacePane.ContentLayout);
-            }
-            finally
-            {
-                RestoreOwners(savedOwners);
-            }
+            var serializer = new DockSerializer(
+                typeof(System.Collections.ObjectModel.ObservableCollection<>),
+                new WorkspaceDockTypeInfoResolver());
+            var layoutJson = serializer.Serialize(workspacePane.ContentLayout);
 
             if (!string.IsNullOrWhiteSpace(layoutJson))
             {
@@ -2266,7 +2240,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Build merged entity data with updated tabs and dock-layout
         var entityNode = JsonNode.Parse(dataElement.GetRawText())?.AsObject();
-        if (entityNode is null) return;
+        if (entityNode is null) return Task.CompletedTask;
 
         entityNode["tabs"] = tabDescriptors;
 
@@ -2299,7 +2273,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         using var doc = JsonDocument.Parse(updatedJson);
         var updatedData = doc.RootElement.Clone();
 
-        _ = this.entityBroker.UpdateAsync(new UpdateRequest
+        return this.entityBroker.UpdateAsync(new UpdateRequest
         {
             UpdateMetadata = new UpdateMetadata
             {
@@ -2489,36 +2463,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
             }
         }
-    }
-
-    /// <summary>
-    /// Captures the <see cref="IDockable.Owner"/> of every dockable reachable from
-    /// <paramref name="root"/> and sets them to <c>null</c>. Returns the captured
-    /// values so they can be restored via <see cref="RestoreOwners"/>.
-    /// </summary>
-    internal static Dictionary<IDockable, IDockable?> CaptureAndClearOwners(IDockable root)
-    {
-        var saved = new Dictionary<IDockable, IDockable?>(ReferenceEqualityComparer.Instance);
-        CaptureAndClearOwnersCore(root, saved);
-        return saved;
-    }
-
-    private static void CaptureAndClearOwnersCore(IDockable dockable, Dictionary<IDockable, IDockable?> saved)
-    {
-        if (saved.ContainsKey(dockable)) return;
-        saved[dockable] = dockable.Owner;
-        dockable.Owner = null;
-        if (dockable is IDock dock && dock.VisibleDockables is not null)
-        {
-            foreach (var child in dock.VisibleDockables.ToList())
-                CaptureAndClearOwnersCore(child, saved);
-        }
-    }
-
-    internal static void RestoreOwners(Dictionary<IDockable, IDockable?> saved)
-    {
-        foreach (var (dockable, owner) in saved)
-            dockable.Owner = owner;
     }
 
     internal string? FindWorkspacePaneIdForTab(string tabId)
