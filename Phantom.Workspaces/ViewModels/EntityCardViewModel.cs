@@ -22,6 +22,8 @@ public sealed class EntityCardViewModel : ViewModelBase
         _ => { },
         _ => false);
 
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
+
     private readonly SubscribedEntityViewModel? entity;
     private readonly FieldEditorFactory? fieldEditorFactory;
     private readonly string cardViewName;
@@ -441,12 +443,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         }
 
         using var parsedDocument = JsonDocument.Parse(element.GetRawText());
-        return JsonSerializer.Serialize(
-            parsedDocument.RootElement,
-            new JsonSerializerOptions
-            {
-                WriteIndented = true,
-            });
+        return JsonSerializer.Serialize(parsedDocument.RootElement, IndentedJsonOptions);
     }
 
     private void OnEntityPropertyChanged(

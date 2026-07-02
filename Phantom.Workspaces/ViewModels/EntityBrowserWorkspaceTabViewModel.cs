@@ -358,7 +358,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 });
             subscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
             this.subscribedGetsByPath[pathKey] = subscribedGet;
-            // The subscription's CollectionChanged handler will trigger a rebuild when results arrive
+            _ = this.RebuildTreeAsync();
         }
         finally
         {
