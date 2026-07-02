@@ -72,6 +72,7 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
     // Sub-agent registry
     private readonly Dictionary<string, (AgentChat Chat, SubAgentChatClient Client)> subAgentMap =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> parentToolCallIdToAgentId = new(StringComparer.Ordinal);
     private readonly object subAgentsLock = new();
     private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
     private readonly List<AgentChat> restoredSubAgentChats = [];
@@ -725,6 +726,18 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
         }
     }
 
+    /// <summary>
+    /// Returns the child <see cref="AgentChat.AgentId"/> that was spawned by the tool call with the
+    /// given <paramref name="parentToolCallId"/>, or <see langword="null"/> if no such mapping exists.
+    /// </summary>
+    public string? TryGetSubAgentIdByToolCallId(string parentToolCallId)
+    {
+        lock (this.subAgentsLock)
+        {
+            return this.parentToolCallIdToAgentId.TryGetValue(parentToolCallId, out var agentId) ? agentId : null;
+        }
+    }
+
     /// <inheritdoc/>
     public async Task<ISubAgentChat> GetOrCreateAsync(
         string agentId,
@@ -764,6 +777,7 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
             else
             {
                 this.subAgentMap[agentId] = (childChat, chatClient);
+                this.parentToolCallIdToAgentId[parentToolCallId] = agentId;
                 result = chatClient;
             }
         }

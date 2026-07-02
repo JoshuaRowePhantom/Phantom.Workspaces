@@ -64,6 +64,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     /// </summary>
     public event EventHandler<string>? InspectorRequested;
 
+    /// <summary>
+    /// Raised when the user clicks the '→ Open sub-agent' jump link on a tool-result block.
+    /// The event argument is the <see cref="AgentChat.AgentId"/> of the target sub-agent.
+    /// </summary>
+    public event EventHandler<string>? NavigateToAgentRequested;
+
     public AgentChatOutputControl()
     {
         this.InitializeComponent();
@@ -247,7 +253,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 sink: this,
                 isDiagnosticsVisible: () => vm.IsDiagnosticsVisible,
                 toolFactory: DefaultToolFactory,
-                statusSink: this);
+                statusSink: this,
+                resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId);
             this.browser.EndBatch();
             this.suppressSinkScroll = false;
 
@@ -331,6 +338,19 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                     if (!string.IsNullOrEmpty(path))
                     {
                         this.outputModel?.NotifyInsertionFailed(path);
+                    }
+                }
+                break;
+            }
+            case "navigateToAgent":
+            {
+                if (root.TryGetProperty("agentId", out var agentIdProp))
+                {
+                    var agentId = agentIdProp.GetString();
+                    if (!string.IsNullOrEmpty(agentId))
+                    {
+                        this.NavigateToAgentRequested?.Invoke(this, agentId);
+                        this.subscribedViewModel?.NavigateToAgentHandler?.Invoke(agentId);
                     }
                 }
                 break;

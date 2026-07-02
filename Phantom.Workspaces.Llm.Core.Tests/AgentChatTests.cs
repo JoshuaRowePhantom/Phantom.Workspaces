@@ -1636,4 +1636,16 @@ public sealed class AgentChatTests
             => this.inner.WriteSubAgentManifestEntryAsync(parentSessionId, entry, cancellationToken);
     }
 
+    [Fact]
+    public void TryGetSubAgentIdByToolCallId_ReturnsNull_WhenNotRegistered()
+    {
+        // Verify that a fresh AgentChat returns null for any parentToolCallId
+        // before any sub-agent has been registered.
+        var chat = CreateChat();
+
+        var result = chat.TryGetSubAgentIdByToolCallId("nonexistent-tool-call-id");
+
+        Assert.Null(result);
+    }
+
 }

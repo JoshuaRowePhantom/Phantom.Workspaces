@@ -297,6 +297,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// </summary>
     public Action<string>? OpenUrlHandler { get; set; }
 
+    /// <summary>
+    /// Called when the user clicks the '→ Open sub-agent' jump link on a tool-result block.
+    /// The argument is the <see cref="AgentChat.AgentId"/> of the target sub-agent.
+    /// Implemented in the workspace layer (issue #634). Null means no navigation occurs.
+    /// </summary>
+    public Action<string>? NavigateToAgentHandler { get; set; }
+
     private void RequestOpenLogWindow()
         => this.OpenLogWindowRequested?.Invoke(this, EventArgs.Empty);
 

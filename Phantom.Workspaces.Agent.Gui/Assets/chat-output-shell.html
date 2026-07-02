@@ -670,6 +670,14 @@
         postToHost({ type: "openUrl", url: anchor.href });
       }, true);
 
+      // Intercept sub-agent jump-link clicks and post navigateToAgent to host.
+      document.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-navigate-agent-id]");
+        if (!btn) { return; }
+        e.preventDefault();
+        postToHost({ type: "navigateToAgent", agentId: btn.getAttribute("data-navigate-agent-id") });
+      }, true);
+
       postToHost({ type: "ready" });
 
       // Initialise gutter components once the host bridge is wired up.

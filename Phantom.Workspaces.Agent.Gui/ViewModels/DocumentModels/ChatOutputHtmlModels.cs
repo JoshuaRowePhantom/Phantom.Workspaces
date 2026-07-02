@@ -25,6 +25,7 @@ internal sealed class ChatMessageHtmlModel
     private readonly Func<bool>? isDiagnosticsVisible;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
+    private readonly Func<string, string?>? resolveSubAgentId;
     private readonly List<ContentBinding> bindings = [];
     private AgentChatHistoryItem source;
     private string? renderedRoleLabel;
@@ -40,7 +41,8 @@ internal sealed class ChatMessageHtmlModel
         IChatOutputHtmlSink sink,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
-        IAgentStatusSink? statusSink = null)
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null)
     {
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         ArgumentNullException.ThrowIfNull(sink);
@@ -51,6 +53,7 @@ internal sealed class ChatMessageHtmlModel
         this.sink = sink;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
+        this.resolveSubAgentId = resolveSubAgentId;
         this.Render(emit: false);
     }
 
@@ -108,11 +111,22 @@ internal sealed class ChatMessageHtmlModel
     {
         var roleLabel = this.source.Role.Value;
         this.renderedRoleLabel = roleLabel;
+        string? jumpLinkHtml = null;
+        if (this.source.ParentToolCallId is { } parentToolCallId && this.resolveSubAgentId is not null)
+        {
+            var subAgentId = this.resolveSubAgentId(parentToolCallId);
+            if (subAgentId is not null)
+            {
+                jumpLinkHtml = ChatOutputHtmlRenderer.RenderSubAgentJumpLink(subAgentId);
+            }
+        }
+
         return ChatOutputHtmlRenderer.RenderMessage(
             this.ElementId,
             roleLabel,
             this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
-            this.source.Timestamp);
+            this.source.Timestamp,
+            jumpLinkHtml);
     }
 
     public void Update(AgentChatHistoryItem newSource)
@@ -367,6 +381,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly string containerPath;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
+    private readonly Func<string, string?>? resolveSubAgentId;
 
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
@@ -377,7 +392,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         string containerPath,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
-        IAgentStatusSink? statusSink = null)
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null)
         : base(source, target)
     {
         this.sink = sink;
@@ -387,11 +403,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.containerPath = containerPath;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
+        this.resolveSubAgentId = resolveSubAgentId;
         this.ApplyInitialTransform();
     }
 
     protected override RenderSlot Create(AgentChatHistoryItem sourceItem)
-        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink));
+        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink, this.resolveSubAgentId));
 
     protected override void Update(RenderSlot target, AgentChatHistoryItem sourceItem)
         => target.Model.Update(sourceItem);
@@ -803,7 +820,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IChatOutputHtmlSink sink,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
-        IAgentStatusSink? statusSink = null)
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
@@ -823,7 +841,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
             ChatOutputHtmlRenderer.HistoryContainerId,
             isDiagnosticsVisible,
             toolFactory,
-            statusSink);
+            statusSink,
+            resolveSubAgentId);
         this.runningTransformer = new RunningChatItemsHtmlTransformer(
             runningItems,
             this.runningModels,
