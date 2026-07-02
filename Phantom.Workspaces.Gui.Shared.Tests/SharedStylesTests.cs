@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class SharedStylesTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void ThemeClassFontWeightResources_AreTypedFontWeightValues()
     {
         var sharedStyles = LoadSharedStyles();
@@ -30,7 +30,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void TextBlockClassStyles_WithFontWeightSetters_DoNotUseStringValues()
     {
         var sharedStyles = LoadSharedStyles();
@@ -52,7 +52,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void SimpleClassStyles_CanAttachToResolvedControlTypes()
     {
         var sharedStyles = LoadSharedStyles();
@@ -123,7 +123,7 @@ public sealed class SharedStylesTests
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void CopyableTextBox_InnerLeftContent_UsesTemplateSetter()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -148,7 +148,7 @@ public sealed class SharedStylesTests
             "InnerLeftContent setter must wrap control content in <Template>.");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void StatusThemeResources_AreSolidColorBrushes()
     {
         var sharedStyles = LoadSharedStyles();
@@ -171,7 +171,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineResources_Resolve()
     {
         var statusLineStyles = LoadAgentChatStatusLineStyles();
@@ -194,7 +194,7 @@ public sealed class SharedStylesTests
         _ = Assert.IsType<Thickness>(padding);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AltIndexBadge_DefaultOpacity_Is0Point5()
     {
         // Issue #349: badges must appear instantly at 0.50 base opacity, not fade in from 0.
@@ -213,7 +213,7 @@ public sealed class SharedStylesTests
         Assert.Equal(0.50, border.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AltIndexBadge_WhenAltHeld_OpacityIsOne()
     {
         // Issue #349: the alt-held override must still raise opacity to 1.
@@ -233,7 +233,7 @@ public sealed class SharedStylesTests
         Assert.Equal(1.0, border.Opacity);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void SharedStyles_QueueStatusStyles_DoNotReferenceSubmitStatusOption()
     {
         // Issue #253: SubmitStatusOption no longer exists on any ViewModel.
@@ -250,7 +250,7 @@ public sealed class SharedStylesTests
         Assert.DoesNotContain("SubmitStatusOption", content, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void SharedStyles_QueueImmediacyOptionPill_UsesThemeResourceForBackground()
     {
         // Issue #253: queue-immediacy-option-pill must use DynamicResource for Background

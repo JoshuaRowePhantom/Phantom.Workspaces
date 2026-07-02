@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -43,7 +43,7 @@ public sealed class CloneEntityShortcutHandlerTests
         Assert.True(handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensCloneEntityWorkspaceTabViewModel_WithoutCreatingEntity()
     {
         var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

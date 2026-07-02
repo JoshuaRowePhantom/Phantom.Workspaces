@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -50,7 +50,7 @@ public sealed class QueueComposerSlashCommandTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Submit_WithNonSlashText_QueuesNormally_WithoutCallingInterceptor()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(

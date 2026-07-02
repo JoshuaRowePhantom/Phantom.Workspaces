@@ -1243,6 +1243,55 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
         Assert.Equal(queryCountBeforeSecondWrite, counter.JsonSchemaQueryCount);
     }
 
+    [Fact]
+    public async Task UpdateAsync_WithSchemaChangesInRequest_ValidatesAgainstUpdatedSchemas()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var schemaAccessor = new SchemaAccessor(inner);
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(inner, schemaAccessor)).Populate();
+        Assert.Empty(populationErrors);
+
+        var dal = new SchemaValidatingDataAccessLayer(inner, schemaAccessor);
+        var schemaEntityId = new EntityId("d0e1f2a3-b4c5-4d6e-8f0a-1b2c3d4e5f6a");
+        var entityId = new EntityId("e1f2a3b4-c5d6-4e7f-9a0b-2c3d4e5f6a7b");
+
+        var result = await RequireUpdateSucceedsAsync(
+            dal,
+            CreateUpdateRequest(
+                CreateUpdateMetadata("Schema + entity in same request"),
+                new EntityChange[]
+                {
+                    CreateSchemaEntityChange(schemaEntityId, TestSchemaName),
+                    CreateValidatedEntityChange(entityId, "hello", TestSchemaName),
+                }));
+
+        Assert.DoesNotContain(result.EntityResults, r => r.UpdateState == UpdateState.Failed);
+        Assert.Equal(2, result.EntityResults.Count);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WithNoSchemaChanges_UsesSharedSingletonSchemaAccessor()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var counter = new QueryCountingDataAccessLayer(inner);
+        var schemaAccessor = new SchemaAccessor(counter);
+        var populationErrors = await new SchemaPopulator(new SchemaValidatingDataAccessLayer(counter, schemaAccessor)).Populate();
+        Assert.Empty(populationErrors);
+
+        var dal = new SchemaValidatingDataAccessLayer(counter, schemaAccessor);
+
+        var id1 = new EntityId("f2a3b4c5-d6e7-4f8a-0b1c-3d4e5f6a7b8c");
+        var id2 = new EntityId("a3b4c5d6-e7f8-4a0b-1c2d-4e5f6a7b8c9d");
+
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(CreateUpdateMetadata("write 1"), new[] { CreateTaskEntityChange(id1) }));
+        var countAfterFirst = counter.JsonSchemaQueryCount;
+
+        await RequireUpdateSucceedsAsync(dal, CreateUpdateRequest(CreateUpdateMetadata("write 2"), new[] { CreateTaskEntityChange(id2) }));
+
+        // The shared singleton SchemaAccessor caches schemas — the second update must not re-query.
+        Assert.Equal(countAfterFirst, counter.JsonSchemaQueryCount);
+    }
+
     private static EntityChange CreateTaskEntityChange(EntityId entityId)
     {
         using var entityDocument = JsonDocument.Parse(

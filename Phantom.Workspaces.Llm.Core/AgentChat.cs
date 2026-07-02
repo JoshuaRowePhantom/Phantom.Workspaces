@@ -535,7 +535,10 @@ public sealed class AgentChat : IAsyncDisposable
 
         if (writeToHistory)
         {
-            foreach (var historyItem in item.Items)
+            // Snapshot before iterating: the foreground scheduler may concurrently modify
+            // item.Items via SyncItems, so enumeration without a snapshot can throw
+            // "Collection was modified; enumeration operation may not execute."
+            foreach (var historyItem in item.Items.ToArray())
             {
                 this.AddHistoryItem(historyItem);
                 this.TurnCompleted?.Invoke(this, historyItem);
@@ -1163,6 +1166,10 @@ public sealed class AgentChat : IAsyncDisposable
                     }
 
                     var interruptedItems = runningItem.Items
+                        // Snapshot before iterating: the foreground scheduler may still have an
+                        // in-flight SyncItems call on runningItem.Items that would cause
+                        // "Collection was modified" if we enumerate without a snapshot.
+                        .ToArray()
                         .Concat([
                             new AgentChatHistoryItem
                             {
@@ -1180,6 +1187,9 @@ public sealed class AgentChat : IAsyncDisposable
                     var runningItem = currentPartialTextResponseItem
                         ?? throw new InvalidOperationException("Running item was unexpectedly null while handling a provider error.");
                     var errorItems = runningItem.Items
+                        // Snapshot before iterating: same concurrent-modification risk as in
+                        // the interrupt path above.
+                        .ToArray()
                         .Concat([
                             new AgentChatHistoryItem
                             {

@@ -523,7 +523,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.ApplySelectedViewAsync();
         await this.InitializeProfileAsync();
         this.InitializeDockLayout(); // Initialize workspace-level dock
-        await this.OpenStartupWorkspaceAsync();
+        if (this.configuration?.SkipStartupWorkspace != true)
+        {
+            await this.OpenStartupWorkspaceAsync();
+        }
         this.refreshTimer.Start();
         await this.InitializeWebHostAsync();
         await this.InitializeScheduledToolsAsync();

@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListItemViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToggleExpandCommand_UpdatesItemAndNodeExpansionState()
     {
         var node = new EntityListNodeViewModel(
@@ -34,7 +34,7 @@ public sealed class EntityListItemViewModelTests
         Assert.Equal("▴", item.ExpandArrow);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void ToggleExpandCommand_DisabledWhenNoChildren()
     {
         var node = new EntityListNodeViewModel(
@@ -52,7 +52,7 @@ public sealed class EntityListItemViewModelTests
         Assert.False(item.ToggleExpandCommand.CanExecute(null));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void JsonButton_TogglesRawJsonEditorVisibility()
     {
         var node = new EntityListNodeViewModel(
@@ -82,7 +82,7 @@ public sealed class EntityListItemViewModelTests
         Assert.True(item.ShowRawJsonEditor);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task DeleteButton_InvokesDeleteCommand()
     {
         var deleteInvocations = 0;

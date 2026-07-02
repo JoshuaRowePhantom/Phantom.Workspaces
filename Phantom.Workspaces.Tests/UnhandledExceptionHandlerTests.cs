@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class CrashDialogTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void CrashDialog_ShowsExceptionText()
     {
         var exception = new InvalidOperationException("Something went wrong");
@@ -19,7 +19,7 @@ public sealed class CrashDialogTests
         Assert.Equal(exception.ToString(), dialog.ExceptionTextBox.Text);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void CrashDialog_NullException_ShowsFallbackText()
     {
         var dialog = new CrashDialog(null, isTerminating: false);
@@ -27,7 +27,7 @@ public sealed class CrashDialogTests
         Assert.Equal("No exception details available.", dialog.ExceptionTextBox.Text);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void CrashDialog_WhenTerminating_UpdatesTitle()
     {
         var dialog = new CrashDialog(new Exception("fatal"), isTerminating: true);
@@ -38,7 +38,7 @@ public sealed class CrashDialogTests
 
 public sealed class UnhandledExceptionHandlerTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void OnUnobservedTaskException_SetsObserved()
     {
         UnhandledExceptionHandler._dialogActive = 0;
@@ -56,7 +56,7 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void OnDispatcherUnhandledException_SetsHandled()
     {
         UnhandledExceptionHandler._dialogActive = 0;
@@ -75,7 +75,7 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void ShowOrDiscard_WhenNoDialogActive_SetsDialogActiveFlag()
     {
         UnhandledExceptionHandler._dialogActive = 0;
@@ -90,7 +90,7 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void ShowOrDiscard_WhenDialogAlreadyActive_Discards()
     {
         var factoryCalled = 0;

@@ -6,7 +6,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class RepositorySourceTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ConfigurationFile_ProjectsToRepositorySource()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{System.Guid.NewGuid():N}");
@@ -41,7 +41,7 @@ public sealed class RepositorySourceTests
         }
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void DevTunnelWeb_WithExplicitEndpoint_ProjectsToWebSourceUsingGitHubToken()
     {
         var configuration = new WorkspacesConfiguration
@@ -58,7 +58,7 @@ public sealed class RepositorySourceTests
         Assert.True(web.UseGitHubAuthToken);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void DevTunnelWeb_WithTunnelNameAndNoEndpoint_ProjectsToDevTunnelNameSource()
     {
         var configuration = new WorkspacesConfiguration
@@ -76,7 +76,7 @@ public sealed class RepositorySourceTests
         Assert.Equal(DevTunnelAccessMode.Private, source.AccessMode);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void DevTunnelWeb_WithNeitherEndpointNorTunnelName_Throws()
     {
         var configuration = new WorkspacesConfiguration

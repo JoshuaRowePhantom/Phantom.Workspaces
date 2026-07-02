@@ -17,6 +17,7 @@ using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Shell;
@@ -30,17 +31,17 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowIntegrationTests
 {
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ThemeResources_UseFontFamilyType()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         Assert.True(Avalonia.Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
         Assert.IsType<FontFamily>(fontFamilyResource);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_InitializesWithExpectedPipeline()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -52,7 +53,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEmpty(snapshots);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_SeedsGithubModelsAgentManifest()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -67,7 +68,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("GitHub Models Workspace Assistant", ReadDefaultDisplayName(githubModelsSnapshot.Value.Data));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_SeedsWorkspacesAgentManifestDisplayName()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -82,7 +83,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("Workspaces Assistant", ReadDefaultDisplayName(workspacesSnapshot.Value.Data));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_SeedsMainViewWithGitWorkspacesSubView()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -104,17 +105,17 @@ public sealed class MainWindowIntegrationTests
             && id[1].GetString() == "git-workspaces");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void MainWindowViewModel_ThemeSelectionIsDataDriven()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         Assert.Contains("dark", viewModel.ThemeNames);
         Assert.Contains("light", viewModel.ThemeNames);
         viewModel.SelectedThemeName = "light";
         Assert.Equal("light", viewModel.SelectedThemeName);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task SelectedThemeName_SetToLight_PersistsAcrossViewModelInstances()
     {
         var profilePath = CreateTempProfileStorePath();
@@ -122,11 +123,11 @@ public sealed class MainWindowIntegrationTests
         {
             var store = new ProfileStore(profilePath);
 
-            var vm1 = new MainWindowViewModel(CreateInMemoryRepositorySource(), profileStore: store);
+            var vm1 = CreateTestMainWindowViewModel(profileStore: store);
             await vm1.InitializeAsync();
             await vm1.SetThemeAsync("light");
 
-            var vm2 = new MainWindowViewModel(CreateInMemoryRepositorySource(), profileStore: store);
+            var vm2 = CreateTestMainWindowViewModel(profileStore: store);
             await vm2.InitializeAsync();
 
             Assert.Equal("light", vm2.SelectedThemeName);
@@ -137,7 +138,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_InitializeAsync_ReplacesDefaultAndLoadingWorkspacePanes()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -150,10 +151,10 @@ public sealed class MainWindowIntegrationTests
                 || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WhenAlreadyOpening_SecondRequestIsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -188,10 +189,10 @@ public sealed class MainWindowIntegrationTests
             pane => pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithExternalEntityTab_PopulatesTabAsynchronously()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -264,10 +265,10 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateTabFromEntityAsync_ExternalEntityNonDefaultUrlKey_SetsTitleToUrlKeyAndFixesTitle()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -343,10 +344,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("docs", webVm.Title);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_CloseWhileTabsLoading_DoesNotCrash()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -424,10 +425,10 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var sessionsView = Assert.Single(
@@ -449,10 +450,10 @@ public sealed class MainWindowIntegrationTests
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ViewEntityViewModel_TraversedEntitiesCollapsed_WhenDispositionIsCollapsed()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -539,20 +540,20 @@ public sealed class MainWindowIntegrationTests
             e => e.Entity.EntityId == relatedId);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void MainWindow_ConstructsWithoutTemplateCastErrors()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         var window = new MainWindow(viewModel);
 
         Assert.NotNull(window);
         Assert.Empty(window.DataTemplates);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePane_DoesNotInjectFallbackCenterRegion_WhenWorkspaceHasNoRegions()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
         
         using var workspaceDocument = JsonDocument.Parse(
@@ -599,11 +600,11 @@ public sealed class MainWindowIntegrationTests
         Assert.Single(workspacePane!.Tabs);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_LocalEchoDefinition_CreatesAgentSessionTab()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -641,11 +642,11 @@ public sealed class MainWindowIntegrationTests
         Assert.True(launchpadTab.CanStart);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentManifestShortcutHandler_LocalEchoManifest_CreatesAgentSessionTab()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -685,11 +686,11 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(sessionTab2.Agent);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentManifestShortcutHandler_ManifestWithParameters_ShowsLaunchpadNotAutoStarted()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -733,10 +734,10 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain(viewModel.SelectedWorkspacePane.Tabs, static t => t is AgentSessionWorkspaceTabViewModel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -780,10 +781,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(sessionTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePaneAsync_WithAgentSessionTab_CreatesAgentSessionWorkspaceTabViewModel()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -877,10 +878,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionTab.Agent);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePaneAsync_WithAgentSessionTabButMissingDefinition_FallsBackToEntityWorkspaceTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -984,10 +985,10 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<AgentSessionWorkspaceTabViewModel>(agentTab);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseActiveTabCommand_WithTwoTabs_ClosesActiveTabAndLeavesOther()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
@@ -1007,10 +1008,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(remaining!, doc => doc.Id == "tab-a");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabForwardCommand_WithThreeTabs_WrapsAroundForward()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
@@ -1039,10 +1040,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(startIndex, dockables.IndexOf(documentDock.ActiveDockable!));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabBackwardCommand_WithThreeTabs_WrapsAroundBackward()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a", Title = "Tab A" };
@@ -1071,10 +1072,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(startIndex, dockables.IndexOf(documentDock.ActiveDockable!));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabForwardCommand_WithSingleTab_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "tab-a-single", Title = "Tab A" };
@@ -1107,10 +1108,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("tab-a-single", documentDock.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_WithThreeTabs_ActivatesCorrectTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "goto-tab-a", Title = "Tab A" };
@@ -1128,10 +1129,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "goto-oob-a", Title = "Tab A" };
@@ -1148,10 +1149,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(activeBefore, documentDock.ActiveDockable);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithMultiplePanes_ActivatesCorrectPane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1195,10 +1196,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var selectedBefore = viewModel.SelectedWorkspacePane;
@@ -1208,10 +1209,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1288,10 +1289,10 @@ public sealed class MainWindowIntegrationTests
             "Expected notification for tabB to be marked read after switching back to pane B");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInCurrentPaneHasUnreadNotification_OnlyMarksTargetPaneTabRead()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1363,10 +1364,10 @@ public sealed class MainWindowIntegrationTests
             "Pane A's tab notification should remain unread after switching away.");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithFocusedTabId_ActivatesFocusedTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1423,10 +1424,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("tab-second", contentDock!.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithAbsentFocusedTabId_DoesNotCrash()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1474,10 +1475,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(contentDock!.ActiveDockable);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNonMatchingFocusedTabId_DoesNotCrash()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1526,10 +1527,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(contentDock!.ActiveDockable);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateAgentSessionEntityAsync_WithOwningProfileEntityId_StoresOwningProfileEntityIdInData()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1565,10 +1566,10 @@ public sealed class MainWindowIntegrationTests
             && string.Equals(idElement.GetString(), localProfileEntityId.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithLocalProfileOwner_RoutesToLocalExecutorSuccessfully()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1610,10 +1611,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Ready, agentTab.State);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithNoOwningProfile_DefaultsToLocalExecution()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1655,10 +1656,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Ready, agentTab2.State);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithRemoteProfileOwner_SetsFailedWhenNoConnectionAvailable()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1704,10 +1705,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Failed, agentTab3.State);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_UsesEntityIdAsTabId()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1743,10 +1744,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentSessionEntity!.EntityId.ToString(), tab.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_SameEntityOpenedTwice_DeduplicatesTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1789,11 +1790,11 @@ public sealed class MainWindowIntegrationTests
         Assert.Single(agentSessionDocs!);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_WithRunningAgentChatTable_AcrossTwoWorkspacePanes_SharesAgentChat()
     {
         var runningAgentChatTable = new RunningAgentChatTable();
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1872,10 +1873,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_WhenAgentChatIsInNonSelectedPane_OpensTabInAgentChatPane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -1971,10 +1972,10 @@ public sealed class MainWindowIntegrationTests
             doc => doc.Id == $"web-{testUrl}");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_WhenAgentChatIsInSelectedPane_OpensTabInSamePane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2056,10 +2057,10 @@ public sealed class MainWindowIntegrationTests
             doc => doc.Id == $"web-{testUrl}");
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_InsertsNewTabAfterAgentSessionTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2125,10 +2126,10 @@ public sealed class MainWindowIntegrationTests
 
     // ── Dock-layout save / restore (issue #561) ──────────────────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThenWriteBack_DockLayoutJsonContainsDockTabDescriptor()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://descriptor-test.example.com")
@@ -2142,8 +2143,17 @@ public sealed class MainWindowIntegrationTests
         var pane = viewModel.SelectedWorkspacePane;
         Assert.NotNull(pane.ContentLayout);
 
-        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
-        var layoutJson = serializer.Serialize(pane.ContentLayout!);
+        var savedOwners = MainWindowViewModel.CaptureAndClearOwners(pane.ContentLayout!);
+        string layoutJson;
+        try
+        {
+            var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+            layoutJson = serializer.Serialize(pane.ContentLayout!);
+        }
+        finally
+        {
+            MainWindowViewModel.RestoreOwners(savedOwners);
+        }
 
         // The serialized layout must contain the Descriptor property
         Assert.Contains("Descriptor", layoutJson, StringComparison.Ordinal);
@@ -2153,10 +2163,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("descriptor-test.example.com", layoutJson, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThenWriteBack_DockLayoutDoesNotContainTabViewModelData()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://no-vm-test.example.com")
@@ -2182,10 +2192,10 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain("EffectiveTabHeader", layoutJson, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithSavedDockLayout_RestoresTabsFromDescriptors()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2231,10 +2241,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEmpty(restoredPane!.Tabs);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_FallsBackToTabsArray_WhenDockLayoutAbsent()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -2611,12 +2621,18 @@ public sealed class MainWindowIntegrationTests
         return tcs.Task;
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    private static async Task CloseWindowAsync(Window window)
+    {
+        window.Close();
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_CalledTwice_CurrentViewPopulationContainsEntitiesOnce()
     {
         // Regression for issue #104: concurrent ApplySelectedViewAsync invocations must not
         // double-populate the entity list.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var sessionsView = Assert.Single(
@@ -2642,10 +2658,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(distinctIds, agentManifestEntities.Count);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_EachCall_CreatesNewCurrentViewPopulationInstance()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var firstPopulation = viewModel.CurrentViewPopulation;
@@ -2660,10 +2676,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotSame(firstPopulation, viewModel.CurrentViewPopulation);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_PreviousPopulationDisposed_ItsEntitiesNotModifiedAfterSwap()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var sessionsView = Assert.Single(
@@ -2688,10 +2704,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(countAfterFirstRun, firstPopulation.Entities.Count);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_ViewSwitchedTwice_CurrentViewPopulationReflectsSecondView()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var applyMethod = typeof(MainWindowViewModel).GetMethod(
@@ -2720,12 +2736,12 @@ public sealed class MainWindowIntegrationTests
         Assert.NotSame(populationAfterFirst, viewModel.CurrentViewPopulation);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
         // set so tab icons and notification indicators are rendered via EffectiveTabHeader.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com") { Id = "header-tmpl-test", Title = "Header Test" };
@@ -2733,54 +2749,70 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        await WaitForLayoutAsync(window);
+        try
+        {
+            await WaitForLayoutAsync(window);
 
-        // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
-        var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
-        Assert.NotEmpty(tabStrips);
+            // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
+            var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
+            Assert.NotEmpty(tabStrips);
 
-        // Diagnostic: check DataContext types on all tab strips and DockControls
-        var allDockControls = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DockControl>().ToList();
+            // Diagnostic: check DataContext types on all tab strips and DockControls
+            var allDockControls = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DockControl>().ToList();
 
-        var contentTabStrip = tabStrips.FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
-        Assert.NotNull(contentTabStrip);
+            var contentTabStrip = tabStrips.FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
+            Assert.NotNull(contentTabStrip);
 
-        // Diagnostic: check the full chain from DocumentControl → DocumentTabStrip → PART_HeaderPresenter
-        var documentControl = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DocumentControl>()
-            .FirstOrDefault(dc => dc.GetVisualDescendants().Contains(contentTabStrip));
-        Assert.NotNull(documentControl);
+            // Diagnostic: check the full chain from DocumentControl → DocumentTabStrip → PART_HeaderPresenter
+            var documentControl = window.GetVisualDescendants().OfType<Dock.Avalonia.Controls.DocumentControl>()
+                .FirstOrDefault(dc => dc.GetVisualDescendants().Contains(contentTabStrip));
+            Assert.NotNull(documentControl);
 
-        // Both DocumentControl and DocumentTabStrip should have our ContentControl DataTemplate, not Dock's default.
-        var dcHeaderTemplateTypeName = documentControl!.HeaderTemplate?.GetType().Name ?? "(null)";
-        var dcHeaderTemplateDataType = (documentControl!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
-        var tsHeaderTemplateTypeName = contentTabStrip!.HeaderTemplate?.GetType().Name ?? "(null)";
-        var tsHeaderTemplateDataType = (contentTabStrip!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
+            // Both DocumentControl and DocumentTabStrip should have our ContentControl DataTemplate, not Dock's default.
+            var dcHeaderTemplateTypeName = documentControl!.HeaderTemplate?.GetType().Name ?? "(null)";
+            var dcHeaderTemplateDataType = (documentControl!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
+            var tsHeaderTemplateTypeName = contentTabStrip!.HeaderTemplate?.GetType().Name ?? "(null)";
+            var tsHeaderTemplateDataType = (contentTabStrip!.HeaderTemplate as Avalonia.Markup.Xaml.Templates.DataTemplate)?.DataType?.Name ?? "(no DataType)";
 
-        var tabStripItems = contentTabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
-        Assert.NotEmpty(tabStripItems);
+            var tabStripItems = contentTabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+            Assert.NotEmpty(tabStripItems);
 
-        var headerPresenter = tabStripItems[0]
-            .GetVisualDescendants()
-            .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
-            .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
-        Assert.NotNull(headerPresenter);
+            var headerPresenter = tabStripItems[0]
+                .GetVisualDescendants()
+                .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
+            Assert.NotNull(headerPresenter);
 
-        // The child of PART_HeaderPresenter should be a ContentControl (our template), not a TextBlock.
-        // If this fails, check: dcHeaderTemplate={dcHeaderTemplateTypeName}, tsHeaderTemplate={tsHeaderTemplateTypeName}
-        var headerChild = headerPresenter!.GetVisualChildren().FirstOrDefault();
-        Assert.NotNull(headerChild);
-        Assert.True(
-            headerChild is Avalonia.Controls.ContentControl,
-            $"Expected ContentControl but got {headerChild!.GetType().Name}. " +
-            $"DC.HeaderTemplate={dcHeaderTemplateTypeName}(DataType={dcHeaderTemplateDataType}), " +
-            $"TS.HeaderTemplate={tsHeaderTemplateTypeName}(DataType={tsHeaderTemplateDataType})");
-
-        window.Close();
+            // The child of PART_HeaderPresenter should be a ContentControl (our template), not a TextBlock.
+            // If this fails, check: dcHeaderTemplate={dcHeaderTemplateTypeName}, tsHeaderTemplate={tsHeaderTemplateTypeName}
+            var headerChild = headerPresenter!.GetVisualChildren().FirstOrDefault();
+            Assert.NotNull(headerChild);
+            Assert.True(
+                headerChild is Avalonia.Controls.ContentControl,
+                $"Expected ContentControl but got {headerChild!.GetType().Name}. " +
+                $"DC.HeaderTemplate={dcHeaderTemplateTypeName}(DataType={dcHeaderTemplateDataType}), " +
+                $"TS.HeaderTemplate={tsHeaderTemplateTypeName}(DataType={tsHeaderTemplateDataType})");
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();
+    }
+
+    private static MainWindowViewModel CreateTestMainWindowViewModel(
+        ProfileStore? profileStore = null,
+        ApplicationServices? applicationServices = null)
+    {
+        return new MainWindowViewModel(
+            CreateInMemoryRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = true },
+            profileStore,
+            applicationServices);
     }
 
     private static string CreateTempProfileStorePath()
@@ -2879,10 +2911,10 @@ public sealed class MainWindowIntegrationTests
         return defaultValueElement.GetString();
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ExistingTab_PushesNavigationEntry()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "nav-push-a", Title = "Tab A" };
@@ -2903,10 +2935,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("nav-push-b", documentDock.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateBack_AfterMultipleToolDrivenNavigations_TraversesAllEntries()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "multi-nav-a", Title = "Tab A" };
@@ -2931,10 +2963,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("multi-nav-a", documentDock.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithMultipleBrowserTabs_TabsAppearInDeclarationOrder()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3004,10 +3036,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(["tab-order-a", "tab-order-b", "tab-order-c"], tabIds);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithUnresolvableMiddleTab_SkipsNullAndPreservesOrder()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3078,10 +3110,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(["null-order-a", "null-order-c"], tabIds);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-a", Title = "Tab A" };
@@ -3093,21 +3125,26 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_UpdatesSelectedWorkspacePane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3161,10 +3198,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(pane2, viewModel.SelectedWorkspacePane);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_ThenAlt1_ActivatesTabInNewPane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3230,20 +3267,24 @@ public sealed class MainWindowIntegrationTests
         // Alt+1 must activate the first tab of pane 2, not pane 1.
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
-
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("adc-alt1-pane2-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("adc-alt1-pane2-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_PushesNavigationEntry()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3317,10 +3358,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("adc-nav-tab-a", documentDockA!.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_WhenNavigatingViaHistory_DoesNotPushExtraEntry()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3394,10 +3435,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("adc-nav-guard-tab-b", GetDocumentDock(viewModel)?.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_WithShellTabActive_ActivatesFirstContentTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt1-shell-a", Title = "Tab A" };
@@ -3409,21 +3450,26 @@ public sealed class MainWindowIntegrationTests
         // Shell tab is now active (last opened).
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("kb-alt1-shell-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("kb-alt1-shell-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         for (var i = 0; i < 10; i++)
@@ -3434,21 +3480,26 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit0, RawInputModifiers.Alt);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal(documentDock!.VisibleDockables![9], documentDock.ActiveDockable);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal(documentDock!.VisibleDockables![9], documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "kb-alt-oob-a", Title = "Tab A" };
@@ -3458,23 +3509,28 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        var activeBefore = documentDock!.ActiveDockable;
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            var activeBefore = documentDock!.ActiveDockable;
 
-        window.KeyPressQwerty(PhysicalKey.Digit9, RawInputModifiers.Alt);
+            window.KeyPressQwerty(PhysicalKey.Digit9, RawInputModifiers.Alt);
 
-        Assert.Equal(activeBefore, documentDock.ActiveDockable);
-
-        window.Close();
+            Assert.Equal(activeBefore, documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShift1_ActivatesFirstWorkspacePane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3512,21 +3568,25 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
 
-        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
-        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt | RawInputModifiers.Shift);
 
-        window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt | RawInputModifiers.Shift);
-
-        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
-
-        window.Close();
+            Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShift2_ActivatesSecondWorkspacePane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3564,34 +3624,43 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
 
-        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Control);
-
-        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
-
-        window.Close();
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShiftDigit_WithIndexOutOfRange_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        var selectedBefore = viewModel.SelectedWorkspacePane;
+            var selectedBefore = viewModel.SelectedWorkspacePane;
 
-        window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Alt | RawInputModifiers.Shift);
+            window.KeyPressQwerty(PhysicalKey.Digit2, RawInputModifiers.Alt | RawInputModifiers.Shift);
 
-        Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
-
-        window.Close();
+            Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -3639,7 +3708,7 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -3650,7 +3719,7 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
     {
         var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
@@ -3740,10 +3809,10 @@ public sealed class MainWindowIntegrationTests
             failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigatePreviousNotificationCommand_NavigatesToUnreadTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "nav-prev-a", Title = "Tab A" };
@@ -3761,10 +3830,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("nav-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_NavigatesToUnreadTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "nav-next-a", Title = "Tab A" };
@@ -3782,10 +3851,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("nav-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3825,10 +3894,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPaneWithWorkspaceIdHint_SwitchesWorkspacePane()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -3869,10 +3938,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f7-prev-a", Title = "Tab A" };
@@ -3885,21 +3954,26 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
+            window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("ctrl-f7-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("ctrl-f7-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "ctrl-f8-next-a", Title = "Tab A" };
@@ -3912,84 +3986,97 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
-        window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
+            window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        Assert.Equal("ctrl-f8-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
-
-        window.Close();
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Equal("ctrl-f8-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF7_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
         // preventing child controls such as WebView2 from seeing the keystroke.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            // Register a bubble-phase handler with handledEventsToo: true so it still fires
+            // even after the tunnel handler has already set e.Handled = true.
+            bool handledByTunnel = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.F7 && e.KeyModifiers == KeyModifiers.Control)
+                        handledByTunnel = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        // Register a bubble-phase handler with handledEventsToo: true so it still fires
-        // even after the tunnel handler has already set e.Handled = true.
-        bool handledByTunnel = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.F7 && e.KeyModifiers == KeyModifiers.Control)
-                    handledByTunnel = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            // With no unread notifications the command is a no-op, but the key must still be handled.
+            window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
 
-        // With no unread notifications the command is a no-op, but the key must still be handled.
-        window.KeyPressQwerty(PhysicalKey.F7, RawInputModifiers.Control);
-
-        Assert.True(handledByTunnel);
-
-        window.Close();
+            Assert.True(handledByTunnel);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF8_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
         // preventing child controls such as WebView2 from seeing the keystroke.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handledByTunnel = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.F8 && e.KeyModifiers == KeyModifiers.Control)
+                        handledByTunnel = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handledByTunnel = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.F8 && e.KeyModifiers == KeyModifiers.Control)
-                    handledByTunnel = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
 
-        window.KeyPressQwerty(PhysicalKey.F8, RawInputModifiers.Control);
-
-        Assert.True(handledByTunnel);
-
-        window.Close();
+            Assert.True(handledByTunnel);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnPreviewKeyDown_CtrlShiftK_CallsDuplicateBrowserTabCommandAndHandlesEvent()
     {
         // Verifies that Ctrl+Shift+K fires DuplicateBrowserTabCommand and marks the event as
         // handled so that child controls such as WebView2 do not receive the keystroke.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-shift-k-tab", Title = "Browser" };
@@ -3997,32 +4084,36 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handledByTunnel = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                        handledByTunnel = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handledByTunnel = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
-                    handledByTunnel = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control | RawInputModifiers.Shift);
 
-        window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control | RawInputModifiers.Shift);
+            Assert.True(handledByTunnel);
 
-        Assert.True(handledByTunnel);
-
-        Assert.Equal(2, viewModel.SelectedWorkspacePane.Tabs.Count);
-
-        window.Close();
+            Assert.Equal(2, viewModel.SelectedWorkspacePane.Tabs.Count);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnPreviewKeyDown_CtrlK_WithoutShift_DoesNotDuplicateTab()
     {
         // Verifies that Ctrl+K alone (missing Shift) does not trigger DuplicateBrowserTabCommand.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-k-no-dup", Title = "Browser" };
@@ -4030,30 +4121,40 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
 
-        window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
-
-        Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
-
-        window.Close();
+            Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
     {
         // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
         // setters (e.g. Value="rotate(-18deg)"). Avalonia's XAML IL compiler does not apply
         // type converters inside KeyFrame.Setter, so the value arrived as a boxed string with
         // no registered animator, throwing InvalidOperationException on first style application.
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var window = new MainWindow(viewModel);
         window.Show();
-
-        // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
-        // and interprets animation keyframes. The bug caused a throw here.
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        try
+        {
+            // Force a full layout pass — this applies all loaded styles (including NotificationsStyles)
+            // and interprets animation keyframes. The bug caused a throw here.
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     // ── IsAltHeld / Alt-badge tests ──────────────────────────────────────────
@@ -4061,14 +4162,14 @@ public sealed class MainWindowIntegrationTests
     [Fact]
     public void IsAltHeld_DefaultIsFalse()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         Assert.False(viewModel.IsAltHeld);
     }
 
     [Fact]
     public void IsAltHeld_SetToTrue_RaisesPropertyChanged()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         var raised = false;
         viewModel.PropertyChanged += (_, e) =>
         {
@@ -4081,41 +4182,49 @@ public sealed class MainWindowIntegrationTests
         Assert.True(raised);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPressQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
 
-        window.KeyPressQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
-
-        Assert.True(viewModel.IsAltHeld);
-
-        window.Close();
+            Assert.True(viewModel.IsAltHeld);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            viewModel.IsAltHeld = true;
+            window.KeyReleaseQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
 
-        viewModel.IsAltHeld = true;
-        window.KeyReleaseQwerty(PhysicalKey.AltLeft, RawInputModifiers.None);
-
-        Assert.False(viewModel.IsAltHeld);
-
-        window.Close();
+            Assert.False(viewModel.IsAltHeld);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_Execute_DoesNotClearIsAltHeld()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "alt-clear-a", Title = "Tab A" };
@@ -4127,10 +4236,10 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "alt-label-a", Title = "Tab A" };
@@ -4149,10 +4258,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseTab_ByIndex_RefreshesAltShortcutLabels()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "alt-close-a", Title = "Tab A" };
@@ -4173,10 +4282,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -4189,20 +4298,24 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            Assert.True(agentViewModel.AutoScrollEnabled);
 
-        Assert.True(agentViewModel.AutoScrollEnabled);
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.False(agentViewModel.AutoScrollEnabled);
-
-        window.Close();
+            Assert.False(agentViewModel.AutoScrollEnabled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -4215,19 +4328,23 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.True(agentViewModel.AutoScrollEnabled);
-
-        window.Close();
+            Assert.True(agentViewModel.AutoScrollEnabled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_IsHandledInTunnelPhase()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -4240,29 +4357,33 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handled = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.Scroll)
+                        handled = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handled = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.Scroll)
-                    handled = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.True(handled);
-
-        window.Close();
+            Assert.True(handled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var plainTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-noop", Title = "NoAgent" };
@@ -4270,31 +4391,35 @@ public sealed class MainWindowIntegrationTests
 
         var window = new MainWindow(viewModel);
         window.Show();
+        try
+        {
+            bool handled = false;
+            window.AddHandler(
+                InputElement.KeyDownEvent,
+                (_, e) =>
+                {
+                    if (e.Key == Key.Scroll)
+                        handled = e.Handled;
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
 
-        bool handled = false;
-        window.AddHandler(
-            InputElement.KeyDownEvent,
-            (_, e) =>
-            {
-                if (e.Key == Key.Scroll)
-                    handled = e.Handled;
-            },
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
 
-        window.KeyPress(Key.Scroll, RawInputModifiers.None, PhysicalKey.None, "");
-
-        Assert.False(handled);
-
-        window.Close();
+            Assert.False(handled);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     // ── WebViewModel and AgentSessionTab accelerator-key wiring ─────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_WebViewModel_AltKeyStateChanged_SetsIsAltHeld()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var webVm = new WebViewModel("https://example.com") { Id = "wv-alt-held", Title = "Tab" };
@@ -4305,10 +4430,10 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_WebViewModel_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com") { Id = "wv-goto-a", Title = "Tab A" };
@@ -4325,10 +4450,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("wv-goto-a", documentDock!.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_AgentSessionTab_AltKeyStateChanged_SetsIsAltHeld()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "agent-alt-held", Title = "Agent" };
@@ -4339,10 +4464,10 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_AgentSessionTab_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "agent-goto-a", Title = "Agent A" };
@@ -4359,10 +4484,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("agent-goto-a", documentDock!.ActiveDockable?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_ShowsRelatedEntityNestedUnderWorkspace()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
 
         var workspaceId = new EntityId("a2b3c4d5-0001-4000-8000-000000000001");
@@ -4426,10 +4551,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(workspaceIndex + 1, noteIndex);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_WorkspaceWithNoRelatedEntities_ShowsWorkspaceFlatOnly()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
 
         var workspaceId = new EntityId("a2b3c4d5-0002-4000-8000-000000000001");
@@ -4470,10 +4595,10 @@ public sealed class MainWindowIntegrationTests
 
     // ── Single-window guard tests (issue #240) ────────────────────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void OnOpenScheduledTasksClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         var mainWindow = new MainWindow(viewModel);
 
         var trackingField = typeof(MainWindow).GetField(
@@ -4494,10 +4619,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(existingDialog, trackingField.GetValue(mainWindow));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void OnOpenScheduledTasksClicked_TrackingField_InitiallyNull()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         var mainWindow = new MainWindow(viewModel);
 
         var trackingField = typeof(MainWindow).GetField(
@@ -4507,10 +4632,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(trackingField!.GetValue(mainWindow));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_RunVsCodeTunnelTool_IsRegistered()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var hostField = typeof(MainWindowViewModel).GetField(
@@ -4523,10 +4648,10 @@ public sealed class MainWindowIntegrationTests
 
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_GitWorkspaceDiscoveryTool_IsRegistered()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var hostField = typeof(MainWindowViewModel).GetField(
@@ -4538,10 +4663,10 @@ public sealed class MainWindowIntegrationTests
         Assert.True(host.TryGetTool("git-workspace-discovery", out _));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_WorkspaceWithChildren_ShowsExpandAffordance()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4607,10 +4732,10 @@ public sealed class MainWindowIntegrationTests
         Assert.True(workspaceVm.HasTraversedChildren);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_ToggleExpand_HidesAndShowsChildren()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4717,12 +4842,12 @@ public sealed class MainWindowIntegrationTests
         });
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_CreatesTwoTabsWithSameAgentChat()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4804,12 +4929,12 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AgentSessionWorkspaceTabViewModel_DisposeWithLease_ReleasesChat_OnLastDispose()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -4925,12 +5050,12 @@ public sealed class MainWindowIntegrationTests
         await probe2.DisposeAsync();
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_WithRunningAgentTab_IsAnyRunning()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -4971,12 +5096,12 @@ public sealed class MainWindowIntegrationTests
         Assert.True(brain.IsAnyRunning);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_WithRunningAgentTab_HasRowWithWorkspaceAndTabTitles()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5038,12 +5163,12 @@ public sealed class MainWindowIntegrationTests
         Assert.True(row.HasOpenTab);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_Activate_FocusesTab()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5101,12 +5226,12 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentTab.Id, activeDoc!.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_RowActivateCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var brain = viewModel.RunningAgentBrain;
@@ -5180,10 +5305,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentTab.Id, (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ActivateTabById_WhenWorkspacePaneNotInWorkspacePanes_OpensWorkspaceAndActivatesTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5248,10 +5373,10 @@ public sealed class MainWindowIntegrationTests
 
     // ── PopulateWorkspacePaneTabsAsync — new tabs[] format ───────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithTopLevelTabsArray_PopulatesPaneTabsInSavedOrder()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5310,10 +5435,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(["tabs-arr-a", "tabs-arr-b", "tabs-arr-c"], tabIds);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithLegacyRegions_FlattensToSingleDock()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5386,10 +5511,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("legacy-tab-right", tabIds);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNoTabsAndNoRegions_OpensDefaultEntityTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5424,10 +5549,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(defaultTab);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithTopLevelTabsAndActiveTabId_ActivatesSpecifiedTab()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5476,10 +5601,10 @@ public sealed class MainWindowIntegrationTests
 
     // ── CreateWorkspaceContentLayout — ItemsSource wiring ────────────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_SetsItemsSourceToPaneTabs()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5514,10 +5639,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(workspacePane.Tabs, itemsSourceDock!.ItemsSource);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_AddingTabToPaneTabs_CreatesWorkspaceDocumentInDock()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5562,10 +5687,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(newTab, doc!.TabViewModel);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_RemovingTabFromPaneTabs_RemovesWorkspaceDocumentFromDock()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabToRemove = new WebViewModel("https://remove.example.com")
@@ -5589,10 +5714,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(docAfterRemoval);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_SlashCommandContext_WithLocalSession_ExecuteAutoResume_UpdatesEntityWithTrustedExecutorDot()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5632,9 +5757,6 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(interceptor);
         await interceptor!("/auto-resume");
 
-        // Wait a tick so the async update completes
-        await Task.Delay(50);
-
         // Reload the entity and verify auto-resume was persisted
         var updatedEntities = await entityBroker.GetEntitiesAsync([agentSessionEntity!.EntityId]);
         var updatedEntity = updatedEntities.FirstOrDefault(e => e.EntityId == agentSessionEntity!.EntityId);
@@ -5645,10 +5767,10 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(TrustProfile.LocalClientInstance, executorEl.GetString());
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_SlashCommandContext_WithAutoResumeAlreadyEnabled_ExecuteAutoResume_RemovesAutoResume()
     {
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -5687,11 +5809,9 @@ public sealed class MainWindowIntegrationTests
 
         // Enable auto-resume first
         await interceptor!("/auto-resume");
-        await Task.Delay(50);
 
         // Execute again — CurrentAutoResume should now be non-null so the toggle disables it
         await interceptor!("/auto-resume");
-        await Task.Delay(50);
 
         var updatedEntities = await entityBroker.GetEntitiesAsync([agentSessionEntity!.EntityId]);
         var updatedEntity = updatedEntities.FirstOrDefault(e => e.EntityId == agentSessionEntity!.EntityId);
@@ -5700,12 +5820,12 @@ public sealed class MainWindowIntegrationTests
         Assert.False(updatedData.TryGetProperty("auto-resume", out _));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryStartAutoResumeAsync_WithMatchingLocalSession_AcquiresLeaseAndEnqueuesResumePrompt()
     {
         var table = new RunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
-        var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource(), applicationServices: appServices);
+        var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
