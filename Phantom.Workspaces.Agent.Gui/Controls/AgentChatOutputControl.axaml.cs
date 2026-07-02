@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -119,6 +120,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
     }
+
+    public void BeginBatch() => this.browser.BeginBatch();
+
+    public void EndBatch() => this.browser.EndBatch();
+
+    internal Task HistoryLoaded => this.outputModel?.HistoryLoaded ?? Task.CompletedTask;
 
     public void UpdateStatus(AgentStatusField field, string? value)
         => this.subscribedViewModel?.StatusSink.UpdateStatus(field, value);

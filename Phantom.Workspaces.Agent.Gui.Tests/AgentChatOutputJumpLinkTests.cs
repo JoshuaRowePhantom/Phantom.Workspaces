@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -62,8 +63,8 @@ public sealed class AgentChatOutputJumpLinkTests
 
     // ── ChatOutputHtmlModel (jump-link via resolveSubAgentId) ───────────────
 
-    [Fact]
-    public void JumpLink_Present_WhenHistoryItemHasParentToolCallId()
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task JumpLink_Present_WhenHistoryItemHasParentToolCallId()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -81,14 +82,15 @@ public sealed class AgentChatOutputJumpLinkTests
             () => true,
             sink,
             resolveSubAgentId: _ => "sub-agent-42");
+        await model.HistoryLoaded;
 
         var content = Assert.Single(sink.ContentOperations);
         Assert.Contains("data-navigate-agent-id=\"sub-agent-42\"", content.Content, StringComparison.Ordinal);
         Assert.Contains("→ Open sub-agent", content.Content, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void JumpLink_Absent_WhenParentToolCallIdIsNull()
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task JumpLink_Absent_WhenParentToolCallIdIsNull()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -106,13 +108,14 @@ public sealed class AgentChatOutputJumpLinkTests
             () => true,
             sink,
             resolveSubAgentId: _ => "sub-agent-42");
+        await model.HistoryLoaded;
 
         var content = Assert.Single(sink.ContentOperations);
         Assert.DoesNotContain("data-navigate-agent-id", content.Content, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void JumpLink_Absent_WhenResolverReturnsNull()
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task JumpLink_Absent_WhenResolverReturnsNull()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -130,6 +133,7 @@ public sealed class AgentChatOutputJumpLinkTests
             () => true,
             sink,
             resolveSubAgentId: _ => null);
+        await model.HistoryLoaded;
 
         var content = Assert.Single(sink.ContentOperations);
         Assert.DoesNotContain("data-navigate-agent-id", content.Content, StringComparison.Ordinal);

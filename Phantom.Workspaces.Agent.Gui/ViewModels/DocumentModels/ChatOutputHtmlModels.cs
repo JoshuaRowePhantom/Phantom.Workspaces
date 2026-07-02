@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia.Threading;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
@@ -520,8 +523,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 static s => s.Model.IsInserted,
                 static s => s.Group?.GroupId ?? s.Model.ElementId);
             this.sink.UpdateContent(reference, location, slot.Model.BuildHtml());
-            slot.Model.IsInserted = true;
         }
+
+        // Mark as inserted in both the live path and the skip path (Phase B already put it in the DOM).
+        slot.Model.IsInserted = true;
     }
 
     protected override void OnRemoveAt(int index, RenderSlot slot)
@@ -829,6 +834,7 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 /// Top-level chat-output model for the browser-hosted renderer. Mirrors the selectable-text output
 /// model but, instead of building an Avalonia inline tree, emits incremental HTML operations to an
 /// <see cref="IChatOutputHtmlSink"/> and requests a scroll-to-bottom after each content change.
+/// History is loaded asynchronously in three phases to keep the UI thread responsive.
 /// </summary>
 public sealed class ChatOutputHtmlModel : IDisposable
 {
@@ -838,13 +844,27 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly IChatOutputHtmlSink sink;
     private readonly IReadOnlyList<AgentChatHistoryItem> historyItems;
     private readonly IReadOnlyList<AgentChatRunningItem> runningItems;
-    private readonly ChatMessageHtmlTransformer historyTransformer;
+    private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool>? isDiagnosticsVisible;
+    private readonly IToolVisualizerFactory? toolFactory;
+    private readonly IAgentStatusSink? statusSink;
+    private readonly Func<string, string?>? resolveSubAgentId;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
     private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
     private readonly List<RenderSlot> historySlots = [];
     private readonly List<RunningChatItemHtmlModel> runningModels = [];
     private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = [];
+    private readonly CancellationTokenSource loadCts = new();
+    private ChatMessageHtmlTransformer? historyTransformer;
+    private bool historyLoading;
+    private List<NotifyCollectionChangedEventArgs>? bufferedHistoryEvents;
     private int idSequence;
+
+    /// <summary>
+    /// Task that completes when the history has been fully loaded and the live transformer is ready.
+    /// Exposed internally for tests to await before asserting history-related sink state.
+    /// </summary>
+    internal Task HistoryLoaded { get; }
 
     public ChatOutputHtmlModel(
         IReadOnlyList<AgentChatHistoryItem> historyItems,
@@ -866,18 +886,23 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.historyItems = historyItems;
         this.runningItems = runningItems;
         this.sink = sink;
+        this.isReasoningVisible = isReasoningVisible;
+        this.isDiagnosticsVisible = isDiagnosticsVisible;
+        this.toolFactory = toolFactory;
+        this.statusSink = statusSink;
+        this.resolveSubAgentId = resolveSubAgentId;
 
-        this.historyTransformer = new ChatMessageHtmlTransformer(
-            historyItems,
-            this.historySlots,
-            sink,
-            isReasoningVisible,
-            this.NextId,
-            ChatOutputHtmlRenderer.HistoryContainerId,
-            isDiagnosticsVisible,
-            toolFactory,
-            statusSink,
-            resolveSubAgentId);
+        // Phase A: take a snapshot of history for off-thread processing.
+        var snapshot = new List<AgentChatHistoryItem>(historyItems);
+        this.historyLoading = true;
+        this.bufferedHistoryEvents = [];
+
+        // Subscribe before Task.Run so no CollectionChanged events are missed.
+        if (historyItems is INotifyCollectionChanged historyChanged)
+        {
+            historyChanged.CollectionChanged += this.OnHistoryCollectionChanged;
+        }
+
         this.runningTransformer = new RunningChatItemsHtmlTransformer(
             runningItems,
             this.runningModels,
@@ -893,28 +918,130 @@ public sealed class ChatOutputHtmlModel : IDisposable
             this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink);
         }
 
-        // Subscribe AFTER the transformers so, for any one collection-changed event, the DOM
-        // operations are emitted (by the transformer) before the trailing scroll request.
-        if (historyItems is INotifyCollectionChanged historyChanged)
-        {
-            historyChanged.CollectionChanged += this.OnHistoryCollectionChanged;
-        }
-
         if (runningItems is INotifyCollectionChanged runningChanged)
         {
             runningChanged.CollectionChanged += this.OnRunningCollectionChanged;
         }
 
         this.SyncRunningItemSubscriptions();
-        this.sink.ScrollToBottom();
+
+        // Fire off background history load; HistoryLoaded completes when Phase C finishes.
+        this.HistoryLoaded = Task.Run(() => this.LoadHistoryChunksAsync(snapshot, this.loadCts.Token));
+    }
+
+    private async Task LoadHistoryChunksAsync(
+        List<AgentChatHistoryItem> snapshot,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var chunks = ComputeChunkRanges(snapshot);
+            var idBox = new int[1];
+
+            // Process chunks oldest-first so that each chunk is appended in DOM order
+            // and the integer IDs assigned by idBox match the index-order IDs that the
+            // live ChatMessageHtmlTransformer will assign in Phase C.
+            for (var chunkIndex = chunks.Count - 1; chunkIndex >= 0; chunkIndex--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var (start, end) = chunks[chunkIndex];
+                var chunkSlice = snapshot.GetRange(start, end - start);
+                var (cmds, _) = GenerateHistoryChunk(
+                    chunkSlice, idBox,
+                    this.isReasoningVisible, this.isDiagnosticsVisible,
+                    this.toolFactory, this.statusSink, this.resolveSubAgentId);
+
+                var isLastChunk = chunkIndex == 0;
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    this.sink.BeginBatch();
+
+                    foreach (var cmd in cmds)
+                    {
+                        if (cmd.Location is null)
+                        {
+                            this.sink.RemoveContent(cmd.Path);
+                        }
+                        else
+                        {
+                            this.sink.UpdateContent(cmd.Path, cmd.Location.Value, cmd.Content!);
+                        }
+                    }
+
+                    if (isLastChunk)
+                    {
+                        this.sink.ScrollToBottom();
+                    }
+
+                    this.sink.EndBatch();
+                });
+            }
+
+            // Phase C: construct live transformer and replay any buffered events.
+            var finalIdBox = idBox;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // Reset id sequence to 0 so ApplyInitialTransform assigns the same integer IDs to
+                // pre-existing history slots as Phase B did (which also started from 0, oldest-first).
+                // We save the running-items count to restore it afterward, preventing collisions.
+                var savedIdSequence = this.idSequence;
+                this.idSequence = 0;
+
+                // Construct the live transformer. ApplyInitialTransform skips items 0..snapshot.Count-1
+                // (rendered by chunks) and emits DOM ops for any items added to historyItems during load.
+                this.historyTransformer = new ChatMessageHtmlTransformer(
+                    this.historyItems,
+                    this.historySlots,
+                    this.sink,
+                    this.isReasoningVisible,
+                    this.NextId,
+                    ChatOutputHtmlRenderer.HistoryContainerId,
+                    this.isDiagnosticsVisible,
+                    this.toolFactory,
+                    this.statusSink,
+                    this.resolveSubAgentId,
+                    skipInitialItems: snapshot.Count);
+
+                // Ensure future ids don't collide with running-item ids allocated in Phase A.
+                this.idSequence = Math.Max(savedIdSequence, this.idSequence);
+
+                this.historyLoading = false;
+
+                if (this.bufferedHistoryEvents is { Count: > 0 })
+                {
+                    this.sink.ScrollToBottom();
+                }
+
+                this.bufferedHistoryEvents = null;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposed before loading completed; no further action needed.
+        }
     }
 
     /// <summary>Re-renders every message (for example, when reasoning visibility toggles).</summary>
     public void Refresh()
     {
-        foreach (var slot in this.historySlots)
+        if (!this.historyLoading)
         {
-            slot.Model.Refresh();
+            foreach (var slot in this.historySlots)
+            {
+                slot.Model.Refresh();
+            }
         }
 
         foreach (var model in this.runningModels)
@@ -972,7 +1099,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
             Func<bool> isReasoningVisible,
             Func<bool>? isDiagnosticsVisible,
             IToolVisualizerFactory? toolFactory,
-            IAgentStatusSink? statusSink)
+            IAgentStatusSink? statusSink,
+            Func<string, string?>? resolveSubAgentId = null)
     {
         var recording = new RecordingChatOutputHtmlSink();
         var slots = new List<RenderSlot>();
@@ -980,7 +1108,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             chunk, slots, recording,
             isReasoningVisible, () => idBox[0]++,
             ChatOutputHtmlRenderer.HistoryContainerId,
-            isDiagnosticsVisible, toolFactory, statusSink);
+            isDiagnosticsVisible, toolFactory, statusSink, resolveSubAgentId);
 
         string? firstElementId = slots.Count > 0
             ? (slots[0].Group?.GroupId ?? slots[0].Model.ElementId)
@@ -1046,6 +1174,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
     public void Dispose()
     {
+        this.loadCts.Cancel();
+        this.loadCts.Dispose();
+
         if (this.historyItems is INotifyCollectionChanged historyChanged)
         {
             historyChanged.CollectionChanged -= this.OnHistoryCollectionChanged;
@@ -1064,13 +1195,22 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.runningItemHandlers.Clear();
         this.subAgentsTransformer?.Dispose();
         this.runningTransformer.Dispose();
-        this.historyTransformer.Dispose();
+        this.historyTransformer?.Dispose();
     }
 
     private int NextId() => this.idSequence++;
 
     private void OnHistoryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => this.sink.ScrollToBottom();
+    {
+        if (this.historyLoading)
+        {
+            this.bufferedHistoryEvents?.Add(e);
+        }
+        else
+        {
+            this.sink.ScrollToBottom();
+        }
+    }
 
     private void OnRunningCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

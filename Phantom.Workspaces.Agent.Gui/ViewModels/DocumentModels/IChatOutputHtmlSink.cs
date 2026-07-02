@@ -34,4 +34,10 @@ public interface IChatOutputHtmlSink
 
     /// <summary>Requests that the page scroll to the bottom (honored only when scroll lock is enabled).</summary>
     void ScrollToBottom();
+
+    /// <summary>Begins a batch of DOM operations for efficient coalesced delivery.</summary>
+    void BeginBatch() { }
+
+    /// <summary>Ends the current batch and flushes accumulated operations.</summary>
+    void EndBatch() { }
 }

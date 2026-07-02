@@ -378,9 +378,10 @@ public sealed class AgentChatOutputControlTests
 
         // Setting DataContext triggers AttachOutputModel → HtmlShell → Ready → OnBrowserReady.
         control.DataContext = viewModel;
+        await control.HistoryLoaded;
 
-        // The initial population must have been wrapped in exactly one batch.
-        Assert.Equal(1, browser.BatchCount);
+        // The initial population: 1 batch from OnBrowserReady (running items) + 1 batch from history chunk.
+        Assert.Equal(2, browser.BatchCount);
 
         // Messages must still have been delivered (the batch was not empty).
         Assert.True(
@@ -400,8 +401,8 @@ public sealed class AgentChatOutputControlTests
     public async Task AgentChatOutputControl_IncrementalMessageAfterInitial_DoesNotStartNewBatch()
     {
         // Verify that messages appended after the initial load are not batched —
-        // they go through the normal single-message path. The batch count must remain at 1
-        // (the initial load batch).
+        // they go through the normal single-message path. The batch count must remain at 2
+        // (1 from OnBrowserReady + 1 from history chunk).
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
@@ -420,13 +421,14 @@ public sealed class AgentChatOutputControlTests
         isAttachedField!.SetValue(control, true);
 
         control.DataContext = viewModel;
-        Assert.Equal(1, browser.BatchCount);
+        await control.HistoryLoaded;
+        Assert.Equal(2, browser.BatchCount);
 
         // Add a message incrementally — this must not open a new batch.
         browser.PostedMessages.Clear();
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("reply")] });
 
-        Assert.Equal(1, browser.BatchCount); // Still 1; no extra batch for incremental adds.
+        Assert.Equal(2, browser.BatchCount); // Still 2; no extra batch for incremental adds.
         Assert.True(browser.PostedMessages.Count > 0, "Expected incremental update messages.");
     }
 
@@ -557,6 +559,7 @@ public sealed class AgentChatOutputControlTests
         isAttachedField!.SetValue(control, true);
 
         control.DataContext = viewModel;
+        await control.HistoryLoaded;
 
         var messages = browser.PostedMessages;
         var lastUpdateIndex = -1;
