@@ -9,9 +9,6 @@ public sealed record SchemaEntityDocument
     [JsonPropertyName("schema")]
     public JsonElement? SchemaPayload { get; init; }
 
-    [JsonPropertyName("$id")]
-    public string? SchemaId { get; init; }
-
     public static SchemaEntityDocument? Deserialize(JsonElement entityData)
     {
         if (entityData.ValueKind != JsonValueKind.Object)
@@ -25,8 +22,7 @@ public sealed record SchemaEntityDocument
     public bool IsSchemaEntity()
     {
         return this.SchemaPayload is not null
-            || this.GetExplicitEntityTypeNames().Contains("json-schema")
-            || !string.IsNullOrWhiteSpace(this.SchemaId);
+            || this.GetExplicitEntityTypeNames().Contains("json-schema");
     }
 
     public bool TryGetSchemaPayloadId(out string schemaPayloadId)
@@ -42,12 +38,6 @@ public sealed record SchemaEntityDocument
             && !string.IsNullOrWhiteSpace(schemaPayloadDocument.SchemaId))
         {
             schemaPayloadId = schemaPayloadDocument.SchemaId;
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(this.SchemaId))
-        {
-            schemaPayloadId = this.SchemaId;
             return true;
         }
 

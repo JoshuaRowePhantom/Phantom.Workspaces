@@ -45,11 +45,19 @@ public sealed class EntityRepository
     {
         var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource).ConfigureAwait(false);
         var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
-        var innerDataAccessLayer = isWebSource
-            ? underlyingDataAccessLayer
-            : new MergeProcessingDataAccessLayer(
+        IDataAccessLayer innerDataAccessLayer;
+        if (isWebSource)
+        {
+            innerDataAccessLayer = underlyingDataAccessLayer;
+        }
+        else
+        {
+            var schemaAccessor = new SchemaAccessor(underlyingDataAccessLayer);
+            innerDataAccessLayer = new MergeProcessingDataAccessLayer(
                 new ReferentialIntegrityDataAccessLayer(
-                    new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
+                    new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer, schemaAccessor),
+                    schemaAccessor));
+        }
         if (!isWebSource)
         {
             await EnsureSeedDataIfNeededAsync(innerDataAccessLayer).ConfigureAwait(false);
