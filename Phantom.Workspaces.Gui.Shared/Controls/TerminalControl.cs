@@ -308,11 +308,11 @@ public partial class TerminalControl : Control
         if (reverse)
             return new SolidColorBrush(AnsiToColor(attrs.BackgroundColor, bright: false));
 
-        if (attrs.ForegroundRgb.ARGB != 0)
+        if (attrs.ForegroundRgb is { ARGB: not 0 } fgRgb)
             return new SolidColorBrush(Color.FromRgb(
-                (byte)attrs.ForegroundRgb.Red,
-                (byte)attrs.ForegroundRgb.Green,
-                (byte)attrs.ForegroundRgb.Blue));
+                (byte)fgRgb.Red,
+                (byte)fgRgb.Green,
+                (byte)fgRgb.Blue));
 
         return defaultFg ?? new SolidColorBrush(AnsiToColor(attrs.ForegroundColor, attrs.Bright));
     }
@@ -322,11 +322,11 @@ public partial class TerminalControl : Control
         if (reverse)
             return AnsiToColor(attrs.ForegroundColor, bright: false);
 
-        if (attrs.BackgroundRgb.ARGB != 0)
+        if (attrs.BackgroundRgb is { ARGB: not 0 } bgRgb)
             return Color.FromRgb(
-                (byte)attrs.BackgroundRgb.Red,
-                (byte)attrs.BackgroundRgb.Green,
-                (byte)attrs.BackgroundRgb.Blue);
+                (byte)bgRgb.Red,
+                (byte)bgRgb.Green,
+                (byte)bgRgb.Blue);
 
         // Default background — caller fills the whole rect with Terminal.Background.
         var idx = (int)attrs.BackgroundColor;

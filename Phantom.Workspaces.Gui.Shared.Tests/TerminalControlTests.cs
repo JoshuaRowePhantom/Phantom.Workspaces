@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,10 +8,13 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
 using VtNetCore.VirtualTerminal.Enums;
+using VtNetCore.VirtualTerminal.Model;
 using VtNetCore.XTermParser;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
@@ -253,7 +257,100 @@ public sealed class TerminalControlTests
         Assert.False(vtc.SgrMouseMode);
     }
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_Render_WhenCellHasNullRgbAttributes_DoesNotThrow()
+    {
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+        // ANSI palette colour 31 (red) — no explicit RGB, so ForegroundRgb is null
+        control.PushBytesForTest(Encoding.ASCII.GetBytes("\x1b[31mA"));
+
+        using var renderTarget = new RenderTargetBitmap(new PixelSize(800, 600), new Vector(96, 96));
+        var ex = Record.Exception(() =>
+        {
+            using var context = renderTarget.CreateDrawingContext();
+            control.Render(context);
+        });
+        Assert.Null(ex);
+    }
+
+    // ── ResolveFg / ResolveBgColor – null RGB guard ───────────────────────────────────────────
+
+    [Fact]
+    public void TerminalControl_ResolveFg_WhenForegroundRgbIsNull_ReturnsDefaultForeground()
+    {
+        var attrs = new TerminalAttribute { ForegroundRgb = null };
+        IBrush defaultFg = new SolidColorBrush(Colors.White);
+
+        var result = InvokeResolveFg(attrs, reverse: false, defaultFg);
+
+        Assert.Same(defaultFg, result);
+    }
+
+    [Fact]
+    public void TerminalControl_ResolveFg_WhenForegroundRgbIsNonZero_ReturnsRgbBrush()
+    {
+        var attrs = new TerminalAttribute
+        {
+            ForegroundRgb = new TerminalColor { Red = 100, Green = 150, Blue = 200 },
+        };
+
+        var result = InvokeResolveFg(attrs, reverse: false, defaultFg: null) as SolidColorBrush;
+
+        Assert.NotNull(result);
+        Assert.Equal(100, result.Color.R);
+        Assert.Equal(150, result.Color.G);
+        Assert.Equal(200, result.Color.B);
+    }
+
+    [Fact]
+    public void TerminalControl_ResolveBgColor_WhenBackgroundRgbIsNull_ReturnsNull()
+    {
+        var attrs = new TerminalAttribute { BackgroundRgb = null };
+
+        var result = InvokeResolveBgColor(attrs, reverse: false);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void TerminalControl_ResolveBgColor_WhenBackgroundRgbIsNonZero_ReturnsRgbColor()
+    {
+        var attrs = new TerminalAttribute
+        {
+            BackgroundRgb = new TerminalColor { Red = 10, Green = 20, Blue = 30 },
+        };
+
+        var result = InvokeResolveBgColor(attrs, reverse: false);
+
+        Assert.NotNull(result);
+        Assert.Equal(10, result.Value.R);
+        Assert.Equal(20, result.Value.G);
+        Assert.Equal(30, result.Value.B);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────────────────────
+
+    private static readonly MethodInfo ResolveFgMethod =
+        typeof(TerminalControl).GetMethod("ResolveFg", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+    private static readonly MethodInfo ResolveBgColorMethod =
+        typeof(TerminalControl).GetMethod("ResolveBgColor", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+    private static IBrush? InvokeResolveFg(TerminalAttribute attrs, bool reverse, IBrush? defaultFg) =>
+        (IBrush?)ResolveFgMethod.Invoke(null, [attrs, reverse, defaultFg]);
+
+    private static Color? InvokeResolveBgColor(TerminalAttribute attrs, bool reverse) =>
+        (Color?)ResolveBgColorMethod.Invoke(null, [attrs, reverse]);
+
 
     private static VirtualTerminalController CreateVtc(int cols, int rows)
     {
