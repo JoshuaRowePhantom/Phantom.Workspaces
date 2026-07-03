@@ -29,7 +29,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentChatRegistry, IRunningSubAgent
+public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
@@ -75,6 +75,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly Dictionary<string, string> parentToolCallIdToAgentId = new(StringComparer.Ordinal);
     private readonly object subAgentsLock = new();
     private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
+    private readonly Dictionary<string, SubAgent> subAgentTableMap = new(StringComparer.Ordinal);
     private readonly List<AgentChat> restoredSubAgentChats = [];
     private SubAgentChatClient? subAgentChatClientSource;
     private string agentId = string.Empty;
@@ -711,6 +712,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     public object? GetService(Type serviceType)
     {
+        if (serviceType == typeof(ISubAgentTable))
+            return this;
         return this.chatClientAgent?.GetService(serviceType)
             ?? this.request.AgentServices?.GetService(serviceType);
     }
@@ -820,6 +823,49 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             cancellationToken);
 
         return result;
+    }
+
+    /// <inheritdoc/>
+    SubAgent ISubAgentTable.Add(AgentChat agentChat)
+    {
+        var sessionId = new AgentSessionId(agentChat.AgentSessionId);
+        var factory = this.request.AgentServices?.RunningAgentChatFactory;
+        var subAgent = new SubAgent(sessionId, agentChat, factory);
+
+        lock (this.subAgentsLock)
+        {
+            if (this.subAgentTableMap.ContainsKey(agentChat.AgentSessionId))
+            {
+                throw new InvalidOperationException(
+                    $"A sub-agent with session ID '{agentChat.AgentSessionId}' is already registered.");
+            }
+
+            this.subAgentTableMap[agentChat.AgentSessionId] = subAgent;
+        }
+
+        _ = Task.Factory.StartNew(
+            () => this.subAgentItems.Add(subAgent),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+
+        if (agentChat.AgentDefinition is not null)
+        {
+            var parentSessionId = this.agentSessionId;
+            var childSessionId = agentChat.AgentSessionId;
+            var agentDefJson = MongoDB.Bson.BsonDocument.Parse(agentChat.AgentDefinition.ToJson());
+            _ = this.request.ConfiguredStore.WriteSubAgentManifestEntryAsync(
+                parentSessionId,
+                new SubAgentManifestEntry
+                {
+                    SessionId = childSessionId,
+                    AgentDefinitionJson = agentDefJson,
+                    CompletionState = AgentChatCompletionState.Running,
+                    LastUpdatedAt = DateTime.UtcNow,
+                });
+        }
+
+        return subAgent;
     }
 
     public void SetAgentSessionId(string agentSessionId)
