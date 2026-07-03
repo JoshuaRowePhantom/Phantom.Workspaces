@@ -193,6 +193,9 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
        {
            copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
+           copilotChatClient.SetSubAgentDependencies(
+               this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory,
+               this);
        }
 
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)

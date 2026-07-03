@@ -43,6 +43,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
+    private IRunningAgentChatFactory? runningAgentChatFactory;
+    private ISubAgentTable? subAgentTable;
+
     private CopilotClient? copilotClient;
     private CopilotSession? copilotSession;
     private string? currentSessionSignature;
@@ -290,6 +293,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
+    /// <summary>
+    /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
+    /// <see cref="CopilotSdkTurnEventDispatcher"/> uses to create and register sub-agent
+    /// <see cref="AgentChat"/> instances when a <c>SubagentStartedEvent</c> arrives.
+    /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created,
+    /// in the same block that subscribes to <see cref="SteeringMessageForwarded"/> and
+    /// <see cref="SessionEstablished"/>.
+    /// </summary>
+    internal void SetSubAgentDependencies(IRunningAgentChatFactory? factory, ISubAgentTable? table)
+    {
+        this.runningAgentChatFactory = factory;
+        this.subAgentTable = table;
+    }
+
     /// <inheritdoc />
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -378,7 +395,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 SingleWriter = true,
             });
 
-            var dispatcher = new CopilotSdkTurnEventDispatcher(channel.Writer, this.subAgentChatRegistry);
+            var dispatcher = new CopilotSdkTurnEventDispatcher(
+                channel.Writer,
+                this.subAgentChatRegistry,
+                this.runningAgentChatFactory,
+                this.subAgentTable,
+                this.loggerFactory?.CreateLogger<CopilotSdkTurnEventDispatcher>());
             var eventSubscription = session.On(sessionEvent => _ = dispatcher.DispatchAsync(sessionEvent));
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
@@ -423,6 +445,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
                 }
+
+                _ = Task.Run(dispatcher.DisposeRemainingLeasesAsync);
             });
 
             return new StreamingTurnContext(
