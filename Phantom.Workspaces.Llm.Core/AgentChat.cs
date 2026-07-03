@@ -29,7 +29,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunningSubAgent
+public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentChatRegistry, IRunningSubAgent
 {
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
@@ -707,6 +707,12 @@ public sealed class AgentChat : IAsyncDisposable, ISubAgentChatRegistry, IRunnin
         {
             this.ownedResources.Add(resource);
         }
+    }
+
+    public object? GetService(Type serviceType)
+    {
+        return this.chatClientAgent?.GetService(serviceType)
+            ?? this.request.AgentServices?.GetService(serviceType);
     }
 
     /// <inheritdoc/>

@@ -4,7 +4,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm;
 
-public interface IRunningAgentChatFactory
+public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
 {
     /// <summary>
     /// The live set of sessions currently held by at least one lease.
