@@ -208,11 +208,12 @@ public static class AgentFactory
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
             "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
             "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
+            "github-copilot-subagent" => new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent"),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, ollama, openai, azure"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure"),
         };
     }
 
