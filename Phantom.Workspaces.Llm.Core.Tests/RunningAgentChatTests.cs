@@ -1,4 +1,6 @@
+using AgentSchema;
 using Phantom.Workspaces.Llm.Interfaces;
+using System.Collections.ObjectModel;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -49,6 +51,8 @@ public sealed class RunningAgentChatTests
         public AgentSessionId LastRequestedSessionId { get; private set; }
         public CancellationToken LastCancellationToken { get; private set; }
 
+        public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
+
         public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
         {
             GetAsyncCallCount++;
@@ -57,5 +61,12 @@ public sealed class RunningAgentChatTests
             var lease = new RunningAgentChatLease(sessionId, null!, () => ValueTask.CompletedTask);
             return Task.FromResult(lease);
         }
+
+        public Task<RunningAgentChatLease> CreateAsync(
+            AgentDefinition definition,
+            AgentSessionId sessionId,
+            AgentServices? services = null,
+            CancellationToken ct = default)
+            => throw new NotImplementedException();
     }
 }
