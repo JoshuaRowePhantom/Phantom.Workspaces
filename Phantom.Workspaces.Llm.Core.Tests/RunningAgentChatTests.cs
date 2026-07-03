@@ -68,5 +68,12 @@ public sealed class RunningAgentChatTests
             AgentServices? services = null,
             CancellationToken ct = default)
             => throw new NotImplementedException();
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            CancellationToken ct = default)
+            => GetAsync(sessionId, ct);
     }
 }

@@ -219,8 +219,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         }
 
         var lease = await this.runningAgentChatTable.AcquireAsync(
-            agentSessionId!,
-            () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel));
+            new AgentSessionId(agentSessionId!));
 
         lease.AgentChat.EnqueueUserMessage(resumePrompt);
         return lease;
@@ -313,8 +312,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         if (this.runningAgentChatTable is not null)
         {
             lease = await this.runningAgentChatTable.AcquireAsync(
-                agentSessionId!,
-                () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel),
+                new AgentSessionId(agentSessionId!),
+                createAgentChatRequest.AgentDefinition,
+                createAgentChatRequest.AgentServices,
                 agentSessionEntity.DisplayName,
                 agentSessionEntity.EntityId.ToString());
             agentChat = lease.AgentChat;

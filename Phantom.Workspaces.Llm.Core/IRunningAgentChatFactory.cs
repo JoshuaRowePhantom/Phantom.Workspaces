@@ -27,4 +27,17 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
         AgentSessionId sessionId,
         AgentServices? services = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns a lease on the already-running session, or — when <paramref name="definition"/>
+    /// is non-null and the session is not yet running — persists the definition, creates the
+    /// <see cref="AgentChat"/>, and returns a new lease. If <paramref name="definition"/> is
+    /// <see langword="null"/> and the session is not running, delegates to
+    /// <see cref="GetAsync"/> (which loads from persistence).
+    /// </summary>
+    Task<RunningAgentChatLease> GetOrCreateAsync(
+        AgentSessionId sessionId,
+        AgentDefinition? definition = null,
+        AgentServices? services = null,
+        CancellationToken ct = default);
 }

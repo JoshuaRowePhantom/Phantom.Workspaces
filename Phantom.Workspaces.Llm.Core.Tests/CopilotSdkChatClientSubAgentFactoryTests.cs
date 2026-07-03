@@ -322,6 +322,13 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, CancellationToken ct) =>
             throw new NotImplementedException();
+
+        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition,
+            AgentServices? services,
+            CancellationToken ct) =>
+            throw new NotImplementedException();
     }
 
     private sealed class NonReceiverChatClient : IChatClient

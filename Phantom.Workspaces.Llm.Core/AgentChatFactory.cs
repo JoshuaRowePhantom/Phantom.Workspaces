@@ -42,6 +42,67 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         _foregroundScheduler = foregroundScheduler;
     }
 
+    public async Task<RunningAgentChatLease> GetOrCreateAsync(
+        AgentSessionId sessionId,
+        AgentDefinition? definition = null,
+        AgentServices? services = null,
+        CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+
+        AgentChat? newChat = null;
+        RunningAgentChatLease? existingLease = null;
+
+        try
+        {
+            if (_entries.TryGetValue(sessionId, out var existing))
+            {
+                existing.RefCount++;
+                existingLease = MakeLease(sessionId, existing.AgentChat);
+            }
+            else
+            {
+                var effectiveServices = services ?? _services;
+
+                if (definition is not null)
+                {
+                    var definitionJson = MongoDB.Bson.BsonDocument.Parse(definition.ToJson());
+                    await _store.StoreAsync(new StoreRequestAgent
+                    {
+                        Agent = new PersistedAgent
+                        {
+                            AgentSessionId = sessionId.Value!,
+                            AgentDefinitionJson = definitionJson,
+                        }
+                    }, ct);
+                }
+
+                var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+                {
+                    AgentDefinition = definition,
+                    AgentSessionId = sessionId.Value,
+                    AgentServices = effectiveServices,
+                    ConfiguredStore = _store,
+                    ClientOverride = effectiveServices.ChatClientOverride,
+                    ForegroundScheduler = _foregroundScheduler,
+                    CancellationToken = ct,
+                });
+                _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
+                newChat = chat;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (existingLease is not null)
+            return existingLease;
+
+        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+        return MakeLease(sessionId, newChat!);
+    }
+
     public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);

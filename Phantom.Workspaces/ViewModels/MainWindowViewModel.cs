@@ -158,7 +158,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 sessionKey =>
                 {
                     var entityId = runningAgentChats.RunningSessions
-                        .FirstOrDefault(s => string.Equals(s.SessionKey, sessionKey, StringComparison.Ordinal))
+                        .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
                         ?.EntityId;
                     if (entityId is not null)
                     {

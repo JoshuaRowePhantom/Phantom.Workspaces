@@ -20,6 +20,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
@@ -1795,7 +1796,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_WithRunningAgentChatTable_AcrossTwoWorkspacePanes_SharesAgentChat()
     {
-        var runningAgentChatTable = new RunningAgentChatTable();
+        var runningAgentChatTable = CreateTestRunningAgentChatTable();
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
@@ -2816,6 +2817,13 @@ public sealed class MainWindowIntegrationTests
             "Phantom.Workspaces.Tests",
             Guid.NewGuid().ToString("N"),
             "profile.json");
+    }
+
+    private static RunningAgentChatTable CreateTestRunningAgentChatTable()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(store, new AgentServices(), TaskScheduler.Default);
+        return new RunningAgentChatTable(factory);
     }
 
     private static void DeleteTempProfileStoreDirectory(string profilePath)
@@ -4839,7 +4847,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_CreatesTwoTabsWithSameAgentChat()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
@@ -4926,7 +4934,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task AgentSessionWorkspaceTabViewModel_DisposeWithLease_ReleasesChat_OnLastDispose()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
@@ -5012,42 +5020,22 @@ public sealed class MainWindowIntegrationTests
         // After disposing first tab, acquire on same key should return cached chat (second tab still holds lease)
         await tabA.DisposeAsync();
 
-        var callCount = 0;
-        Task<AgentChat> TrackedFactory()
-        {
-            callCount++;
-            return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
-            {
-                AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
-                    {
-                        "kind": "prompt",
-                        "name": "shared-dispose-echo",
-                        "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
-                        "tools": []
-                    }
-                    """),
-                AgentSessionId = agentSessionId,
-                ForegroundScheduler = TaskScheduler.Default,
-            });
-        }
-
-        var probe1 = await table.AcquireAsync(agentSessionId, TrackedFactory);
-        Assert.Equal(0, callCount); // factory not called — chat still alive via second tab
-        Assert.Same(sharedChat, probe1.AgentChat);
+        var probe1 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
+        Assert.Same(sharedChat, probe1.AgentChat); // cached — same instance, second tab still holds lease
         await probe1.DisposeAsync();
 
-        // After disposing second tab, the chat should be gone
+        // After disposing second tab, the chat should be gone and a new one created from persistence
         await tabB.DisposeAsync();
 
-        var probe2 = await table.AcquireAsync(agentSessionId, TrackedFactory);
-        Assert.Equal(1, callCount); // factory called — chat was disposed and entry removed
+        var probe2 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
+        Assert.NotSame(sharedChat, probe2.AgentChat); // new instance — old was disposed
         await probe2.DisposeAsync();
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_WithRunningAgentTab_IsAnyRunning()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
@@ -5093,7 +5081,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_WithRunningAgentTab_HasRowWithWorkspaceAndTabTitles()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
@@ -5160,7 +5148,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_Activate_FocusesTab()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
@@ -5223,7 +5211,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_RowActivateCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
@@ -5817,7 +5805,7 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task TryStartAutoResumeAsync_WithMatchingLocalSession_AcquiresLeaseAndEnqueuesResumePrompt()
     {
-        var table = new RunningAgentChatTable();
+        var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
         await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
         await viewModel.InitializeAsync();
