@@ -2128,6 +2128,187 @@ public sealed class MainWindowIntegrationTests
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
 
+    // ── Float-tab disposal guard (issue #635) ─────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task FloatDockable_AgentSessionTab_DoesNotDisposeOrRemoveTabFromPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("f1050001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "f1050001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "float-no-dispose-echo"]],
+              "display-name": { "default": "Float No Dispose Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "float-no-dispose-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var workspacePane = viewModel.SelectedWorkspacePane;
+        var agentTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(workspacePane);
+        await WaitForAgentReadyAsync(agentTab);
+
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, agentTab.Id);
+
+        var document = dockFactory.GetDocumentForTab(agentTab.Id);
+        Assert.NotNull(document);
+
+        // Act: float the tab into a floating window
+        dockFactory.FloatDockable(document!);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // The tab must remain in pane.Tabs — float must NOT remove or dispose it
+        Assert.Contains(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
+        Assert.NotNull(agentTab.Agent);
+        Assert.Equal(AgentTabState.Ready, agentTab.State);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task CloseDockable_AfterFloat_DisposesTabAndRemovesFromPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("f1060001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "f1060001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "float-close-echo"]],
+              "display-name": { "default": "Float Close Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "float-close-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var workspacePane = viewModel.SelectedWorkspacePane;
+        var agentTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(workspacePane);
+        await WaitForAgentReadyAsync(agentTab);
+
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, agentTab.Id);
+
+        var document = dockFactory.GetDocumentForTab(agentTab.Id);
+        Assert.NotNull(document);
+
+        // Float first, then close from the floating state
+        dockFactory.FloatDockable(document!);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        Assert.Contains(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
+
+        // Act: close the floating document
+        dockFactory.CloseDockable(document!);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // Tab must have been removed from pane.Tabs and disposed
+        Assert.DoesNotContain(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task CloseDockable_FromMainDock_DisposesTabExactlyOnce()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("f1070001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId,
+            """
+            {
+              "entity-id": "f1070001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "close-once-echo"]],
+              "display-name": { "default": "Close Once Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "close-once-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var workspacePane = viewModel.SelectedWorkspacePane;
+        var agentTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(workspacePane);
+        await WaitForAgentReadyAsync(agentTab);
+
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, agentTab.Id);
+
+        var document = dockFactory.GetDocumentForTab(agentTab.Id);
+        Assert.NotNull(document);
+
+        // Track how many times the tab is removed from pane.Tabs
+        var removeCount = 0;
+        ((System.Collections.Specialized.INotifyCollectionChanged)workspacePane.Tabs).CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove
+                && e.OldItems?.Contains(agentTab) == true)
+            {
+                removeCount++;
+            }
+        };
+
+        // Act: close directly from the main dock (no float)
+        dockFactory.CloseDockable(document!);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // Tab must be removed exactly once (guards against double-dispose from both
+        // SyncPaneTabsFromDockChange and OnDockableClosed firing on close)
+        Assert.Equal(1, removeCount);
+        Assert.DoesNotContain(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
+    }
+
     // ── Dock-layout save / restore (issue #561) ──────────────────────────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

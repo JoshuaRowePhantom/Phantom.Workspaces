@@ -2347,18 +2347,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         IDocumentDock documentDock,
         NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        if (e.Action == NotifyCollectionChangedAction.Remove)
         {
-            foreach (var item in e.OldItems)
-            {
-                if (item is WorkspaceDocument doc && doc.TabViewModel is { } docTab && workspacePane.Tabs.Contains(docTab))
-                {
-                    // Remove from pane.Tabs; WorkspaceDocumentGenerator.ClearDocumentContainer
-                    // already removes from documentsByTabId via the onCleared callback.
-                    workspacePane.Tabs.Remove(docTab);
-                    DisposeWorkspaceTab(docTab);
-                }
-            }
+            // Remove events fire for both close and float. Disposal and tab removal are
+            // handled exclusively by OnDockableTabClosed (called from WorkspaceDockFactory
+            // .OnDockableClosed, which is only invoked by CloseDockable, never FloatDockable).
         }
         else if (e.Action is NotifyCollectionChangedAction.Move
             or NotifyCollectionChangedAction.Reset)
@@ -2491,6 +2484,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 disposable.Dispose();
                 break;
         }
+    }
+
+    public void OnDockableTabClosed(WorkspaceTabViewModel tabVm)
+    {
+        foreach (var pane in WorkspacePanes)
+        {
+            if (pane.Tabs.Contains(tabVm))
+            {
+                pane.Tabs.Remove(tabVm);
+                break;
+            }
+        }
+        DisposeWorkspaceTab(tabVm);
     }
 
     private async Task OpenEntityBrowserTabAsync()
