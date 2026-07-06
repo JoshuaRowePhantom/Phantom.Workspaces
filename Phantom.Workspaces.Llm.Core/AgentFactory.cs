@@ -340,6 +340,8 @@ public static class AgentFactory
         IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
             ?? new InMemoryAgentPersistenceStore();
 
+        var ct = createAgentChatRequest.CancellationToken;
+
         // Try to extract chat-history tool from agent definition (skipped if override is provided)
         if (services?.AgentPersistenceStoreOverride is null
             && requestedAgentDefinition is PromptAgent promptAgent
@@ -357,9 +359,9 @@ public static class AgentFactory
                     // Convert the connection options to JSON then deserialize as ChatHistoryProviderDefinition
                     var connectionJson = System.Text.Json.JsonSerializer.Serialize(connectionDict);
                     var definition = ChatHistoryProviderDefinition.FromJson(connectionJson);
-                    configuredStore = AgentPersistenceStoreFactory.CreateAsync(
-                        definition,
-                        CancellationToken.None).GetAwaiter().GetResult();
+                    var storeFactory = createAgentChatRequest.PersistenceStoreFactory
+                        ?? AgentPersistenceStoreFactory.CreateAsync;
+                    configuredStore = await storeFactory(definition, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
