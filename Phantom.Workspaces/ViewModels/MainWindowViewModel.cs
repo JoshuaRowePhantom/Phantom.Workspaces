@@ -2475,15 +2475,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private static void DisposeWorkspaceTab(
         WorkspaceTabViewModel workspaceTab)
     {
-        switch (workspaceTab)
-        {
-            case IAsyncDisposable asyncDisposable:
-                _ = asyncDisposable.DisposeAsync();
-                break;
-            case IDisposable disposable:
-                disposable.Dispose();
-                break;
-        }
+        _ = workspaceTab.DisposeAsync();
     }
 
     public void OnDockableTabClosed(WorkspaceTabViewModel tabVm)
@@ -3836,7 +3828,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         this.refreshTimer.Stop();
         this.notificationService.NotificationsChanged -= this.OnNotificationsChanged;
@@ -3872,6 +3864,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await lease.DisposeAsync();
         }
+
+        await base.DisposeAsync();
     }
 }
 

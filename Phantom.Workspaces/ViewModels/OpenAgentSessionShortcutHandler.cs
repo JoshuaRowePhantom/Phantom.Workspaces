@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
@@ -19,8 +20,9 @@ using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
+public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDisposable
 {
+    private readonly ViewModelLifetime lifetime = new();
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable? runningAgentChatTable;
@@ -34,6 +36,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         this.trustedExecutorSelector = trustedExecutorSelector;
         this.runningAgentChatTable = runningAgentChatTable;
     }
+
+    public ValueTask DisposeAsync() => lifetime.DisposeAsync();
 
     public override bool ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
@@ -76,7 +80,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
 
         // Complete initialization in the background
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
-        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
+        lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
 
         return true;
     }
@@ -141,7 +145,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         };
 
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
-        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
+        lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
 
         return loadingTab;
     }

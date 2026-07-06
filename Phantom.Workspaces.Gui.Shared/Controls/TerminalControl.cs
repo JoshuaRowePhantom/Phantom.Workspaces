@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
 using VtNetCore.VirtualTerminal.Enums;
@@ -43,7 +44,7 @@ public partial class TerminalControl : Control
 
     private VirtualTerminalController? _vtc;
     private DataConsumer? _dataConsumer;
-    private CancellationTokenSource? _readCts;
+    private ViewModelLifetime? _sessionLifetime;
 
     // Exposed internally for tests so they can push bytes synchronously without the async loop.
     internal VirtualTerminalController? Vtc => _vtc;
@@ -95,14 +96,14 @@ public partial class TerminalControl : Control
         if (cols > 0 && rows > 0)
             _vtc.ResizeView(cols, rows);
 
-        _readCts = new CancellationTokenSource();
-        _ = ReadLoopAsync(session, _readCts.Token);
+        _sessionLifetime = new ViewModelLifetime();
+        _sessionLifetime.Run(ct => ReadLoopAsync(session, ct));
     }
 
     private void DetachSession()
     {
-        _readCts?.Cancel();
-        _readCts = null;
+        _ = _sessionLifetime?.DisposeAsync();
+        _sessionLifetime = null;
         _vtc = null;
         _dataConsumer = null;
         InvalidateVisual();

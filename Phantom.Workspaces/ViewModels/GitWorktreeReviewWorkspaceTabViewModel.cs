@@ -10,7 +10,7 @@ using LibGit2Sharp;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewModel, IAsyncDisposable
+public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewModel
 {
     private string targetBranch = "main";
     private bool sideBySide;
@@ -38,7 +38,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             this.watcher.Start();
         }
 
-        _ = this.RefreshAsync();
+        Lifetime.Run(this.RefreshAsync);
     }
 
     public string RepositoryPath { get; }
@@ -50,7 +50,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (this.SetProperty(ref this.targetBranch, value))
             {
-                _ = this.RefreshAsync();
+                Lifetime.Run(this.RefreshAsync);
             }
         }
     }
@@ -201,10 +201,10 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     private void OnWatcherChanged(object? sender, EventArgs e)
     {
-        _ = this.RefreshAsync();
+        Lifetime.Run(this.RefreshAsync);
     }
 
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         this.refreshCts?.Cancel();
         this.refreshCts?.Dispose();
@@ -216,7 +216,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             this.watcher.Dispose();
         }
 
-        await Task.CompletedTask;
+        await base.DisposeAsync();
     }
 
     private static string? GetRepositoryPath(SubscribedEntityViewModel entityViewModel)

@@ -71,7 +71,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
         this.DeleteEntityCommand = entity.DeleteEntityCommand;
         this.externalCard = this.cardViewName == "external" ? ExternalEntityCardViewModel.Create(entity) : null;
-        _ = this.BuildFieldEditorsAsync();
+        Lifetime.Run(this.BuildFieldEditorsAsync);
     }
 
     public EntityCardViewModel(
@@ -228,7 +228,7 @@ public sealed class EntityCardViewModel : ViewModelBase
 
             if (this.IsEditMode)
             {
-                _ = this.ValidateRawJsonAsync();
+                Lifetime.Run(this.ValidateRawJsonAsync);
             }
         }
     }
@@ -310,7 +310,7 @@ public sealed class EntityCardViewModel : ViewModelBase
     /// all schema fields) and applies them to the card. Read-versus-edit presentation is embodied by
     /// each field editor, so the card renders correctly in both read and edit modes.
     /// </summary>
-    private async Task BuildFieldEditorsAsync()
+    private async Task BuildFieldEditorsAsync(CancellationToken ct = default)
     {
         if (this.fieldEditorFactory is null
             || this.entity?.Data is not JsonElement entityData
@@ -351,7 +351,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.ShowEditIndicator));
         this.RaisePropertyChanged(nameof(this.ShowEditActions));
         this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
-        _ = this.ValidateRawJsonAsync();
+        Lifetime.Run(this.ValidateRawJsonAsync);
     }
 
     private async void SaveEditMode()
@@ -419,7 +419,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.IsRawJsonReadOnly));
     }
 
-    private async Task ValidateRawJsonAsync()
+    private async Task ValidateRawJsonAsync(CancellationToken ct = default)
     {
         await this.validation.UpdateAsync(this.rawJsonText);
         this.SaveEditModeCommand.RaiseCanExecuteChanged();
@@ -494,7 +494,7 @@ public sealed class EntityCardViewModel : ViewModelBase
             {
                 this.rawJsonText = BuildRawJsonText(this.entity?.Data);
                 this.RaisePropertyChanged(nameof(this.RawJsonText));
-                _ = this.BuildFieldEditorsAsync();
+                Lifetime.Run(this.BuildFieldEditorsAsync);
             }
 
             if (this.cardViewName == "external" && this.entity is not null)

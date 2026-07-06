@@ -11,7 +11,7 @@ using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel, IAsyncDisposable
+public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 {
     private readonly CancellationTokenSource _rebuildCts = new();
     private readonly EntityCardViewResolver entityCardViewResolver = new();
@@ -41,7 +41,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel, 
 
     public EntityListViewModel EntityList => this.entityList;
 
-    public ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         this.rootSubscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
         foreach (var subscribedGet in this.subscribedGetsByPath.Values)
@@ -50,7 +50,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel, 
         }
 
         this._rebuildCts.Cancel();
-        return ValueTask.CompletedTask;
+        await base.DisposeAsync();
     }
 
     private void OnSubscribedResultsChanged(
