@@ -76,7 +76,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly object subAgentsLock = new();
     private readonly ObservableCollection<IRunningSubAgent> subAgentItems = [];
     private readonly Dictionary<string, SubAgent> subAgentTableMap = new(StringComparer.Ordinal);
-    private readonly List<AgentChat> restoredSubAgentChats = [];
     private SubAgentChatClient? subAgentChatClientSource;
     private string agentId = string.Empty;
     private AgentChat? parentAgent;
@@ -820,7 +819,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     SubAgent ISubAgentTable.Add(AgentChat agentChat)
     {
         var sessionId = new AgentSessionId(agentChat.AgentSessionId);
-        var factory = this.request.AgentServices?.RunningAgentChatFactory;
+        var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
         var subAgent = new SubAgent(sessionId, agentChat, factory);
 
         lock (this.subAgentsLock)
@@ -869,40 +868,24 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
     {
+        var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
+        if (factory is null)
+        {
+            return;
+        }
+
         var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
             this.agentSessionId, cancellationToken);
 
         foreach (var childId in childIds)
         {
-            var persistedChild = await this.request.ConfiguredStore.RestoreAsync(
-                new RestoreRequest { AgentSessionId = childId.Value },
-                cancellationToken);
-
-            if (persistedChild?.AgentDefinitionJson is null)
+            var stub = new SubAgent(childId, factory);
+            lock (this.subAgentsLock)
             {
-                continue;
+                this.subAgentTableMap[childId.Value] = stub;
             }
-
-            var agentDef = AgentDefinition.FromJson(persistedChild.Value.AgentDefinitionJson!.ToJson());
-            var noOpClient = new NoOpHostedAgentChatClient();
-
-            var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
-            {
-                AgentDefinition = agentDef,
-                AgentSessionId = childId.Value,
-                ConfiguredStore = this.request.ConfiguredStore,
-                ClientOverride = noOpClient,
-                DisplayNameOverride = agentDef?.Name,
-                CancellationToken = cancellationToken,
-            });
-
-            childChat.parentAgent = this;
-            childChat.agentId = childId.Value;
-
-            this.restoredSubAgentChats.Add(childChat);
-
-            await Task.Factory.StartNew(
-                () => this.subAgentItems.Add(childChat),
+            _ = Task.Factory.StartNew(
+                () => this.subAgentItems.Add(stub),
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler);
@@ -967,13 +950,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         {
             await childChat.DisposeAsync();
         }
-
-        foreach (var restoredChat in this.restoredSubAgentChats)
-        {
-            await restoredChat.DisposeAsync();
-        }
-
-        this.restoredSubAgentChats.Clear();
     }
 
     // Drains a conflator while suppressing coalesce faults so a secondary failure during teardown

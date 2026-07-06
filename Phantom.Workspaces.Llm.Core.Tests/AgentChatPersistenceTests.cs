@@ -43,7 +43,9 @@ public sealed class AgentChatPersistenceTests
 
     private static async Task<AgentChat> CreateParentChatAsync(
         InMemoryAgentPersistenceStore store,
-        string? agentSessionId = null) =>
+        string? agentSessionId = null,
+        AgentServices? services = null,
+        TaskScheduler? foregroundScheduler = null) =>
         await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = ParentDefinition,
@@ -51,7 +53,35 @@ public sealed class AgentChatPersistenceTests
             ConfiguredStore = store,
             ClientOverride = new DeterministicTestChatClient(),
             DisplayNameOverride = "parent",
+            AgentServices = services,
+            ForegroundScheduler = foregroundScheduler,
         });
+
+    private static AgentChatFactory CreateFactory(InMemoryAgentPersistenceStore store) =>
+        new(store, new AgentServices { ChatClientOverride = new DeterministicTestChatClient() }, TaskScheduler.Default);
+
+    /// <summary>
+    /// Queues tasks without executing them until <see cref="Drain"/> is called.
+    /// </summary>
+    private sealed class CapturingTaskScheduler : TaskScheduler
+    {
+        private readonly List<Task> _queue = [];
+
+        public void Drain()
+        {
+            while (_queue.Count > 0)
+            {
+                var tasks = _queue.ToList();
+                _queue.Clear();
+                foreach (var task in tasks)
+                    TryExecuteTask(task);
+            }
+        }
+
+        protected override IEnumerable<Task>? GetScheduledTasks() => _queue;
+        protected override void QueueTask(Task task) => _queue.Add(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+    }
 
     [Fact]
     public async Task GetOrCreateAsync_AddsSubAgentLink()
@@ -79,7 +109,11 @@ public sealed class AgentChatPersistenceTests
             parentSessionId = parent.AgentSessionId;
         }
 
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId);
+        var scheduler = new CapturingTaskScheduler();
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
+        scheduler.Drain();
 
         Assert.Single(restoredParent.SubAgents);
     }
@@ -98,10 +132,15 @@ public sealed class AgentChatPersistenceTests
             parentSessionId = parent.AgentSessionId;
         }
 
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId);
+        var scheduler = new CapturingTaskScheduler();
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
+        scheduler.Drain();
 
-        var restoredChild = (AgentChat)Assert.Single(restoredParent.SubAgents);
-        Assert.Equal("sub-agent", restoredChild.AgentDefinition?.Name);
+        var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
+        await using var lease = await stub.AcquireLeaseAsync();
+        Assert.Equal("sub-agent", lease.AgentChat.AgentDefinition?.Name);
     }
 
     [Fact]
@@ -128,29 +167,14 @@ public sealed class AgentChatPersistenceTests
             parentSessionId = parent.AgentSessionId;
         }
 
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId);
+        var scheduler = new CapturingTaskScheduler();
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
+        scheduler.Drain();
 
-        var restoredChild = (AgentChat)Assert.Single(restoredParent.SubAgents);
-        Assert.True(restoredChild.History.Count > 0);
-    }
-
-    [Fact]
-    public async Task InitializeAsync_RestoredSubAgent_IsHostedAgent_AcceptsUserInput_False()
-    {
-        var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
-
-        await using (var parent = await CreateParentChatAsync(store))
-        {
-            var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
-            sink.Complete();
-            await Task.Yield();
-            parentSessionId = parent.AgentSessionId;
-        }
-
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId);
-
-        var restoredChild = (AgentChat)Assert.Single(restoredParent.SubAgents);
-        Assert.False(restoredChild.AcceptsUserInput);
+        var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
+        await using var lease = await stub.AcquireLeaseAsync();
+        Assert.True(lease.AgentChat.History.Count > 0);
     }
 }
