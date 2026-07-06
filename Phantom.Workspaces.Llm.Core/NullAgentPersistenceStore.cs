@@ -35,15 +35,15 @@ public sealed class NullAgentPersistenceStore : IAgentPersistenceStore
         => ValueTask.FromResult(Array.Empty<ChatMessage>());
 
     /// <inheritdoc />
-    public ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(
+    public ValueTask AddSubAgentLinkAsync(
         string parentSessionId,
-        CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(Array.Empty<SubAgentManifestEntry>());
-
-    /// <inheritdoc />
-    public ValueTask WriteSubAgentManifestEntryAsync(
-        string parentSessionId,
-        SubAgentManifestEntry entry,
+        string childSessionId,
         CancellationToken cancellationToken = default)
         => ValueTask.CompletedTask;
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(Array.Empty<AgentSessionId>());
 }

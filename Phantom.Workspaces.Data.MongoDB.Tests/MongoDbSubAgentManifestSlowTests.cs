@@ -1,5 +1,3 @@
-using MongoDB.Bson;
-using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
@@ -18,117 +16,48 @@ public sealed class MongoDbSubAgentManifestSlowTests
     private MongoDbAgentPersistenceStore CreateStore() =>
         new(_fixture.Database, MongoDbTestDatabaseFixture.ChatHistoryCollectionName);
 
-    private static SubAgentManifestEntry MakeEntry(string sessionId, AgentChatCompletionState state = AgentChatCompletionState.Running) =>
-        new()
-        {
-            SessionId = sessionId,
-            AgentDefinitionJson = new BsonDocument { { "key", sessionId } },
-            CompletionState = state,
-            LastUpdatedAt = new DateTime(2024, 6, 1, 12, 0, 0, DateTimeKind.Utc),
-        };
-
     [Fact]
-    public async Task WriteSubAgentManifestEntryAsync_TwoDistinctChildren_BothPersistedNoCrash()
+    public async Task AddSubAgentLink_TwoDistinctChildren_BothPersisted_NoCrash()
     {
         await _fixture.ResetCollectionAsync();
         var store = CreateStore();
         var parent = "parent-session-1";
 
-        await store.WriteSubAgentManifestEntryAsync(parent, MakeEntry("child-a"));
-        await store.WriteSubAgentManifestEntryAsync(parent, MakeEntry("child-b"));
+        await store.AddSubAgentLinkAsync(parent, "child-a");
+        await store.AddSubAgentLinkAsync(parent, "child-b");
 
-        var results = await store.ReadSubAgentManifestAsync(parent);
-        Assert.Equal(2, results.Length);
-        Assert.Contains(results, r => r.SessionId == "child-a");
-        Assert.Contains(results, r => r.SessionId == "child-b");
+        var results = await store.ReadSubAgentChildIdsAsync(parent);
+        Assert.Equal(2, results.Count);
+        Assert.Contains(results, r => r.Value == "child-a");
+        Assert.Contains(results, r => r.Value == "child-b");
     }
 
     [Fact]
-    public async Task WriteSubAgentManifestEntryAsync_SameParentChildPair_SecondCallIsIdempotent()
+    public async Task AddSubAgentLink_SameParentChildPair_SecondCall_IsIdempotent()
     {
         await _fixture.ResetCollectionAsync();
         var store = CreateStore();
         var parent = "parent-session-2";
-        var entry = MakeEntry("child-x");
 
-        await store.WriteSubAgentManifestEntryAsync(parent, entry);
-        await store.WriteSubAgentManifestEntryAsync(parent, entry);
+        await store.AddSubAgentLinkAsync(parent, "child-x");
+        await store.AddSubAgentLinkAsync(parent, "child-x");
 
-        var results = await store.ReadSubAgentManifestAsync(parent);
+        var results = await store.ReadSubAgentChildIdsAsync(parent);
         Assert.Single(results);
-        Assert.Equal("child-x", results[0].SessionId);
+        Assert.Equal("child-x", results[0].Value);
     }
 
     [Fact]
-    public async Task WriteSubAgentManifestEntryAsync_ThenRead_RoundTripsAllFields()
+    public async Task ReadSubAgentChildIds_RoundTrips()
     {
         await _fixture.ResetCollectionAsync();
         var store = CreateStore();
         var parent = "parent-session-3";
-        var definition = new BsonDocument { { "type", "test-agent" }, { "version", 42 } };
-        var lastUpdated = new DateTime(2024, 7, 15, 9, 30, 0, DateTimeKind.Utc);
-        var entry = new SubAgentManifestEntry
-        {
-            SessionId = "child-roundtrip",
-            AgentDefinitionJson = definition,
-            CompletionState = AgentChatCompletionState.Succeeded,
-            LastUpdatedAt = lastUpdated,
-        };
 
-        await store.WriteSubAgentManifestEntryAsync(parent, entry);
+        await store.AddSubAgentLinkAsync(parent, "child-roundtrip");
 
-        var results = await store.ReadSubAgentManifestAsync(parent);
-        Assert.Single(results);
-        var result = results[0];
-        Assert.Equal("child-roundtrip", result.SessionId);
-        Assert.Equal(AgentChatCompletionState.Succeeded, result.CompletionState);
-        Assert.Equal(lastUpdated, result.LastUpdatedAt);
-        Assert.Equal(definition, result.AgentDefinitionJson);
-    }
-
-    [Fact]
-    public async Task WriteSubAgentManifestEntryAsync_ThreeChildren_AllReturned()
-    {
-        await _fixture.ResetCollectionAsync();
-        var store = CreateStore();
-        var parent = "parent-session-4";
-
-        await store.WriteSubAgentManifestEntryAsync(parent, MakeEntry("child-1"));
-        await store.WriteSubAgentManifestEntryAsync(parent, MakeEntry("child-2"));
-        await store.WriteSubAgentManifestEntryAsync(parent, MakeEntry("child-3"));
-
-        var results = await store.ReadSubAgentManifestAsync(parent);
-        Assert.Equal(3, results.Length);
-        Assert.Contains(results, r => r.SessionId == "child-1");
-        Assert.Contains(results, r => r.SessionId == "child-2");
-        Assert.Contains(results, r => r.SessionId == "child-3");
-    }
-
-    [Fact]
-    public async Task ReadSubAgentManifestAsync_UnknownParent_ReturnsEmpty()
-    {
-        await _fixture.ResetCollectionAsync();
-        var store = CreateStore();
-
-        var results = await store.ReadSubAgentManifestAsync("unknown-parent-session");
-
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public async Task ReadSubAgentManifestAsync_DoesNotReturnEntriesForOtherParents()
-    {
-        await _fixture.ResetCollectionAsync();
-        var store = CreateStore();
-        var parentA = "parent-session-a";
-        var parentB = "parent-session-b";
-
-        await store.WriteSubAgentManifestEntryAsync(parentA, MakeEntry("child-of-a"));
-
-        var resultsForB = await store.ReadSubAgentManifestAsync(parentB);
-        Assert.Empty(resultsForB);
-
-        var resultsForA = await store.ReadSubAgentManifestAsync(parentA);
-        Assert.Single(resultsForA);
+        var results = await store.ReadSubAgentChildIdsAsync(parent);
+        var result = Assert.Single(results);
+        Assert.Equal("child-roundtrip", result.Value);
     }
 }

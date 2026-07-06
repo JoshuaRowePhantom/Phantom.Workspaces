@@ -800,30 +800,18 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
         var parentSessionId = this.agentSessionId;
         var childSessionId = childChat.AgentSessionId;
-        var agentDefJson = MongoDB.Bson.BsonDocument.Parse(subAgentDefinition.ToJson());
 
-        chatClient.CompletionStateChanged += (_, _) =>
-        {
-            var entry = new SubAgentManifestEntry
+        await this.request.ConfiguredStore.StoreAsync(
+            new StoreRequestAgent
             {
-                SessionId = childSessionId,
-                AgentDefinitionJson = agentDefJson,
-                CompletionState = chatClient.CompletionState,
-                LastUpdatedAt = DateTime.UtcNow,
-            };
-            _ = this.request.ConfiguredStore.WriteSubAgentManifestEntryAsync(parentSessionId, entry);
-        };
-
-        await this.request.ConfiguredStore.WriteSubAgentManifestEntryAsync(
-            parentSessionId,
-            new SubAgentManifestEntry
-            {
-                SessionId = childSessionId,
-                AgentDefinitionJson = agentDefJson,
-                CompletionState = AgentChatCompletionState.Running,
-                LastUpdatedAt = DateTime.UtcNow,
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = childSessionId,
+                    AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(subAgentDefinition.ToJson()),
+                },
             },
             cancellationToken);
+        await this.request.ConfiguredStore.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
 
         return result;
     }
@@ -852,21 +840,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
 
-        if (agentChat.AgentDefinition is not null)
-        {
-            var parentSessionId = this.agentSessionId;
-            var childSessionId = agentChat.AgentSessionId;
-            var agentDefJson = MongoDB.Bson.BsonDocument.Parse(agentChat.AgentDefinition.ToJson());
-            _ = this.request.ConfiguredStore.WriteSubAgentManifestEntryAsync(
-                parentSessionId,
-                new SubAgentManifestEntry
-                {
-                    SessionId = childSessionId,
-                    AgentDefinitionJson = agentDefJson,
-                    CompletionState = AgentChatCompletionState.Running,
-                    LastUpdatedAt = DateTime.UtcNow,
-                });
-        }
+        _ = this.request.ConfiguredStore.AddSubAgentLinkAsync(this.agentSessionId, agentChat.AgentSessionId);
 
         return subAgent;
     }
@@ -895,27 +869,35 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
     {
-        var manifest = await this.request.ConfiguredStore.ReadSubAgentManifestAsync(
+        var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
             this.agentSessionId, cancellationToken);
 
-        foreach (var entry in manifest)
+        foreach (var childId in childIds)
         {
-            var agentDef = AgentDefinition.FromJson(entry.AgentDefinitionJson.ToJson());
+            var persistedChild = await this.request.ConfiguredStore.RestoreAsync(
+                new RestoreRequest { AgentSessionId = childId.Value },
+                cancellationToken);
+
+            if (persistedChild?.AgentDefinitionJson is null)
+            {
+                continue;
+            }
+
+            var agentDef = AgentDefinition.FromJson(persistedChild.Value.AgentDefinitionJson!.ToJson());
             var noOpClient = new NoOpHostedAgentChatClient();
 
             var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
             {
                 AgentDefinition = agentDef,
-                AgentSessionId = entry.SessionId,
+                AgentSessionId = childId.Value,
                 ConfiguredStore = this.request.ConfiguredStore,
                 ClientOverride = noOpClient,
                 DisplayNameOverride = agentDef?.Name,
                 CancellationToken = cancellationToken,
             });
 
-            childChat.SetCompletionState(entry.CompletionState);
             childChat.parentAgent = this;
-            childChat.agentId = entry.SessionId;
+            childChat.agentId = childId.Value;
 
             this.restoredSubAgentChats.Add(childChat);
 

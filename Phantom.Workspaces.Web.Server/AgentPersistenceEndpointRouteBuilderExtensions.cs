@@ -21,8 +21,8 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
 
     /// <summary>
     /// Maps <c>POST /agent/persistence/store</c>, <c>POST /agent/persistence/restore</c>,
-    /// <c>POST /agent/persistence/messages</c>, <c>POST /agent/persistence/sub-agent-manifest/read</c>,
-    /// and <c>POST /agent/persistence/sub-agent-manifest/write</c> onto the supplied route builder.
+    /// <c>POST /agent/persistence/messages</c>, <c>POST /agent/persistence/sub-agent-links/add</c>,
+    /// and <c>POST /agent/persistence/sub-agent-links/read</c> onto the supplied route builder.
     /// </summary>
     public static IEndpointRouteBuilder MapAgentPersistenceEndpoints(
         this IEndpointRouteBuilder endpointRouteBuilder)
@@ -131,7 +131,7 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
             return Results.Json(new ReadMessagesResponse { Messages = messages }, SerializerOptions);
         });
 
-        endpointRouteBuilder.MapPost("/agent/persistence/sub-agent-manifest/read", async (HttpContext httpContext) =>
+        endpointRouteBuilder.MapPost("/agent/persistence/sub-agent-links/add", async (HttpContext httpContext) =>
         {
             var cancellationToken = httpContext.RequestAborted;
 
@@ -144,49 +144,49 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
             }
 
             var request = await JsonSerializer
-                .DeserializeAsync<ReadSubAgentManifestRequest>(httpContext.Request.Body, SerializerOptions, cancellationToken)
+                .DeserializeAsync<AddSubAgentLinkRequest>(httpContext.Request.Body, SerializerOptions, cancellationToken)
                 .ConfigureAwait(false);
 
             if (request is null)
             {
-                return Results.BadRequest("Empty read sub-agent manifest request.");
+                return Results.BadRequest("Empty add sub-agent link request.");
             }
 
-            var entries = await store.ReadSubAgentManifestAsync(request.ParentSessionId, cancellationToken)
-                .ConfigureAwait(false);
-
-            return Results.Json(
-                new ReadSubAgentManifestResponse { Entries = entries.Select(ToDto).ToArray() },
-                SerializerOptions);
-        });
-
-        endpointRouteBuilder.MapPost("/agent/persistence/sub-agent-manifest/write", async (HttpContext httpContext) =>
-        {
-            var cancellationToken = httpContext.RequestAborted;
-
-            var store = httpContext.RequestServices.GetService(typeof(IAgentPersistenceStore))
-                as IAgentPersistenceStore;
-
-            if (store is null)
-            {
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
-
-            var request = await JsonSerializer
-                .DeserializeAsync<WriteSubAgentManifestEntryRequest>(httpContext.Request.Body, SerializerOptions, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (request is null)
-            {
-                return Results.BadRequest("Empty write sub-agent manifest entry request.");
-            }
-
-            await store.WriteSubAgentManifestEntryAsync(
+            await store.AddSubAgentLinkAsync(
                 request.ParentSessionId,
-                FromDto(request.Entry),
+                request.ChildSessionId,
                 cancellationToken).ConfigureAwait(false);
 
             return Results.Ok();
+        });
+
+        endpointRouteBuilder.MapPost("/agent/persistence/sub-agent-links/read", async (HttpContext httpContext) =>
+        {
+            var cancellationToken = httpContext.RequestAborted;
+
+            var store = httpContext.RequestServices.GetService(typeof(IAgentPersistenceStore))
+                as IAgentPersistenceStore;
+
+            if (store is null)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var request = await JsonSerializer
+                .DeserializeAsync<ReadSubAgentChildIdsRequest>(httpContext.Request.Body, SerializerOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (request is null)
+            {
+                return Results.BadRequest("Empty read sub-agent child IDs request.");
+            }
+
+            var childIds = await store.ReadSubAgentChildIdsAsync(request.ParentSessionId, cancellationToken)
+                .ConfigureAwait(false);
+
+            return Results.Json(
+                new ReadSubAgentChildIdsResponse { ChildSessionIds = childIds.Select(static id => id.Value).ToArray() },
+                SerializerOptions);
         });
 
         return endpointRouteBuilder;
@@ -206,21 +206,5 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
         AgentSessionJson = dto.AgentSessionJson.ToBsonDocument(),
         AgentDefinitionJson = dto.AgentDefinitionJson.ToBsonDocument(),
         CopilotSdkSessionId = dto.CopilotSdkSessionId,
-    };
-
-    private static SubAgentManifestEntryDto ToDto(SubAgentManifestEntry entry) => new()
-    {
-        SessionId = entry.SessionId,
-        AgentDefinitionJson = entry.AgentDefinitionJson.ToJsonElement()!.Value,
-        CompletionState = entry.CompletionState,
-        LastUpdatedAt = entry.LastUpdatedAt,
-    };
-
-    private static SubAgentManifestEntry FromDto(SubAgentManifestEntryDto dto) => new()
-    {
-        SessionId = dto.SessionId,
-        AgentDefinitionJson = dto.AgentDefinitionJson.ToBsonDocument()!,
-        CompletionState = dto.CompletionState,
-        LastUpdatedAt = dto.LastUpdatedAt,
     };
 }

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
-using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Data.Web.Client;
 
@@ -27,30 +26,19 @@ public sealed record ReadMessagesResponse
     public required ChatMessage[] Messages { get; init; }
 }
 
-public sealed record SubAgentManifestEntryDto
+public sealed record AddSubAgentLinkRequest
 {
-    public required string SessionId { get; init; }
+    public required string ParentSessionId { get; init; }
 
-    public required JsonElement AgentDefinitionJson { get; init; }
-
-    public required AgentChatCompletionState CompletionState { get; init; }
-
-    public required DateTime LastUpdatedAt { get; init; }
+    public required string ChildSessionId { get; init; }
 }
 
-public sealed record ReadSubAgentManifestRequest
+public sealed record ReadSubAgentChildIdsRequest
 {
     public required string ParentSessionId { get; init; }
 }
 
-public sealed record ReadSubAgentManifestResponse
+public sealed record ReadSubAgentChildIdsResponse
 {
-    public required SubAgentManifestEntryDto[] Entries { get; init; }
-}
-
-public sealed record WriteSubAgentManifestEntryRequest
-{
-    public required string ParentSessionId { get; init; }
-
-    public required SubAgentManifestEntryDto Entry { get; init; }
+    public required string[] ChildSessionIds { get; init; }
 }

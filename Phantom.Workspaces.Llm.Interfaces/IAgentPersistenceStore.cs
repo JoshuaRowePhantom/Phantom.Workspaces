@@ -1,8 +1,5 @@
-using AgentSchema;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
-using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Llm.Interfaces;
 
@@ -18,13 +15,20 @@ public interface IAgentPersistenceStore
         ReadMessagesRequest request,
         CancellationToken cancellationToken = default);
 
-    ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(
+    /// <summary>
+    /// Persists a parent→child session ID link. Idempotent — calling twice with the same pair is safe.
+    /// </summary>
+    ValueTask AddSubAgentLinkAsync(
         string parentSessionId,
+        string childSessionId,
         CancellationToken cancellationToken = default);
 
-    ValueTask WriteSubAgentManifestEntryAsync(
+    /// <summary>
+    /// Returns all child session IDs that were registered under <paramref name="parentSessionId"/>.
+    /// Returns an empty list when no children are known.
+    /// </summary>
+    ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
         string parentSessionId,
-        SubAgentManifestEntry entry,
         CancellationToken cancellationToken = default);
 }
 
@@ -61,13 +65,4 @@ public readonly record struct ReadMessagesRequest
     public required string AgentSessionId { get; init; }
 }
 
-public readonly record struct SubAgentManifestEntry
-{
-    public required string SessionId { get; init; }
 
-    public required BsonDocument AgentDefinitionJson { get; init; }
-
-    public required AgentChatCompletionState CompletionState { get; init; }
-
-    public required DateTime LastUpdatedAt { get; init; }
-}

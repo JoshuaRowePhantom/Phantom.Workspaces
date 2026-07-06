@@ -164,7 +164,30 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         return lastMessage is null ? 0 : lastMessage.Sequence + 1;
     }
 
-    public async ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(
+    public async ValueTask AddSubAgentLinkAsync(
+        string parentSessionId,
+        string childSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(childSessionId);
+
+        var document = new MongoDbSubAgentManifestDocument
+        {
+            Id = $"{parentSessionId}/{childSessionId}",
+            ParentSessionId = parentSessionId,
+            ChildSessionId = childSessionId,
+        };
+
+        await this.subAgentManifestCollection.ReplaceOneAsync(
+                filter: Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(static x => x.Id, document.Id),
+                replacement: document,
+                options: new ReplaceOptions { IsUpsert = true },
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
         string parentSessionId,
         CancellationToken cancellationToken = default)
     {
@@ -175,43 +198,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return documents
-            .Select(static doc => new SubAgentManifestEntry
-            {
-                SessionId = doc.ChildSessionId,
-                AgentDefinitionJson = doc.AgentDefinitionJson,
-                CompletionState = doc.CompletionState,
-                LastUpdatedAt = doc.LastUpdatedAt,
-            })
-            .ToArray();
-    }
-
-    public async ValueTask WriteSubAgentManifestEntryAsync(
-        string parentSessionId,
-        SubAgentManifestEntry entry,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(entry.SessionId);
-
-        var document = new MongoDbSubAgentManifestDocument
-        {
-            Id = $"{parentSessionId}/{entry.SessionId}",
-            ParentSessionId = parentSessionId,
-            ChildSessionId = entry.SessionId,
-            AgentDefinitionJson = entry.AgentDefinitionJson,
-            CompletionState = entry.CompletionState,
-            LastUpdatedAt = entry.LastUpdatedAt,
-        };
-
-        await this.subAgentManifestCollection.ReplaceOneAsync(
-                filter: Builders<MongoDbSubAgentManifestDocument>.Filter.And(
-                    Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(static x => x.ParentSessionId, parentSessionId),
-                    Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(static x => x.ChildSessionId, entry.SessionId)),
-                replacement: document,
-                options: new ReplaceOptions { IsUpsert = true },
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        return documents.Select(static d => new AgentSessionId(d.ChildSessionId)).ToList();
     }
 
     private sealed record MongoDbPersistedSessionDocument
@@ -256,11 +243,5 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public string ParentSessionId { get; init; } = string.Empty;
 
         public string ChildSessionId { get; init; } = string.Empty;
-
-        public BsonDocument AgentDefinitionJson { get; init; } = new();
-
-        public AgentChatCompletionState CompletionState { get; init; }
-
-        public DateTime LastUpdatedAt { get; init; }
     }
 }

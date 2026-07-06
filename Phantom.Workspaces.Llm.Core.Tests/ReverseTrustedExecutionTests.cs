@@ -229,11 +229,11 @@ public sealed class ReverseTrustedExecutionTests
             return ValueTask.FromResult(System.Array.Empty<ChatMessage>());
         }
 
-        public ValueTask<Phantom.Workspaces.Llm.Interfaces.SubAgentManifestEntry[]> ReadSubAgentManifestAsync(string parentSessionId, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(System.Array.Empty<Phantom.Workspaces.Llm.Interfaces.SubAgentManifestEntry>());
-
-        public ValueTask WriteSubAgentManifestEntryAsync(string parentSessionId, Phantom.Workspaces.Llm.Interfaces.SubAgentManifestEntry entry, CancellationToken cancellationToken = default)
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<Phantom.Workspaces.Llm.Interfaces.AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IReadOnlyList<Phantom.Workspaces.Llm.Interfaces.AgentSessionId>>(System.Array.Empty<Phantom.Workspaces.Llm.Interfaces.AgentSessionId>());
     }
 
 

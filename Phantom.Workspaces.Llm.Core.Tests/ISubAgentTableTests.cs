@@ -258,8 +258,8 @@ public sealed class ISubAgentTableTests
 
         ((ISubAgentTable)parent).Add(child);
 
-        var manifest = await store.ReadSubAgentManifestAsync(parent.AgentSessionId);
-        Assert.Single(manifest);
-        Assert.Equal(child.AgentSessionId, manifest[0].SessionId);
+        var childIds = await store.ReadSubAgentChildIdsAsync(parent.AgentSessionId);
+        var childId = Assert.Single(childIds);
+        Assert.Equal(child.AgentSessionId, childId.Value);
     }
 }

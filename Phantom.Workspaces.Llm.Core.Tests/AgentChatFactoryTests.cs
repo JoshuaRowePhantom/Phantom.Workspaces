@@ -371,11 +371,11 @@ public sealed class AgentChatFactoryTests
         public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
             => _inner.ReadMessagesAsync(request, cancellationToken);
 
-        public ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(string parentSessionId, CancellationToken cancellationToken = default)
-            => _inner.ReadSubAgentManifestAsync(parentSessionId, cancellationToken);
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => _inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
 
-        public ValueTask WriteSubAgentManifestEntryAsync(string parentSessionId, SubAgentManifestEntry entry, CancellationToken cancellationToken = default)
-            => _inner.WriteSubAgentManifestEntryAsync(parentSessionId, entry, cancellationToken);
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => _inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
     }
 
     private sealed class VerifyingScheduler : TaskScheduler

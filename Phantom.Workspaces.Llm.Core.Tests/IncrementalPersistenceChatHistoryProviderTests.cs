@@ -125,10 +125,10 @@ public class IncrementalPersistenceChatHistoryProviderTests
         public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(Array.Empty<ChatMessage>());
 
-        public ValueTask<SubAgentManifestEntry[]> ReadSubAgentManifestAsync(string parentSessionId, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(Array.Empty<SubAgentManifestEntry>());
-
-        public ValueTask WriteSubAgentManifestEntryAsync(string parentSessionId, SubAgentManifestEntry entry, CancellationToken cancellationToken = default)
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(Array.Empty<AgentSessionId>());
     }
 }

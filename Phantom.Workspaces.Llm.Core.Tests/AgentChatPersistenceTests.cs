@@ -54,50 +54,15 @@ public sealed class AgentChatPersistenceTests
         });
 
     [Fact]
-    public async Task GetOrCreateAsync_WritesInitialManifestEntry_WithRunningState()
+    public async Task GetOrCreateAsync_AddsSubAgentLink()
     {
         var store = new InMemoryAgentPersistenceStore();
         await using var parent = await CreateParentChatAsync(store);
 
         await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
 
-        var entries = await store.ReadSubAgentManifestAsync(parent.AgentSessionId);
-        var entry = Assert.Single(entries);
-        Assert.Equal(AgentChatCompletionState.Running, entry.CompletionState);
-    }
-
-    [Fact]
-    public async Task SubagentCompleted_WritesManifestEntry_WithSucceededState()
-    {
-        var store = new InMemoryAgentPersistenceStore();
-        await using var parent = await CreateParentChatAsync(store);
-
-        var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
-        sink.Complete();
-
-        // Allow the fire-and-forget write to complete
-        await Task.Yield();
-
-        var entries = await store.ReadSubAgentManifestAsync(parent.AgentSessionId);
-        var entry = Assert.Single(entries);
-        Assert.Equal(AgentChatCompletionState.Succeeded, entry.CompletionState);
-    }
-
-    [Fact]
-    public async Task SubagentFailed_WritesManifestEntry_WithFailedState()
-    {
-        var store = new InMemoryAgentPersistenceStore();
-        await using var parent = await CreateParentChatAsync(store);
-
-        var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
-        sink.Fail(new InvalidOperationException("test failure"));
-
-        // Allow the fire-and-forget write to complete
-        await Task.Yield();
-
-        var entries = await store.ReadSubAgentManifestAsync(parent.AgentSessionId);
-        var entry = Assert.Single(entries);
-        Assert.Equal(AgentChatCompletionState.Failed, entry.CompletionState);
+        var childIds = await store.ReadSubAgentChildIdsAsync(parent.AgentSessionId);
+        Assert.Single(childIds);
     }
 
     [Fact]
@@ -117,26 +82,6 @@ public sealed class AgentChatPersistenceTests
         await using var restoredParent = await CreateParentChatAsync(store, parentSessionId);
 
         Assert.Single(restoredParent.SubAgents);
-    }
-
-    [Fact]
-    public async Task InitializeAsync_RestoredSubAgent_HasCorrectCompletionState()
-    {
-        var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
-
-        await using (var parent = await CreateParentChatAsync(store))
-        {
-            var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
-            sink.Complete();
-            await Task.Yield();
-            parentSessionId = parent.AgentSessionId;
-        }
-
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId);
-
-        var restoredChild = Assert.Single(restoredParent.SubAgents);
-        Assert.Equal(AgentChatCompletionState.Succeeded, restoredChild.CompletionState);
     }
 
     [Fact]
