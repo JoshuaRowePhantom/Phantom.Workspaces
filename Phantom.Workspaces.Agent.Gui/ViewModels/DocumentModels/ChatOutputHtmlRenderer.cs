@@ -23,6 +23,7 @@ internal static class ChatOutputHtmlRenderer
 {
     public const string HistoryContainerId = "chat-history";
     public const string RunningContainerId = "chat-running";
+    public const string RunningSubAgentsContainerId = "running-subagents";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
 

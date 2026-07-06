@@ -13,7 +13,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     // ── Panel insertion ───────────────────────────────────────────────────────
 
     [Fact]
-    public void RunningSubAgentsPanel_AppendedAfterChatHistory_WhenSubAgentStarts()
+    public void RunningSubAgentsHtmlTransformer_Panel_ContentUpdated_WhenFirstRunningSubAgentAppears()
     {
         var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
         var sink = new RecordingSink();
@@ -25,13 +25,28 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         subAgents.Add(agent);
 
         Assert.Contains(sink.Operations, op =>
-            op.Path == ChatOutputHtmlRenderer.HistoryContainerId &&
-            op.Location == ChatOutputUpdateLocation.After &&
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
+            op.Location == ChatOutputUpdateLocation.Replace &&
             op.Content.Contains("running-subagents"));
     }
 
     [Fact]
-    public void RunningSubAgentsPanel_RemovedFromDom_WhenLastSubAgentCompletes()
+    public void RunningSubAgentsHtmlTransformer_Panel_NoDynamicContainerInjection()
+    {
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        subAgents.Add(agent);
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Location == ChatOutputUpdateLocation.After);
+    }
+
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_Panel_ClearedWhenNoRunningSubAgents()
     {
         var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
         var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
@@ -44,25 +59,16 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         agent.RaiseActivityChanged();
 
         Assert.Contains(sink.Operations, op =>
-            op.Kind == "remove" && op.Path == RunningSubAgentsHtmlTransformer.ContainerId);
-    }
-
-    [Fact]
-    public void RunningSubAgentsPanel_PanelHidden_WhenNoSubAgentsRunning()
-    {
-        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Succeeded);
-        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
-        var sink = new RecordingSink();
-        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
-
-        Assert.DoesNotContain(sink.Operations, op => op.Content.Contains("running-subagents"));
-        Assert.DoesNotContain(sink.Operations, op => op.Kind == "remove" && op.Path == RunningSubAgentsHtmlTransformer.ContainerId);
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Content == string.Empty);
     }
 
     // ── Content rendering ─────────────────────────────────────────────────────
 
     [Fact]
-    public void RunningSubAgentsPanel_ShowsLast5ActivityLines_OlderLinesEvicted()
+    public void RunningSubAgentsHtmlTransformer_ActivityCap_AtFiveLines()
     {
         var activity = new List<SubAgentActivityLine>
         {
@@ -78,6 +84,23 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         Assert.Contains("line1", html, StringComparison.Ordinal);
         Assert.Contains("line5", html, StringComparison.Ordinal);
         Assert.Equal(5, CountOccurrences(html, "<li>"));
+    }
+
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_ToolUses_RenderedAsChildren()
+    {
+        var activity = new List<SubAgentActivityLine>
+        {
+            new(SubAgentActivityKind.ToolCall, "powershell"),
+            new(SubAgentActivityKind.ToolCall, "edit"),
+        };
+        var agent = new StubSubAgent("a1", "Task agent", AgentChatCompletionState.Running, activity: activity);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.Contains("<ul class=\"running-subagent-activity\">", html, StringComparison.Ordinal);
+        Assert.Contains("powershell", html, StringComparison.Ordinal);
+        Assert.Contains("edit", html, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(html, "<li>"));
     }
 
     [Fact]
@@ -113,7 +136,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     }
 
     [Fact]
-    public void RunningSubAgentsPanel_MultipleSubAgents_EachRenderedAsSeparateRow()
+    public void RunningSubAgentsHtmlTransformer_MultipleAgents_EachRenderedAsSiblingRow()
     {
         var a1 = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
         var a2 = new StubSubAgent("a2", "Doc Writer", AgentChatCompletionState.Running);
@@ -190,19 +213,18 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         var sink = new RecordingSink();
         using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
 
-        // Panel was inserted After chat-history on first render
         sink.Clear();
 
         // Trigger a re-render while still running (ActivityChanged)
         agent.RaiseActivityChanged();
 
-        // Should Replace the existing panel, not insert After again
+        // Should Replace the existing panel on RunningSubAgentsContainerId, not inject After
         Assert.Contains(sink.Operations, op =>
             op.Kind == "update" &&
-            op.Path == RunningSubAgentsHtmlTransformer.ContainerId &&
+            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
             op.Location == ChatOutputUpdateLocation.Replace);
         Assert.DoesNotContain(sink.Operations, op =>
-            op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+            op.Location == ChatOutputUpdateLocation.After);
     }
 
     [Fact]

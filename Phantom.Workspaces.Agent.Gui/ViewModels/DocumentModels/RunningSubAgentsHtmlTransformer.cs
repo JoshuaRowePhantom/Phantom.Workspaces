@@ -9,12 +9,12 @@ using Phantom.Workspaces.Llm;
 namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 
 /// <summary>
-/// Maintains the <c>#running-subagents</c> panel inserted after <c>#chat-history</c>. The panel is
-/// present while at least one entry in <paramref name="subAgents"/> has
-/// <see cref="AgentChatCompletionState.Running"/> state and is removed as soon as none remain.
-/// Each running sub-agent is rendered as a clickable row with its display name, up to
-/// <see cref="MaxActivityLines"/> recent activity lines, and any running nested sub-agents as
-/// indented children. An ancestry breadcrumb above the rows allows navigation to each ancestor.
+/// Maintains the <c>#running-subagents</c> panel. The panel is populated while at least one entry
+/// in <paramref name="subAgents"/> has <see cref="AgentChatCompletionState.Running"/> state and is
+/// cleared as soon as none remain. Each running sub-agent is rendered as a clickable row with its
+/// display name, up to <see cref="MaxActivityLines"/> recent activity lines, and any running nested
+/// sub-agents as indented children. An ancestry breadcrumb above the rows allows navigation to each
+/// ancestor.
 /// </summary>
 internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
 {
@@ -25,7 +25,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     private readonly IReadOnlyList<IRunningSubAgentDisplay> subAgents;
     private readonly IReadOnlyList<IRunningSubAgent> ancestors;
     private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> activityHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
-    private bool isPanelPresent;
+    private bool hasContent;
 
     public RunningSubAgentsHtmlTransformer(
         IReadOnlyList<IRunningSubAgentDisplay> subAgents,
@@ -86,26 +86,18 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
 
         if (!hasRunning)
         {
-            if (this.isPanelPresent)
+            if (this.hasContent)
             {
-                this.sink.RemoveContent(ContainerId);
-                this.isPanelPresent = false;
+                this.sink.UpdateContent(ChatOutputHtmlRenderer.RunningSubAgentsContainerId, ChatOutputUpdateLocation.Replace, string.Empty);
+                this.hasContent = false;
             }
 
             return;
         }
 
         var html = BuildPanelHtml(this.subAgents, this.ancestors);
-
-        if (this.isPanelPresent)
-        {
-            this.sink.UpdateContent(ContainerId, ChatOutputUpdateLocation.Replace, html);
-        }
-        else
-        {
-            this.sink.UpdateContent(ChatOutputHtmlRenderer.HistoryContainerId, ChatOutputUpdateLocation.After, html);
-            this.isPanelPresent = true;
-        }
+        this.sink.UpdateContent(ChatOutputHtmlRenderer.RunningSubAgentsContainerId, ChatOutputUpdateLocation.Replace, html);
+        this.hasContent = true;
     }
 
     /// <summary>
@@ -178,7 +170,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
 
         sb.Append("<button class=\"running-subagent-link\" data-navigate-agent-id=\"")
           .Append(ChatOutputHtmlRenderer.HtmlEscape(agent.AgentId))
-          .Append("\">⟳ ")
+          .Append("\">▷ ")
           .Append(ChatOutputHtmlRenderer.HtmlEscape(agent.DisplayName))
           .Append("</button>");
 
