@@ -196,6 +196,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
 
         var document = new MongoDbSubAgentManifestDocument
         {
+            Id = $"{parentSessionId}/{entry.SessionId}",
             ParentSessionId = parentSessionId,
             ChildSessionId = entry.SessionId,
             AgentDefinitionJson = entry.AgentDefinitionJson,
@@ -250,7 +251,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
     private sealed record MongoDbSubAgentManifestDocument
     {
         [BsonId]
-        public ObjectId Id { get; init; }
+        public string Id { get; init; } = string.Empty;
 
         public string ParentSessionId { get; init; } = string.Empty;
 
