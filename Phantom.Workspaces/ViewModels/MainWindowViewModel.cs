@@ -1414,13 +1414,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         object? sender,
         EntityBrokerChangedEventArgs e)
     {
-        if (this.mainNavigationView is not null
-            && e.ChangedEntityIds.Contains(this.mainNavigationView.EntityId))
+        var navigationEntityChanged = this.mainNavigationView is not null
+            && e.ChangedEntityIds.Contains(this.mainNavigationView.EntityId);
+
+        if (navigationEntityChanged)
         {
             this.InitializeTopLevelViews();
         }
 
-        _ = this.ApplySelectedViewAsync();
+        if (navigationEntityChanged || e.HasQueryMembershipChanges)
+        {
+            _ = this.ApplySelectedViewAsync();
+        }
     }
 
     private void OnInterestCatalogChanged(object? sender, EventArgs e)

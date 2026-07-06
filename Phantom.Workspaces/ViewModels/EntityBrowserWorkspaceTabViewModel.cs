@@ -36,6 +36,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         this.entityReferenceSearch = new EntityReferenceSearch(this.entityBroker);
         this.rootSubscribedGet = subscribedGet;
         this.rootSubscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
+        this.entityList.Items.CollectionChanged += this.OnEntityListItemsCollectionChanged;
         _ = this.RebuildTreeAsync();
     }
 
@@ -49,6 +50,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             subscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
         }
 
+        this.entityList.Items.CollectionChanged -= this.OnEntityListItemsCollectionChanged;
+        foreach (var item in this.entityList.Items)
+        {
+            item.PropertyChanged -= this.OnItemPropertyChanged;
+        }
+
         this._rebuildCts.Cancel();
         await base.DisposeAsync();
     }
@@ -58,6 +65,27 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         NotifyCollectionChangedEventArgs e)
     {
         _ = this.RebuildTreeAsync();
+    }
+
+    private void OnEntityListItemsCollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null && e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Replace)
+        {
+            foreach (EntityListItemViewModel item in e.OldItems)
+            {
+                item.PropertyChanged -= this.OnItemPropertyChanged;
+            }
+        }
+
+        if (e.NewItems is not null && e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Replace)
+        {
+            foreach (EntityListItemViewModel item in e.NewItems)
+            {
+                item.PropertyChanged += this.OnItemPropertyChanged;
+            }
+        }
     }
 
     private async Task RebuildTreeAsync()
@@ -327,7 +355,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 parentItemKey: parentItemKey,
                 childItemKeys: childItemKeys,
                 isExpanded: isExpanded);
-            item.PropertyChanged += this.OnItemPropertyChanged;
             items.Add(item);
         }
 

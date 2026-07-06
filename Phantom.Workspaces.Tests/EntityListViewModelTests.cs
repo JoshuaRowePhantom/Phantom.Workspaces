@@ -135,4 +135,167 @@ public sealed class EntityListViewModelTests
         Assert.True(parent.ToggleExpandCommand.CanExecute(null));
     }
 
+    [PhantomAvaloniaFact]
+    public void SetItems_PreservesIsExpandedState_WhenKeyUnchanged()
+    {
+        var list = new EntityListViewModel();
+        var node = new EntityListNodeViewModel(
+            displayName: "Folder",
+            entityType: "folder",
+            nameComponents: ["folder"],
+            sortKey: "[\"folder\"]");
+        var child = new EntityListNodeViewModel(
+            displayName: "Child",
+            entityType: "entity",
+            nameComponents: ["folder", "child"],
+            sortKey: "[\"folder\",\"child\"]");
+        node.SetChildren([child]);
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(node, order: 1, level: 0, itemKey: "[\"folder\"]", childItemKeys: ["[\"folder\",\"child\"]"]),
+        ]);
+
+        var originalInstance = list.Items[0];
+        originalInstance.IsExpanded = true;
+
+        var node2 = new EntityListNodeViewModel(
+            displayName: "Folder",
+            entityType: "folder",
+            nameComponents: ["folder"],
+            sortKey: "[\"folder\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(node2, order: 2, level: 0, itemKey: "[\"folder\"]"),
+        ]);
+
+        Assert.Single(list.Items);
+        Assert.Same(originalInstance, list.Items[0]);
+        Assert.True(list.Items[0].IsExpanded);
+    }
+
+    [PhantomAvaloniaFact]
+    public void SetItems_AddsNewItem_WithoutAffectingExisting()
+    {
+        var list = new EntityListViewModel();
+        var nodeA = new EntityListNodeViewModel(
+            displayName: "A",
+            entityType: "entity",
+            nameComponents: ["a"],
+            sortKey: "[\"a\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(nodeA, order: 1, level: 0, itemKey: "[\"a\"]"),
+        ]);
+
+        var instanceA = list.Items[0];
+
+        var nodeB = new EntityListNodeViewModel(
+            displayName: "B",
+            entityType: "entity",
+            nameComponents: ["b"],
+            sortKey: "[\"b\"]");
+        var newNodeA = new EntityListNodeViewModel(
+            displayName: "A",
+            entityType: "entity",
+            nameComponents: ["a"],
+            sortKey: "[\"a\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(newNodeA, order: 1, level: 0, itemKey: "[\"a\"]"),
+            new EntityListItemViewModel(nodeB, order: 2, level: 0, itemKey: "[\"b\"]"),
+        ]);
+
+        Assert.Equal(2, list.Items.Count);
+        Assert.Same(instanceA, list.Items[0]);
+        Assert.Equal("[\"b\"]", list.Items[1].ItemKey);
+    }
+
+    [PhantomAvaloniaFact]
+    public void SetItems_RemovesItem_LeavingOthersUntouched()
+    {
+        var list = new EntityListViewModel();
+        var nodeA = new EntityListNodeViewModel(
+            displayName: "A",
+            entityType: "entity",
+            nameComponents: ["a"],
+            sortKey: "[\"a\"]");
+        var nodeB = new EntityListNodeViewModel(
+            displayName: "B",
+            entityType: "entity",
+            nameComponents: ["b"],
+            sortKey: "[\"b\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(nodeA, order: 1, level: 0, itemKey: "[\"a\"]"),
+            new EntityListItemViewModel(nodeB, order: 2, level: 0, itemKey: "[\"b\"]"),
+        ]);
+
+        var instanceA = list.Items[0];
+
+        var newNodeA = new EntityListNodeViewModel(
+            displayName: "A",
+            entityType: "entity",
+            nameComponents: ["a"],
+            sortKey: "[\"a\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(newNodeA, order: 1, level: 0, itemKey: "[\"a\"]"),
+        ]);
+
+        Assert.Single(list.Items);
+        Assert.Same(instanceA, list.Items[0]);
+    }
+
+    [PhantomAvaloniaFact]
+    public void SetItems_MovesItemToCorrectPosition_WhenOrderChanges()
+    {
+        var list = new EntityListViewModel();
+        var nodeA = new EntityListNodeViewModel(
+            displayName: "A",
+            entityType: "entity",
+            nameComponents: ["a"],
+            sortKey: "[\"a\"]");
+        var nodeB = new EntityListNodeViewModel(
+            displayName: "B",
+            entityType: "entity",
+            nameComponents: ["b"],
+            sortKey: "[\"b\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(nodeA, order: 1, level: 0, itemKey: "[\"a\"]"),
+            new EntityListItemViewModel(nodeB, order: 2, level: 0, itemKey: "[\"b\"]"),
+        ]);
+
+        var instanceA = list.Items[0];
+        var instanceB = list.Items[1];
+
+        var newNodeA = new EntityListNodeViewModel(
+            displayName: "A",
+            entityType: "entity",
+            nameComponents: ["a"],
+            sortKey: "[\"a\"]");
+        var newNodeB = new EntityListNodeViewModel(
+            displayName: "B",
+            entityType: "entity",
+            nameComponents: ["b"],
+            sortKey: "[\"b\"]");
+
+        list.SetItems(
+        [
+            new EntityListItemViewModel(newNodeB, order: 1, level: 0, itemKey: "[\"b\"]"),
+            new EntityListItemViewModel(newNodeA, order: 2, level: 0, itemKey: "[\"a\"]"),
+        ]);
+
+        Assert.Equal(2, list.Items.Count);
+        Assert.Same(instanceB, list.Items[0]);
+        Assert.Same(instanceA, list.Items[1]);
+    }
+
 }
