@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Xunit;
 using Xunit.Sdk;
@@ -31,6 +33,33 @@ public class PhantomAvaloniaFactDiscoverer : AvaloniaFactDiscoverer
 
 internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXunitSerializable, IAsyncDisposable
 {
+    // HeadlessUnitTestSession._dispatchTask is the Task.Run backing the queue processor loop.
+    // When it exits — whether normally (DisposeAsync) or faulted (unhandled exception, e.g.
+    // Dispatcher.ResetForUnitTests() throwing InvalidProgramException) — items already in the
+    // queue but not yet processed have their TaskCompletionSource permanently abandoned, hanging
+    // every pending PhantomAvaloniaTestCase.Run indefinitely.  We reflect on this private field
+    // so that we can register a ContinueWith that fires tcs.TrySetException, converting the
+    // hang into a test failure with a diagnostic message.  If the field is renamed in a future
+    // Avalonia release the reflect returns null and we fall back to the pre-fix behaviour.
+    // See: https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/643
+    private static readonly FieldInfo? _dispatchTaskField =
+        typeof(HeadlessUnitTestSession).GetField(
+            "_dispatchTask", BindingFlags.NonPublic | BindingFlags.Instance);
+
+    // HeadlessUnitTestSession._cancellationTokenSource is cancelled by DisposeAsync.  The
+    // _dispatchTask safety net above only fires when _dispatchTask actually EXITS.  However,
+    // _dispatchTask can be alive-but-stuck (e.g. RunLoop blocked in ExecuteJob on a re-entrant
+    // dispatcher call, or PushFrame waiting for frame.Continue=false that never fires).  In
+    // those cases _dispatchTask never exits and the ContinueWith never fires.
+    // Registering on _cancellationTokenSource.Token gives us a second trigger: when the test
+    // framework calls session.DisposeAsync() it cancels this token, which fires our callback
+    // synchronously (useSynchronizationContext:false captures no context), unblocking every
+    // pending tcs.Task immediately and converting the hang into a test failure.
+    // See: https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/660
+    private static readonly FieldInfo? _cancellationTokenSourceField =
+        typeof(HeadlessUnitTestSession).GetField(
+            "_cancellationTokenSource", BindingFlags.NonPublic | BindingFlags.Instance);
+
     private IXunitTestCase _inner;
 
     [Obsolete("Called by the de-serializer; should only be called by deserializers")]
@@ -70,6 +99,68 @@ internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXu
             }
         }) { IsBackground = true };
         thread.Start();
+
+        // Safety net against HeadlessUnitTestSession queue-processor death (#643).
+        // If the session's dispatch loop exits before our background thread's item is processed
+        // (e.g. Dispatcher.ResetForUnitTests() throws InvalidProgramException from inside
+        // application.Dispose(), killing the loop because only OperationCanceledException is
+        // caught), tcs is never resolved and this Run hangs forever.
+        // Registering a ContinueWith on the private _dispatchTask converts the hang into a
+        // test failure with a diagnostic message.  The TrySetException is a no-op for tests
+        // whose tcs was already set by the background thread, so normal runs are unaffected.
+        if (_inner.TestClass?.Class?.Assembly is { } assembly)
+        {
+            var session = HeadlessUnitTestSession.GetOrStartForAssembly(assembly);
+            if (_dispatchTaskField?.GetValue(session) is Task dispatchTask)
+            {
+                _ = dispatchTask.ContinueWith(
+                    static (dt, state) =>
+                    {
+                        var pendingTcs = (TaskCompletionSource<RunSummary>)state!;
+                        if (dt.IsFaulted)
+                        {
+                            pendingTcs.TrySetException(new InvalidOperationException(
+                                "HeadlessUnitTestSession queue processor crashed before this test was " +
+                                "dispatched. Root cause: application.Dispose() threw a non-cancellation " +
+                                "exception (likely Dispatcher.ResetForUnitTests() timed out on pending " +
+                                "UIThread jobs). See https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/643",
+                                dt.Exception!.InnerException ?? dt.Exception));
+                        }
+                        else
+                        {
+                            pendingTcs.TrySetException(new InvalidOperationException(
+                                "HeadlessUnitTestSession was disposed before this test was dispatched. " +
+                                "See https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/643"));
+                        }
+                    },
+                    tcs,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+
+            // Second safety net: fire immediately when the session's cancellation token fires
+            // (DisposeAsync calls CancelAsync before awaiting _dispatchTask).  This covers the
+            // alive-but-stuck case where _dispatchTask never exits — e.g. PushFrame waiting for
+            // frame.Continue=false on a dispatcher that silently stopped processing items — so that
+            // pending tests fail with a clear message rather than hanging forever.
+            if (_cancellationTokenSourceField?.GetValue(session) is CancellationTokenSource sessionCts)
+            {
+                sessionCts.Token.Register(
+                    static state =>
+                    {
+                        var pendingTcs = (TaskCompletionSource<RunSummary>)state!;
+                        pendingTcs.TrySetException(new InvalidOperationException(
+                            "HeadlessUnitTestSession was cancelled before this test completed. The " +
+                            "dispatch task is likely alive-but-stuck (PushFrame waiting for " +
+                            "frame.Continue=false that never fires, or RunLoop blocked in ExecuteJob " +
+                            "on a re-entrant dispatcher call). " +
+                            "See https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/660"));
+                    },
+                    tcs,
+                    useSynchronizationContext: false);
+            }
+        }
 
         var summary = await tcs.Task;
 
