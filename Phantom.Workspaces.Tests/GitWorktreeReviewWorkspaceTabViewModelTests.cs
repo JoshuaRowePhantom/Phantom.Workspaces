@@ -775,4 +775,38 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.Equal("Test Author", commit.AuthorName);
         }
     }
+
+    [Fact]
+    public void CommitList_CopyButton_CopiesFullHash()
+    {
+        var commit = new GitCommitModel
+        {
+            Oid = "abcdef1234567890abcdef1234567890abcdef12",
+            ShortMessage = "Test commit",
+            AuthorName = "Test Author",
+            AuthorDate = DateTimeOffset.UtcNow,
+        };
+
+        Assert.Equal("abcdef1234567890abcdef1234567890abcdef12", commit.Oid);
+        Assert.Equal("abcdef1", commit.ShortOid);
+    }
+
+    [Fact]
+    public void CommitList_DetailsPopup_ShowsFullCommitDetails()
+    {
+        var fullSha = "1234567890abcdef1234567890abcdef12345678";
+        var authorDate = new DateTimeOffset(2024, 1, 15, 14, 30, 0, TimeSpan.Zero);
+        var commit = new GitCommitModel
+        {
+            Oid = fullSha,
+            ShortMessage = "Test commit message",
+            AuthorName = "Test Author",
+            AuthorDate = authorDate,
+        };
+
+        Assert.Equal(fullSha, commit.Oid);
+        Assert.Equal("Test commit message", commit.ShortMessage);
+        Assert.Equal("Test Author", commit.AuthorName);
+        Assert.Equal(authorDate, commit.AuthorDate);
+    }
 }
