@@ -3052,7 +3052,8 @@ public sealed class MainWindowIntegrationTests
     private static RunningAgentChatTable CreateTestRunningAgentChatTable()
     {
         var store = new InMemoryAgentPersistenceStore();
-        var factory = new AgentChatFactory(store, new AgentServices(), TaskScheduler.Default);
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
         return new RunningAgentChatTable(factory);
     }
 
@@ -5514,6 +5515,88 @@ public sealed class MainWindowIntegrationTests
         var probe2 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
         Assert.NotSame(sharedChat, probe2.AgentChat); // new instance — old was disposed
         await probe2.DisposeAsync();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentChatTable_Refresh_DoesNotThrow_WhenSessionRemovedConcurrently()
+    {
+        var table = CreateTestRunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var brain = viewModel.RunningAgentBrain;
+        Assert.NotNull(brain);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("aa070001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa070001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "refresh-race-echo"]],
+              "display-name": { "default": "Refresh Race Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "refresh-race-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var workspaceId = new EntityId("aa070002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "aa070002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "refresh-race-ws"]],
+              "display-name": { "default": "Refresh Race WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(tab);
+
+        Assert.NotNull(tab.Lease);
+        Assert.Single(table.RunningSessions);
+
+        // Dispose the tab (which releases the lease and triggers removal from RunningSessions).
+        // With the bug (TaskScheduler.Default), the removal happens on a thread-pool thread.
+        // With the fix (FromCurrentSynchronizationContext), it marshals to the UI thread.
+        // Force Refresh to run multiple times concurrently to increase chance of catching the race.
+        var disposeTask = tab.DisposeAsync().AsTask();
+
+        for (int i = 0; i < 10; i++)
+        {
+            brain.Refresh();
+        }
+
+        await disposeTask;
+
+        // If the bug exists, one of the Refresh() calls may have thrown InvalidOperationException
+        // due to enumerating RunningSessions while it was being mutated on another thread.
+        // With the fix, all mutations happen on the UI thread, so no exception occurs.
+        Assert.Empty(table.RunningSessions);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
