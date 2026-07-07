@@ -26,6 +26,12 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         this.Children = [.. children];
         this.IsExpanded = isExpanded;
         this.ToggleExpandCommand = new RelayCommand(() => this.IsExpanded = !this.IsExpanded, () => this.HasChildren);
+        this.Children.CollectionChanged += (_, _) =>
+        {
+            this.RaisePropertyChanged(nameof(this.HasChildren));
+            this.RaisePropertyChanged(nameof(this.NotHasChildren));
+            this.ToggleExpandCommand.RaiseCanExecuteChanged();
+        };
     }
 
     public string Id { get; }

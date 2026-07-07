@@ -360,6 +360,40 @@ public sealed class AgentViewModelEditorTreeTests
         Assert.True(conversationSlot.IsVisible);
     }
 
+    [Fact]
+    public async Task SubAgentsNavItem_AutoExpands_WhenFirstSubAgentAdded()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
+
+        Assert.False(subAgentsNav.IsExpanded);
+
+        await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
+
+        Assert.True(subAgentsNav.IsExpanded);
+    }
+
+    [Fact]
+    public async Task SubAgentsNavItem_RemainsExpanded_WhenSecondSubAgentAdded()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
+
+        await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
+        Assert.True(subAgentsNav.IsExpanded);
+
+        await AddSubAgentAsync(chat, "sub-agent-2", "Sub Agent 2");
+        Assert.True(subAgentsNav.IsExpanded);
+    }
+
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """
