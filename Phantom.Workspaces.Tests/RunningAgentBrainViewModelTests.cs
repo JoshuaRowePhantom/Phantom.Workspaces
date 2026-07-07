@@ -336,4 +336,18 @@ public sealed class RunningAgentBrainViewModelTests
 
         Assert.False(vm.IsOpen);
     }
+
+    [Fact]
+    public void Refresh_AfterDispose_DoesNotThrow()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent Session");
+
+        var vm = CreateBrainVm(table, []);
+
+        vm.Dispose();
+        vm.Refresh();
+
+        // No exception should be thrown
+    }
 }
