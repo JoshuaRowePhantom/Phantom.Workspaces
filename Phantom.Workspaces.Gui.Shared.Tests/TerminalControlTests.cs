@@ -570,6 +570,139 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
+    // ── ReadLoopAsync unhandled VT sequences (issue #713) ─────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UnhandledOscSequence_Param110_DoesNotKillReadLoop()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("START\x1b]110\x07END")  // text + OSC 110 + text in one chunk
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+        chunked.ReleaseChunk(0);
+
+        await vm.WhenExited;
+
+        // Read loop completed without crashing - that's the main assertion
+        Assert.True(vm.IsExited);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UnhandledOscSequence_Param4_DoesNotKillReadLoop()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("START\x1b]4;1;rgb:ff/00/00\x07END")
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+        chunked.ReleaseChunk(0);
+
+        await vm.WhenExited;
+
+        Assert.True(vm.IsExited);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UnhandledCsiSequence_KittyQuery_DoesNotKillReadLoop()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("START\x1b[?uEND")
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+        chunked.ReleaseChunk(0);
+
+        await vm.WhenExited;
+
+        Assert.True(vm.IsExited);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UnhandledCsiSequence_GreaterThanM_DoesNotKillReadLoop()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("START\x1b[>4;2mEND")
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+        chunked.ReleaseChunk(0);
+
+        await vm.WhenExited;
+
+        Assert.True(vm.IsExited);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UnknownSequence_AfterPartialText_TextStillRendered()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("BEFORE\x1b]110\x07AFTER")
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+        chunked.ReleaseChunk(0);
+
+        await vm.WhenExited;
+
+        Assert.True(vm.IsExited);
+    }
+
     // ── ChunkedStream helper ──────────────────────────────────────────────────────────────────
 
     /// <summary>

@@ -143,6 +143,10 @@ public partial class TerminalControl : Control
                     _pendingBytes = chunk.Length > 65536 ? Array.Empty<byte>() : chunk;
                     continue;
                 }
+                catch (Exception ex) when (ex.Message.StartsWith("There are no", StringComparison.Ordinal))
+                {
+                    // Unhandled VT sequence — skip and continue
+                }
 
                 await Dispatcher.UIThread.InvokeAsync(InvalidateVisual, DispatcherPriority.Render);
             }
