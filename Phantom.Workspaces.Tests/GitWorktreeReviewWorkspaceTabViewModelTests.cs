@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -290,5 +291,156 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         Assert.Equal(0, refreshAfterDispose);
         _ = refreshCountBeforeDispose;
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task FileList_SelectFile_DiffViewUpdatesToSelectedFile()
+    {
+        this.InitRepoWithBranch("main");
+
+        using var repo = new Repository(this.repoDir);
+        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+        File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "file1 content");
+        File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "file2 content");
+        Commands.Stage(repo, "*");
+        repo.Commit("Add files", sig, sig);
+
+        File.AppendAllText(Path.Combine(this.repoDir, "file1.txt"), "\nfile1 change");
+        File.AppendAllText(Path.Combine(this.repoDir, "file2.txt"), "\nfile2 change");
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}}
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+
+            var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
+            Assert.NotNull(file1);
+            vm.FileList.SelectedFiles.Add(file1);
+
+            await diffRebuildCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+            Assert.Contains("file1", vm.FileDiffs[0].RelativePath);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task FileList_SelectSecondFile_DiffViewChanges()
+    {
+        this.InitRepoWithBranch("main");
+
+        using var repo = new Repository(this.repoDir);
+        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+        File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "file1 content");
+        File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "file2 content");
+        Commands.Stage(repo, "*");
+        repo.Commit("Add files", sig, sig);
+
+        File.AppendAllText(Path.Combine(this.repoDir, "file1.txt"), "\nfile1 change");
+        File.AppendAllText(Path.Combine(this.repoDir, "file2.txt"), "\nfile2 change");
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}}
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
+            Assert.NotNull(file1);
+
+            var diffRebuildCompleted1 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted1.TrySetResult(true);
+            vm.FileList.SelectedFiles.Add(file1);
+            await diffRebuildCompleted1.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+            Assert.Contains("file1", vm.FileDiffs[0].RelativePath);
+
+            var file2 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file2"));
+            Assert.NotNull(file2);
+
+            var diffRebuildCompleted2 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted2.TrySetResult(true);
+            vm.FileList.SelectedFiles.Clear();
+            vm.FileList.SelectedFiles.Add(file2);
+            await diffRebuildCompleted2.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+            Assert.Contains("file2", vm.FileDiffs[0].RelativePath);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task FileList_NoFileSelected_DiffViewShowsAllFiles()
+    {
+        this.InitRepoWithBranch("main");
+
+        using var repo = new Repository(this.repoDir);
+        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+        File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "file1 content");
+        File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "file2 content");
+        Commands.Stage(repo, "*");
+        repo.Commit("Add files", sig, sig);
+
+        File.AppendAllText(Path.Combine(this.repoDir, "file1.txt"), "\nfile1 change");
+        File.AppendAllText(Path.Combine(this.repoDir, "file2.txt"), "\nfile2 change");
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}}
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
+            Assert.NotNull(file1);
+
+            var diffRebuildCompleted1 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted1.TrySetResult(true);
+            vm.FileList.SelectedFiles.Add(file1);
+            await diffRebuildCompleted1.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+
+            var diffRebuildCompleted2 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted2.TrySetResult(true);
+            vm.FileList.SelectedFiles.Clear();
+            await diffRebuildCompleted2.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Equal(2, vm.FileDiffs.Count);
+        }
     }
 }
