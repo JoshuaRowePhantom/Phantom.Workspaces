@@ -809,4 +809,163 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         Assert.Equal("Test Author", commit.AuthorName);
         Assert.Equal(authorDate, commit.AuthorDate);
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task RebuildFileDiffsAsync_DeletedFile_DoesNotThrow()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            Commands.Stage(repo, "*");
+            repo.Commit("Add files", sig, sig);
+
+            File.Delete(Path.Combine(this.repoDir, "file1.txt"));
+            Commands.Stage(repo, "*");
+            repo.Commit("Delete file1", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var deleteCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Delete"));
+            Assert.NotNull(deleteCommit);
+
+            var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+
+            vm.CommitList.SelectedCommits.Add(deleteCommit);
+
+            await diffViewUpdatedCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task RebuildFileDiffsAsync_AddedFile_DoesNotThrow()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Add file1", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            Commands.Stage(repo, "*");
+            repo.Commit("Add file2", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var addCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Add file2"));
+            Assert.NotNull(addCommit);
+
+            var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+
+            vm.CommitList.SelectedCommits.Add(addCommit);
+
+            await diffViewUpdatedCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task RebuildFileDiffsAsync_UnmatchedPath_ProcessesOtherFiles()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            File.WriteAllText(Path.Combine(this.repoDir, "file3.txt"), "content3");
+            Commands.Stage(repo, "*");
+            repo.Commit("Add files", sig, sig);
+
+            File.Delete(Path.Combine(this.repoDir, "file2.txt"));
+            File.AppendAllText(Path.Combine(this.repoDir, "file3.txt"), "\nmodified");
+            Commands.Stage(repo, "*");
+            repo.Commit("Delete file2, modify file3", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var secondCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Delete"));
+            Assert.NotNull(secondCommit);
+
+            var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+
+            vm.CommitList.SelectedCommits.Add(secondCommit);
+
+            await diffViewUpdatedCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Equal(2, vm.FileDiffs.Count);
+            Assert.Contains(vm.FileDiffs, d => d.RelativePath.Contains("file2"));
+            Assert.Contains(vm.FileDiffs, d => d.RelativePath.Contains("file3"));
+        }
+    }
 }

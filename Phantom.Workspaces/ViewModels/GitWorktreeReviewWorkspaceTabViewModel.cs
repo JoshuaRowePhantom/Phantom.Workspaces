@@ -146,7 +146,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                             repo.Head.Tip?.Tree,
                             DiffTargets.WorkingDirectory,
                             new[] { fileEntry.RelativePath },
-                            null,
+                            new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
                             new CompareOptions { ContextLines = this.contextLines });
                     }
                     else if (commit.IsStaged)
@@ -155,7 +155,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                             repo.Head.Tip?.Tree,
                             DiffTargets.Index,
                             new[] { fileEntry.RelativePath },
-                            null,
+                            new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
                             new CompareOptions { ContextLines = this.contextLines });
                     }
                     else
@@ -167,7 +167,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                                 parent.Tree,
                                 c.Tree,
                                 new[] { fileEntry.RelativePath },
-                                new ExplicitPathsOptions(),
+                                new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
                                 new CompareOptions { ContextLines = this.contextLines });
                         }
                     }
