@@ -108,7 +108,7 @@ Write the planned tests before any implementation code. Tests may initially fail
 Patterns to follow:
 - Unit tests → appropriate `*.Tests` project
 - Integration tests → `Phantom.Workspaces.Tests\MainWindowIntegrationTests.cs` or a nearby focused file
-- Deterministic synchronisation only — no `Task.Delay` or timing-based waits
+- Deterministic synchronisation only — no `Task.Delay` or timing-based waits, no fixed dispatcher-pass pumping (repeated `RunAsync(DispatcherPriority.Background, …)`)
 - Simple test doubles for interfaces; no Moq unless already present in that project
 
 ## Step 8 — Implement

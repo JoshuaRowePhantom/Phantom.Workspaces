@@ -399,6 +399,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly Func<string, string?>? resolveSubAgentId;
     private readonly int skipInitialItems;
     private bool inInitialTransform;
+    private readonly Dictionary<string, RenderSlot> slotByCallId = [];
+    private int lastToolCallSlotIndex = -1;
 
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
@@ -438,6 +440,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     {
         var sourceItem = this.Source[index];
         var suppressSink = this.inInitialTransform && index < this.skipInitialItems;
+
+        // Maintain indexed lookup structures early, before any early returns.
+        this.AddCallIdsToIndex(sourceItem, slot);
 
         // If the new item contains only FunctionResultContent items, try to inject each result into
         // the preceding slot that owns the matching FunctionCallContent. When any result is injected
@@ -485,6 +490,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     else
                         existingGroup.AppendItemStateOnly(slot.Model, toolName);
                     slot.Group = existingGroup;
+                    this.lastToolCallSlotIndex = index;
                     return;
                 }
 
@@ -508,6 +514,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     else
                         group.AppendItemStateOnly(slot.Model, toolName);
                     slot.Group = group;
+                    this.lastToolCallSlotIndex = index;
                     return;
                 }
             }
@@ -527,10 +534,58 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         // Mark as inserted in both the live path and the skip path (Phase B already put it in the DOM).
         slot.Model.IsInserted = true;
+
+        if (IsToolCallOnlyItem(sourceItem) || slot.Group is not null)
+        {
+            this.lastToolCallSlotIndex = index;
+        }
     }
 
     protected override void OnRemoveAt(int index, RenderSlot slot)
-        => this.sink.RemoveContent(slot.Model.ElementId);
+    {
+        this.sink.RemoveContent(slot.Model.ElementId);
+        this.RemoveCallIdsFromIndex(slot);
+        if (index == this.lastToolCallSlotIndex)
+        {
+            this.lastToolCallSlotIndex = this.FindLastToolCallSlotIndexBelow(index);
+        }
+    }
+
+    private void AddCallIdsToIndex(AgentChatHistoryItem sourceItem, RenderSlot slot)
+    {
+        foreach (var content in sourceItem.Contents)
+        {
+            if (content is FunctionCallContent call && call.CallId is not null)
+            {
+                this.slotByCallId[call.CallId] = slot;
+            }
+        }
+    }
+
+    private void RemoveCallIdsFromIndex(RenderSlot slot)
+    {
+        var keysToRemove = this.slotByCallId
+            .Where(kvp => ReferenceEquals(kvp.Value, slot))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            this.slotByCallId.Remove(key);
+        }
+    }
+
+    private int FindLastToolCallSlotIndexBelow(int index)
+    {
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (IsToolCallOnlyItem(this.Source[i]) || this.Target[i].Group is not null)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
 
     /// <summary>
     /// Returns true when the item contains only <see cref="FunctionResultContent"/> items.
@@ -577,22 +632,15 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     /// the most recent slot whose source message contains a <see cref="FunctionCallContent"/> with
     /// the given <paramref name="callId"/>. Returns <see langword="null"/> if not found.
     /// </summary>
-    private RenderSlot? FindSlotWithCallId(string? callId)
+    internal RenderSlot? FindSlotWithCallId(string? callId)
     {
         if (callId is null)
         {
             return null;
         }
 
-        for (var i = this.Target.Count - 1; i >= 0; i--)
-        {
-            if (this.Target[i].Model.HasCallWithId(callId))
-            {
-                return this.Target[i];
-            }
-        }
-
-        return null;
+        this.slotByCallId.TryGetValue(callId, out var slot);
+        return slot;
     }
 
     /// <summary>
@@ -601,8 +649,13 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     /// or already belongs to a group. Returns -1 if the search reaches the start of the collection
     /// or hits any other kind of message.
     /// </summary>
-    private int FindPrecedingToolCallSlotIndex(int index)
+    internal int FindPrecedingToolCallSlotIndex(int index)
     {
+        if (index == 0 || this.lastToolCallSlotIndex < 0)
+        {
+            return -1;
+        }
+
         for (var i = index - 1; i >= 0; i--)
         {
             if (IsToolResultOnlyItem(this.Source[i]))

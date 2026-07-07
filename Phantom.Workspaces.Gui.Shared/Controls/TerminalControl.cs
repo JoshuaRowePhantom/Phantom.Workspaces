@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -10,6 +11,8 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Phantom.Workspaces.Gui.Shared.Encoding;
+using Phantom.Workspaces.Gui.Shared.Models;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
@@ -18,6 +21,16 @@ using VtNetCore.VirtualTerminal.Model;
 using VtNetCore.XTermParser;
 
 namespace Phantom.Workspaces.Gui.Shared.Controls;
+
+/// <summary>
+/// Represents a shell integration marker (OSC 133).
+/// </summary>
+internal record ShellMark(string Type, int? ExitCode = null);
+
+/// <summary>
+/// Represents a hyperlink region (OSC 8).
+/// </summary>
+internal record Hyperlink(string Uri);
 
 /// <summary>
 /// Avalonia terminal control. Reads output bytes from a <see cref="TerminalSessionViewModel"/>'s
@@ -45,9 +58,27 @@ public partial class TerminalControl : Control
     private VirtualTerminalController? _vtc;
     private DataConsumer? _dataConsumer;
     private ViewModelLifetime? _sessionLifetime;
+    private byte[] _pendingBytes = Array.Empty<byte>();
+    private readonly TerminalMouseModeState _mouseModeState = new();
+    private readonly TerminalSelectionModel _selectionModel = new();
 
     // Exposed internally for tests so they can push bytes synchronously without the async loop.
     internal VirtualTerminalController? Vtc => _vtc;
+    internal TerminalMouseModeState MouseModeState => _mouseModeState;
+    internal TerminalSelectionModel SelectionModel => _selectionModel;
+
+    // ── VT sequence handler state (issue #725) ────────────────────────────────────────────────
+
+    internal int CursorShape { get; private set; }
+    internal Dictionary<int, Color> PaletteOverrides { get; } = new();
+    internal Color? DefaultFgOverride { get; private set; }
+    internal Color? DefaultBgOverride { get; private set; }
+    internal Color? CursorColorOverride { get; private set; }
+    internal List<ShellMark> ShellMarks { get; } = new();
+    internal string? CurrentWorkingDirectory { get; private set; }
+    internal List<Hyperlink> Hyperlinks { get; } = new();
+    internal string? Title { get; private set; }
+    internal int SynchronizedOutputNestingLevel { get; private set; }
 
     // ── Cell metrics ──────────────────────────────────────────────────────────────────────────
 
@@ -61,6 +92,10 @@ public partial class TerminalControl : Control
     // ── Resize debounce ───────────────────────────────────────────────────────────────────────
 
     private CancellationTokenSource? _resizeCts;
+    private bool _isDragging;
+
+    // Test infrastructure - allows tests to override pointer position
+    internal static Point? TestPointerPositionOverride;
 
     // ── ANSI color tables ─────────────────────────────────────────────────────────────────────
 
@@ -102,11 +137,14 @@ public partial class TerminalControl : Control
 
     private void DetachSession()
     {
+        _resizeCts?.Cancel();
+        _resizeCts?.Dispose();
+        _resizeCts = null;
+        
         _ = _sessionLifetime?.DisposeAsync();
         _sessionLifetime = null;
         _vtc = null;
         _dataConsumer = null;
-        InvalidateVisual();
     }
 
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
@@ -120,9 +158,39 @@ public partial class TerminalControl : Control
                 if (read == 0)
                     break;
 
-                // Copy to a local array so it is not mutated while VtNetCore processes it.
-                var chunk = buffer[..read];
-                _dataConsumer?.Push(chunk);
+                byte[] chunk;
+                if (_pendingBytes.Length > 0)
+                {
+                    chunk = new byte[_pendingBytes.Length + read];
+                    _pendingBytes.CopyTo(chunk, 0);
+                    buffer[..read].CopyTo(chunk, _pendingBytes.Length);
+                    _pendingBytes = Array.Empty<byte>();
+                }
+                else
+                {
+                    chunk = buffer[..read];
+                }
+
+                // Track mouse mode state before pushing to VT emulator
+                _mouseModeState.Apply(chunk);
+
+                // Process VT sequences we handle (issue #725)
+                var interceptor = new TerminalSequenceInterceptor(this, session.Stream);
+                chunk = interceptor.Process(chunk);
+
+                try
+                {
+                    _dataConsumer?.Push(chunk);
+                }
+                catch (IndexOutOfRangeException)
+                {
+                    _pendingBytes = chunk.Length > 65536 ? Array.Empty<byte>() : chunk;
+                    continue;
+                }
+                catch (Exception ex) when (ex.Message.StartsWith("There are no", StringComparison.Ordinal))
+                {
+                    // Unhandled VT sequence — skip and continue
+                }
 
                 await Dispatcher.UIThread.InvokeAsync(InvalidateVisual, DispatcherPriority.Render);
             }
@@ -265,6 +333,25 @@ public partial class TerminalControl : Control
             }
         }
 
+        // Selection highlight
+        if (_selectionModel.HasSelection)
+        {
+            var selectionBrush = new SolidColorBrush(Color.FromArgb(128, 100, 149, 237));
+            for (var row = 0; row < visRows; row++)
+            {
+                for (var col = 0; col < visCols; col++)
+                {
+                    if (_selectionModel.IsSelected(col, row))
+                    {
+                        var x = col * _cellWidth;
+                        var y = row * _cellHeight;
+                        var cellRect = new Rect(x, y, _cellWidth, _cellHeight);
+                        context.FillRectangle(selectionBrush, cellRect);
+                    }
+                }
+            }
+        }
+
         // Cursor
         var cursor = _vtc.ViewPort.CursorPosition;
         if (cursor.Row >= 0 && cursor.Column >= 0
@@ -335,7 +422,7 @@ public partial class TerminalControl : Control
         if (seq is null)
             return;
 
-        var bytes = Encoding.UTF8.GetBytes(seq);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(seq);
         _ = Session.Stream.WriteAsync(bytes).AsTask();
         e.Handled = true;
     }
@@ -350,7 +437,7 @@ public partial class TerminalControl : Control
             ? $"\x1b[200~{e.Text}\x1b[201~"
             : e.Text;
 
-        var bytes = Encoding.UTF8.GetBytes(text);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
         _ = Session.Stream.WriteAsync(bytes).AsTask();
         e.Handled = true;
     }
@@ -358,7 +445,159 @@ public partial class TerminalControl : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Press, e.KeyModifiers, mode);
+            e.Handled = true;
+            return;
+        }
+        
         Focus();
+        HandleNativeMousePress(e);
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            if (!ShouldSendMotionEvent(mode, e.GetCurrentPoint(this).Properties))
+                return;
+            
+            SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Motion, e.KeyModifiers, mode);
+            e.Handled = true;
+            return;
+        }
+        
+        HandleNativeMouseMove(e);
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            if (_mouseModeState.TrackingMode == VtMouseTrackingMode.X10)
+                return;
+            
+            SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Release, e.KeyModifiers, mode);
+            e.Handled = true;
+            return;
+        }
+        
+        HandleNativeMouseRelease(e);
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            int button = e.Delta.Y > 0 ? 64 : 65;
+            SendScrollWheelVtSequence(e.GetCurrentPoint(this), button, e.KeyModifiers, mode);
+            e.Handled = true;
+            return;
+        }
+        
+        HandleNativeScroll(e);
+    }
+
+    private bool ShouldSendMotionEvent(VtMouseMode mode, PointerPointProperties props)
+    {
+        if (_mouseModeState.TrackingMode == VtMouseTrackingMode.X10)
+            return false;
+        
+        if (_mouseModeState.TrackingMode == VtMouseTrackingMode.Button)
+        {
+            return props.IsLeftButtonPressed || props.IsMiddleButtonPressed || props.IsRightButtonPressed;
+        }
+        
+        return true;
+    }
+
+    private void SendMouseVtSequence(PointerPoint point, MouseEventType eventType, KeyModifiers keyMods, VtMouseMode mode)
+    {
+        if (_vtc is null || Session is null)
+            return;
+        
+        int col = Math.Clamp((int)(point.Position.X / _cellWidth) + 1, 1, _vtc.VisibleColumns);
+        int row = Math.Clamp((int)(point.Position.Y / _cellHeight) + 1, 1, _vtc.VisibleRows);
+        
+        int button = DetermineButton(point.Properties, eventType);
+        var modifiers = MapModifiers(keyMods);
+        
+        var seq = VtMouseEncoder.Encode(button, eventType, modifiers, col, row, mode);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(seq);
+        _ = Session.Stream.WriteAsync(bytes).AsTask();
+    }
+
+    private void SendScrollWheelVtSequence(PointerPoint point, int button, KeyModifiers keyMods, VtMouseMode mode)
+    {
+        if (_vtc is null || Session is null)
+            return;
+        
+        int col = Math.Clamp((int)(point.Position.X / _cellWidth) + 1, 1, _vtc.VisibleColumns);
+        int row = Math.Clamp((int)(point.Position.Y / _cellHeight) + 1, 1, _vtc.VisibleRows);
+        
+        var modifiers = MapModifiers(keyMods);
+        
+        var seq = VtMouseEncoder.Encode(button, MouseEventType.Press, modifiers, col, row, mode);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(seq);
+        _ = Session.Stream.WriteAsync(bytes).AsTask();
+    }
+
+    private static int DetermineButton(PointerPointProperties props, MouseEventType eventType)
+    {
+        if (eventType == MouseEventType.Motion)
+        {
+            if (props.IsLeftButtonPressed)
+                return 0;
+            if (props.IsMiddleButtonPressed)
+                return 1;
+            if (props.IsRightButtonPressed)
+                return 2;
+            return 0;
+        }
+        
+        if (eventType == MouseEventType.Press)
+        {
+            if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
+                return 0;
+            if (props.PointerUpdateKind == PointerUpdateKind.MiddleButtonPressed)
+                return 1;
+            if (props.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
+                return 2;
+        }
+        
+        if (eventType == MouseEventType.Release)
+        {
+            if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased)
+                return 0;
+            if (props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased)
+                return 1;
+            if (props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased)
+                return 2;
+        }
+        
+        return 0;
+    }
+
+    private static MouseModifiers MapModifiers(KeyModifiers keyMods)
+    {
+        var modifiers = MouseModifiers.None;
+        
+        if ((keyMods & KeyModifiers.Shift) != 0)
+            modifiers |= MouseModifiers.Shift;
+        if ((keyMods & KeyModifiers.Alt) != 0)
+            modifiers |= MouseModifiers.Alt;
+        if ((keyMods & KeyModifiers.Control) != 0)
+            modifiers |= MouseModifiers.Ctrl;
+        
+        return modifiers;
     }
 
     private static string? MapKey(Key key, KeyModifiers mods)
@@ -412,11 +651,281 @@ public partial class TerminalControl : Control
         };
     }
 
+    // ── Native mouse selection (no VT mouse mode active) ─────────────────────────────────────
+
+    private void HandleNativeMousePress(PointerPressedEventArgs e)
+    {
+        if (_vtc is null)
+            return;
+
+        var point = e.GetCurrentPoint(this);
+        var props = point.Properties;
+        var position = TestPointerPositionOverride ?? point.Position;
+        var cell = PixelToCell(position);
+
+        if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
+        {
+            if ((e.KeyModifiers & KeyModifiers.Control) != 0)
+            {
+                TryOpenUrlAtCell(cell);
+                e.Handled = true;
+                return;
+            }
+
+            var isRectangular = (e.KeyModifiers & KeyModifiers.Alt) != 0;
+            
+            if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
+            {
+                _selectionModel.ExtendSelection(cell);
+            }
+            else
+            {
+                _selectionModel.StartSelection(cell, isRectangular);
+                _isDragging = true;
+
+                if (e.ClickCount == 2)
+                {
+                    var lines = GetAllVisibleLines();
+                    _selectionModel.ExpandToWords(lines);
+                }
+                else if (e.ClickCount == 3)
+                {
+                    _selectionModel.ExpandToLines(_vtc.VisibleRows);
+                }
+            }
+
+            InvalidateVisual();
+            e.Handled = true;
+        }
+        else if (props.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
+        {
+            _ = HandleRightClickAsync();
+            e.Handled = true;
+        }
+        else if (props.PointerUpdateKind == PointerUpdateKind.MiddleButtonPressed)
+        {
+            _ = HandleMiddleClickAsync();
+            e.Handled = true;
+        }
+    }
+
+    private void HandleNativeMouseMove(PointerEventArgs e)
+    {
+        if (_vtc is null || !_isDragging)
+            return;
+
+        var point = e.GetCurrentPoint(this);
+        var position = TestPointerPositionOverride ?? point.Position;
+        var cell = PixelToCell(position);
+        _selectionModel.ExtendSelection(cell);
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    private void HandleNativeMouseRelease(PointerReleasedEventArgs e)
+    {
+        _isDragging = false;
+    }
+
+    private void HandleNativeScroll(PointerWheelEventArgs e)
+    {
+        if (_vtc is null)
+            return;
+
+        var delta = (int)-e.Delta.Y * 3;
+        
+        var maxTopRow = 0;
+        for (int i = 0; ; i++)
+        {
+            if (_vtc.ViewPort.GetLine(i) == null)
+            {
+                maxTopRow = Math.Max(0, i - _vtc.VisibleRows);
+                break;
+            }
+        }
+        
+        var newTopRow = _vtc.ViewPort.TopRow + delta;
+        _vtc.ViewPort.TopRow = Math.Clamp(newTopRow, 0, maxTopRow);
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    private async Task HandleRightClickAsync()
+    {
+        if (Session is null || _vtc is null)
+            return;
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            _selectionModel.Clear();
+            InvalidateVisual();
+            return;
+        }
+
+        if (_selectionModel.HasSelection)
+        {
+            var lines = GetAllVisibleLines();
+            var selectedText = _selectionModel.GetSelectedText(lines);
+            if (!string.IsNullOrEmpty(selectedText))
+            {
+                var data = new DataTransfer();
+                data.Add(DataTransferItem.CreateText(selectedText));
+                await clipboard.SetDataAsync(data);
+            }
+        }
+
+        _selectionModel.Clear();
+        InvalidateVisual();
+
+        using var clipboardData = await clipboard.TryGetDataAsync();
+        if (clipboardData is not null)
+        {
+            var clipboardText = await clipboardData.TryGetTextAsync();
+            if (!string.IsNullOrEmpty(clipboardText))
+            {
+                await WriteTextToSessionAsync(clipboardText);
+            }
+        }
+    }
+
+    private async Task HandleMiddleClickAsync()
+    {
+        if (Session is null)
+            return;
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+
+        using var clipboardData = await clipboard.TryGetDataAsync();
+        if (clipboardData is not null)
+        {
+            var clipboardText = await clipboardData.TryGetTextAsync();
+            if (!string.IsNullOrEmpty(clipboardText))
+            {
+                await WriteTextToSessionAsync(clipboardText);
+            }
+        }
+    }
+
+    private async Task WriteTextToSessionAsync(string text)
+    {
+        if (Session is null)
+            return;
+
+        var wrappedText = _vtc?.BracketedPasteMode == true
+            ? $"\x1b[200~{text}\x1b[201~"
+            : text;
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(wrappedText);
+        await Session.Stream.WriteAsync(bytes);
+    }
+
+    private void TryOpenUrlAtCell(TerminalCell cell)
+    {
+        if (_vtc is null || cell.Row < 0 || cell.Row >= _vtc.VisibleRows)
+            return;
+
+        var line = _vtc.ViewPort.GetVisibleLine(cell.Row);
+        if (line is null)
+            return;
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < line.Count; i++)
+        {
+            var ch = line[i]?.Char ?? '\0';
+            if (ch != '\0')
+                sb.Append(ch);
+        }
+
+        var lineText = sb.ToString();
+        var match = System.Text.RegularExpressions.Regex.Match(lineText, @"https?://[^\s]+");
+        if (match.Success)
+        {
+            var url = match.Value;
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private IReadOnlyList<TerminalLine> GetAllVisibleLines()
+    {
+        if (_vtc is null)
+            return Array.Empty<TerminalLine>();
+
+        var lines = new List<TerminalLine>();
+        for (int i = 0; i < _vtc.VisibleRows; i++)
+        {
+            var line = _vtc.ViewPort.GetVisibleLine(i);
+            if (line is not null)
+                lines.Add(line);
+        }
+        return lines;
+    }
+
+    private TerminalCell PixelToCell(Point position)
+    {
+        if (_vtc is null)
+            return new TerminalCell(0, 0);
+
+        // If cell dimensions aren't measured yet, measure now
+        if (_cellWidth <= 0 || _cellHeight <= 0)
+            MeasureCells();
+
+        if (_cellWidth <= 0 || _cellHeight <= 0)
+            return new TerminalCell(0, 0);
+
+        int col = Math.Clamp((int)(position.X / _cellWidth), 0, _vtc.VisibleColumns - 1);
+        int row = Math.Clamp((int)(position.Y / _cellHeight), 0, _vtc.VisibleRows - 1);
+        return new TerminalCell(col, row);
+    }
+
+    // ── VT sequence handler methods (issue #725) ──────────────────────────────────────────────
+
+    internal void SetCursorShape(int shape) => CursorShape = shape;
+    internal void SetPaletteColor(int index, Color color) => PaletteOverrides[index] = color;
+    internal void ResetPaletteColor(int index) => PaletteOverrides.Remove(index);
+    internal void SetDefaultFg(Color color) => DefaultFgOverride = color;
+    internal void ResetDefaultFg() => DefaultFgOverride = null;
+    internal void SetDefaultBg(Color color) => DefaultBgOverride = color;
+    internal void ResetDefaultBg() => DefaultBgOverride = null;
+    internal void SetCursorColor(Color color) => CursorColorOverride = color;
+    internal void ResetCursorColor() => CursorColorOverride = null;
+    internal void AddShellMark(string type, int? exitCode) => ShellMarks.Add(new ShellMark(type, exitCode));
+    internal void SetWorkingDirectory(string path) => CurrentWorkingDirectory = path;
+    internal void OpenHyperlink(string uri) => Hyperlinks.Add(new Hyperlink(uri));
+    internal void CloseHyperlink() { /* Hyperlink closed by empty URI */ }
+    internal void SetTitle(string title) => Title = title;
+    internal void IncrementSynchronizedOutput() => SynchronizedOutputNestingLevel++;
+    internal void DecrementSynchronizedOutput()
+    {
+        if (SynchronizedOutputNestingLevel > 0)
+            SynchronizedOutputNestingLevel--;
+    }
+
     // ── Test hook ─────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Pushes <paramref name="bytes"/> directly into the VtNetCore processor without going through
     /// the async read loop. For test use only.
     /// </summary>
-    internal void PushBytesForTest(byte[] bytes) => _dataConsumer?.Push(bytes);
+    internal void PushBytesForTest(byte[] bytes)
+    {
+        if (Session is null)
+            return;
+
+        var interceptor = new TerminalSequenceInterceptor(this, Session.Stream);
+        var filtered = interceptor.Process(bytes);
+        _dataConsumer?.Push(filtered);
+    }
 }

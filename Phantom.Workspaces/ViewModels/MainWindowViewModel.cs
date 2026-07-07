@@ -2185,8 +2185,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         NotifyCollectionChangedEventHandler handler = (_, e) =>
         {
-            RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
             this.SyncPaneTabsFromDockChange(workspacePane, documentDock, e);
+            RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
         };
         collection.CollectionChanged += handler;
         this.innerDockSubscriptions[workspacePane.Id] = handler;

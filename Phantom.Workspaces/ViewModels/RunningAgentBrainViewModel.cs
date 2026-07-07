@@ -23,6 +23,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
     private bool isAnyRunning;
     private bool isOpen;
+    private bool _disposed;
 
     // Per-row subscriptions: sessionKey → (tab, tabHandler, agentHandler)
     private readonly List<(string sessionKey, AgentSessionWorkspaceTabViewModel tab,
@@ -78,6 +79,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     /// </summary>
     public void Refresh()
     {
+        if (this._disposed) return;
         this.IsAnyRunning = this.table.RunningSessions.Count > 0;
 
         // Build lookup: agentSessionId → AgentTabInfo (only Ready tabs with a known session ID)
@@ -313,6 +315,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        this._disposed = true;
         this.table.RunningSessions.CollectionChanged -= this.OnSessionsChanged;
 
         foreach (var (_, tab, tabHandler, agentHandler) in this.rowSubscriptions)
