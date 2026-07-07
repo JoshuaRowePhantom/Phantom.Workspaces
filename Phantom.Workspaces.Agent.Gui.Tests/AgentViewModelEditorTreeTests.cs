@@ -220,7 +220,7 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task SubAgentNavItem_DetailContent_IsConversationDetail()
+    public async Task SubAgentNavItem_DetailContent_IsSubAgentsContainerDetail()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
@@ -233,7 +233,7 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentNav = Assert.Single(subAgentsNav.Children);
 
         Assert.NotNull(subAgentNav.DetailContent);
-        Assert.IsType<AgentChatConversationDetailViewModel>(subAgentNav.DetailContent);
+        Assert.Same(viewModel.SubAgentsContainer, subAgentNav.DetailContent);
     }
 
     [Fact]
