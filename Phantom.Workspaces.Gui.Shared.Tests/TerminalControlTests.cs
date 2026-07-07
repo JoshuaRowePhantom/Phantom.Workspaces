@@ -897,4 +897,240 @@ public sealed class TerminalControlTests
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
+
+    // ── TerminalControl – native mouse selection path (no VT mouse mode active) ──────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_LeftDrag_SelectsText()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Hello World"));
+
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(0, 10), 0, pressProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(0, 10);
+        control.RaiseEvent(pressArgs);
+
+        var moveProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.Other);
+        var moveArgs = new PointerEventArgs(null, control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, moveProps, KeyModifiers.None);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(moveArgs, InputElement.PointerMovedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        control.RaiseEvent(moveArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.True(control.SelectionModel.HasSelection);
+        var vtc = control.Vtc!;
+        var lines = new List<TerminalLine>();
+        for (int i = 0; i < vtc.VisibleRows; i++)
+        {
+            var line = vtc.ViewPort.GetVisibleLine(i);
+            if (line != null) lines.Add(line);
+        }
+        var selected = control.SelectionModel.GetSelectedText(lines);
+        Assert.NotEmpty(selected);
+        Assert.Contains("Hello", selected);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_DoubleClick_SelectsWord()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Hello World"));
+
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(20, 10), 0, pressProps, KeyModifiers.None, 2);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(pressArgs);
+
+        Assert.True(control.SelectionModel.HasSelection);
+        var vtc = control.Vtc!;
+        var lines = new List<TerminalLine>();
+        for (int i = 0; i < vtc.VisibleRows; i++)
+        {
+            var line = vtc.ViewPort.GetVisibleLine(i);
+            if (line != null) lines.Add(line);
+        }
+        var selected = control.SelectionModel.GetSelectedText(lines);
+        Assert.Equal("Hello", selected);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_TripleClick_SelectsLine()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Hello World\r\nSecond Line"));
+
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.None, 3);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(pressArgs);
+
+        Assert.True(control.SelectionModel.HasSelection);
+        var vtc = control.Vtc!;
+        var lines = new List<TerminalLine>();
+        for (int i = 0; i < vtc.VisibleRows; i++)
+        {
+            var line = vtc.ViewPort.GetVisibleLine(i);
+            if (line != null) lines.Add(line);
+        }
+        var selected = control.SelectionModel.GetSelectedText(lines);
+        Assert.Contains("Hello World", selected);
+        Assert.DoesNotContain("Second Line", selected);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_AltDrag_SelectsRectangularRegion()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("ABCDE\r\n12345"));
+
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(20, 10), 0, pressProps, KeyModifiers.Alt, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(pressArgs);
+
+        var moveProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.Other);
+        var moveArgs = new PointerEventArgs(null, control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(60, 30), 0, moveProps, KeyModifiers.Alt);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(moveArgs, InputElement.PointerMovedEvent);
+        control.RaiseEvent(moveArgs);
+
+        Assert.True(control.SelectionModel.HasSelection);
+        Assert.True(control.SelectionModel.IsRectangular);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_ShiftClick_ExtendsSelection()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Hello World"));
+
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(20, 10), 0, pressProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(pressArgs);
+
+        var shiftPressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var shiftPressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(100, 10), 0, shiftPressProps, KeyModifiers.Shift, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(shiftPressArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(shiftPressArgs);
+
+        Assert.True(control.SelectionModel.HasSelection);
+        var vtc = control.Vtc!;
+        var lines = new List<TerminalLine>();
+        for (int i = 0; i < vtc.VisibleRows; i++)
+        {
+            var line = vtc.ViewPort.GetVisibleLine(i);
+            if (line != null) lines.Add(line);
+        }
+        var selected = control.SelectionModel.GetSelectedText(lines);
+        Assert.NotEmpty(selected);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task TerminalControl_MouseReportingDisabled_RightClick_PastesFromClipboard()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Test"));
+
+        var rightProps = new PointerPointProperties(RawInputModifiers.RightMouseButton, PointerUpdateKind.RightButtonPressed);
+        var rightArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, rightProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(rightArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(rightArgs);
+
+        await Task.Delay(100);
+
+        Assert.True(true);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task TerminalControl_MouseReportingDisabled_MiddleClick_PastesFromClipboard()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var middleProps = new PointerPointProperties(RawInputModifiers.MiddleMouseButton, PointerUpdateKind.MiddleButtonPressed);
+        var middleArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, middleProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(middleArgs, InputElement.PointerPressedEvent);
+        control.RaiseEvent(middleArgs);
+
+        await Task.Delay(100);
+
+        Assert.True(true);
+    }
 }

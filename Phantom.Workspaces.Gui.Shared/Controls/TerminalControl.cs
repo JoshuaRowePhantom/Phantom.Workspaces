@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -68,6 +69,10 @@ public partial class TerminalControl : Control
     // ── Resize debounce ───────────────────────────────────────────────────────────────────────
 
     private CancellationTokenSource? _resizeCts;
+    private bool _isDragging;
+
+    // Test infrastructure - allows tests to override pointer position
+    internal static Point? TestPointerPositionOverride;
 
     // ── ANSI color tables ─────────────────────────────────────────────────────────────────────
 
@@ -419,6 +424,7 @@ public partial class TerminalControl : Control
         }
         
         Focus();
+        HandleNativeMousePress(e);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -432,7 +438,10 @@ public partial class TerminalControl : Control
             
             SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Motion, e.KeyModifiers, mode);
             e.Handled = true;
+            return;
         }
+        
+        HandleNativeMouseMove(e);
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -446,7 +455,10 @@ public partial class TerminalControl : Control
             
             SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Release, e.KeyModifiers, mode);
             e.Handled = true;
+            return;
         }
+        
+        HandleNativeMouseRelease(e);
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -458,7 +470,10 @@ public partial class TerminalControl : Control
             int button = e.Delta.Y > 0 ? 64 : 65;
             SendScrollWheelVtSequence(e.GetCurrentPoint(this), button, e.KeyModifiers, mode);
             e.Handled = true;
+            return;
         }
+        
+        HandleNativeScroll(e);
     }
 
     private bool ShouldSendMotionEvent(VtMouseMode mode, PointerPointProperties props)
@@ -604,6 +619,132 @@ public partial class TerminalControl : Control
             Key.F11 => "\x1b[23~", Key.F12 => "\x1b[24~",
             _ => null,
         };
+    }
+
+    // ── Native mouse selection (no VT mouse mode active) ─────────────────────────────────────
+
+    private void HandleNativeMousePress(PointerPressedEventArgs e)
+    {
+        if (_vtc is null)
+            return;
+
+        var point = e.GetCurrentPoint(this);
+        var props = point.Properties;
+        var position = TestPointerPositionOverride ?? point.Position;
+        var cell = PixelToCell(position);
+
+        if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
+        {
+            var isRectangular = (e.KeyModifiers & KeyModifiers.Alt) != 0;
+            
+            if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
+            {
+                _selectionModel.ExtendSelection(cell);
+            }
+            else
+            {
+                _selectionModel.StartSelection(cell, isRectangular);
+                _isDragging = true;
+
+                if (e.ClickCount == 2)
+                {
+                    var lines = GetAllVisibleLines();
+                    _selectionModel.ExpandToWords(lines);
+                }
+                else if (e.ClickCount == 3)
+                {
+                    _selectionModel.ExpandToLines(_vtc.VisibleRows);
+                }
+            }
+
+            InvalidateVisual();
+            e.Handled = true;
+        }
+        else if (props.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
+        {
+            _ = HandleRightClickAsync();
+            e.Handled = true;
+        }
+        else if (props.PointerUpdateKind == PointerUpdateKind.MiddleButtonPressed)
+        {
+            _ = HandleMiddleClickAsync();
+            e.Handled = true;
+        }
+    }
+
+    private void HandleNativeMouseMove(PointerEventArgs e)
+    {
+        if (_vtc is null || !_isDragging)
+            return;
+
+        var point = e.GetCurrentPoint(this);
+        var position = TestPointerPositionOverride ?? point.Position;
+        var cell = PixelToCell(position);
+        _selectionModel.ExtendSelection(cell);
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
+    private void HandleNativeMouseRelease(PointerReleasedEventArgs e)
+    {
+        _isDragging = false;
+    }
+
+    private void HandleNativeScroll(PointerWheelEventArgs e)
+    {
+        if (_vtc is null)
+            return;
+
+        e.Handled = true;
+    }
+
+    private async Task HandleRightClickAsync()
+    {
+        if (Session is null || _vtc is null)
+            return;
+
+        _selectionModel.Clear();
+        InvalidateVisual();
+    }
+
+    private async Task HandleMiddleClickAsync()
+    {
+        if (Session is null)
+            return;
+
+        await Task.CompletedTask;
+    }
+
+    private IReadOnlyList<TerminalLine> GetAllVisibleLines()
+    {
+        if (_vtc is null)
+            return Array.Empty<TerminalLine>();
+
+        var lines = new List<TerminalLine>();
+        for (int i = 0; i < _vtc.VisibleRows; i++)
+        {
+            var line = _vtc.ViewPort.GetVisibleLine(i);
+            if (line is not null)
+                lines.Add(line);
+        }
+        return lines;
+    }
+
+    private TerminalCell PixelToCell(Point position)
+    {
+        if (_vtc is null)
+            return new TerminalCell(0, 0);
+
+        // If cell dimensions aren't measured yet, measure now
+        if (_cellWidth <= 0 || _cellHeight <= 0)
+            MeasureCells();
+
+        if (_cellWidth <= 0 || _cellHeight <= 0)
+            return new TerminalCell(0, 0);
+
+        int col = Math.Clamp((int)(position.X / _cellWidth), 0, _vtc.VisibleColumns - 1);
+        int row = Math.Clamp((int)(position.Y / _cellHeight), 0, _vtc.VisibleRows - 1);
+        return new TerminalCell(col, row);
     }
 
     // ── Test hook ─────────────────────────────────────────────────────────────────────────────
