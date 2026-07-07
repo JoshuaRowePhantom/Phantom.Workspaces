@@ -56,8 +56,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
-    /// The event argument is the URL string. The control also calls <see cref="Process.Start"/>
-    /// to open the URL; this event is provided for testability.
+    /// The event argument is the URL string. The control also invokes
+    /// <see cref="AgentViewModel.OpenUrlHandler"/> if a ViewModel is subscribed;
+    /// tests must stub or null that delegate to avoid side effects.
     /// </summary>
     public event EventHandler<string>? UrlNavigationRequested;
 

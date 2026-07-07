@@ -63,6 +63,52 @@ public sealed class AgentChatOutputControlTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_OpenUrlMessage_WithNullOpenUrlHandler_DoesNotThrow()
+    {
+        // Verify that when an openUrl message is received and the subscribed ViewModel
+        // has a null OpenUrlHandler, no exception is thrown and no side-effect occurs.
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory)
+        {
+            OpenUrlHandler = null,
+        };
+
+        control.DataContext = viewModel;
+
+        string? receivedUrl = null;
+        control.UrlNavigationRequested += (_, url) => receivedUrl = url;
+
+        browser.FireMessage("""{"type":"openUrl","url":"https://example.com"}""");
+
+        Assert.Equal("https://example.com", receivedUrl);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatOutputControl_OpenUrlMessage_WithNoViewModel_DoesNotThrow()
+    {
+        // Verify that when an openUrl message is received and no ViewModel is subscribed
+        // (subscribedViewModel is null), no exception is thrown.
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        string? receivedUrl = null;
+        control.UrlNavigationRequested += (_, url) => receivedUrl = url;
+
+        browser.FireMessage("""{"type":"openUrl","url":"https://example.com"}""");
+
+        Assert.Equal("https://example.com", receivedUrl);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_UnknownMessageType_DoesNotThrow()
     {
         var control = new AgentChatOutputControl();
