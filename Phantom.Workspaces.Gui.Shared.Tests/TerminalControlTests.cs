@@ -1133,4 +1133,459 @@ public sealed class TerminalControlTests
 
         Assert.True(true);
     }
+
+    // ── Kitty keyboard protocol (issue #725) ──────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void KittyKeyboard_QueryReceived_RespondsWithNoEnhancements()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?u"));
+
+        var response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Equal("\x1b[?0u", response);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void KittyKeyboard_PushFlags_Acknowledged()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var ex = Record.Exception(() => control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[>u")));
+        Assert.Null(ex);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void KittyKeyboard_PopFlags_Acknowledged()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var ex = Record.Exception(() => control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[<u")));
+        Assert.Null(ex);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void KittyKeyboard_SetFlags_NoOp()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var ex = Record.Exception(() => control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[=1;2u")));
+        Assert.Null(ex);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void KeyModifierOption_Set_NoOp()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var ex = Record.Exception(() => control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[>4m")));
+        Assert.Null(ex);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void KeyModifierOption_Query_RespondsWithDefaultValue()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?4m"));
+
+        var response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Equal("\x1b[>4;0m", response);
+    }
+
+    // ── Device attributes (issue #725) ────────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void PrimaryDeviceAttributes_Queried_RespondsWithCapabilities()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[c"));
+
+        var response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Equal("\x1b[?64;1;2;6;22c", response);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void SecondaryDeviceAttributes_Queried_Responds()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[>c"));
+
+        var response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Equal("\x1b[>0;0;0c", response);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DeviceStatusReport_Queried_RespondsOK()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[5n"));
+
+        var response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Equal("\x1b[0n", response);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorPositionReport_Queried_RespondsWithCurrentPosition()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("Hello\n"));
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[6n"));
+
+        var response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        Assert.Matches(@"\x1b\[\d+;\d+R", response);
+    }
+
+    // ── DECSCUSR cursor shape (issue #725) ────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_BlinkingBlock_SetCorrectly()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[1 q"));
+        Assert.Equal(1, control.CursorShape);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_SteadyBlock_SetCorrectly()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[2 q"));
+        Assert.Equal(2, control.CursorShape);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_BlinkingUnderline_SetCorrectly()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[3 q"));
+        Assert.Equal(3, control.CursorShape);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_SteadyUnderline_SetCorrectly()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[4 q"));
+        Assert.Equal(4, control.CursorShape);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_BlinkingBar_SetCorrectly()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[5 q"));
+        Assert.Equal(5, control.CursorShape);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_SteadyBar_SetCorrectly()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[6 q"));
+        Assert.Equal(6, control.CursorShape);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void CursorShape_Reset_RestoresDefault()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[5 q"));
+        Assert.Equal(5, control.CursorShape);
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[0 q"));
+        Assert.Equal(0, control.CursorShape);
+    }
+
+    // ── OSC palette/colors (issue #725) ───────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscPaletteSet_ColorN_StoredInPalette()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]4;1;rgb:ff/00/00\x07"));
+        Assert.Equal(Color.FromRgb(0xff, 0, 0), control.PaletteOverrides[1]);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscPaletteReset_ColorN_ClearedFromPalette()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]4;1;rgb:ff/00/00\x07"));
+        Assert.True(control.PaletteOverrides.ContainsKey(1));
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]104;1\x07"));
+        Assert.False(control.PaletteOverrides.ContainsKey(1));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscDefaultFg_Set_OverridesTerminalDefault()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]10;rgb:ff/00/00\x07"));
+        Assert.Equal(Color.FromRgb(0xff, 0, 0), control.DefaultFgOverride);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscDefaultFg_Reset_RestoresTerminalDefault()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]10;rgb:ff/00/00\x07"));
+        Assert.NotNull(control.DefaultFgOverride);
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]110\x07"));
+        Assert.Null(control.DefaultFgOverride);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscDefaultBg_Set_OverridesTerminalDefault()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]11;rgb:00/ff/00\x07"));
+        Assert.Equal(Color.FromRgb(0, 0xff, 0), control.DefaultBgOverride);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscDefaultBg_Reset_RestoresTerminalDefault()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]11;rgb:00/ff/00\x07"));
+        Assert.NotNull(control.DefaultBgOverride);
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]111\x07"));
+        Assert.Null(control.DefaultBgOverride);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscCursorColor_Set_AffectsCursorRendering()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]12;rgb:ff/ff/00\x07"));
+        Assert.Equal(Color.FromRgb(0xff, 0xff, 0), control.CursorColorOverride);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscCursorColor_Reset_RestoresDefault()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]12;rgb:ff/ff/00\x07"));
+        Assert.NotNull(control.CursorColorOverride);
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]112\x07"));
+        Assert.Null(control.CursorColorOverride);
+    }
+
+    // ── Synchronized output (issue #725) ──────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void SynchronizedOutput_Begin_BatchesDomUpdates()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?2026h"));
+        Assert.Equal(1, control.SynchronizedOutputNestingLevel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void SynchronizedOutput_End_FlushesAllPendingUpdates()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?2026h"));
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("Hello"));
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?2026l"));
+
+        Assert.Equal(0, control.SynchronizedOutputNestingLevel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void SynchronizedOutput_Nested_OnlyFlushesOnOutermostEnd()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?2026h"));
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?2026h"));
+        Assert.Equal(2, control.SynchronizedOutputNestingLevel);
+        
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b[?2026l"));
+        Assert.Equal(1, control.SynchronizedOutputNestingLevel);
+    }
+
+    // ── Shell integration (issue #725) ────────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void ShellIntegration_PromptStart_MarksPromptRegion()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]133;A\x07"));
+        Assert.Contains(control.ShellMarks, m => m.Type == "PromptStart");
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void ShellIntegration_CommandEnd_RecordsExitCode()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]133;D;0\x07"));
+        var mark = Assert.Single(control.ShellMarks, m => m.Type == "CommandEnd");
+        Assert.Equal(0, mark.ExitCode);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void ShellIntegration_WorkingDirectory_UpdatesCwd()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]7;file:///home/user\x07"));
+        Assert.Equal("/home/user", control.CurrentWorkingDirectory);
+    }
+
+    // ── Hyperlinks (issue #725) ───────────────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void Hyperlink_Open_RendersClickableLink()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]8;;https://example.com\x07"));
+        Assert.NotEmpty(control.Hyperlinks);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void Hyperlink_Close_EndsClickableRegion()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]8;;https://example.com\x07link\x1b]8;;\x07"));
+        Assert.NotEmpty(control.Hyperlinks);
+    }
+
+    // ── Window title (issue #725) ─────────────────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscTitle_Osc0_UpdatesTabTitle()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]0;MyTitle\x07"));
+        Assert.Equal("MyTitle", control.Title);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void OscTitle_Osc2_UpdatesTabTitle()
+    {
+        var control = CreateControlWithSession();
+        control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]2;MyTitle\x07"));
+        Assert.Equal("MyTitle", control.Title);
+    }
+
+    // ── Helper for tests ──────────────────────────────────────────────────────────────────────
+
+    private static TerminalControl CreateControlWithSession()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+        return control;
+    }
 }
