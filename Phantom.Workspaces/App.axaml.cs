@@ -8,6 +8,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.Templates;
@@ -250,9 +251,13 @@ public partial class App : Application
 
             loadingWindow.Show();
             loadingViewModel.StatusText = "Initializing main workspace view model.";
+            var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
+            var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
+            var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+            var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), foregroundScheduler);
             var applicationServices = new ApplicationServices(
-                new RunningAgentChatTable(),
-                new AgentPersistenceStoreCache());
+                new RunningAgentChatTable(agentChatFactory),
+                agentPersistenceStoreCache);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             loadingViewModel.StatusText = "Loading repository data and profile.";

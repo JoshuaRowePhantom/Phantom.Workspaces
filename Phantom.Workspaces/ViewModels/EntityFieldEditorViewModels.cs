@@ -702,6 +702,8 @@ public sealed class LocalizedMimeAttachmentValueViewModel : ViewModelBase
 
 public sealed class JsonSchemaFieldEditorViewModel : EntityFieldEditorViewModel
 {
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
+
     private string jsonText;
 
     public JsonSchemaFieldEditorViewModel(
@@ -745,12 +747,7 @@ public sealed class JsonSchemaFieldEditorViewModel : EntityFieldEditorViewModel
         try
         {
             using var document = JsonDocument.Parse(jsonText);
-            return JsonSerializer.Serialize(
-                document.RootElement,
-                new JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                });
+            return JsonSerializer.Serialize(document.RootElement, IndentedJsonOptions);
         }
         catch (JsonException)
         {

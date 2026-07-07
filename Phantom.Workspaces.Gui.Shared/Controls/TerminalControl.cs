@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
 using VtNetCore.VirtualTerminal.Enums;
@@ -43,7 +44,7 @@ public partial class TerminalControl : Control
 
     private VirtualTerminalController? _vtc;
     private DataConsumer? _dataConsumer;
-    private CancellationTokenSource? _readCts;
+    private ViewModelLifetime? _sessionLifetime;
 
     // Exposed internally for tests so they can push bytes synchronously without the async loop.
     internal VirtualTerminalController? Vtc => _vtc;
@@ -51,8 +52,8 @@ public partial class TerminalControl : Control
     // ── Cell metrics ──────────────────────────────────────────────────────────────────────────
 
     private static readonly FontFamily MonoFamily =
-        new FontFamily("Cascadia Code,Cascadia Mono,Consolas,Courier New,monospace");
-    private const double TermFontSize = 13.0;
+        new FontFamily("Cascadia Mono,Cascadia Code,Consolas,Courier New,monospace");
+    private const double TermFontSize = 12.0;
 
     private double _cellWidth;
     private double _cellHeight;
@@ -63,29 +64,8 @@ public partial class TerminalControl : Control
 
     // ── ANSI color tables ─────────────────────────────────────────────────────────────────────
 
-    private static readonly Color[] DimAnsi =
-    [
-        Color.FromRgb(0, 0, 0),       // 0 Black
-        Color.FromRgb(170, 0, 0),     // 1 Red
-        Color.FromRgb(0, 170, 0),     // 2 Green
-        Color.FromRgb(170, 170, 0),   // 3 Yellow
-        Color.FromRgb(0, 0, 170),     // 4 Blue
-        Color.FromRgb(170, 0, 170),   // 5 Magenta
-        Color.FromRgb(0, 170, 170),   // 6 Cyan
-        Color.FromRgb(170, 170, 170), // 7 White
-    ];
-
-    private static readonly Color[] BrightAnsi =
-    [
-        Color.FromRgb(85, 85, 85),    // 0 Bright Black
-        Color.FromRgb(255, 85, 85),   // 1 Bright Red
-        Color.FromRgb(85, 255, 85),   // 2 Bright Green
-        Color.FromRgb(255, 255, 85),  // 3 Bright Yellow
-        Color.FromRgb(85, 85, 255),   // 4 Bright Blue
-        Color.FromRgb(255, 85, 255),  // 5 Bright Magenta
-        Color.FromRgb(85, 255, 255),  // 6 Bright Cyan
-        Color.FromRgb(255, 255, 255), // 7 Bright White
-    ];
+    private static readonly Color[] DimAnsi    = CampbellColorScheme.Dim;
+    private static readonly Color[] BrightAnsi = CampbellColorScheme.Bright;
 
     // ── Static constructor ────────────────────────────────────────────────────────────────────
 
@@ -116,14 +96,14 @@ public partial class TerminalControl : Control
         if (cols > 0 && rows > 0)
             _vtc.ResizeView(cols, rows);
 
-        _readCts = new CancellationTokenSource();
-        _ = ReadLoopAsync(session, _readCts.Token);
+        _sessionLifetime = new ViewModelLifetime();
+        _sessionLifetime.Run(ct => ReadLoopAsync(session, ct));
     }
 
     private void DetachSession()
     {
-        _readCts?.Cancel();
-        _readCts = null;
+        _ = _sessionLifetime?.DisposeAsync();
+        _sessionLifetime = null;
         _vtc = null;
         _dataConsumer = null;
         InvalidateVisual();
@@ -218,7 +198,7 @@ public partial class TerminalControl : Control
         var bounds = new Rect(Bounds.Size);
 
         // Background
-        var bgBrush = TryFindBrush("Terminal.Background") ?? Brushes.Black;
+        var bgBrush = TryFindBrush("Terminal.Background") ?? new SolidColorBrush(CampbellColorScheme.Background);
         context.FillRectangle(bgBrush, bounds);
 
         if (_vtc is null)
@@ -230,7 +210,7 @@ public partial class TerminalControl : Control
         var visRows = _vtc.VisibleRows;
         var visCols = _vtc.VisibleColumns;
 
-        var defaultFg = TryFindBrush("Terminal.Foreground");
+        var defaultFg = TryFindBrush("Terminal.Foreground") ?? new SolidColorBrush(CampbellColorScheme.Foreground);
         var cursorBrush = TryFindBrush("Terminal.Cursor") ?? Brushes.White;
 
         var normalTypeface = new Typeface(MonoFamily);
@@ -308,11 +288,11 @@ public partial class TerminalControl : Control
         if (reverse)
             return new SolidColorBrush(AnsiToColor(attrs.BackgroundColor, bright: false));
 
-        if (attrs.ForegroundRgb.ARGB != 0)
+        if (attrs.ForegroundRgb is { ARGB: not 0 } fgRgb)
             return new SolidColorBrush(Color.FromRgb(
-                (byte)attrs.ForegroundRgb.Red,
-                (byte)attrs.ForegroundRgb.Green,
-                (byte)attrs.ForegroundRgb.Blue));
+                (byte)fgRgb.Red,
+                (byte)fgRgb.Green,
+                (byte)fgRgb.Blue));
 
         return defaultFg ?? new SolidColorBrush(AnsiToColor(attrs.ForegroundColor, attrs.Bright));
     }
@@ -322,11 +302,11 @@ public partial class TerminalControl : Control
         if (reverse)
             return AnsiToColor(attrs.ForegroundColor, bright: false);
 
-        if (attrs.BackgroundRgb.ARGB != 0)
+        if (attrs.BackgroundRgb is { ARGB: not 0 } bgRgb)
             return Color.FromRgb(
-                (byte)attrs.BackgroundRgb.Red,
-                (byte)attrs.BackgroundRgb.Green,
-                (byte)attrs.BackgroundRgb.Blue);
+                (byte)bgRgb.Red,
+                (byte)bgRgb.Green,
+                (byte)bgRgb.Blue);
 
         // Default background — caller fills the whole rect with Terminal.Background.
         var idx = (int)attrs.BackgroundColor;

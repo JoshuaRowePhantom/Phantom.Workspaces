@@ -5,7 +5,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm;
 
-public sealed record AgentServices
+public sealed record AgentServices : IServiceProvider
 {
     public bool LogChat { get; init; }
 
@@ -25,6 +25,11 @@ public sealed record AgentServices
     public IChatClient? ChatClientOverride { get; init; }
 
     /// <summary>
+    /// Factory for acquiring leased references to running agent chat sessions.
+    /// </summary>
+    public IRunningAgentChatFactory? RunningAgentChatFactory { get; init; }
+
+    /// <summary>
     /// Overrides toolset factory resolution for custom tool kinds.
     /// </summary>
     public IToolsetFactory? ToolsetFactory { get; init; }
@@ -35,4 +40,14 @@ public sealed record AgentServices
     /// its own tool resource factory.
     /// </summary>
     public IToolResourceFactory? ToolResourceFactory { get; init; }
+
+    public object? GetService(Type serviceType)
+    {
+        if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;
+        if (serviceType == typeof(IAgentPersistenceStore))     return AgentPersistenceStoreOverride;
+        if (serviceType == typeof(IRunningAgentChatFactory))   return RunningAgentChatFactory;
+        if (serviceType == typeof(IToolsetFactory))            return ToolsetFactory;
+        if (serviceType == typeof(IToolResourceFactory))       return ToolResourceFactory;
+        return null;
+    }
 }

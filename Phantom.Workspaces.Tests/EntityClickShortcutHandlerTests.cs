@@ -18,7 +18,7 @@ public sealed class EntityClickShortcutHandlerTests
         shortcutManager.AddShortcutHandler(openRecorder);
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
 
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var workspace = CreateEntity("workspace");
 
         var handled = await clickHandler.Handle(mainWindowViewModel, Shortcut.Open, workspace);
@@ -37,7 +37,7 @@ public sealed class EntityClickShortcutHandlerTests
         shortcutManager.AddShortcutHandler(openRecorder);
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
 
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var note = CreateEntity("note");
 
         var handled = await clickHandler.Handle(mainWindowViewModel, Shortcut.Open, note);
@@ -47,24 +47,24 @@ public sealed class EntityClickShortcutHandlerTests
     }
 
     [PhantomAvaloniaFact]
-    public void ShouldApplyTo_MatchesOnlyConfiguredTypes()
+    public async Task ShouldApplyTo_MatchesOnlyConfiguredTypes()
     {
         var shortcutManager = new ShortcutManager();
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
 
         Assert.True(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("workspace")));
         Assert.False(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
     }
 
     [PhantomAvaloniaFact]
-    public void UnregisteredClickHandler_ContributesNoShortcutButton()
+    public async Task UnregisteredClickHandler_ContributesNoShortcutButton()
     {
         // The production wiring keeps the click handler out of the manager, so it never affects the
         // buttons returned by GetShortcutsFor.
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var workspace = CreateEntity("workspace");
 
         var before = shortcutManager.GetShortcutsFor(mainWindowViewModel, workspace).ToArray();

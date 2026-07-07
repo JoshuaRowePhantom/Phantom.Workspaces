@@ -21,7 +21,8 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
 
     /// <summary>
     /// Maps <c>POST /agent/persistence/store</c>, <c>POST /agent/persistence/restore</c>,
-    /// and <c>POST /agent/persistence/messages</c> onto the supplied route builder.
+    /// <c>POST /agent/persistence/messages</c>, <c>POST /agent/persistence/sub-agent-links/add</c>,
+    /// and <c>POST /agent/persistence/sub-agent-links/read</c> onto the supplied route builder.
     /// </summary>
     public static IEndpointRouteBuilder MapAgentPersistenceEndpoints(
         this IEndpointRouteBuilder endpointRouteBuilder)
@@ -128,6 +129,64 @@ public static class AgentPersistenceEndpointRouteBuilderExtensions
                 cancellationToken).ConfigureAwait(false);
 
             return Results.Json(new ReadMessagesResponse { Messages = messages }, SerializerOptions);
+        });
+
+        endpointRouteBuilder.MapPost("/agent/persistence/sub-agent-links/add", async (HttpContext httpContext) =>
+        {
+            var cancellationToken = httpContext.RequestAborted;
+
+            var store = httpContext.RequestServices.GetService(typeof(IAgentPersistenceStore))
+                as IAgentPersistenceStore;
+
+            if (store is null)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var request = await JsonSerializer
+                .DeserializeAsync<AddSubAgentLinkRequest>(httpContext.Request.Body, SerializerOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (request is null)
+            {
+                return Results.BadRequest("Empty add sub-agent link request.");
+            }
+
+            await store.AddSubAgentLinkAsync(
+                request.ParentSessionId,
+                request.ChildSessionId,
+                cancellationToken).ConfigureAwait(false);
+
+            return Results.Ok();
+        });
+
+        endpointRouteBuilder.MapPost("/agent/persistence/sub-agent-links/read", async (HttpContext httpContext) =>
+        {
+            var cancellationToken = httpContext.RequestAborted;
+
+            var store = httpContext.RequestServices.GetService(typeof(IAgentPersistenceStore))
+                as IAgentPersistenceStore;
+
+            if (store is null)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var request = await JsonSerializer
+                .DeserializeAsync<ReadSubAgentChildIdsRequest>(httpContext.Request.Body, SerializerOptions, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (request is null)
+            {
+                return Results.BadRequest("Empty read sub-agent child IDs request.");
+            }
+
+            var childIds = await store.ReadSubAgentChildIdsAsync(request.ParentSessionId, cancellationToken)
+                .ConfigureAwait(false);
+
+            return Results.Json(
+                new ReadSubAgentChildIdsResponse { ChildSessionIds = childIds.Select(static id => id.Value).ToArray() },
+                SerializerOptions);
         });
 
         return endpointRouteBuilder;

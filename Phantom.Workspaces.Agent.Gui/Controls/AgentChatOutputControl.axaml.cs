@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -11,6 +12,7 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Controls;
 
@@ -64,6 +66,12 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     /// </summary>
     public event EventHandler<string>? InspectorRequested;
 
+    /// <summary>
+    /// Raised when the user clicks the '→ Open sub-agent' jump link on a tool-result block.
+    /// The event argument is the <see cref="AgentChat.AgentId"/> of the target sub-agent.
+    /// </summary>
+    public event EventHandler<string>? NavigateToAgentRequested;
+
     public AgentChatOutputControl()
     {
         this.InitializeComponent();
@@ -105,13 +113,26 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     public void ScrollToBottom()
     {
-        if (this.subscribedViewModel?.AutoScrollEnabled == false || this.suppressSinkScroll)
+        // Clear the load-time scroll suppression. Set true in OnBrowserReady before constructing
+        // the model; cleared on first call (from the model after the newest history chunk in Phase B).
+        if (this.suppressSinkScroll)
+        {
+            this.suppressSinkScroll = false;
+        }
+
+        if (this.subscribedViewModel?.AutoScrollEnabled == false)
         {
             return;
         }
 
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
     }
+
+    public void BeginBatch() => this.browser.BeginBatch();
+
+    public void EndBatch() => this.browser.EndBatch();
+
+    internal Task HistoryLoaded => this.outputModel?.HistoryLoaded ?? Task.CompletedTask;
 
     public void UpdateStatus(AgentStatusField field, string? value)
         => this.subscribedViewModel?.StatusSink.UpdateStatus(field, value);
@@ -220,7 +241,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         }
     }
 
-    private void OnBrowserReady(object? sender, EventArgs e)
+    private async void OnBrowserReady(object? sender, EventArgs e)
     {
         // Always post the theme first so CSS variables are set before any DOM operations arrive.
         this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
@@ -234,10 +255,10 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         if (this.subscribedViewModel is { } vm)
         {
-            // Suppress scroll-to-bottom calls from inside the batch: the scroll command would
-            // be processed before the browser lays out the new DOM nodes, so it would have no
-            // effect. The explicit scroll posted after EndBatch arrives in a later IPC round-trip,
-            // once the DOM is rendered, and therefore lands correctly at the bottom.
+            // suppressSinkScroll stays true until the model delivers ScrollToBottom after the
+            // first (newest) history chunk in Phase B. The BeginBatch/EndBatch here wraps only
+            // Phase A (running-items initial DOM); each history chunk gets its own batch inside
+            // LoadHistoryChunksAsync.
             this.suppressSinkScroll = true;
             this.browser.BeginBatch();
             this.outputModel = new ChatOutputHtmlModel(
@@ -247,17 +268,19 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 sink: this,
                 isDiagnosticsVisible: () => vm.IsDiagnosticsVisible,
                 toolFactory: DefaultToolFactory,
-                statusSink: this);
+                statusSink: this,
+                resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
+                subAgents: vm.SubAgentDisplays,
+                ancestors: BuildAncestors(vm.AgentChat));
             this.browser.EndBatch();
-            this.suppressSinkScroll = false;
+            // suppressSinkScroll is cleared by ScrollToBottom() when the model delivers
+            // the first history chunk scroll — no explicit clear here.
 
-            // Always scroll to bottom and enable auto-scroll after the batch is flushed.
-            // Using suppressScrollOnEnable prevents the PropertyChanged handler from emitting
-            // a redundant second scroll command.
+            // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom
+            // is issued by the model after the first history chunk, not here.
             this.suppressScrollOnEnable = true;
             vm.AutoScrollEnabled = true;
             this.suppressScrollOnEnable = false;
-            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
         }
     }
 
@@ -335,6 +358,19 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 }
                 break;
             }
+            case "navigateToAgent":
+            {
+                if (root.TryGetProperty("agentId", out var agentIdProp))
+                {
+                    var agentId = agentIdProp.GetString();
+                    if (!string.IsNullOrEmpty(agentId))
+                    {
+                        this.NavigateToAgentRequested?.Invoke(this, agentId);
+                        this.subscribedViewModel?.NavigateToAgentHandler?.Invoke(agentId);
+                    }
+                }
+                break;
+            }
         }
     }
 
@@ -371,4 +407,22 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         => color.A == 255
             ? $"#{color.R:x2}{color.G:x2}{color.B:x2}"
             : $"rgba({color.R}, {color.G}, {color.B}, {(color.A / 255.0):0.###})";
+
+    /// <summary>
+    /// Builds the ancestry chain from the root agent down to <paramref name="agentChat"/> (inclusive),
+    /// for use as the breadcrumb in the running sub-agents panel.
+    /// </summary>
+    private static IReadOnlyList<IRunningSubAgent> BuildAncestors(AgentChat agentChat)
+    {
+        var chain = new List<IRunningSubAgent>();
+        AgentChat? current = agentChat;
+        while (current is not null)
+        {
+            chain.Add(current);
+            current = current.ParentAgent;
+        }
+
+        chain.Reverse();
+        return chain;
+    }
 }

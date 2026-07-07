@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
@@ -1103,6 +1104,176 @@ public class AgentFactoryTests
             """);
     }
 
+    // -----------------------------------------------------------------------
+    // PersistenceStoreFactory / CancellationToken threading tests (#698)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CreateAgentChat_DoesNotDeadlock_WhenPersistenceStoreCreationIsAsync()
+    {
+        // Regression guard: the old code used .GetAwaiter().GetResult() inside an async method.
+        // When the factory's Task.Yield() posted its continuation back to a single-threaded
+        // SynchronizationContext whose thread was already blocked, a deadlock occurred.
+        // With await…ConfigureAwait(false) the SC thread is not blocked, so this test completes.
+        var agent = LoadEchoAgentWithChatHistoryTool();
+        using var ctx = new SingleThreadedSynchronizationContext();
+
+        var chatTask = ctx.PostAsync(() =>
+            AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentDefinition = agent,
+                PersistenceStoreFactory = async (def, ct) =>
+                {
+                    await Task.Yield();
+                    return new InMemoryAgentPersistenceStore();
+                },
+            }));
+
+        var winner = await Task.WhenAny(chatTask, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.True(winner == chatTask, "CreateAgentChatAsync deadlocked under a single-threaded SynchronizationContext.");
+        await using var chat = await chatTask;
+        Assert.NotNull(chat);
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_FallsBackToInMemory_WhenPersistenceStoreCreationThrows()
+    {
+        // The catch(Exception) in CreateAgentChatAsync swallows any factory exception
+        // and falls back to InMemoryAgentPersistenceStore so the session stays alive.
+        var agent = LoadEchoAgentWithChatHistoryTool();
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agent,
+            PersistenceStoreFactory = (def, ct) =>
+                ValueTask.FromException<IAgentPersistenceStore>(
+                    new InvalidOperationException("Simulated store creation failure")),
+        });
+
+        Assert.NotNull(chat);
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_FallsBackToInMemory_WhenTokenCancelledDuringStoreCreation()
+    {
+        // OperationCanceledException is caught by the broad catch(Exception) in CreateAgentChatAsync
+        // and falls back to InMemoryAgentPersistenceStore. This is the documented fall-back policy:
+        // any failure during store creation (including cancellation) is swallowed to keep the session alive.
+        var agent = LoadEchoAgentWithChatHistoryTool();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agent,
+            CancellationToken = cts.Token,
+            PersistenceStoreFactory = (def, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                return ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore());
+            },
+        });
+
+        Assert.NotNull(chat);
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_PassesAmbientCancellationToken_ToStoreFactory()
+    {
+        var agent = LoadEchoAgentWithChatHistoryTool();
+        using var cts = new CancellationTokenSource();
+        CancellationToken capturedToken = default;
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agent,
+            CancellationToken = cts.Token,
+            PersistenceStoreFactory = (def, ct) =>
+            {
+                capturedToken = ct;
+                return ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore());
+            },
+        });
+
+        Assert.Equal(cts.Token, capturedToken);
+    }
+
+    private static AgentDefinition LoadEchoAgentWithChatHistoryTool() =>
+        AgentDefinitionLoader.LoadAgentFromJson("""
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [
+                {
+                  "name": "chat-history",
+                  "kind": "chat-history",
+                  "options": {
+                    "connection": {
+                      "provider": "mongodb",
+                      "mongoProvider": "external",
+                      "connection-string": "mongodb://localhost:27017",
+                      "database-name": "test-db",
+                      "collection-name": "test-collection"
+                    }
+                  }
+                }
+              ]
+            }
+            """);
+
+    /// <summary>
+    /// A minimal single-threaded <see cref="SynchronizationContext"/> that processes posted
+    /// callbacks sequentially on a dedicated background thread.  Used to reproduce the
+    /// sync-over-async deadlock scenario described in issue #698.
+    /// </summary>
+    private sealed class SingleThreadedSynchronizationContext : SynchronizationContext, IDisposable
+    {
+        private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue
+            = new(new System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback, object?)>());
+
+        public SingleThreadedSynchronizationContext()
+        {
+            var thread = new Thread(() =>
+            {
+                SynchronizationContext.SetSynchronizationContext(this);
+                foreach (var (cb, state) in _queue.GetConsumingEnumerable())
+                    cb(state);
+            })
+            { IsBackground = true, Name = "TestSingleThreadSC" };
+            thread.Start();
+        }
+
+        public override void Post(SendOrPostCallback d, object? state) => _queue.Add((d, state));
+
+        public override void Send(SendOrPostCallback d, object? state) => d(state);
+
+        /// <summary>
+        /// Posts <paramref name="work"/> to the SC thread and returns a Task that completes
+        /// when the returned Task from <paramref name="work"/> completes.
+        /// </summary>
+        public Task<T> PostAsync<T>(Func<Task<T>> work)
+        {
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(_ =>
+            {
+                work().ContinueWith(t =>
+                {
+                    if (t.IsCompletedSuccessfully) tcs.SetResult(t.Result);
+                    else if (t.IsFaulted)
+                        tcs.SetException(
+                            t.Exception!.InnerExceptions.Count == 1
+                                ? t.Exception.InnerException!
+                                : t.Exception);
+                    else tcs.SetCanceled();
+                }, TaskScheduler.Default);
+            }, null);
+            return tcs.Task;
+        }
+
+        public void Dispose() => _queue.CompleteAdding();
+    }
+
     private static Task<AgentChat> CreateChatAsync(AgentDefinition agentDefinition, AgentServices? agentServices = null)
         => AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
@@ -1198,6 +1369,12 @@ public class AgentFactoryTests
             Interlocked.Increment(ref this.readCalls);
             return ValueTask.FromResult(Array.Empty<ChatMessage>());
         }
+
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(Array.Empty<AgentSessionId>());
     }
 
     private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver

@@ -82,6 +82,62 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
     }
 
     [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectRepositoryPathField()
+    {
+        var vm = CreateViewModel("""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": "/some/repo/path"
+            }
+            """);
+
+        await using (vm)
+        {
+            Assert.Equal("/some/repo/path", vm.RepositoryPath);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectTargetBranchField()
+    {
+        var vm = CreateViewModel("""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "target-branch": "develop"
+            }
+            """);
+
+        await using (vm)
+        {
+            Assert.Equal("develop", vm.TargetBranch);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_WhenPathMissing_DoesNotThrow()
+    {
+        var vm = CreateViewModel("""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" }
+            }
+            """);
+
+        await using (vm)
+        {
+            Assert.Equal(string.Empty, vm.RepositoryPath);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMainWhenBranchExists()
     {
         this.InitRepoWithBranch("main");
@@ -93,7 +149,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
                 "entity-types": ["entity", "git-worktree"],
                 "names": [["worktrees", "test"]],
                 "display-name": { "default": "Test" },
-                "filesystem-path": {{repoPath}}
+                "path": {{repoPath}}
             }
             """);
 
@@ -115,7 +171,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
                 "entity-types": ["entity", "git-worktree"],
                 "names": [["worktrees", "test"]],
                 "display-name": { "default": "Test" },
-                "filesystem-path": {{repoPath}}
+                "path": {{repoPath}}
             }
             """);
 
@@ -212,7 +268,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
                 "entity-types": ["entity", "git-worktree"],
                 "names": [["worktrees", "test"]],
                 "display-name": { "default": "Test" },
-                "filesystem-path": {{repoPath}}
+                "path": {{repoPath}}
             }
             """);
 

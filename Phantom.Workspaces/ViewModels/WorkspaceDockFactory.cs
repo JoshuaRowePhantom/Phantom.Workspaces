@@ -140,6 +140,13 @@ public class WorkspaceDockFactory : Factory
         return root;
     }
 
+    public override void OnDockableClosed(IDockable? dockable)
+    {
+        base.OnDockableClosed(dockable);
+        if (dockable is WorkspaceDocument { TabViewModel: { } tabVm })
+            mainWindowViewModel.OnDockableTabClosed(tabVm);
+    }
+
     public override void InitLayout(IDockable layout)
     {
         if (ContextLocator is null)

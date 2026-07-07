@@ -21,8 +21,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
-    private readonly AgentChatPlaceholderDetailViewModel subAgentsDetail;
-    private readonly AgentChatDiagnosticsDetailViewModel diagnosticsDetail;
+    private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
+    private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
+    private readonly DiagnosticInspectorViewModel diagnosticsDetail;
+    private readonly List<AgentViewModel> subAgentViewModels = [];
+    private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
@@ -42,10 +45,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.backgroundTasksDetail = new AgentChatPlaceholderDetailViewModel(
             "Background tasks",
             "Background task model coming later.");
-        this.subAgentsDetail = new AgentChatPlaceholderDetailViewModel(
-            "Sub-agents",
-            "Sub-agent model coming later.");
-        this.diagnosticsDetail = new AgentChatDiagnosticsDetailViewModel(this);
+        this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
+        this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
+        this.diagnosticsDetail = new DiagnosticInspectorViewModel(agentChat.History);
+        this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
@@ -55,6 +58,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.agentChat.InputQueueManager);
         this.EditorItems = [];
 
+        this.NavigateToAgentHandler = this.NavigateToSubAgent;
+
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged += this.OnToolsChanged;
         this.agentChat.UsageChanged += this.OnUsageChanged;
@@ -62,6 +67,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
         }
+        ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
+
+        // Seed slots for any sub-agents already present (e.g. restored from persistence).
+        foreach (var subAgent in agentChat.SubAgents)
+        {
+            this.AddSubAgentSlot(subAgent);
+        }
+
         this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
     }
 
@@ -114,6 +127,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public AgentChat AgentChat => this.agentChat;
 
+    /// <summary>Whether this agent accepts user input (false for hosted sub-agents).</summary>
+    public bool AcceptsUserInput => this.agentChat.AcceptsUserInput;
+
+    /// <summary>The sub-agents container (browser card + cached sub-agent slots).</summary>
+    public SubAgentsContainerViewModel SubAgentsContainer => this.subAgentsContainerDetail;
+
+    /// <summary>UI-layer display wrappers for each direct child sub-agent, in the order they were created.</summary>
+    public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgentDisplays { get; }
+
     public ICommand InterruptCommand { get; }
 
     public ICommand ToggleReasoningVisibilityCommand { get; }
@@ -121,6 +143,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public ICommand RequestOpenLogWindowCommand { get; }
 
     public InputQueueViewModel InputQueue { get; }
+
+    public DiagnosticInspectorViewModel DiagnosticsInspector => this.diagnosticsDetail;
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
@@ -145,6 +169,22 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             if (ReferenceEquals(value?.DetailContent, this.toolsDetail))
             {
                 this.toolsDetail.SetRootItem(value);
+            }
+
+            // Update the sub-agents container when a sub-agent nav item is selected.
+            if (value is not null && ReferenceEquals(value.DetailContent, this.subAgentsContainerDetail))
+            {
+                if (value.Id == "chat-sub-agents")
+                {
+                    // The group node itself — show the browser card.
+                    this.subAgentsContainerDetail.ShowBrowser();
+                }
+                else if (value.Id.StartsWith("sub-agent-", StringComparison.Ordinal))
+                {
+                    // An individual sub-agent child node.
+                    var agentId = value.Id.Substring("sub-agent-".Length);
+                    this.subAgentsContainerDetail.ShowSubAgent(agentId);
+                }
             }
 
             this.RaisePropertyChanged(nameof(this.SelectedEditorDetailContent));
@@ -295,6 +335,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// </summary>
     public Action<string>? OpenUrlHandler { get; set; }
 
+    /// <summary>
+    /// Called when the user clicks the '→ Open sub-agent' jump link on a tool-result block.
+    /// The argument is the <see cref="AgentChat.AgentId"/> of the target sub-agent.
+    /// Implemented in the workspace layer (issue #634). Null means no navigation occurs.
+    /// </summary>
+    public Action<string>? NavigateToAgentHandler { get; set; }
+
     private void RequestOpenLogWindow()
         => this.OpenLogWindowRequested?.Invoke(this, EventArgs.Empty);
 
@@ -342,6 +389,22 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         var toolNavigationItems = BuildToolNavigationItems(this.Tools);
 
+        // Build sub-agent children (one per cached slot), all sharing the container as DetailContent.
+        var subAgentCount = this.subAgentsContainerDetail.Slots.Count;
+        var subAgentLabel = subAgentCount > 0
+            ? $"Sub-agents ({subAgentCount})"
+            : "Sub-agents";
+        var subAgentChildren = this.subAgentsContainerDetail.Slots
+            .Select(slot => new AgentEditorNavigationItemViewModel(
+                $"sub-agent-{slot.AgentId}",
+                slot.SubAgentViewModel.DisplayName,
+                null,
+                null,
+                null,
+                this.subAgentsContainerDetail,
+                []))
+            .ToArray();
+
         var root = new AgentEditorNavigationItemViewModel(
             "chat",
             this.DisplayName,
@@ -353,7 +416,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 new AgentEditorNavigationItemViewModel("chat-details", "Chat details", null, "Session information", null, this.chatDetailsDetail, []),
                 new AgentEditorNavigationItemViewModel("chat-tools", "Tools", null, "Loaded tools", null, this.toolsDetail, toolNavigationItems, isExpanded: true),
                 new AgentEditorNavigationItemViewModel("chat-background-tasks", "Background tasks", null, "Planned background work", null, this.backgroundTasksDetail, []),
-                new AgentEditorNavigationItemViewModel("chat-sub-agents", "Sub-agents", null, "Planned sub-agent work", null, this.subAgentsDetail, []),
+                new AgentEditorNavigationItemViewModel("chat-sub-agents", subAgentLabel, null, "Sub-agents", null, this.subAgentsContainerDetail, subAgentChildren),
                 new AgentEditorNavigationItemViewModel("chat-diagnostics", "Diagnostics", null, "Diagnostic information", null, this.diagnosticsDetail, []),
             ],
             isExpanded: false);
@@ -412,6 +475,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
         this.diagnosticsDetail.Dispose();
+        this.subAgentsBrowserDetail.Dispose();
+        ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;
@@ -419,6 +484,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
         }
+        foreach (var subAgentViewModel in this.subAgentViewModels)
+        {
+            await subAgentViewModel.DisposeViewResourcesAsync();
+        }
+
+        foreach (var display in this.subAgentDisplayItems)
+        {
+            if (display is IDisposable d)
+                d.Dispose();
+        }
+
         await Task.CompletedTask;
     }
 
@@ -435,6 +511,56 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void OnRunningItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         => this.RaisePropertyChanged(nameof(this.IsChatRunning));
+
+    private void OnSubAgentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (IRunningSubAgent subAgent in e.NewItems)
+            {
+                this.AddSubAgentSlot(subAgent);
+            }
+        }
+
+        this.BuildEditorTree();
+    }
+
+    private void AddSubAgentSlot(IRunningSubAgent subAgent)
+    {
+        var subAgentChat = (AgentChat)subAgent;
+        var display = new RunningSubAgentDisplay(subAgentChat);
+        this.subAgentDisplayItems.Add(display);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
+        this.subAgentViewModels.Add(subAgentViewModel);
+        this.subAgentsContainerDetail.AddSlot(subAgent.AgentId, subAgentViewModel);
+    }
+
+    private void NavigateToSubAgent(string agentId)
+    {
+        // Select the "Sub-agents" group node in the editor tree so the container is shown,
+        // then tell the container to display the requested sub-agent.
+        if (this.EditorItems.Count == 0)
+        {
+            return;
+        }
+
+        var root = this.EditorItems[0];
+        var subAgentsGroup = root.Children.FirstOrDefault(c => c.Id == "chat-sub-agents");
+        if (subAgentsGroup is null)
+        {
+            return;
+        }
+
+        // Select the child nav item for this agent (or fall back to the group itself).
+        var childItem = subAgentsGroup.Children.FirstOrDefault(c =>
+            c.Id == $"sub-agent-{agentId}");
+
+        this.SelectedEditorItem = childItem ?? subAgentsGroup;
+        subAgentsGroup.IsExpanded = true;
+
+        // Ensure the container shows the requested sub-agent.
+        this.subAgentsContainerDetail.ShowSubAgent(agentId);
+    }
 
     private void OnUsageChanged(object? sender, EventArgs eventArgs)
     {

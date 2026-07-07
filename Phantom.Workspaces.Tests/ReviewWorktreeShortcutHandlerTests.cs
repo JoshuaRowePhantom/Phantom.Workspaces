@@ -12,30 +12,30 @@ namespace Phantom.Workspaces.Tests;
 public sealed class ReviewWorktreeShortcutHandlerTests
 {
     [Fact]
-    public void ShouldApplyTo_ReturnsTrueForReviewShortcutOnGitWorktreeEntity()
+    public async Task ShouldApplyTo_ReturnsTrueForReviewShortcutOnGitWorktreeEntity()
     {
         var handler = new ReviewWorktreeShortcutHandler();
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateGitWorktreeEntity();
 
         Assert.True(handler.ShouldApplyTo(vm, Shortcut.Review, entity));
     }
 
     [Fact]
-    public void ShouldApplyTo_ReturnsFalseForOpenShortcutOnGitWorktreeEntity()
+    public async Task ShouldApplyTo_ReturnsFalseForOpenShortcutOnGitWorktreeEntity()
     {
         var handler = new ReviewWorktreeShortcutHandler();
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateGitWorktreeEntity();
 
         Assert.False(handler.ShouldApplyTo(vm, Shortcut.Open, entity));
     }
 
     [Fact]
-    public void ShouldApplyTo_ReturnsFalseForReviewShortcutOnOtherEntityType()
+    public async Task ShouldApplyTo_ReturnsFalseForReviewShortcutOnOtherEntityType()
     {
         var handler = new ReviewWorktreeShortcutHandler();
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateNoteEntity();
 
         Assert.False(handler.ShouldApplyTo(vm, Shortcut.Review, entity));
@@ -44,7 +44,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensGitWorktreeReviewTabWithCorrectId()
     {
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         await vm.InitializeAsync();
 
         var handler = new ReviewWorktreeShortcutHandler();
@@ -69,7 +69,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_DeduplicatesTabWhenAlreadyOpen()
     {
-        var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
         await vm.InitializeAsync();
 
         var handler = new ReviewWorktreeShortcutHandler();
@@ -91,7 +91,53 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await reviewTabs[0].DisposeAsync();
     }
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_WhenRepositoryPathMissing_StillOpensTabWithEmptyPath()
+    {
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await vm.InitializeAsync();
+
+        var handler = new ReviewWorktreeShortcutHandler();
+        var entity = CreateGitWorktreeEntityWithoutPath();
+
+        await handler.Handle(vm, Shortcut.Review, entity);
+
+        var documentDock = FindDocumentDock(vm);
+        var reviewTab = documentDock?.VisibleDockables
+            ?.OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<GitWorktreeReviewWorkspaceTabViewModel>()
+            .FirstOrDefault();
+
+        Assert.NotNull(reviewTab);
+        Assert.Equal(string.Empty, reviewTab.RepositoryPath);
+
+        await reviewTab.DisposeAsync();
+    }
+
     private static SubscribedEntityViewModel CreateGitWorktreeEntity()
+    {
+        using var document = JsonDocument.Parse("""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "my-worktree"]],
+                "display-name": { "default": "My Worktree" }
+            }
+            """);
+
+        return new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+    }
+
+    private static SubscribedEntityViewModel CreateGitWorktreeEntityWithoutPath()
     {
         using var document = JsonDocument.Parse("""
             {

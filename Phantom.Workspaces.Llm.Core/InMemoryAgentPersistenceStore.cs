@@ -13,8 +13,13 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
     }
 
     private readonly ConcurrentDictionary<string, SessionData> sessions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<(string ParentSessionId, string ChildSessionId), byte> subAgentLinks = new();
 
-    internal void Reset() => this.sessions.Clear();
+    internal void Reset()
+    {
+        this.sessions.Clear();
+        this.subAgentLinks.Clear();
+    }
 
     public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
     {
@@ -71,5 +76,32 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
         {
             return ValueTask.FromResult(session.Messages.ToArray());
         }
+    }
+
+    public ValueTask AddSubAgentLinkAsync(
+        string parentSessionId,
+        string childSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(childSessionId);
+
+        this.subAgentLinks[(parentSessionId, childSessionId)] = 0;
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+
+        var result = this.subAgentLinks.Keys
+            .Where(k => k.ParentSessionId == parentSessionId)
+            .Select(k => new AgentSessionId(k.ChildSessionId))
+            .ToList();
+
+        return ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(result);
     }
 }

@@ -21,7 +21,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithPathField_ReturnsTrue()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/repo"}""");
@@ -34,7 +34,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithHomeDirectoryField_ReturnsTrue()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","user-computer-profile"],"home-directory":"C:\\Users\\tester"}""");
@@ -47,7 +47,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithoutPathOrHomeDirectory_ReturnsFalse()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","workspace"]}""");
@@ -62,7 +62,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithPathField_OpensShellTabViewModel()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"display-name":{"default":"repo"},"path":"/repo"}""");
@@ -81,7 +81,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithPathField_PassesPathAsWorkingDirectory()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"display-name":{"default":"repo"},"path":"/test/repo"}""");
@@ -103,7 +103,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithHomeDirectoryField_PassesHomeDirectoryAsWorkingDirectory()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","user-computer-profile"],"display-name":{"default":"profile"},"home-directory":"C:\\Users\\tester"}""");
@@ -125,7 +125,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithBothPathAndHomeDirectory_PrefersPathAsWorkingDirectory()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree"],"display-name":{"default":"repo"},"path":"/the/path","home-directory":"C:\\Users\\tester"}""");
@@ -149,7 +149,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfileEntity_UsesLocalClientInstance()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -173,7 +173,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnGitWorktreeEntityBelongingToLocalProfile_UsesLocalClientInstance()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -232,7 +232,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnGitWorktreeEntityWithNoProfileName_FallsBackToLocalClientInstance()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         // An entity with a path but no profile secondary name — fall back to local.

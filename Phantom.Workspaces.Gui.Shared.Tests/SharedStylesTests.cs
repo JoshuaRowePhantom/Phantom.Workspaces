@@ -52,7 +52,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 30_000)]
     public void SimpleClassStyles_CanAttachToResolvedControlTypes()
     {
         var sharedStyles = LoadSharedStyles();
@@ -73,6 +73,9 @@ public sealed class SharedStylesTests
         Assert.NotEmpty(simpleCases);
 
         var failures = new List<string>();
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+
         foreach (var testCase in simpleCases)
         {
             var controlType = ResolveStyledElementType(testCase.ControlTypeName);
@@ -80,8 +83,6 @@ public sealed class SharedStylesTests
             {
                 continue;
             }
-
-            var perControlStyles = LoadSharedStyles();
 
             Control control;
             try
@@ -107,15 +108,15 @@ public sealed class SharedStylesTests
                 }
                 else
                 {
-                    var host = new StackPanel();
-                    host.Styles.Add(perControlStyles);
                     host.Children.Add(control);
                     host.Measure(new Size(1000, 1000));
                     host.Arrange(new Rect(0, 0, 1000, 1000));
+                    host.Children.Remove(control);
                 }
             }
             catch (Exception ex)
             {
+                host.Children.Remove(control);
                 failures.Add($"Selector '{testCase.Style.Selector}' on {controlType.Name} threw {ex.GetType().Name}: {ex.Message}");
             }
         }

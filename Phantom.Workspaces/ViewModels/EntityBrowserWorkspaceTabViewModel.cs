@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
@@ -12,6 +13,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 {
+    private readonly CancellationTokenSource _rebuildCts = new();
     private readonly EntityCardViewResolver entityCardViewResolver = new();
     private readonly EntityBroker entityBroker;
     private readonly ISchemaAccessor schemaAccessor;
@@ -22,6 +24,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingSubscriptions = new(StringComparer.Ordinal);
     private bool isRebuilding;
+    private bool isRebuildPending;
 
     public EntityBrowserWorkspaceTabViewModel(
         EntityBroker entityBroker,
@@ -33,10 +36,29 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         this.entityReferenceSearch = new EntityReferenceSearch(this.entityBroker);
         this.rootSubscribedGet = subscribedGet;
         this.rootSubscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
+        this.entityList.Items.CollectionChanged += this.OnEntityListItemsCollectionChanged;
         _ = this.RebuildTreeAsync();
     }
 
     public EntityListViewModel EntityList => this.entityList;
+
+    public override async ValueTask DisposeAsync()
+    {
+        this.rootSubscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
+        foreach (var subscribedGet in this.subscribedGetsByPath.Values)
+        {
+            subscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
+        }
+
+        this.entityList.Items.CollectionChanged -= this.OnEntityListItemsCollectionChanged;
+        foreach (var item in this.entityList.Items)
+        {
+            item.PropertyChanged -= this.OnItemPropertyChanged;
+        }
+
+        this._rebuildCts.Cancel();
+        await base.DisposeAsync();
+    }
 
     private void OnSubscribedResultsChanged(
         object? sender,
@@ -45,31 +67,78 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         _ = this.RebuildTreeAsync();
     }
 
+    private void OnEntityListItemsCollectionChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null && e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Replace)
+        {
+            foreach (EntityListItemViewModel item in e.OldItems)
+            {
+                item.PropertyChanged -= this.OnItemPropertyChanged;
+            }
+        }
+
+        if (e.NewItems is not null && e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Replace)
+        {
+            foreach (EntityListItemViewModel item in e.NewItems)
+            {
+                item.PropertyChanged += this.OnItemPropertyChanged;
+            }
+        }
+    }
+
     private async Task RebuildTreeAsync()
     {
+        if (this._rebuildCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (this.isRebuilding)
+        {
+            this.isRebuildPending = true;
+            return;
+        }
+
+        var ct = this._rebuildCts.Token;
         this.isRebuilding = true;
         try
         {
-            var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
-            foreach (var item in this.entityList.Items)
+            do
             {
-                expansionStateByPath[item.ItemKey] = item.IsExpanded;
-            }
+                this.isRebuildPending = false;
+                ct.ThrowIfCancellationRequested();
 
-            var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath);
-            var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
-            this.entityList.SetItems(items);
+                var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
+                foreach (var item in this.entityList.Items)
+                {
+                    expansionStateByPath[item.ItemKey] = item.IsExpanded;
+                }
+
+                var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath, ct);
+                ct.ThrowIfCancellationRequested();
+                var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
+                this.entityList.SetItems(items);
+            }
+            while (this.isRebuildPending);
+        }
+        catch (OperationCanceledException)
+        {
+            // View model was disposed while a rebuild was in progress.
         }
         finally
         {
             this.isRebuilding = false;
+            this.isRebuildPending = false;
         }
     }
 
     private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenAsync(
         IReadOnlyCollection<string> parentPath,
         IReadOnlyCollection<SubscribedEntityViewModel> entities,
-        IReadOnlyDictionary<string, bool> expansionStateByPath)
+        IReadOnlyDictionary<string, bool> expansionStateByPath,
+        CancellationToken ct)
     {
         var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
         foreach (var entity in entities)
@@ -106,7 +175,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     entity,
                     nameComponents,
                     sortKey,
-                    await this.BuildFieldEditorsAsync(entity),
+                    await this.BuildFieldEditorsAsync(entity, ct),
                     cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
                 children.Add(sortKey, node);
             }
@@ -134,12 +203,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 if (isExpanded)
                 {
                     // Node is expanded, recursively build all descendants
-                    node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath));
+                    node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath, ct));
                 }
                 else
                 {
                     // Node is collapsed, build immediate children as simple leaf nodes (no recursion)
-                    node.SetChildren(await this.BuildChildrenNonRecursiveAsync(node.NameComponents, childGet.Results));
+                    node.SetChildren(this.BuildChildrenNonRecursive(node.NameComponents, childGet.Results));
                 }
             }
             // If subscription isn't ready yet, leave children empty
@@ -156,12 +225,14 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             .ToArray();
     }
 
-    private async Task<IReadOnlyCollection<EntityListNodeViewModel>> BuildChildrenNonRecursiveAsync(
+    private IReadOnlyCollection<EntityListNodeViewModel> BuildChildrenNonRecursive(
         IReadOnlyCollection<string> parentPath,
         IReadOnlyCollection<SubscribedEntityViewModel> entities)
     {
-        // Build immediate children as leaf nodes without any recursion
-        // This is used for collapsed nodes where we just need to show the immediate children
+        // Build immediate children as leaf nodes without any recursion or field-editor resolution.
+        // Field editors are intentionally omitted: these children are inside a collapsed folder and
+        // are not visible, so resolving their field types (which hits the thread pool and schema DAL)
+        // would be wasted work. Field editors are built in BuildChildrenAsync when the node is expanded.
         var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
         foreach (var entity in entities)
         {
@@ -197,19 +268,10 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     entity,
                     nameComponents,
                     sortKey,
-                    await this.BuildFieldEditorsAsync(entity),
                     cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
                 
-                // Set expansion callback so user can expand this node later
                 node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
-                
-                // Subscribe to this node's children so we can determine HasChildren for the expander arrow
-                // When the subscription completes, it will set Children to the results automatically
                 this.EnsureChildSubscription(nameComponents, sortKey);
-                
-                // Don't populate children yet - just mark as empty for now
-                // Once the subscription completes, CollectionChanged will trigger a rebuild
-                // At that point, HasChildren will be true and the expander will appear
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
                 
                 children.Add(sortKey, node);
@@ -293,7 +355,6 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 parentItemKey: parentItemKey,
                 childItemKeys: childItemKeys,
                 isExpanded: isExpanded);
-            item.PropertyChanged += this.OnItemPropertyChanged;
             items.Add(item);
         }
 
@@ -343,6 +404,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         try
         {
+            var ct = this._rebuildCts.Token;
             var subscribedGet = await this.entityBroker.SubscribeGetAsync(
                 new GetRequest
                 {
@@ -355,10 +417,18 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                         },
                     ],
                     Timestamps = [null],
-                });
-            subscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
-            this.subscribedGetsByPath[pathKey] = subscribedGet;
-            // The subscription's CollectionChanged handler will trigger a rebuild when results arrive
+                },
+                ct);
+            if (!ct.IsCancellationRequested)
+            {
+                subscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
+                this.subscribedGetsByPath[pathKey] = subscribedGet;
+                _ = this.RebuildTreeAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // View model was disposed before the subscription completed.
         }
         finally
         {
@@ -370,9 +440,11 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         EntityListNodeViewModel node,
         bool isExpanded)
     {
-        // Don't trigger rebuild during tree rebuild
+        // Don't trigger rebuild during tree rebuild — mark pending so the current rebuild
+        // loop runs another iteration and picks up the new expansion state.
         if (this.isRebuilding)
         {
+            this.isRebuildPending = true;
             return;
         }
         
@@ -449,7 +521,8 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     }
 
     private async Task<IReadOnlyCollection<EntityFieldEditorViewModel>> BuildFieldEditorsAsync(
-        SubscribedEntityViewModel entity)
+        SubscribedEntityViewModel entity,
+        CancellationToken ct)
     {
         if (entity.Data is not JsonElement entityData || entityData.ValueKind != JsonValueKind.Object)
         {
@@ -470,7 +543,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 fieldValue = nullDocument.RootElement.Clone();
             }
 
-            editors.Add(await this.CreateFieldEditorAsync(entityData, fieldName, fieldValue, [fieldName]));
+            editors.Add(await this.CreateFieldEditorAsync(entityData, fieldName, fieldValue, [fieldName], ct));
         }
 
         return editors;
@@ -480,9 +553,10 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         JsonElement rootEntity,
         string fieldName,
         JsonElement fieldValue,
-        IReadOnlyList<string> fieldPath)
+        IReadOnlyList<string> fieldPath,
+        CancellationToken ct)
     {
-        var resolvedType = await Task.Run(() => this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue));
+        var resolvedType = await Task.Run(() => this.fieldTypeResolver.ResolveFieldTypeAsync(rootEntity, fieldPath, fieldValue), ct);
 
         // Entity-reference editor when the field's schema declares allowed entity types, so the browser
         // renders related entities (for example a relationship's participants) as their display names.
@@ -571,7 +645,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 foreach (var item in fieldValue.EnumerateArray())
                 {
                     var itemPath = fieldPath.Concat([itemIndex.ToString()]).ToArray();
-                    items.Add(await this.CreateFieldEditorAsync(rootEntity, $"[{itemIndex}]", item, itemPath));
+                    items.Add(await this.CreateFieldEditorAsync(rootEntity, $"[{itemIndex}]", item, itemPath, ct));
                     itemIndex++;
                 }
 
@@ -610,7 +684,8 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                             rootEntity,
                             childFieldName,
                             childValue,
-                            fieldPath.Concat([childFieldName]).ToArray()));
+                            fieldPath.Concat([childFieldName]).ToArray(),
+                            ct));
                 }
 
                 return new ObjectFieldEditorViewModel(fieldName, childEditors);

@@ -45,6 +45,7 @@
             "echo",
             "github-models",
             "github-copilot",
+            "github-copilot-subagent",
             "ollama",
             "openai",
             "azure"

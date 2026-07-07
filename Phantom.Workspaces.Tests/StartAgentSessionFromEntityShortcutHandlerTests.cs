@@ -9,10 +9,10 @@ namespace Phantom.Workspaces.Tests;
 public sealed class StartAgentSessionFromEntityShortcutHandlerTests
 {
     [PhantomAvaloniaFact]
-    public void ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasPathField_ReturnsTrue()
+    public async Task ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasPathField_ReturnsTrue()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","git"],"path":"/home/user/repo"}""");
 
         var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
@@ -21,10 +21,10 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     }
 
     [PhantomAvaloniaFact]
-    public void ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasHomeDirectoryField_ReturnsTrue()
+    public async Task ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasHomeDirectoryField_ReturnsTrue()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","user-computer-profile"],"home-directory":"C:\\Users\\tester"}""");
 
         var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
@@ -33,10 +33,10 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     }
 
     [PhantomAvaloniaFact]
-    public void ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasNeitherField_ReturnsFalse()
+    public async Task ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasNeitherField_ReturnsFalse()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","workspace"],"display-name":{"default":"My Workspace"}}""");
 
         var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
@@ -45,10 +45,10 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     }
 
     [PhantomAvaloniaFact]
-    public void ShouldApplyTo_WhenShortcutIsNotStartAgentSession_ReturnsFalse()
+    public async Task ShouldApplyTo_WhenShortcutIsNotStartAgentSession_ReturnsFalse()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","git"],"path":"/home/user/repo"}""");
 
         var result = handler.ShouldApplyTo(viewModel, Shortcut.Open, entity);
@@ -57,10 +57,10 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     }
 
     [PhantomAvaloniaFact]
-    public void ShouldApplyTo_WhenEntityDataIsNull_ReturnsFalse()
+    public async Task ShouldApplyTo_WhenEntityDataIsNull_ReturnsFalse()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = new SubscribedEntityViewModel(new EntitySnapshot
         {
             EntityId = new EntityId(Guid.NewGuid()),
@@ -78,7 +78,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     public async Task Handle_WhenEntityHasPathField_OpensStartAgentSessionTab()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
         var entity = CreateEntityWithData("""{"entity-id":"11111111-1111-1111-1111-111111111111","entity-types":["entity","git"],"names":[["git","my-repo"]],"display-name":{"default":"My Repo"},"path":"/home/user/my-repo"}""");
 
@@ -91,7 +91,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     public async Task Handle_WhenEntityHasHomeDirectoryField_OpensStartAgentSessionTab()
     {
         var handler = CreateHandler();
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
         var entity = CreateEntityWithData("""{"entity-id":"22222222-2222-2222-2222-222222222222","entity-types":["entity","user-computer-profile"],"names":[["computer-user-profiles","users","username","tester","computers","hostname","myhost"]],"display-name":{"default":"My Profile"},"home-directory":"C:\\Users\\tester"}""");
 

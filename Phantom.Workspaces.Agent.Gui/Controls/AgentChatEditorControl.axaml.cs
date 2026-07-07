@@ -55,18 +55,34 @@ public partial class AgentChatEditorControl : UserControl
         if (this.subscribedViewModel is not null)
         {
             this.subscribedViewModel.OpenLogWindowRequested -= this.OnOpenLogWindowRequested;
+            this.subscribedViewModel.DiagnosticsInspector.InspectorRequested -= this.OnDiagnosticInspectorRequested;
         }
 
         this.subscribedViewModel = this.DataContext as AgentViewModel;
         if (this.subscribedViewModel is not null)
         {
             this.subscribedViewModel.OpenLogWindowRequested += this.OnOpenLogWindowRequested;
+            this.subscribedViewModel.DiagnosticsInspector.InspectorRequested += this.OnDiagnosticInspectorRequested;
         }
     }
 
     private void OnOpenLogWindowRequested(object? sender, System.EventArgs e)
     {
         this.OpenLogWindow();
+    }
+
+    private void OnDiagnosticInspectorRequested(object? sender, DiagnosticInspectorRequestedEventArgs e)
+    {
+        var inspector = new AIContentInspectorWindow(e.ContentId, e.ContentJson);
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (owner is not null)
+        {
+            inspector.Show(owner);
+        }
+        else
+        {
+            inspector.Show();
+        }
     }
 
     private void OnEditorSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -125,3 +141,4 @@ public partial class AgentChatEditorControl : UserControl
     }
 
 }
+

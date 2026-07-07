@@ -360,6 +360,7 @@
 <body>
   <div id="chat-history"></div>
   <div id="chat-running"></div>
+  <div id="running-subagents"></div>
   <script>
     /* copy-gutter.js — reusable copy-to-clipboard component.
      * Call CopyGutter.init(root) to wire up all [data-copy-target] elements inside root.
@@ -582,6 +583,42 @@
     })();
   </script>
   <script>
+    /* timestamp-formatter.js — formats [data-utc] spans in local time.
+     * Same day as now: shows HH:MM only. Different day: shows Mon D HH:MM.
+     * A MutationObserver keeps watching for spans added by streaming updates.
+     */
+    var TimestampFormatter = (function () {
+      "use strict";
+
+      function formatTimestamp(el) {
+        var d = new Date(el.getAttribute("data-utc"));
+        if (isNaN(d.getTime())) { return; }
+        var now = new Date();
+        var sameDay = d.toDateString() === now.toDateString();
+        el.textContent = sameDay
+          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+            d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function init(root) {
+        root.querySelectorAll("[data-utc]").forEach(formatTimestamp);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-utc")) { formatTimestamp(node); }
+              node.querySelectorAll("[data-utc]").forEach(formatTimestamp);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      return { init: init };
+    })();
+  </script>
+  <script>
     (function () {
       "use strict";
 
@@ -670,6 +707,14 @@
         postToHost({ type: "openUrl", url: anchor.href });
       }, true);
 
+      // Intercept sub-agent jump-link clicks and post navigateToAgent to host.
+      document.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-navigate-agent-id]");
+        if (!btn) { return; }
+        e.preventDefault();
+        postToHost({ type: "navigateToAgent", agentId: btn.getAttribute("data-navigate-agent-id") });
+      }, true);
+
       postToHost({ type: "ready" });
 
       // Initialise gutter components once the host bridge is wired up.
@@ -677,42 +722,6 @@
       DetailsGutter.init(document);
       InspectGutter.init(document);
       TimestampFormatter.init(document);
-    })();
-  </script>
-  <script>
-    /* timestamp-formatter.js — formats [data-utc] spans in local time.
-     * Same day as now: shows HH:MM only. Different day: shows Mon D HH:MM.
-     * A MutationObserver keeps watching for spans added by streaming updates.
-     */
-    var TimestampFormatter = (function () {
-      "use strict";
-
-      function formatTimestamp(el) {
-        var d = new Date(el.getAttribute("data-utc"));
-        if (isNaN(d.getTime())) { return; }
-        var now = new Date();
-        var sameDay = d.toDateString() === now.toDateString();
-        el.textContent = sameDay
-          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
-            d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      }
-
-      function init(root) {
-        root.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-        var observer = new MutationObserver(function (mutations) {
-          mutations.forEach(function (mutation) {
-            mutation.addedNodes.forEach(function (node) {
-              if (node.nodeType !== 1) { return; }
-              if (node.hasAttribute("data-utc")) { formatTimestamp(node); }
-              node.querySelectorAll("[data-utc]").forEach(formatTimestamp);
-            });
-          });
-        });
-        observer.observe(root, { childList: true, subtree: true });
-      }
-
-      return { init: init };
     })();
   </script>
   <script>

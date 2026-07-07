@@ -1,21 +1,35 @@
 using System.Collections.ObjectModel;
+using AgentSchema;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Services;
 
 public interface IRunningAgentChatTable
 {
     /// <summary>
-    /// Acquires (or joins) a running agent-chat session identified by <paramref name="sessionKey"/>.
-    /// If no session exists for the key, <paramref name="factory"/> is called once to create it.
+    /// The live collection of active sessions, enriched with workspace entity display info.
+    /// Mutations are dispatched on the foreground scheduler (mirrored from
+    /// <see cref="IRunningAgentChatFactory.RunningSessions"/>); UI subscribers need not marshal.
+    /// </summary>
+    ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions { get; }
+
+    /// <summary>
+    /// Acquires (or joins) a running agent-chat session identified by <paramref name="sessionId"/>.
+    /// When <paramref name="definition"/> is non-null and the session is not yet running, the
+    /// definition is persisted and a new <see cref="AgentChat"/> is created. When the session is
+    /// already running, the existing <see cref="AgentChat"/> is returned.
+    /// Registers <paramref name="entityName"/> / <paramref name="entityId"/> for display in
+    /// <see cref="RunningSessions"/> if this is the first caller for the session.
     /// Dispose the returned lease when done; the underlying <see cref="AgentChat"/> is disposed when
     /// the last lease is released.
     /// </summary>
-    Task<RunningAgentChatLease> AcquireAsync(string sessionKey, Func<Task<AgentChat>> factory, string entityName = "", string? entityId = null);
-
-    /// <summary>
-    /// The live collection of active sessions. Raises <see cref="System.Collections.Specialized.INotifyCollectionChanged.CollectionChanged"/>
-    /// from a background thread; subscribers that update UI must dispatch to the UI thread.
-    /// </summary>
-    ObservableCollection<RunningAgentChat> RunningSessions { get; }
+    Task<RunningAgentChatLease> AcquireAsync(
+        AgentSessionId sessionId,
+        AgentDefinition? definition = null,
+        AgentServices? agentServices = null,
+        string entityName = "",
+        string? entityId = null,
+        CancellationToken ct = default);
 }
+

@@ -91,7 +91,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         var currentSessionKeys = new HashSet<string>(
-            this.table.RunningSessions.Select(s => s.SessionKey),
+            this.table.RunningSessions.Select(s => s.SessionId.Value),
             StringComparer.Ordinal);
 
         // Remove rows for sessions no longer in the table
@@ -112,9 +112,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         // Add or update a row for each active session
-        foreach (var session in this.table.RunningSessions)
+        foreach (var session in this.table.RunningSessions.ToList())
         {
-            var sessionKey = session.SessionKey;
+            var sessionKey = session.SessionId.Value;
             var hasTab = tabsBySessionId.TryGetValue(sessionKey, out var tabInfo);
             var existing = this.Rows.FirstOrDefault(r =>
                 string.Equals(r.SessionKey, sessionKey, StringComparison.Ordinal));
@@ -173,9 +173,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             activateCommand: activateCmd);
     }
 
-    private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChat session)
+    private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChatWithEntityInfo session)
     {
-        var capturedSessionKey = session.SessionKey;
+        var capturedSessionKey = session.SessionId.Value;
 
         ICommand activateCmd = new RelayCommand(_ =>
         {

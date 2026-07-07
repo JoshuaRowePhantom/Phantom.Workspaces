@@ -314,7 +314,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 },
                 "shortcut": {
                   "type": "string",
-                  "enum": ["Open", "Json", "Delete", "StartAgentSession", "StartShell"],
+                  "enum": ["Open", "Json", "Delete", "Review", "StartAgentSession", "StartShell"],
                   "description": "The shortcut to invoke. 'Open' opens the entity as a workspace pane, tab, or agent chat session — use this for all open/navigate operations."
                 }
               },
@@ -336,6 +336,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             "Invoke a named shortcut on an entity by entity-id. "
             + "Shortcuts: 'Open' opens the entity (workspace pane, tab, agent chat session — use this for all open/navigate operations), "
             + "'Json' toggles raw JSON view, 'Delete' deletes the entity, "
+            + "'Review' reviews changes for a git-worktree entity, "
             + "'StartAgentSession' starts an agent session on the entity's profile, "
             + "'StartShell' starts a shell on the entity's profile. "
             + "Opening anything navigates to it and pushes a navigation history entry so the user can Ctrl+\u2212 back.";
@@ -367,7 +368,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             {
                 return Serialize(new
                 {
-                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, Json, Delete, StartAgentSession, StartShell.",
+                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, Json, Delete, Review, StartAgentSession, StartShell.",
                 });
             }
 
@@ -390,11 +391,16 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             return Serialize(new { handled });
         }
 
+        // When adding a case here, also update:
+        //   - ShortcutManager.shortcuts (so the button appears in entity toolbars)
+        //   - The JSON schema enum and Description for entity_invoke_shortcut
+        //   - The error message's "Valid values" list
         private static Shortcut? ResolveShortcut(string name) => name switch
         {
             "Open" => Shortcut.Open,
             "Json" => Shortcut.Json,
             "Delete" => Shortcut.Delete,
+            "Review" => Shortcut.Review,
             "StartAgentSession" => Shortcut.StartAgentSession,
             "StartShell" => Shortcut.StartShell,
             _ => null,

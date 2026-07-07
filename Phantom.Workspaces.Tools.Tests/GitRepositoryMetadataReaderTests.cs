@@ -73,6 +73,74 @@ public sealed class GitRepositoryMetadataReaderTests : IDisposable
         Assert.Null(metadata);
     }
 
+    [Fact]
+    public void EnumerateLinkedWorktrees_InvokesCallbackForEachLinkedWorktree()
+    {
+        var rootRepoPath = Path.Combine(this.temporaryRootPath, "root-for-linked");
+        var linkedPath = Path.Combine(this.temporaryRootPath, "linked-wt-callback");
+        InitializeGitRepository(rootRepoPath, "https://example.com/linked.git");
+
+        using (var repo = new Repository(rootRepoPath))
+        {
+            repo.Worktrees.Add("linked-wt", linkedPath, isLocked: false);
+        }
+
+        var collected = new List<string>();
+        GitRepositoryMetadataReader.EnumerateLinkedWorktrees(rootRepoPath, null, collected.Add);
+
+        Assert.Single(collected);
+        Assert.Equal(Path.GetFullPath(linkedPath), collected[0], StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EnumerateLinkedWorktrees_ReportsNormalizedPath_WithNoTrailingSeparator()
+    {
+        var rootRepoPath = Path.Combine(this.temporaryRootPath, "root-norm");
+        var linkedPath = Path.Combine(this.temporaryRootPath, "linked-norm");
+        InitializeGitRepository(rootRepoPath, "https://example.com/norm.git");
+
+        using (var repo = new Repository(rootRepoPath))
+        {
+            repo.Worktrees.Add("norm-wt", linkedPath, isLocked: false);
+        }
+
+        var collected = new List<string>();
+        GitRepositoryMetadataReader.EnumerateLinkedWorktrees(rootRepoPath, null, collected.Add);
+
+        Assert.Single(collected);
+        var path = collected[0];
+        Assert.False(
+            path.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+            || path.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal),
+            $"Path should not have trailing separator: {path}");
+    }
+
+    [Fact]
+    public void EnumerateLinkedWorktrees_WhenRepositoryCannotBeOpened_DoesNotThrow()
+    {
+        var invalidPath = Path.Combine(this.temporaryRootPath, "not-a-repo");
+        Directory.CreateDirectory(Path.Combine(invalidPath, ".git"));
+
+        var collected = new List<string>();
+        var exception = Record.Exception(() =>
+            GitRepositoryMetadataReader.EnumerateLinkedWorktrees(invalidPath, null, collected.Add));
+
+        Assert.Null(exception);
+        Assert.Empty(collected);
+    }
+
+    [Fact]
+    public void EnumerateLinkedWorktrees_WhenRepoHasNoLinkedWorktrees_InvokesCallbackZeroTimes()
+    {
+        var rootRepoPath = Path.Combine(this.temporaryRootPath, "root-no-linked");
+        InitializeGitRepository(rootRepoPath, "https://example.com/no-linked.git");
+
+        var collected = new List<string>();
+        GitRepositoryMetadataReader.EnumerateLinkedWorktrees(rootRepoPath, null, collected.Add);
+
+        Assert.Empty(collected);
+    }
+
     private static void InitializeGitRepository(string repositoryPath, string remoteUrl)
     {
         Directory.CreateDirectory(repositoryPath);

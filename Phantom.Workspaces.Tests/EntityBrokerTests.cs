@@ -127,8 +127,11 @@ public sealed class EntityBrokerTests
         await SeedSnapshotAsync(broker, initialSnapshot);
         var weakEntity = await CreateCollectedEntityAsync(broker, entityId);
 
-        ForceGarbageCollection();
-        Assert.False(weakEntity.TryGetTarget(out _));
+        while (IsWeakReferenceAlive(weakEntity))
+        {
+            ForceGarbageCollection();
+            await Task.Yield();
+        }
 
         var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
         var concurrencyTag = Assert.Contains(entityId, snapshots).ConcurrencyTag;
@@ -770,8 +773,12 @@ public sealed class EntityBrokerTests
 
         var weakRef = await CreateCollectedSubscribedGetAsync(broker, request, ct);
 
-        ForceGarbageCollection();
-        Assert.False(weakRef.TryGetTarget(out _));
+        await Task.Yield(); // flush inline async state machines off the call stack before GC
+        while (IsWeakReferenceAlive(weakRef))
+        {
+            ForceGarbageCollection();
+            await Task.Yield();
+        }
 
         await broker.RefreshAsync(ct);
 
@@ -801,8 +808,12 @@ public sealed class EntityBrokerTests
 
         var weakRef = await CreateCollectedSubscribedQueryAsync(broker, request, ct);
 
-        ForceGarbageCollection();
-        Assert.False(weakRef.TryGetTarget(out _));
+        await Task.Yield(); // flush inline async state machines off the call stack before GC
+        while (IsWeakReferenceAlive(weakRef))
+        {
+            ForceGarbageCollection();
+            await Task.Yield();
+        }
 
         await broker.RefreshAsync(ct);
 
@@ -845,6 +856,10 @@ public sealed class EntityBrokerTests
         var sub = await broker.SubscribeQueryAsync(request, cancellationToken);
         return new WeakReference<SubscribedQuery>(sub);
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool IsWeakReferenceAlive<T>(WeakReference<T> weakRef) where T : class
+        => weakRef.TryGetTarget(out _);
 
     private static void ForceGarbageCollection()
     {

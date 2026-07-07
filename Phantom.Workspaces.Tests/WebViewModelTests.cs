@@ -158,7 +158,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_DefaultKey_TitleIsDisplayName_AndBrowserCanOverride()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var handler = new OpenExternalEntityShortcutHandler();
@@ -183,7 +183,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_NamedKey_TitleIsKeyName_AndBrowserCannotOverride()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var handler = new OpenExternalEntityShortcutHandler();
@@ -208,7 +208,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_ExplicitTitle_IsUsedAndPinned()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -265,7 +265,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_DefaultKey_TitleIsDisplayName_NotFixed()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -321,7 +321,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_NamedKey_TitleIsKeyName_Fixed()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -377,7 +377,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_OpensNewTabAtSameUrl()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com", viewModel) { Id = "web-dup-1", Title = "Tab" };
@@ -396,7 +396,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_InsertsNewTabAfterSource()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com", viewModel) { Id = "web-dup-a", Title = "A" };
@@ -421,7 +421,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNonBrowserTab_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         // Open an entity tab (non-browser tab).
@@ -440,7 +440,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNoActiveTab_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         // Do not open any tabs.
@@ -453,7 +453,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithEmptyUrl_IsNoOp()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("", viewModel) { Id = "web-empty-url", Title = "Tab" };
@@ -469,7 +469,7 @@ public sealed class WebViewModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RaiseOpenNewWindow_InsertsNewTabImmediatelyRightOfSourceTab()
     {
-        var viewModel = CreateTestMainWindowViewModel();
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         // Open two tabs so we can verify relative insertion position.

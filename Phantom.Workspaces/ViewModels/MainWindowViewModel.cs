@@ -19,6 +19,7 @@ using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
@@ -157,7 +158,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 sessionKey =>
                 {
                     var entityId = runningAgentChats.RunningSessions
-                        .FirstOrDefault(s => string.Equals(s.SessionKey, sessionKey, StringComparison.Ordinal))
+                        .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
                         ?.EntityId;
                     if (entityId is not null)
                     {
@@ -1413,13 +1414,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         object? sender,
         EntityBrokerChangedEventArgs e)
     {
-        if (this.mainNavigationView is not null
-            && e.ChangedEntityIds.Contains(this.mainNavigationView.EntityId))
+        var navigationEntityChanged = this.mainNavigationView is not null
+            && e.ChangedEntityIds.Contains(this.mainNavigationView.EntityId);
+
+        if (navigationEntityChanged)
         {
             this.InitializeTopLevelViews();
         }
 
-        _ = this.ApplySelectedViewAsync();
+        if (navigationEntityChanged || e.HasQueryMembershipChanges)
+        {
+            _ = this.ApplySelectedViewAsync();
+        }
     }
 
     private void OnInterestCatalogChanged(object? sender, EventArgs e)
@@ -2204,11 +2210,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// Call explicitly after user-initiated tab changes (open, close).
     /// Returns the underlying update task so callers can await completion when needed.
     /// </summary>
-    internal Task WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
+    internal Task<UpdateResult> WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
     {
-        if (this.entityBroker is null) return Task.CompletedTask;
+        if (this.entityBroker is null) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
         var entityData = workspacePane.Entity.Data;
-        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return Task.CompletedTask;
+        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
 
         // Build tabs array as workspace-tab-descriptors
         var tabDescriptors = new JsonArray();
@@ -2243,7 +2249,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Build merged entity data with updated tabs and dock-layout
         var entityNode = JsonNode.Parse(dataElement.GetRawText())?.AsObject();
-        if (entityNode is null) return Task.CompletedTask;
+        if (entityNode is null) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
 
         entityNode["tabs"] = tabDescriptors;
 
@@ -2287,7 +2293,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 new EntityChange
                 {
                     EntityId = workspacePane.Entity.EntityId,
-                    ConcurrencyTag = null,
+                    ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
                     Data = updatedData,
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
@@ -2305,14 +2311,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (tab.Entity is { } entity)
         {
-            // Entity-reference tab
-            var entityId = entity.EntityId.Value.ToString();
+            // Entity-reference tab: write as UUID string (entity-reference = entity-id | entity-name)
             content = new JsonObject
             {
-                ["target-entity-name"] = new JsonObject
-                {
-                    ["entity-id"] = entityId,
-                },
+                ["target-entity-name"] = entity.EntityId.Value.ToString(),
             };
         }
         else if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
@@ -2346,18 +2348,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         IDocumentDock documentDock,
         NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        if (e.Action == NotifyCollectionChangedAction.Remove)
         {
-            foreach (var item in e.OldItems)
-            {
-                if (item is WorkspaceDocument doc && doc.TabViewModel is { } docTab && workspacePane.Tabs.Contains(docTab))
-                {
-                    // Remove from pane.Tabs; WorkspaceDocumentGenerator.ClearDocumentContainer
-                    // already removes from documentsByTabId via the onCleared callback.
-                    workspacePane.Tabs.Remove(docTab);
-                    DisposeWorkspaceTab(docTab);
-                }
-            }
+            // Remove events fire for both close and float. Disposal and tab removal are
+            // handled exclusively by OnDockableTabClosed (called from WorkspaceDockFactory
+            // .OnDockableClosed, which is only invoked by CloseDockable, never FloatDockable).
         }
         else if (e.Action is NotifyCollectionChangedAction.Move
             or NotifyCollectionChangedAction.Reset)
@@ -2481,15 +2476,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private static void DisposeWorkspaceTab(
         WorkspaceTabViewModel workspaceTab)
     {
-        switch (workspaceTab)
+        _ = workspaceTab.DisposeAsync();
+    }
+
+    public void OnDockableTabClosed(WorkspaceTabViewModel tabVm)
+    {
+        foreach (var pane in WorkspacePanes)
         {
-            case IAsyncDisposable asyncDisposable:
-                _ = asyncDisposable.DisposeAsync();
+            if (pane.Tabs.Contains(tabVm))
+            {
+                pane.Tabs.Remove(tabVm);
                 break;
-            case IDisposable disposable:
-                disposable.Dispose();
-                break;
+            }
         }
+        DisposeWorkspaceTab(tabVm);
     }
 
     private async Task OpenEntityBrowserTabAsync()
@@ -2642,6 +2642,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Collect tab declarations: prefer new tabs[] array, fall back to legacy regions[].tabs
         var tabDeclarations = CollectTabDeclarations(workspaceData);
 
+        // Determine the active/focused tab id before any async work so it is available inside InvokeAsync.
+        // Prefer new active-tab-id property, falling back to legacy focused-tab-id.
+        string? activeTabId = null;
+        if (workspaceData.TryGetProperty("active-tab-id", out var activeTabIdElement)
+            && activeTabIdElement.ValueKind == JsonValueKind.String)
+        {
+            activeTabId = activeTabIdElement.GetString();
+        }
+        else if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
+            && focusedTabIdElement.ValueKind == JsonValueKind.String)
+        {
+            activeTabId = focusedTabIdElement.GetString();
+        }
+
         // Load all tabs in parallel, preserving declaration order
         var tabAdded = false;
         if (tabDeclarations.Count > 0)
@@ -2650,6 +2664,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 tabDeclarations.Select(tabDecl => this.TryFetchWorkspaceTabAsync(tabDecl)));
 
             // Add to pane.Tabs on the UI thread; WorkspaceDocumentGenerator creates dock documents automatically.
+            // Activate the saved active tab in the same dispatcher frame: PrepareDocumentContainer fires
+            // synchronously during Tabs.Add, so GetDocumentForTab is reliable immediately after Add.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var workspaceClosed = false;
@@ -2667,6 +2683,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
                     workspacePane.Tabs.Add(workspaceTab);
                     tabAdded = true;
+                }
+
+                if (tabAdded && !workspaceClosed && !string.IsNullOrEmpty(activeTabId))
+                {
+                    var focusedDoc = this.dockFactory.GetDocumentForTab(activeTabId);
+                    if (focusedDoc is not null)
+                    {
+                        this.dockFactory.SetActiveDockable(focusedDoc);
+                    }
                 }
             });
         }
@@ -2691,37 +2716,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
 
                 workspacePane.Tabs.Add(defaultTab);
-            });
-        }
-
-        // Activate the saved active/focused tab (new active-tab-id property, falling back to legacy focused-tab-id)
-        string? activeTabId = null;
-        if (workspaceData.TryGetProperty("active-tab-id", out var activeTabIdElement)
-            && activeTabIdElement.ValueKind == JsonValueKind.String)
-        {
-            activeTabId = activeTabIdElement.GetString();
-        }
-        else if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
-            && focusedTabIdElement.ValueKind == JsonValueKind.String)
-        {
-            activeTabId = focusedTabIdElement.GetString();
-        }
-
-        if (!string.IsNullOrEmpty(activeTabId))
-        {
-            var tabIdToActivate = activeTabId;
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!this.WorkspacePanes.Contains(workspacePane))
-                {
-                    return;
-                }
-
-                var focusedDoc = this.dockFactory.GetDocumentForTab(tabIdToActivate);
-                if (focusedDoc is not null)
-                {
-                    this.dockFactory.SetActiveDockable(focusedDoc);
-                }
             });
         }
     }
@@ -3188,11 +3182,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task EnsureWorkspaceLoadedAsync()
     {
-        // If the current workspace is the placeholder, open the getting-started workspace
-        if (string.Equals(this.SelectedWorkspacePane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+        if (!string.Equals(this.SelectedWorkspacePane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+            return;
+
+        if (this.configuration?.SkipStartupWorkspace == true)
         {
-            await this.OpenGettingStartedWorkspaceAsync();
+            if (this.SelectedWorkspacePane.ContentLayout is null)
+            {
+                this.SelectedWorkspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(this.SelectedWorkspacePane);
+                this.SubscribeToInnerDockChanges(this.SelectedWorkspacePane);
+            }
+            return;
         }
+
+        await this.OpenGettingStartedWorkspaceAsync();
     }
 
     private async Task OpenGettingStartedWorkspaceAsync()
@@ -3835,7 +3838,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         this.refreshTimer.Stop();
         this.notificationService.NotificationsChanged -= this.OnNotificationsChanged;
@@ -3871,6 +3874,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await lease.DisposeAsync();
         }
+
+        await base.DisposeAsync();
     }
 }
 

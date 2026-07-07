@@ -1,3 +1,4 @@
+using System.Collections;
 using Dock.Model.Avalonia.Controls;
 using Dock.Model.Core;
 using System.Text.Json.Serialization;
@@ -29,6 +30,28 @@ public class WorkspaceContentDock : DocumentDock
     /// </summary>
     [JsonIgnore]
     public new Type? StyleKey => base.StyleKey;
+
+    /// <summary>
+    /// Shadows ItemsSource to prevent serializing the ObservableCollection<WorkspaceTabViewModel>,
+    /// which is not JSON-serializable. The dock layout should be restored via descriptors, not
+    /// by serializing the runtime tab view models.
+    /// </summary>
+    [JsonIgnore]
+    public new IEnumerable? ItemsSource
+    {
+        get => base.ItemsSource;
+        set => base.ItemsSource = value;
+    }
+
+    /// <summary>
+    /// Shadows ItemContainerGenerator to prevent serialization of the generator instance.
+    /// </summary>
+    [JsonIgnore]
+    public new IDockItemContainerGenerator? ItemContainerGenerator
+    {
+        get => base.ItemContainerGenerator;
+        set => base.ItemContainerGenerator = value;
+    }
 
     /// <summary>
     /// Adds the document to the dock. If there is already an active document, the new document
