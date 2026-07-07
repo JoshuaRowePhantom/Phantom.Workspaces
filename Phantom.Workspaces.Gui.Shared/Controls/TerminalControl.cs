@@ -733,7 +733,19 @@ public partial class TerminalControl : Control
             return;
 
         var delta = (int)-e.Delta.Y * 3;
-        _vtc.Scroll(delta);
+        
+        var maxTopRow = 0;
+        for (int i = 0; ; i++)
+        {
+            if (_vtc.ViewPort.GetLine(i) == null)
+            {
+                maxTopRow = Math.Max(0, i - _vtc.VisibleRows);
+                break;
+            }
+        }
+        
+        var newTopRow = _vtc.ViewPort.TopRow + delta;
+        _vtc.ViewPort.TopRow = Math.Clamp(newTopRow, 0, maxTopRow);
         InvalidateVisual();
         e.Handled = true;
     }
