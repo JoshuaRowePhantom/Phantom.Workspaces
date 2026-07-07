@@ -66,6 +66,11 @@ public sealed class AgentChatPersistenceTests
     private sealed class CapturingTaskScheduler : TaskScheduler
     {
         private readonly List<Task> _queue = [];
+        // After Drain() is called, tasks are executed inline immediately when queued.
+        // This prevents a deadlock during AgentChat.DisposeAsync: when the CTS is
+        // cancelled, RunProcessLoopAsync's continuation is queued here; without
+        // auto-drain that continuation would never run and processTask would hang.
+        private volatile bool _autoDrain;
 
         public void Drain()
         {
@@ -76,10 +81,17 @@ public sealed class AgentChatPersistenceTests
                 foreach (var task in tasks)
                     TryExecuteTask(task);
             }
+            _autoDrain = true;
         }
 
         protected override IEnumerable<Task>? GetScheduledTasks() => _queue;
-        protected override void QueueTask(Task task) => _queue.Add(task);
+        protected override void QueueTask(Task task)
+        {
+            if (_autoDrain)
+                TryExecuteTask(task);
+            else
+                _queue.Add(task);
+        }
         protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
     }
 
