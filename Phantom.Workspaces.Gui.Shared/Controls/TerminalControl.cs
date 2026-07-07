@@ -23,6 +23,16 @@ using VtNetCore.XTermParser;
 namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 /// <summary>
+/// Represents a shell integration marker (OSC 133).
+/// </summary>
+internal record ShellMark(string Type, int? ExitCode = null);
+
+/// <summary>
+/// Represents a hyperlink region (OSC 8).
+/// </summary>
+internal record Hyperlink(string Uri);
+
+/// <summary>
 /// Avalonia terminal control. Reads output bytes from a <see cref="TerminalSessionViewModel"/>'s
 /// <see cref="System.IO.Stream"/>, feeds them into VtNetCore's VT emulator, and draws the cell
 /// grid via <see cref="DrawingContext"/>. Translates Avalonia key and text events into standard
@@ -56,6 +66,19 @@ public partial class TerminalControl : Control
     internal VirtualTerminalController? Vtc => _vtc;
     internal TerminalMouseModeState MouseModeState => _mouseModeState;
     internal TerminalSelectionModel SelectionModel => _selectionModel;
+
+    // ── VT sequence handler state (issue #725) ────────────────────────────────────────────────
+
+    internal int CursorShape { get; private set; }
+    internal Dictionary<int, Color> PaletteOverrides { get; } = new();
+    internal Color? DefaultFgOverride { get; private set; }
+    internal Color? DefaultBgOverride { get; private set; }
+    internal Color? CursorColorOverride { get; private set; }
+    internal List<ShellMark> ShellMarks { get; } = new();
+    internal string? CurrentWorkingDirectory { get; private set; }
+    internal List<Hyperlink> Hyperlinks { get; } = new();
+    internal string? Title { get; private set; }
+    internal int SynchronizedOutputNestingLevel { get; private set; }
 
     // ── Cell metrics ──────────────────────────────────────────────────────────────────────────
 
@@ -147,6 +170,10 @@ public partial class TerminalControl : Control
 
                 // Track mouse mode state before pushing to VT emulator
                 _mouseModeState.Apply(chunk);
+
+                // Process VT sequences we handle (issue #725)
+                var interceptor = new TerminalSequenceInterceptor(this, session.Stream);
+                chunk = interceptor.Process(chunk);
 
                 try
                 {
@@ -747,11 +774,42 @@ public partial class TerminalControl : Control
         return new TerminalCell(col, row);
     }
 
+    // ── VT sequence handler methods (issue #725) ──────────────────────────────────────────────
+
+    internal void SetCursorShape(int shape) => CursorShape = shape;
+    internal void SetPaletteColor(int index, Color color) => PaletteOverrides[index] = color;
+    internal void ResetPaletteColor(int index) => PaletteOverrides.Remove(index);
+    internal void SetDefaultFg(Color color) => DefaultFgOverride = color;
+    internal void ResetDefaultFg() => DefaultFgOverride = null;
+    internal void SetDefaultBg(Color color) => DefaultBgOverride = color;
+    internal void ResetDefaultBg() => DefaultBgOverride = null;
+    internal void SetCursorColor(Color color) => CursorColorOverride = color;
+    internal void ResetCursorColor() => CursorColorOverride = null;
+    internal void AddShellMark(string type, int? exitCode) => ShellMarks.Add(new ShellMark(type, exitCode));
+    internal void SetWorkingDirectory(string path) => CurrentWorkingDirectory = path;
+    internal void OpenHyperlink(string uri) => Hyperlinks.Add(new Hyperlink(uri));
+    internal void CloseHyperlink() { /* Hyperlink closed by empty URI */ }
+    internal void SetTitle(string title) => Title = title;
+    internal void IncrementSynchronizedOutput() => SynchronizedOutputNestingLevel++;
+    internal void DecrementSynchronizedOutput()
+    {
+        if (SynchronizedOutputNestingLevel > 0)
+            SynchronizedOutputNestingLevel--;
+    }
+
     // ── Test hook ─────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Pushes <paramref name="bytes"/> directly into the VtNetCore processor without going through
     /// the async read loop. For test use only.
     /// </summary>
-    internal void PushBytesForTest(byte[] bytes) => _dataConsumer?.Push(bytes);
+    internal void PushBytesForTest(byte[] bytes)
+    {
+        if (Session is null)
+            return;
+
+        var interceptor = new TerminalSequenceInterceptor(this, Session.Stream);
+        var filtered = interceptor.Process(bytes);
+        _dataConsumer?.Push(filtered);
+    }
 }
