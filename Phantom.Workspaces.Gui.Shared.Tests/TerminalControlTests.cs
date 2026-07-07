@@ -1742,7 +1742,7 @@ public sealed class TerminalControlTests
     // ── OnDetachedFromVisualTree disposal (issue #643) ────────────────────────────────────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task TerminalControl_OnDetachedFromVisualTree_CancelsPendingResize()
+    public void TerminalControl_OnDetachedFromVisualTree_CancelsPendingResize()
     {
         var resizeCallCount = 0;
         var stream = new MemoryStream();
@@ -1756,7 +1756,7 @@ public sealed class TerminalControlTests
             },
         };
 
-        var control = new TerminalControl();
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
         var panel = new StackPanel();
         panel.Children.Add(control);
 
@@ -1772,8 +1772,6 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 900, 700));
 
         panel.Children.Remove(control);
-
-        await Task.Delay(100);
 
         Assert.Equal(initialResizeCount, resizeCallCount);
         window.Close();

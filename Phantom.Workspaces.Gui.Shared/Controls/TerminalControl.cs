@@ -37,7 +37,7 @@ internal record Hyperlink(string Uri);
 /// <see cref="System.IO.Stream"/>, feeds them into VtNetCore's VT emulator, and draws the cell
 /// grid via <see cref="DrawingContext"/>. Translates Avalonia key and text events into standard
 /// VT input sequences written back to the stream. Maps its pixel size to columns/rows and calls
-/// the session's resize delegate (debounced by 50 ms).
+/// the session's resize delegate (debounced to avoid excessive resize events).
 /// </summary>
 public partial class TerminalControl : Control
 {
@@ -98,6 +98,8 @@ public partial class TerminalControl : Control
     private double _cellHeight;
 
     // ── Resize debounce ───────────────────────────────────────────────────────────────────────
+
+    internal TimeSpan ResizeDebounceDelay { get; set; } = TimeSpan.FromMilliseconds(50);
 
     private CancellationTokenSource? _resizeCts;
     private bool _isDragging;
@@ -258,7 +260,7 @@ public partial class TerminalControl : Control
         _resizeCts?.Cancel();
         _resizeCts = new CancellationTokenSource();
         var token = _resizeCts.Token;
-        _ = Task.Delay(50, token).ContinueWith(
+        _ = Task.Delay(ResizeDebounceDelay, token).ContinueWith(
             _ => Dispatcher.UIThread.Post(ApplyResize),
             CancellationToken.None,
             TaskContinuationOptions.NotOnCanceled,
