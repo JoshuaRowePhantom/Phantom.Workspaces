@@ -1097,16 +1097,39 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
 
-        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Test"));
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("HelloWorld"));
 
+        // Create a selection first
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(0, 10), 0, pressProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(0, 10);
+        control.RaiseEvent(pressArgs);
+
+        var moveProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.Other);
+        var moveArgs = new PointerEventArgs(null, control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, moveProps, KeyModifiers.None);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(moveArgs, InputElement.PointerMovedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        control.RaiseEvent(moveArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.True(control.SelectionModel.HasSelection);
+
+        // Right-click should clear selection and attempt paste
         var rightProps = new PointerPointProperties(RawInputModifiers.RightMouseButton, PointerUpdateKind.RightButtonPressed);
         var rightArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, rightProps, KeyModifiers.None, 1);
         typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(rightArgs, InputElement.PointerPressedEvent);
         control.RaiseEvent(rightArgs);
 
-        await Task.Delay(100);
+        // Wait for async operation to complete deterministically
+        await Task.Yield();
 
-        Assert.True(true);
+        // Selection should be cleared after right-click
+        Assert.False(control.SelectionModel.HasSelection);
+
+        // Note: Full clipboard integration (copy text to clipboard, paste from clipboard) requires
+        // TopLevel with clipboard support, which is not available in headless unit tests.
+        // This test verifies selection clearing and that the method executes without crashing.
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -1129,9 +1152,80 @@ public sealed class TerminalControlTests
         typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(middleArgs, InputElement.PointerPressedEvent);
         control.RaiseEvent(middleArgs);
 
-        await Task.Delay(100);
+        // Wait for async operation to complete deterministically
+        await Task.Yield();
 
-        Assert.True(true);
+        // Note: Full clipboard integration (paste from clipboard) requires TopLevel with clipboard
+        // support, which is not available in headless unit tests. This test verifies that the
+        // method executes without crashing. Stream content verification would require clipboard mock.
+        Assert.NotNull(control.Vtc);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_Scroll_MovesViewport()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Push enough lines to create scrollback history
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 100; i++)
+        {
+            sb.Append($"Line {i}\r\n");
+        }
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes(sb.ToString()));
+
+        var vtc = control.Vtc!;
+        var initialTopRow = vtc.ViewPort.TopRow;
+
+        // Simulate scroll up (positive delta)
+        var scrollProps = new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other);
+        var scrollArgs = new PointerWheelEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 50), 0, scrollProps, KeyModifiers.None, new Vector(0, 3));
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(scrollArgs, InputElement.PointerWheelChangedEvent);
+        control.RaiseEvent(scrollArgs);
+
+        // TopRow should have changed after scroll
+        var afterScrollTopRow = vtc.ViewPort.TopRow;
+        Assert.NotEqual(initialTopRow, afterScrollTopRow);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingDisabled_CtrlLeftClick_NoException()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Visit https://example.com for details"));
+
+        // Ctrl+left-click on the URL
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        
+        // Should not throw (actual URL opening via Process.Start would require integration test)
+        control.RaiseEvent(pressArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.NotNull(control.Vtc);
     }
 
     // ── Kitty keyboard protocol (issue #725) ──────────────────────────────────────────────────

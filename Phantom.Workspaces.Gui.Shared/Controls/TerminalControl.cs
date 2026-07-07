@@ -662,6 +662,13 @@ public partial class TerminalControl : Control
 
         if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
         {
+            if ((e.KeyModifiers & KeyModifiers.Control) != 0)
+            {
+                TryOpenUrlAtCell(cell);
+                e.Handled = true;
+                return;
+            }
+
             var isRectangular = (e.KeyModifiers & KeyModifiers.Alt) != 0;
             
             if ((e.KeyModifiers & KeyModifiers.Shift) != 0)
@@ -722,6 +729,9 @@ public partial class TerminalControl : Control
         if (_vtc is null)
             return;
 
+        var delta = (int)-e.Delta.Y * 3;
+        _vtc.Scroll(delta);
+        InvalidateVisual();
         e.Handled = true;
     }
 
@@ -730,8 +740,32 @@ public partial class TerminalControl : Control
         if (Session is null || _vtc is null)
             return;
 
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            _selectionModel.Clear();
+            InvalidateVisual();
+            return;
+        }
+
+        if (_selectionModel.HasSelection)
+        {
+            var lines = GetAllVisibleLines();
+            var selectedText = _selectionModel.GetSelectedText(lines);
+            if (!string.IsNullOrEmpty(selectedText))
+            {
+                await clipboard.SetTextAsync(selectedText);
+            }
+        }
+
         _selectionModel.Clear();
         InvalidateVisual();
+
+        var clipboardText = await clipboard.GetTextAsync();
+        if (!string.IsNullOrEmpty(clipboardText))
+        {
+            await WriteTextToSessionAsync(clipboardText);
+        }
     }
 
     private async Task HandleMiddleClickAsync()
@@ -739,7 +773,64 @@ public partial class TerminalControl : Control
         if (Session is null)
             return;
 
-        await Task.CompletedTask;
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+
+        var clipboardText = await clipboard.GetTextAsync();
+        if (!string.IsNullOrEmpty(clipboardText))
+        {
+            await WriteTextToSessionAsync(clipboardText);
+        }
+    }
+
+    private async Task WriteTextToSessionAsync(string text)
+    {
+        if (Session is null)
+            return;
+
+        var wrappedText = _vtc?.BracketedPasteMode == true
+            ? $"\x1b[200~{text}\x1b[201~"
+            : text;
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes(wrappedText);
+        await Session.Stream.WriteAsync(bytes);
+    }
+
+    private void TryOpenUrlAtCell(TerminalCell cell)
+    {
+        if (_vtc is null || cell.Row < 0 || cell.Row >= _vtc.VisibleRows)
+            return;
+
+        var line = _vtc.ViewPort.GetVisibleLine(cell.Row);
+        if (line is null)
+            return;
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < line.Count; i++)
+        {
+            var ch = line[i]?.Char ?? '\0';
+            if (ch != '\0')
+                sb.Append(ch);
+        }
+
+        var lineText = sb.ToString();
+        var match = System.Text.RegularExpressions.Regex.Match(lineText, @"https?://[^\s]+");
+        if (match.Success)
+        {
+            var url = match.Value;
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch
+            {
+            }
+        }
     }
 
     private IReadOnlyList<TerminalLine> GetAllVisibleLines()
