@@ -37,7 +37,7 @@ internal record Hyperlink(string Uri);
 /// <see cref="System.IO.Stream"/>, feeds them into VtNetCore's VT emulator, and draws the cell
 /// grid via <see cref="DrawingContext"/>. Translates Avalonia key and text events into standard
 /// VT input sequences written back to the stream. Maps its pixel size to columns/rows and calls
-/// the session's resize delegate (debounced by 50 ms).
+/// the session's resize delegate (debounced to avoid excessive resize events).
 /// </summary>
 public partial class TerminalControl : Control
 {
@@ -52,6 +52,14 @@ public partial class TerminalControl : Control
         get => GetValue(SessionProperty);
         set => SetValue(SessionProperty, value);
     }
+
+    // ── Events ────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Raised when a URL is detected under a Ctrl+left-click gesture.
+    /// The event argument is the detected URL string.
+    /// </summary>
+    public event EventHandler<string>? NavigationRequested;
 
     // ── VtNetCore state ───────────────────────────────────────────────────────────────────────
 
@@ -90,6 +98,8 @@ public partial class TerminalControl : Control
     private double _cellHeight;
 
     // ── Resize debounce ───────────────────────────────────────────────────────────────────────
+
+    internal TimeSpan ResizeDebounceDelay { get; set; } = TimeSpan.FromMilliseconds(50);
 
     private CancellationTokenSource? _resizeCts;
     private bool _isDragging;
@@ -145,6 +155,15 @@ public partial class TerminalControl : Control
         _sessionLifetime = null;
         _vtc = null;
         _dataConsumer = null;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+
+        _resizeCts?.Cancel();
+        _resizeCts?.Dispose();
+        _resizeCts = null;
     }
 
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
@@ -241,7 +260,7 @@ public partial class TerminalControl : Control
         _resizeCts?.Cancel();
         _resizeCts = new CancellationTokenSource();
         var token = _resizeCts.Token;
-        _ = Task.Delay(50, token).ContinueWith(
+        _ = Task.Delay(ResizeDebounceDelay, token).ContinueWith(
             _ => Dispatcher.UIThread.Post(ApplyResize),
             CancellationToken.None,
             TaskContinuationOptions.NotOnCanceled,
@@ -844,17 +863,7 @@ public partial class TerminalControl : Control
         if (match.Success)
         {
             var url = match.Value;
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
-            }
-            catch
-            {
-            }
+            NavigationRequested?.Invoke(this, url);
         }
     }
 
