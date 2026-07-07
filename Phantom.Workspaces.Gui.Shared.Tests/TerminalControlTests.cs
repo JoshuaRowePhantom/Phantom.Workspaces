@@ -10,6 +10,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
@@ -1736,6 +1737,148 @@ public sealed class TerminalControlTests
         var control = CreateControlWithSession();
         control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]2;MyTitle\x07"));
         Assert.Equal("MyTitle", control.Title);
+    }
+
+    // ── OnDetachedFromVisualTree disposal (issue #643) ────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task TerminalControl_OnDetachedFromVisualTree_CancelsPendingResize()
+    {
+        var resizeCallCount = 0;
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl();
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var initialResizeCount = resizeCallCount;
+        control.Measure(new Size(900, 700));
+        control.Arrange(new Rect(0, 0, 900, 700));
+
+        panel.Children.Remove(control);
+
+        await Task.Delay(100);
+
+        Assert.Equal(initialResizeCount, resizeCallCount);
+        window.Close();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task TerminalControl_OnDetachedFromVisualTree_CancelsSessionLifetime()
+    {
+        var readLoopStarted = new TaskCompletionSource<bool>();
+        var cancellationDetected = false;
+
+        var testStream = new TestStreamThatDetectsCancellation(readLoopStarted, () => cancellationDetected = true);
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = testStream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await readLoopStarted.Task;
+
+        panel.Children.Remove(control);
+
+        await Task.Delay(100);
+        Assert.True(cancellationDetected);
+
+        window.Close();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_OnDetachedFromVisualTree_NoSession_DoesNotThrow()
+    {
+        var control = new TerminalControl();
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        var ex = Record.Exception(() => panel.Children.Remove(control));
+
+        Assert.Null(ex);
+        window.Close();
+    }
+
+    private sealed class TestStreamThatDetectsCancellation : Stream
+    {
+        private readonly TaskCompletionSource<bool> _readLoopStarted;
+        private readonly Action _onCancellation;
+
+        public TestStreamThatDetectsCancellation(
+            TaskCompletionSource<bool> readLoopStarted,
+            Action onCancellation)
+        {
+            _readLoopStarted = readLoopStarted;
+            _onCancellation = onCancellation;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            _readLoopStarted.TrySetResult(true);
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return 0;
+            }
+            catch (OperationCanceledException)
+            {
+                _onCancellation();
+                throw;
+            }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException("Use ReadAsync");
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) { }
     }
 
     // ── Helper for tests ──────────────────────────────────────────────────────────────────────

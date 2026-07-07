@@ -155,6 +155,20 @@ public partial class TerminalControl : Control
         _dataConsumer = null;
     }
 
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+
+        _resizeCts?.Cancel();
+        _resizeCts?.Dispose();
+        _resizeCts = null;
+
+        if (_sessionLifetime is not null && Session is not null)
+        {
+            Session = null;
+        }
+    }
+
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
     {
         var buffer = new byte[4096];
