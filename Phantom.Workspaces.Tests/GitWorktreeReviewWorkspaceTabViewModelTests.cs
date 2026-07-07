@@ -968,4 +968,170 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.Contains(vm.FileDiffs, d => d.RelativePath.Contains("file3"));
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitListHeader_ShowsBranchName()
+    {
+        this.InitRepoWithBranch("main");
+
+        var entityJson = $$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": "{{this.repoDir.Replace("\\", "\\\\")}}",
+                "target-branch": "main"
+            }
+            """;
+
+        var vm = CreateViewModel(entityJson);
+        await using (vm)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            Assert.Equal("Commits not in main", vm.CommitListHeader);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitListHeader_UpdatesWhenBranchChanges()
+    {
+        this.InitRepoWithBranch("main");
+
+        var entityJson = $$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": "{{this.repoDir.Replace("\\", "\\\\")}}",
+                "target-branch": "main"
+            }
+            """;
+
+        var vm = CreateViewModel(entityJson);
+        await using (vm)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            Assert.Equal("Commits not in main", vm.CommitListHeader);
+
+            vm.TargetBranch = "develop";
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            Assert.Equal("Commits not in develop", vm.CommitListHeader);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task FileListHeader_SingleCommit_ShowsSha()
+    {
+        this.InitRepoWithBranch("main");
+
+        using var repo = new Repository(this.repoDir);
+        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+        var featureBranch = repo.CreateBranch("feature");
+        Commands.Checkout(repo, featureBranch);
+
+        var filePath = Path.Combine(repo.Info.WorkingDirectory, "feature.txt");
+        File.WriteAllText(filePath, "feature content");
+        Commands.Stage(repo, "feature.txt");
+        var commit = repo.Commit("Add feature", sig, sig);
+
+        var entityJson = $$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": "{{this.repoDir.Replace("\\", "\\\\")}}",
+                "target-branch": "main"
+            }
+            """;
+
+        var vm = CreateViewModel(entityJson);
+        await using (vm)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            await vm.RefreshAsync();
+
+            vm.CommitList.SelectedCommits.Add(vm.CommitList.Commits.First());
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+
+            var shortSha = commit.Sha.Substring(0, 7);
+            Assert.Equal($"Files changed in {shortSha}", vm.FileListHeader);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task FileListHeader_MultipleCommits_ShowsGenericLabel()
+    {
+        this.InitRepoWithBranch("main");
+
+        using var repo = new Repository(this.repoDir);
+        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+        var featureBranch = repo.CreateBranch("feature");
+        Commands.Checkout(repo, featureBranch);
+
+        var filePath1 = Path.Combine(repo.Info.WorkingDirectory, "feature1.txt");
+        File.WriteAllText(filePath1, "feature content 1");
+        Commands.Stage(repo, "feature1.txt");
+        repo.Commit("Add feature 1", sig, sig);
+
+        var filePath2 = Path.Combine(repo.Info.WorkingDirectory, "feature2.txt");
+        File.WriteAllText(filePath2, "feature content 2");
+        Commands.Stage(repo, "feature2.txt");
+        repo.Commit("Add feature 2", sig, sig);
+
+        var entityJson = $$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": "{{this.repoDir.Replace("\\", "\\\\")}}",
+                "target-branch": "main"
+            }
+            """;
+
+        var vm = CreateViewModel(entityJson);
+        await using (vm)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            await vm.RefreshAsync();
+
+            vm.CommitList.SelectedCommits.Add(vm.CommitList.Commits[0]);
+            vm.CommitList.SelectedCommits.Add(vm.CommitList.Commits[1]);
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+
+            Assert.Equal("Files changed in selected commits", vm.FileListHeader);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task FileListHeader_NoSelection_ShowsPlaceholder()
+    {
+        this.InitRepoWithBranch("main");
+
+        var entityJson = $$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": "{{this.repoDir.Replace("\\", "\\\\")}}",
+                "target-branch": "main"
+            }
+            """;
+
+        var vm = CreateViewModel(entityJson);
+        await using (vm)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            await vm.RefreshAsync();
+
+            Assert.Equal("Files changed", vm.FileListHeader);
+        }
+    }
 }
+

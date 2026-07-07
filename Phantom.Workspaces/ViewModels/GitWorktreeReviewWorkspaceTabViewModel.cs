@@ -53,8 +53,34 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (this.SetProperty(ref this.targetBranch, value))
             {
+                this.RaisePropertyChanged(nameof(this.CommitListHeader));
                 Lifetime.Run(this.RefreshAsync);
             }
+        }
+    }
+
+    public string CommitListHeader => $"Commits not in {this.targetBranch}";
+
+    public string FileListHeader
+    {
+        get
+        {
+            var selectedCommits = this.CommitList.SelectedCommits;
+            if (selectedCommits.Count == 0)
+            {
+                return "Files changed";
+            }
+
+            if (selectedCommits.Count == 1)
+            {
+                var commit = selectedCommits[0];
+                if (!commit.IsUnstaged && !commit.IsStaged)
+                {
+                    return $"Files changed in {commit.ShortOid}";
+                }
+            }
+
+            return "Files changed in selected commits";
         }
     }
 
@@ -218,6 +244,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     private void OnSelectedCommitsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
+        this.RaisePropertyChanged(nameof(this.FileListHeader));
+
         var selectedCommits = this.CommitList.SelectedCommits.Count > 0
             ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
             : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
