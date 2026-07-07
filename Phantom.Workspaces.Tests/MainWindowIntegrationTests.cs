@@ -2728,6 +2728,42 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    private static async Task WaitForWorkspacePaneAsync(MainWindowViewModel viewModel, string paneId)
+    {
+        if (viewModel.WorkspacePanes.Any(p =>
+            string.Equals(p.Id, paneId, StringComparison.Ordinal) ||
+            p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (viewModel.WorkspacePanes.Any(p =>
+                string.Equals(p.Id, paneId, StringComparison.Ordinal) ||
+                p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal)))
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        viewModel.WorkspacePanes.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            if (!viewModel.WorkspacePanes.Any(p =>
+                string.Equals(p.Id, paneId, StringComparison.Ordinal) ||
+                p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal)))
+            {
+                await signal.Task;
+            }
+        }
+        finally
+        {
+            viewModel.WorkspacePanes.CollectionChanged -= OnCollectionChanged;
+        }
+    }
+
     private static async Task<T> WaitForSelectedTabAsync<T>(WorkspacePaneViewModel pane)
         where T : WorkspaceTabViewModel
     {
@@ -3961,9 +3997,8 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(defaultPane);
         viewModel.CloseWorkspaceCommand.Execute(defaultPane!);
 
-        // Allow async workspace re-open to complete
-        await Dispatcher.UIThread.InvokeAsync(() => {}, DispatcherPriority.Background);
-        await Dispatcher.UIThread.InvokeAsync(() => {}, DispatcherPriority.Background);
+        // Wait for async workspace re-open to complete
+        await WaitForWorkspacePaneAsync(viewModel, workspaceId.ToString());
 
         // After closing, the default workspace should be re-opened instead of Getting Started
         Assert.Contains(
