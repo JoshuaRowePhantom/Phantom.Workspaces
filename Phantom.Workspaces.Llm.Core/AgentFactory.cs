@@ -371,17 +371,40 @@ public static class AgentFactory
             }
         }
 
-        return await AgentChat.CreateAsync(
+        // Wire AgentSessionToolsetFactory when a running-agent-chat factory is available.
+        // The factory needs the parent AgentChat, which is set on agentChatRef after CreateAsync returns.
+        AgentChatRef? agentChatRef = null;
+        AgentServices? effectiveServices = services;
+        if (services?.RunningAgentChatFactory is IRunningAgentChatFactory runningFactory)
+        {
+            var sessionId = createAgentChatRequest.AgentSessionId ?? Guid.NewGuid().ToString("n");
+            var sessionContext = new CurrentSessionContext { AgentSessionId = sessionId };
+            agentChatRef = new AgentChatRef();
+            var sessionToolsetFactory = ToolsetFactory.CreateAgentSessionToolsetFactory(
+                agentChatRef,
+                sessionContext,
+                runningFactory,
+                services.ToolsetFactory ?? ToolsetFactory.CreateDefaultToolsetFactory());
+            effectiveServices = services with { ToolsetFactory = sessionToolsetFactory };
+        }
+
+        var chat = await AgentChat.CreateAsync(
             new InternalCreateAgentChatRequest
             {
                 AgentDefinition = requestedAgentDefinition,
                 AgentSessionId = createAgentChatRequest.AgentSessionId,
-                AgentServices = services,
+                AgentServices = effectiveServices,
                 ConfiguredStore = configuredStore,
                 ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
                 ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
             });
+
+        // Complete the late-bound reference so AgentSessionToolset tools can access the parent chat.
+        if (agentChatRef is not null)
+            agentChatRef.Chat = chat;
+
+        return chat;
     }
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
