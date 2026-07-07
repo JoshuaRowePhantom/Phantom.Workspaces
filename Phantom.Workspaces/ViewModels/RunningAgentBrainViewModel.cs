@@ -112,7 +112,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         // Add or update a row for each active session
-        foreach (var session in this.table.RunningSessions)
+        foreach (var session in this.table.RunningSessions.ToList())
         {
             var sessionKey = session.SessionId.Value;
             var hasTab = tabsBySessionId.TryGetValue(sessionKey, out var tabInfo);

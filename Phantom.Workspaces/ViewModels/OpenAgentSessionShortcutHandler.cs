@@ -223,7 +223,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         var lease = await this.runningAgentChatTable.AcquireAsync(
-            new AgentSessionId(agentSessionId!));
+            new AgentSessionId(agentSessionId!),
+            createAgentChatRequest.AgentDefinition,
+            createAgentChatRequest.AgentServices,
+            agentSessionEntity.DisplayName,
+            agentSessionEntity.EntityId.ToString());
 
         lease.AgentChat.EnqueueUserMessage(resumePrompt);
         return lease;

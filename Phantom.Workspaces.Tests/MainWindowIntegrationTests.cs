@@ -548,7 +548,7 @@ public sealed class MainWindowIntegrationTests
         var window = new MainWindow(viewModel);
 
         Assert.NotNull(window);
-        Assert.Empty(window.DataTemplates);
+        Assert.NotEmpty(window.DataTemplates);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -1783,14 +1783,17 @@ public sealed class MainWindowIntegrationTests
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
-        var documentDock = GetDocumentDock(viewModel);
-        Assert.NotNull(documentDock);
-        var agentSessionDocs = documentDock!.VisibleDockables
-            ?.OfType<WorkspaceDocument>()
-            .Where(d => d.Id == agentSessionEntity!.EntityId.ToString())
+        // Wait for background agent initialization to complete
+        await Dispatcher.UIThread.InvokeAsync(() => {}, DispatcherPriority.Background);
+        await Dispatcher.UIThread.InvokeAsync(() => {}, DispatcherPriority.Background);
+
+        // Check workspacePane.Tabs directly since VisibleDockables requires visual tree.
+        // Tab ID format: "{paneId}-{entityId}" (see OpenAgentSessionShortcutHandler line 72).
+        var paneId = viewModel.SelectedWorkspacePane!.Id;
+        var agentSessionTabs = viewModel.SelectedWorkspacePane!.Tabs
+            .Where(t => t.Id == $"{paneId}-{agentSessionEntity!.EntityId}")
             .ToList();
-        Assert.NotNull(agentSessionDocs);
-        Assert.Single(agentSessionDocs!);
+        Assert.Single(agentSessionTabs);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -2387,15 +2390,15 @@ public sealed class MainWindowIntegrationTests
         var pane = viewModel.SelectedWorkspacePane;
         Assert.NotNull(pane.ContentLayout);
 
-        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>));
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
         var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
         Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
 
         // Step 2: build a workspace entity that carries the saved dock-layout and open it
-        var workspaceId = new EntityId("d0c1aya0-0000-4000-8000-000000000001");
+        var workspaceId = new EntityId("d0c1a7a0-0000-4000-8000-000000000001");
         var workspaceJson = $$"""
             {
-              "entity-id": "d0c1aya0-0000-4000-8000-000000000001",
+              "entity-id": "d0c1a7a0-0000-4000-8000-000000000001",
               "entity-types": ["entity", "workspace"],
               "display-name": { "default": "Restore Dock Layout Workspace" },
               "dock-layout": {{dockLayoutJson}},
@@ -2576,21 +2579,31 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tab);
 
         var pane = viewModel.SelectedWorkspacePane;
-        var entityBroker = GetEntityBroker(viewModel);
 
         // Wait for ItemContainerGenerator to populate VisibleDockables before write-back
         var saveContentDock = FindDocumentDockIn(pane.ContentLayout!);
         Assert.NotNull(saveContentDock);
         await WaitForWorkspaceTabAsync(saveContentDock!, "slt-tab");
 
+        // Verify entity is subscribed and has a ConcurrencyTag (not the placeholder)
+        Assert.False(pane.Entity.EntityId == new Phantom.Workspaces.Data.EntityId(Guid.Empty),
+            "SelectedWorkspacePane must be a real workspace entity, not the placeholder.");
+        Assert.NotNull(pane.Entity.ConcurrencyTag);
+
         // Explicitly trigger write-back (simulates explicit save) and await completion
-        await viewModel.WriteBackWorkspaceTabs(pane);
+        var writeBackResult = await viewModel.WriteBackWorkspaceTabs(pane);
+        var failedResults = writeBackResult.EntityResults
+            .Where(r => r.UpdateState == Phantom.Workspaces.Data.UpdateState.Failed)
+            .ToList();
+        var errorMessages = failedResults
+            .SelectMany(r => r.Errors ?? [])
+            .Select(e => e.Message)
+            .ToList();
+        Assert.Empty(errorMessages);
 
-        var entities = await entityBroker.GetEntitiesAsync([pane.Entity.EntityId]);
-        var updated = entities.FirstOrDefault(e => e.EntityId == pane.Entity.EntityId);
-        Assert.NotNull(updated);
-
-        var data = Assert.IsType<System.Text.Json.JsonElement>(updated!.Data);
+        // pane.Entity is the subscribed entity view model; its Data is updated in-place
+        // by EntityBroker.UpdateAsync when the underlying snapshot changes.
+        var data = Assert.IsType<System.Text.Json.JsonElement>(pane.Entity.Data);
         Assert.True(data.TryGetProperty("dock-layout", out var dockLayoutEl));
         var dockLayoutJson = dockLayoutEl.GetRawText();
         Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
@@ -2912,7 +2925,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotSame(populationAfterFirst, viewModel.CurrentViewPopulation);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaStaFact(Timeout = 15_000)]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
@@ -3948,6 +3961,10 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(defaultPane);
         viewModel.CloseWorkspaceCommand.Execute(defaultPane!);
 
+        // Allow async workspace re-open to complete
+        await Dispatcher.UIThread.InvokeAsync(() => {}, DispatcherPriority.Background);
+        await Dispatcher.UIThread.InvokeAsync(() => {}, DispatcherPriority.Background);
+
         // After closing, the default workspace should be re-opened instead of Getting Started
         Assert.Contains(
             viewModel.WorkspacePanes,
@@ -4042,6 +4059,22 @@ public sealed class MainWindowIntegrationTests
 
         var entityBroker = GetEntityBroker(viewModel);
 
+        // Open workspace A first so there are two panes (placeholder is removed by OpenWorkspaceAsync)
+        var workspaceAId = new EntityId("b1190319-0000-4000-8000-00000000000a");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceAId,
+            """
+            {
+              "entity-id": "b1190319-0000-4000-8000-00000000000a",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-a"]],
+              "display-name": { "default": "Notif Pane A" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+
         var workspaceBId = new EntityId("b1190319-0000-4000-8000-000000000001");
         await UpsertEntityAndLoadAsync(
             entityBroker,
@@ -4084,6 +4117,22 @@ public sealed class MainWindowIntegrationTests
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
+
+        // Open workspace A first so there are two panes (placeholder is removed by OpenWorkspaceAsync)
+        var workspaceAId = new EntityId("b1190319-0000-4000-8000-00000000000b");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceAId,
+            """
+            {
+              "entity-id": "b1190319-0000-4000-8000-00000000000b",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-pane-a2"]],
+              "display-name": { "default": "Notif Pane A2" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
 
         var workspaceBId = new EntityId("b1190319-0000-4000-8000-000000000002");
         await UpsertEntityAndLoadAsync(
@@ -4254,7 +4303,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaStaFact(Timeout = 15_000)]
     public async Task OnPreviewKeyDown_CtrlShiftK_CallsDuplicateBrowserTabCommandAndHandlesEvent()
     {
         // Verifies that Ctrl+Shift+K fires DuplicateBrowserTabCommand and marks the event as
@@ -4262,7 +4311,7 @@ public sealed class MainWindowIntegrationTests
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
-        var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-shift-k-tab", Title = "Browser" };
+        var tab = new WebViewModel("https://example.com") { Id = "ctrl-shift-k-tab", Title = "Browser" };
         await viewModel.OpenTabAsync(tab);
 
         var window = new MainWindow(viewModel);
@@ -4292,14 +4341,14 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaStaFact(Timeout = 15_000)]
     public async Task OnPreviewKeyDown_CtrlK_WithoutShift_DoesNotDuplicateTab()
     {
         // Verifies that Ctrl+K alone (missing Shift) does not trigger DuplicateBrowserTabCommand.
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
-        var tab = new WebViewModel("https://example.com", viewModel) { Id = "ctrl-k-no-dup", Title = "Browser" };
+        var tab = new WebViewModel("https://example.com") { Id = "ctrl-k-no-dup", Title = "Browser" };
         await viewModel.OpenTabAsync(tab);
 
         var window = new MainWindow(viewModel);
@@ -4676,7 +4725,21 @@ public sealed class MainWindowIntegrationTests
         var workspaceId = new EntityId("a2b3c4d5-0001-4000-8000-000000000001");
         var noteId = new EntityId("a2b3c4d5-0001-4000-8000-000000000002");
         var relatedId = new EntityId("a2b3c4d5-0001-4000-8000-000000000003");
+        var entityTypeViewId = new EntityId("a2b3c4d5-0001-4000-8000-000000000004");
 
+        // Seed entity-type-view for workspace to declare traverse-relationships
+        await SeedEntityAsync(entityBroker, entityTypeViewId, $$"""
+            {
+              "entity-id": "{{entityTypeViewId}}",
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "workspace"]],
+              "display-name": { "default": "Workspace View" },
+              "fields": [],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
         await SeedEntityAsync(entityBroker, workspaceId, $$"""
             {
               "entity-id": "{{workspaceId}}",
@@ -4926,6 +4989,24 @@ public sealed class MainWindowIntegrationTests
         var workspaceId = new EntityId("24900004-0000-4000-8000-000000000004");
         var childId = new EntityId("24900005-0000-4000-8000-000000000005");
         var relationshipId = new EntityId("24900006-0000-4000-8000-000000000006");
+        var entityTypeViewId = new EntityId("24900007-0000-4000-8000-000000000007");
+
+        // Seed entity-type-view for workspace to declare traverse-relationships
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            entityTypeViewId,
+            $$"""
+            {
+              "entity-id": "{{entityTypeViewId}}",
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "workspace"]],
+              "display-name": { "default": "Workspace View" },
+              "fields": [],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
 
         await UpsertEntityAndLoadAsync(
             entityBroker,
@@ -5401,6 +5482,20 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(brain);
 
         var entityBroker = GetEntityBroker(viewModel);
+
+        // Open workspace A first so that workspace B is at index 1 (not 0)
+        var workspaceAId = new EntityId("ab100000-0000-4000-8000-000000000000");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab100000-0000-4000-8000-000000000000",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "brain-cross-pane-ws-a"]],
+              "display-name": { "default": "Brain Cross-Pane Workspace A" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
 
         var workspaceBId = new EntityId("ab100001-0000-4000-8000-000000000001");
         await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,

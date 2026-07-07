@@ -2210,11 +2210,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// Call explicitly after user-initiated tab changes (open, close).
     /// Returns the underlying update task so callers can await completion when needed.
     /// </summary>
-    internal Task WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
+    internal Task<UpdateResult> WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
     {
-        if (this.entityBroker is null) return Task.CompletedTask;
+        if (this.entityBroker is null) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
         var entityData = workspacePane.Entity.Data;
-        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return Task.CompletedTask;
+        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
 
         // Build tabs array as workspace-tab-descriptors
         var tabDescriptors = new JsonArray();
@@ -2249,7 +2249,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Build merged entity data with updated tabs and dock-layout
         var entityNode = JsonNode.Parse(dataElement.GetRawText())?.AsObject();
-        if (entityNode is null) return Task.CompletedTask;
+        if (entityNode is null) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
 
         entityNode["tabs"] = tabDescriptors;
 
@@ -2293,7 +2293,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 new EntityChange
                 {
                     EntityId = workspacePane.Entity.EntityId,
-                    ConcurrencyTag = null,
+                    ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
                     Data = updatedData,
                     EntityChangeMode = EntityChangeMode.Replace,
                 },
@@ -2311,14 +2311,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (tab.Entity is { } entity)
         {
-            // Entity-reference tab
-            var entityId = entity.EntityId.Value.ToString();
+            // Entity-reference tab: write as UUID string (entity-reference = entity-id | entity-name)
             content = new JsonObject
             {
-                ["target-entity-name"] = new JsonObject
-                {
-                    ["entity-id"] = entityId,
-                },
+                ["target-entity-name"] = entity.EntityId.Value.ToString(),
             };
         }
         else if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
@@ -3186,11 +3182,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private async Task EnsureWorkspaceLoadedAsync()
     {
-        // If the current workspace is the placeholder, open the getting-started workspace
-        if (string.Equals(this.SelectedWorkspacePane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+        if (!string.Equals(this.SelectedWorkspacePane.Id, DefaultWorkspaceId, StringComparison.Ordinal))
+            return;
+
+        if (this.configuration?.SkipStartupWorkspace == true)
         {
-            await this.OpenGettingStartedWorkspaceAsync();
+            if (this.SelectedWorkspacePane.ContentLayout is null)
+            {
+                this.SelectedWorkspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(this.SelectedWorkspacePane);
+                this.SubscribeToInnerDockChanges(this.SelectedWorkspacePane);
+            }
+            return;
         }
+
+        await this.OpenGettingStartedWorkspaceAsync();
     }
 
     private async Task OpenGettingStartedWorkspaceAsync()
