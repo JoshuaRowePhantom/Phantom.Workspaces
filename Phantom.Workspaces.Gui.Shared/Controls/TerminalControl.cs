@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Phantom.Workspaces.Gui.Shared.Models;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
@@ -46,9 +47,11 @@ public partial class TerminalControl : Control
     private DataConsumer? _dataConsumer;
     private ViewModelLifetime? _sessionLifetime;
     private byte[] _pendingBytes = Array.Empty<byte>();
+    private readonly TerminalMouseModeState _mouseModeState = new();
 
     // Exposed internally for tests so they can push bytes synchronously without the async loop.
     internal VirtualTerminalController? Vtc => _vtc;
+    internal TerminalMouseModeState MouseModeState => _mouseModeState;
 
     // ── Cell metrics ──────────────────────────────────────────────────────────────────────────
 
@@ -133,6 +136,9 @@ public partial class TerminalControl : Control
                 {
                     chunk = buffer[..read];
                 }
+
+                // Track mouse mode state before pushing to VT emulator
+                _mouseModeState.Apply(chunk);
 
                 try
                 {
