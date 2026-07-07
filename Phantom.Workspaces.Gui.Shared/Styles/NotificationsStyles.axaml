@@ -33,17 +33,22 @@
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
-    <!-- notification-indicator: replaces emoji badge TextBlocks that show unread/active state.
-         Value=0 → empty bar (invisible); Value=100 → full Gold bar (visible). -->
-    <Style Selector="ProgressBar.notification-indicator">
-        <Setter Property="MinWidth" Value="0" />
-        <Setter Property="MinHeight" Value="0" />
-        <Setter Property="Height" Value="3" />
-        <Setter Property="Width" Value="12" />
-        <Setter Property="Maximum" Value="100" />
-        <Setter Property="Background" Value="Transparent" />
+    <!-- exclamation-indicator: renders "!" glyph in gold for unread notifications.
+         Opacity 0 when idle (IsIndeterminate=false); opacity 1 when active (IsIndeterminate=true). -->
+    <Style Selector="ProgressBar.glyph-indicator.exclamation-indicator">
         <Setter Property="Foreground" Value="{DynamicResource Theme.Notifications.Badge.Foreground}" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="IsHitTestVisible" Value="False" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <TextBlock x:Name="Glyph" Text="!" FontSize="14" FontWeight="Bold" Opacity="0"
+                               Foreground="{TemplateBinding Foreground}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ProgressBar.glyph-indicator.exclamation-indicator:indeterminate /template/ TextBlock#Glyph">
+        <Setter Property="Opacity" Value="1.0" />
     </Style>
 </Styles>

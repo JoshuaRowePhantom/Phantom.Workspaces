@@ -356,6 +356,20 @@ public sealed class TabHeaderViewModelTests
         Assert.Contains("pulsating-brain", progressBar.Classes);
     }
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void NotificationIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
+    {
+        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
+        var templates = new WorkspaceDataTemplates();
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        var control = matchingTemplate.Build(viewModel);
+
+        var progressBar = Assert.IsType<ProgressBar>(control);
+        Assert.Contains("glyph-indicator", progressBar.Classes);
+        Assert.Contains("exclamation-indicator", progressBar.Classes);
+    }
+
     // ── AgentSessionWorkspaceTabViewModel – SetReady wires tab header indicators
 
     [Fact]

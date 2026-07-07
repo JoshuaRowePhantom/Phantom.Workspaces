@@ -450,9 +450,8 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-        <!-- Always occupies space; empty bar hides it when there is no unread notification -->
-        <ProgressBar Classes="notification-indicator"
-                     Value="{Binding HasUnread, Converter={x:Static converters:BoolTo100Converter.Instance}}" />
+        <ProgressBar Classes="glyph-indicator exclamation-indicator"
+                     IsIndeterminate="{Binding HasUnread}" />
     </DataTemplate>
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
