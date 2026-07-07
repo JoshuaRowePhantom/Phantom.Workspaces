@@ -401,7 +401,22 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 this.runningAgentChatFactory,
                 this.subAgentTable,
                 this.loggerFactory?.CreateLogger<CopilotSdkTurnEventDispatcher>());
-            var eventSubscription = session.On(sessionEvent => _ = dispatcher.DispatchAsync(sessionEvent));
+
+            // Fix for GitHub issue #765: serialize event dispatch via a channel to prevent concurrent
+            // DispatchAsync calls from corrupting internal dictionaries. SingleReader ensures the drain
+            // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
+            var eventChannel = Channel.CreateUnbounded<SessionEvent>(
+                new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+            var eventSubscription = session.On(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
+
+            var dispatchLoop = Task.Run(async () =>
+            {
+                await foreach (var sessionEvent in eventChannel.Reader.ReadAllAsync(turnCancellationToken))
+                {
+                    await dispatcher.DispatchAsync(sessionEvent).ConfigureAwait(false);
+                }
+            }, turnCancellationToken);
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
@@ -441,6 +456,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var subscription = new DelegateDisposable(() =>
             {
                 eventSubscription.Dispose();
+                eventChannel.Writer.Complete();
+                dispatchLoop.GetAwaiter().GetResult();
                 if (this.queueManager is not null)
                 {
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
