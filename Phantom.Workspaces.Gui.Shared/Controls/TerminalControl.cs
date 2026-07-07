@@ -45,6 +45,7 @@ public partial class TerminalControl : Control
     private VirtualTerminalController? _vtc;
     private DataConsumer? _dataConsumer;
     private ViewModelLifetime? _sessionLifetime;
+    private byte[] _pendingBytes = Array.Empty<byte>();
 
     // Exposed internally for tests so they can push bytes synchronously without the async loop.
     internal VirtualTerminalController? Vtc => _vtc;
@@ -120,9 +121,28 @@ public partial class TerminalControl : Control
                 if (read == 0)
                     break;
 
-                // Copy to a local array so it is not mutated while VtNetCore processes it.
-                var chunk = buffer[..read];
-                _dataConsumer?.Push(chunk);
+                byte[] chunk;
+                if (_pendingBytes.Length > 0)
+                {
+                    chunk = new byte[_pendingBytes.Length + read];
+                    _pendingBytes.CopyTo(chunk, 0);
+                    buffer[..read].CopyTo(chunk, _pendingBytes.Length);
+                    _pendingBytes = Array.Empty<byte>();
+                }
+                else
+                {
+                    chunk = buffer[..read];
+                }
+
+                try
+                {
+                    _dataConsumer?.Push(chunk);
+                }
+                catch (IndexOutOfRangeException)
+                {
+                    _pendingBytes = chunk.Length > 65536 ? Array.Empty<byte>() : chunk;
+                    continue;
+                }
 
                 await Dispatcher.UIThread.InvokeAsync(InvalidateVisual, DispatcherPriority.Render);
             }

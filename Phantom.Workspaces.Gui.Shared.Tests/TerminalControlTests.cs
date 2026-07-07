@@ -376,4 +376,248 @@ public sealed class TerminalControlTests
         vtc.ResizeView(cols, rows);
         return vtc;
     }
+
+    // ── ReadLoopAsync incomplete VT sequences ─────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ReadLoopAsync_IncompleteOscSequence_DoesNotThrow()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("\x1b]0;My"),       // incomplete OSC
+            System.Text.Encoding.UTF8.GetBytes("Title\x07")        // completion + BEL
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Let the read loop start.
+        await Task.Delay(50);
+
+        // Release chunk 0 (incomplete OSC).
+        chunked.ReleaseChunk(0);
+        await Task.Delay(50);
+
+        // Release chunk 1 (completion).
+        chunked.ReleaseChunk(1);
+
+        // Wait for session to exit cleanly.
+        await vm.WhenExited;
+        Assert.True(vm.IsExited);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ReadLoopAsync_SequenceSplitAcrossTwoChunks_RenderedCorrectly()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("\x1b"),            // ESC
+            System.Text.Encoding.UTF8.GetBytes("[HHello")          // [H = cursor home, then "Hello"
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(0);
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(1);
+
+        await vm.WhenExited;
+
+        // Verify text appeared.
+        var vtc = control.Vtc;
+        Assert.NotNull(vtc);
+        var line = vtc.ViewPort.GetVisibleLine(0);
+        Assert.NotNull(line);
+        Assert.True(line.Count >= 5);
+        Assert.Equal('H', line[0].Char);
+        Assert.Equal('e', line[1].Char);
+        Assert.Equal('l', line[2].Char);
+        Assert.Equal('l', line[3].Char);
+        Assert.Equal('o', line[4].Char);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ReadLoopAsync_MalformedStream_ExceedingThreshold_ClearsAndContinues()
+    {
+        // 17 chunks of 4096 bytes each = 69632 bytes > 65536 threshold.
+        var largeIncomplete = new byte[4096];
+        Array.Fill(largeIncomplete, (byte)'X');
+
+        var chunks = new List<byte[]>();
+        for (int i = 0; i < 17; i++)
+            chunks.Add(largeIncomplete);
+
+        // Followed by valid text.
+        chunks.Add(System.Text.Encoding.UTF8.GetBytes("OK"));
+
+        var chunked = new ChunkedStream(chunks.ToArray());
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+
+        // Release all chunks.
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            chunked.ReleaseChunk(i);
+            await Task.Delay(10);
+        }
+
+        await vm.WhenExited;
+
+        // Verify session completed (pending bytes cleared, stream processed).
+        var vtc = control.Vtc;
+        Assert.NotNull(vtc);
+        Assert.True(vm.IsExited);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ReadLoopAsync_PartialSequenceThenCompleteText_BothRenderedCorrectly()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("\x1b"),            // ESC only
+            System.Text.Encoding.UTF8.GetBytes("[2Jtest")          // clear screen + "test"
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(0);
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(1);
+
+        await vm.WhenExited;
+
+        var vtc = control.Vtc;
+        Assert.NotNull(vtc);
+        var line = vtc.ViewPort.GetVisibleLine(0);
+        Assert.NotNull(line);
+        Assert.True(line.Count >= 4);
+        Assert.Equal('t', line[0].Char);
+        Assert.Equal('e', line[1].Char);
+        Assert.Equal('s', line[2].Char);
+        Assert.Equal('t', line[3].Char);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ReadLoopAsync_MultipleIncompleteChunks_ReassembledIntoCompleteSequence()
+    {
+        var chunked = new ChunkedStream(
+            System.Text.Encoding.UTF8.GetBytes("\x1b]"),           // ESC ]
+            System.Text.Encoding.UTF8.GetBytes("0;Title"),         // OSC title param
+            System.Text.Encoding.UTF8.GetBytes("\x07")             // BEL terminator
+        );
+
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = chunked,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(0);
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(1);
+        await Task.Delay(50);
+
+        chunked.ReleaseChunk(2);
+
+        await vm.WhenExited;
+        Assert.True(vm.IsExited);
+    }
+
+    // ── ChunkedStream helper ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A stream that delivers pre-defined byte chunks one at a time, controlled by semaphore.
+    /// After all chunks are released, returns EOF (0 bytes read).
+    /// </summary>
+    private sealed class ChunkedStream : Stream
+    {
+        private readonly byte[][] _chunks;
+        private readonly SemaphoreSlim[] _semaphores;
+        private int _nextChunk;
+
+        public ChunkedStream(params byte[][] chunks)
+        {
+            _chunks = chunks;
+            _semaphores = new SemaphoreSlim[chunks.Length];
+            for (int i = 0; i < chunks.Length; i++)
+                _semaphores[i] = new SemaphoreSlim(0, 1);
+        }
+
+        public void ReleaseChunk(int index) => _semaphores[index].Release();
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
+        {
+            if (_nextChunk >= _chunks.Length)
+                return 0; // EOF
+
+            await _semaphores[_nextChunk].WaitAsync(ct);
+            var chunk = _chunks[_nextChunk++];
+            chunk.CopyTo(buffer, offset);
+            return chunk.Length;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 }
