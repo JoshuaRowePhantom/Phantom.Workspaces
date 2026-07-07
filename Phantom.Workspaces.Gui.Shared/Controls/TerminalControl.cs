@@ -48,10 +48,12 @@ public partial class TerminalControl : Control
     private ViewModelLifetime? _sessionLifetime;
     private byte[] _pendingBytes = Array.Empty<byte>();
     private readonly TerminalMouseModeState _mouseModeState = new();
+    private readonly TerminalSelectionModel _selectionModel = new();
 
     // Exposed internally for tests so they can push bytes synchronously without the async loop.
     internal VirtualTerminalController? Vtc => _vtc;
     internal TerminalMouseModeState MouseModeState => _mouseModeState;
+    internal TerminalSelectionModel SelectionModel => _selectionModel;
 
     // ── Cell metrics ──────────────────────────────────────────────────────────────────────────
 
@@ -291,6 +293,25 @@ public partial class TerminalControl : Control
                     context.DrawLine(pen,
                         new Point(x, y + _cellHeight - 1),
                         new Point(x + _cellWidth, y + _cellHeight - 1));
+                }
+            }
+        }
+
+        // Selection highlight
+        if (_selectionModel.HasSelection)
+        {
+            var selectionBrush = new SolidColorBrush(Color.FromArgb(128, 100, 149, 237));
+            for (var row = 0; row < visRows; row++)
+            {
+                for (var col = 0; col < visCols; col++)
+                {
+                    if (_selectionModel.IsSelected(col, row))
+                    {
+                        var x = col * _cellWidth;
+                        var y = row * _cellHeight;
+                        var cellRect = new Rect(x, y, _cellWidth, _cellHeight);
+                        context.FillRectangle(selectionBrush, cellRect);
+                    }
                 }
             }
         }
