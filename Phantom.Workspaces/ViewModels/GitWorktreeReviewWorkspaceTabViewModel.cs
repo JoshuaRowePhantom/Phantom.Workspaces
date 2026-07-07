@@ -226,7 +226,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             return null;
         }
 
-        if (data.TryGetProperty("filesystem-path", out var pathElement)
+        if (data.TryGetProperty("path", out var pathElement)
             && pathElement.ValueKind == JsonValueKind.String)
         {
             return pathElement.GetString();
