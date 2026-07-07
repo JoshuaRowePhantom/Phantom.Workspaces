@@ -398,12 +398,12 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
 
-        // Let the read loop start.
-        await Task.Delay(50);
+        // Wait for the read loop to request chunk 0.
+        await chunked.ChunkConsumed(0);
 
         // Release chunk 0 (incomplete OSC).
         chunked.ReleaseChunk(0);
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(1);
 
         // Release chunk 1 (completion).
         chunked.ReleaseChunk(1);
@@ -432,10 +432,10 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
 
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(0);
 
         chunked.ReleaseChunk(0);
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(1);
 
         chunked.ReleaseChunk(1);
 
@@ -480,13 +480,11 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
 
-        await Task.Delay(50);
-
-        // Release all chunks.
+        // Release all chunks with deterministic synchronization.
         for (int i = 0; i < chunks.Count; i++)
         {
+            await chunked.ChunkConsumed(i);
             chunked.ReleaseChunk(i);
-            await Task.Delay(10);
         }
 
         await vm.WhenExited;
@@ -516,10 +514,10 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
 
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(0);
 
         chunked.ReleaseChunk(0);
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(1);
 
         chunked.ReleaseChunk(1);
 
@@ -556,13 +554,13 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
 
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(0);
 
         chunked.ReleaseChunk(0);
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(1);
 
         chunked.ReleaseChunk(1);
-        await Task.Delay(50);
+        await chunked.ChunkConsumed(2);
 
         chunked.ReleaseChunk(2);
 
@@ -857,23 +855,32 @@ public sealed class TerminalControlTests
     {
         private readonly byte[][] _chunks;
         private readonly SemaphoreSlim[] _semaphores;
+        private readonly TaskCompletionSource<bool>[] _chunkConsumedSignals;
         private int _nextChunk;
 
         public ChunkedStream(params byte[][] chunks)
         {
             _chunks = chunks;
             _semaphores = new SemaphoreSlim[chunks.Length];
+            _chunkConsumedSignals = new TaskCompletionSource<bool>[chunks.Length];
             for (int i = 0; i < chunks.Length; i++)
+            {
                 _semaphores[i] = new SemaphoreSlim(0, 1);
+                _chunkConsumedSignals[i] = new TaskCompletionSource<bool>();
+            }
         }
 
         public void ReleaseChunk(int index) => _semaphores[index].Release();
+
+        public Task ChunkConsumed(int index) => _chunkConsumedSignals[index].Task;
 
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
         {
             if (_nextChunk >= _chunks.Length)
                 return 0; // EOF
 
+            var currentChunkIndex = _nextChunk;
+            _chunkConsumedSignals[currentChunkIndex].TrySetResult(true);
             await _semaphores[_nextChunk].WaitAsync(ct);
             var chunk = _chunks[_nextChunk++];
             chunk.CopyTo(buffer, offset);
