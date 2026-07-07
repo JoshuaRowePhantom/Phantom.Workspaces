@@ -655,4 +655,124 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.Single(vm.FileDiffs);
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_ShowsDate_FormattedCorrectly()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", new DateTimeOffset(2024, 1, 15, 14, 30, 45, TimeSpan.Zero));
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Test commit", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
+            Assert.NotNull(commit);
+            Assert.Equal(new DateTimeOffset(2024, 1, 15, 14, 30, 45, TimeSpan.Zero), commit.AuthorDate);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_ShortSha_DisplayedInColumn()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Test commit", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
+            Assert.NotNull(commit);
+            Assert.NotEmpty(commit.Oid);
+            Assert.True(commit.Oid.Length >= 7);
+            var shortSha = commit.Oid.Substring(0, 7);
+            Assert.Equal(7, shortSha.Length);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_AuthorColumn_Displayed()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("Test Author", "author@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Test commit", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
+            Assert.NotNull(commit);
+            Assert.Equal("Test Author", commit.AuthorName);
+        }
+    }
 }

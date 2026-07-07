@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             xmlns:converters="using:Phantom.Workspaces.Converters"
              x:Class="Phantom.Workspaces.Templates.GitWorktreeReviewView"
              x:DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
     <Grid RowDefinitions="Auto,Auto,*">
@@ -26,10 +27,85 @@
                  SelectionMode="Multiple">
             <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:GitCommitModel">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding ShortMessage}" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding AuthorName}" Classes="muted" />
-                    </StackPanel>
+                    <Grid ColumnDefinitions="100,60,24,*,120,24" Margin="4,2">
+                        <!-- Date column -->
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding AuthorDate, Converter={x:Static converters:DateTimeOffsetToStringConverter.Instance}}"
+                                   Classes="muted"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,8,0" />
+                        
+                        <!-- SHA column -->
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding ShortOid}"
+                                   FontFamily="Consolas,Monospace"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,4,0" />
+                        
+                        <!-- Copy button -->
+                        <Button Grid.Column="2"
+                                Content="📋"
+                                Click="OnCopyCommitShaClick"
+                                Padding="2"
+                                ToolTip.Tip="Copy full SHA"
+                                VerticalAlignment="Center" />
+                        
+                        <!-- Message column -->
+                        <TextBlock Grid.Column="3"
+                                   Text="{Binding ShortMessage}"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="8,0,8,0" />
+                        
+                        <!-- Author column -->
+                        <TextBlock Grid.Column="4"
+                                   Text="{Binding AuthorName}"
+                                   Classes="muted"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,0,8,0" />
+                        
+                        <!-- Details button -->
+                        <Button Grid.Column="5"
+                                Content="..."
+                                Padding="2"
+                                ToolTip.Tip="Show full commit details"
+                                VerticalAlignment="Center">
+                            <Button.Flyout>
+                                <Flyout>
+                                    <StackPanel Width="400" Spacing="8">
+                                        <TextBlock Text="Commit Details" FontWeight="Bold" FontSize="14" />
+                                        <Border BorderThickness="0,0,0,1" BorderBrush="#33888888" Margin="0,4" />
+                                        
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="SHA:" Width="60" />
+                                            <TextBlock Text="{Binding Oid}"
+                                                       FontFamily="Consolas,Monospace"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="Author:" Width="60" />
+                                            <TextBlock Text="{Binding AuthorName}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="Date:" Width="60" />
+                                            <TextBlock Text="{Binding AuthorDate}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="Message:" />
+                                            <TextBlock Text="{Binding ShortMessage}"
+                                                       TextWrapping="Wrap"
+                                                       Margin="8,0,0,0" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Grid>
                 </DataTemplate>
             </ListBox.ItemTemplate>
         </ListBox>
