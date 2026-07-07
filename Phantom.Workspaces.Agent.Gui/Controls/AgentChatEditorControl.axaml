@@ -300,8 +300,16 @@
                           Grid.Column="1"
                           Click="OnTreeCollapseToggleClicked"
                           Content="◀"/>
-            <ContentControl Grid.Column="2"
-                            Content="{Binding SelectedEditorDetailContent}"/>
+            <Panel Grid.Column="2">
+                <ItemsControl ItemsSource="{Binding DetailContentSlots}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:DetailContentSlot">
+                            <ContentControl Content="{Binding Content}"
+                                            IsVisible="{Binding IsVisible}"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Panel>
         </Grid>
     </Border>
 </UserControl>
