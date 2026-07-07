@@ -137,11 +137,14 @@ public partial class TerminalControl : Control
 
     private void DetachSession()
     {
+        _resizeCts?.Cancel();
+        _resizeCts?.Dispose();
+        _resizeCts = null;
+        
         _ = _sessionLifetime?.DisposeAsync();
         _sessionLifetime = null;
         _vtc = null;
         _dataConsumer = null;
-        InvalidateVisual();
     }
 
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
@@ -754,17 +757,23 @@ public partial class TerminalControl : Control
             var selectedText = _selectionModel.GetSelectedText(lines);
             if (!string.IsNullOrEmpty(selectedText))
             {
-                await clipboard.SetTextAsync(selectedText);
+                var data = new DataTransfer();
+                data.Add(DataTransferItem.CreateText(selectedText));
+                await clipboard.SetDataAsync(data);
             }
         }
 
         _selectionModel.Clear();
         InvalidateVisual();
 
-        var clipboardText = await clipboard.GetTextAsync();
-        if (!string.IsNullOrEmpty(clipboardText))
+        using var clipboardData = await clipboard.TryGetDataAsync();
+        if (clipboardData is not null)
         {
-            await WriteTextToSessionAsync(clipboardText);
+            var clipboardText = await clipboardData.TryGetTextAsync();
+            if (!string.IsNullOrEmpty(clipboardText))
+            {
+                await WriteTextToSessionAsync(clipboardText);
+            }
         }
     }
 
@@ -777,10 +786,14 @@ public partial class TerminalControl : Control
         if (clipboard is null)
             return;
 
-        var clipboardText = await clipboard.GetTextAsync();
-        if (!string.IsNullOrEmpty(clipboardText))
+        using var clipboardData = await clipboard.TryGetDataAsync();
+        if (clipboardData is not null)
         {
-            await WriteTextToSessionAsync(clipboardText);
+            var clipboardText = await clipboardData.TryGetTextAsync();
+            if (!string.IsNullOrEmpty(clipboardText))
+            {
+                await WriteTextToSessionAsync(clipboardText);
+            }
         }
     }
 
