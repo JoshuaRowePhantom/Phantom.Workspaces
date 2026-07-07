@@ -158,6 +158,99 @@ public sealed class ToolVisualizationTests
         Assert.Null(result);
     }
 
+    // --- AgentSessionVisualizerFactory ---
+
+    [Fact]
+    public void AgentSessionVisualizerFactory_AgentSessionCreate_ReturnsSummary()
+    {
+        var factory = new AgentSessionVisualizerFactory();
+        var call = new FunctionCallContent("call-1", "agent_session_create",
+            new Dictionary<string, object?> { ["initial_message"] = "hello subagent" });
+
+        var result = factory.Visualize(new ToolVisualizationContext(call));
+
+        var summary = Assert.IsType<Summary>(result);
+        Assert.Contains("subagent", summary.Label, StringComparison.Ordinal);
+        Assert.Contains("hello", summary.Label, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionVisualizerFactory_AgentSessionSend_ReturnsSummary()
+    {
+        var factory = new AgentSessionVisualizerFactory();
+        var call = new FunctionCallContent("call-1", "agent_session_send",
+            new Dictionary<string, object?>
+            {
+                ["session_id"] = "abc12345xyz",
+                ["text"] = "process this task",
+            });
+
+        var result = factory.Visualize(new ToolVisualizationContext(call));
+
+        var summary = Assert.IsType<Summary>(result);
+        Assert.Contains("abc12345", summary.Label, StringComparison.Ordinal);
+        Assert.Contains("process", summary.Label, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionVisualizerFactory_AgentSessionStop_ReturnsSummary()
+    {
+        var factory = new AgentSessionVisualizerFactory();
+        var call = new FunctionCallContent("call-1", "agent_session_stop",
+            new Dictionary<string, object?>
+            {
+                ["session_id"] = "session123",
+                ["dispose"] = true,
+            });
+
+        var result = factory.Visualize(new ToolVisualizationContext(call));
+
+        var summary = Assert.IsType<Summary>(result);
+        Assert.Contains("stopped", summary.Label, StringComparison.Ordinal);
+        Assert.Contains("disposed", summary.Label, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionVisualizerFactory_AgentSessionWait_ReturnsSummary()
+    {
+        var factory = new AgentSessionVisualizerFactory();
+        var call = new FunctionCallContent("call-1", "agent_session_wait",
+            new Dictionary<string, object?>
+            {
+                ["session_id"] = "session456",
+                ["timeout_seconds"] = 30,
+            });
+
+        var result = factory.Visualize(new ToolVisualizationContext(call));
+
+        var summary = Assert.IsType<Summary>(result);
+        Assert.Contains("waiting", summary.Label, StringComparison.Ordinal);
+        Assert.Contains("30s", summary.Label, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionVisualizerFactory_UnrelatedTool_ReturnsNull()
+    {
+        var factory = new AgentSessionVisualizerFactory();
+        var call = new FunctionCallContent("call-1", "some_other_tool",
+            new Dictionary<string, object?> { ["param"] = "value" });
+
+        var result = factory.Visualize(new ToolVisualizationContext(call));
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void AgentSessionVisualizerFactory_FunctionResult_ReturnsNull()
+    {
+        var factory = new AgentSessionVisualizerFactory();
+        var result = new FunctionResultContent("call-1", "session created");
+
+        var visualization = factory.Visualize(new ToolVisualizationContext(result));
+
+        Assert.Null(visualization);
+    }
+
     // --- AgentChatStatusLineViewModel ---
 
     [Fact]

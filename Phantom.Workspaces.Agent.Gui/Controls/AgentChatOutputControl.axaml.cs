@@ -43,6 +43,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         };
 
     private static readonly IToolVisualizerFactory DefaultToolFactory = CompositeToolVisualizerFactory.Combine(
+        new AgentSessionVisualizerFactory(),
         new WorkspaceVisualizerFactory(),
         new CopilotToolVisualizerFactory());
 
