@@ -53,6 +53,14 @@ public partial class TerminalControl : Control
         set => SetValue(SessionProperty, value);
     }
 
+    // ── Events ────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Raised when a URL is detected under a Ctrl+left-click gesture.
+    /// The event argument is the detected URL string.
+    /// </summary>
+    public event EventHandler<string>? NavigationRequested;
+
     // ── VtNetCore state ───────────────────────────────────────────────────────────────────────
 
     private VirtualTerminalController? _vtc;
@@ -844,17 +852,7 @@ public partial class TerminalControl : Control
         if (match.Success)
         {
             var url = match.Value;
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
-            }
-            catch
-            {
-            }
+            NavigationRequested?.Invoke(this, url);
         }
     }
 

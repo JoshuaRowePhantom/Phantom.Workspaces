@@ -1206,7 +1206,7 @@ public sealed class TerminalControlTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void TerminalControl_MouseReportingDisabled_CtrlLeftClick_NoException()
+    public void TerminalControl_CtrlLeftClickOnUrl_RaisesNavigationRequestedEvent()
     {
         var stream = new MemoryStream();
         var vm = new TerminalSessionViewModel
@@ -1222,13 +1222,79 @@ public sealed class TerminalControlTests
 
         control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Visit https://example.com for details"));
 
+        // Subscribe to NavigationRequested event
+        string? navigatedUrl = null;
+        control.NavigationRequested += (_, url) => navigatedUrl = url;
+
         // Ctrl+left-click on the URL
         var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
         var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
         typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
         TerminalControl.TestPointerPositionOverride = new Point(50, 10);
         
-        // Should not throw (actual URL opening via Process.Start would require integration test)
+        control.RaiseEvent(pressArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.Equal("https://example.com", navigatedUrl);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CtrlLeftClickNotOnUrl_DoesNotRaiseNavigationRequested()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Plain text without URL"));
+
+        // Subscribe to NavigationRequested event
+        string? navigatedUrl = null;
+        control.NavigationRequested += (_, url) => navigatedUrl = url;
+
+        // Ctrl+left-click on plain text
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        
+        control.RaiseEvent(pressArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.Null(navigatedUrl);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_NavigationRequested_NullHandler_NoException()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Visit https://example.com for details"));
+
+        // Ctrl+left-click without subscribing to NavigationRequested
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        
+        // Should not throw even without a subscriber
         control.RaiseEvent(pressArgs);
         TerminalControl.TestPointerPositionOverride = null;
 
