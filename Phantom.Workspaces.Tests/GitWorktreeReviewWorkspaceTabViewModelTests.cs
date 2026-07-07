@@ -443,4 +443,216 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.Equal(2, vm.FileDiffs.Count);
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_SelectCommit_FileListUpdates()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 1", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 2", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            Assert.Equal(2, vm.FileList.Files.Count);
+
+            var commitToSelect = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
+            Assert.NotNull(commitToSelect);
+
+            var fileListRefreshCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileList.Files.CollectionChanged += (_, _) => fileListRefreshCompleted.TrySetResult(true);
+
+            vm.CommitList.SelectedCommits.Add(commitToSelect);
+
+            await fileListRefreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileList.Files);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_SelectMultipleCommits_FileListShowsUnion()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 1", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 2", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var commits = vm.CommitList.Commits.Where(c => !c.IsUnstaged && !c.IsStaged).ToList();
+            Assert.Equal(2, commits.Count);
+
+            var fileListRefreshCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileList.Files.CollectionChanged += (_, _) => fileListRefreshCompleted.TrySetResult(true);
+
+            vm.CommitList.SelectedCommits.Add(commits[0]);
+            vm.CommitList.SelectedCommits.Add(commits[1]);
+
+            await fileListRefreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Equal(2, vm.FileList.Files.Count);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_DeselectAll_FileListShowsAllCommits()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 1", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 2", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
+            Assert.NotNull(commit);
+
+            var fileListRefreshCompleted1 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileList.Files.CollectionChanged += (_, _) => fileListRefreshCompleted1.TrySetResult(true);
+            vm.CommitList.SelectedCommits.Add(commit);
+            await fileListRefreshCompleted1.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileList.Files);
+
+            var fileListRefreshCompleted2 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileList.Files.CollectionChanged += (_, _) => fileListRefreshCompleted2.TrySetResult(true);
+            vm.CommitList.SelectedCommits.Clear();
+            await fileListRefreshCompleted2.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Equal(2, vm.FileList.Files.Count);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task CommitList_SelectionChange_DiffViewUpdates()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "content1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 1", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "file2.txt"), "content2");
+            Commands.Stage(repo, "*");
+            repo.Commit("Commit 2", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
+            Assert.NotNull(commit);
+
+            var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
+
+            vm.CommitList.SelectedCommits.Add(commit);
+
+            await diffViewUpdatedCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Single(vm.FileDiffs);
+        }
+    }
 }

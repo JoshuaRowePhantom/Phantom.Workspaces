@@ -39,6 +39,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         this.FileList.SelectedFiles.CollectionChanged += this.OnSelectedFilesChanged;
+        this.CommitList.SelectedCommits.CollectionChanged += this.OnSelectedCommitsChanged;
 
         Lifetime.Run(this.RefreshAsync);
     }
@@ -215,9 +216,23 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
     }
 
+    private void OnSelectedCommitsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+            ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+            : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+        Lifetime.Run(async ct =>
+        {
+            await this.FileList.RefreshAsync(this.RepositoryPath, selectedCommits, ct);
+            await this.RebuildFileDiffsAsync(selectedCommits, ct);
+        });
+    }
+
     public override async ValueTask DisposeAsync()
     {
         this.FileList.SelectedFiles.CollectionChanged -= this.OnSelectedFilesChanged;
+        this.CommitList.SelectedCommits.CollectionChanged -= this.OnSelectedCommitsChanged;
 
         this.refreshCts?.Cancel();
         this.refreshCts?.Dispose();
