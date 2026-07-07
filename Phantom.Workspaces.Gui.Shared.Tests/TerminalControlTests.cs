@@ -84,7 +84,7 @@ public sealed class TerminalControlTests
         control.Session = vm;
 
         // Push 'H', 'i' directly via the test hook.
-        control.PushBytesForTest(Encoding.ASCII.GetBytes("Hi"));
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Hi"));
 
         var vtc = control.Vtc;
         Assert.NotNull(vtc);
@@ -122,7 +122,7 @@ public sealed class TerminalControlTests
         };
         control.RaiseEvent(args);
 
-        Assert.Equal(Encoding.UTF8.GetBytes("\x1b[A"), stream.ToArray());
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("\x1b[A"), stream.ToArray());
     }
 
     // ── TerminalControl – resize callback ─────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ public sealed class TerminalControlTests
         var consumer = new DataConsumer(vtc);
 
         // ESC [ 3 1 m = red foreground, then ASCII 'A'
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[31mA"));
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[31mA"));
 
         var line = vtc.ViewPort.GetVisibleLine(0);
         Assert.NotNull(line);
@@ -185,7 +185,7 @@ public sealed class TerminalControlTests
         var consumer = new DataConsumer(vtc);
 
         // Set red, write 'A', then reset, write 'B'.
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[31mA\x1b[0mB"));
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[31mA\x1b[0mB"));
 
         var line = vtc.ViewPort.GetVisibleLine(0);
         Assert.NotNull(line);
@@ -203,7 +203,7 @@ public sealed class TerminalControlTests
         var consumer = new DataConsumer(vtc);
 
         // ESC [ 1 m = bold/bright
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[1mX"));
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[1mX"));
 
         var line = vtc.ViewPort.GetVisibleLine(0);
         Assert.NotNull(line);
@@ -220,10 +220,10 @@ public sealed class TerminalControlTests
         var consumer = new DataConsumer(vtc);
 
         // Write on normal screen, then switch to alt screen.
-        consumer.Push(Encoding.ASCII.GetBytes("Normal"));
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("Normal"));
 
         // ESC [ ? 1 0 4 9 h = enable alt screen with cursor save (xterm)
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[?1049h"));
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[?1049h"));
 
         // Alt screen should be blank (empty buffer). GetVisibleLine may return null for an empty line.
         var line = vtc.ViewPort.GetVisibleLine(0);
@@ -240,7 +240,7 @@ public sealed class TerminalControlTests
         var consumer = new DataConsumer(vtc);
 
         // ESC [ ? 1 0 0 6 h = enable SGR extended mouse mode
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[?1006h"));
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[?1006h"));
 
         Assert.True(vtc.SgrMouseMode);
     }
@@ -251,8 +251,8 @@ public sealed class TerminalControlTests
         var vtc = CreateVtc(cols: 80, rows: 24);
         var consumer = new DataConsumer(vtc);
 
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[?1006h")); // enable
-        consumer.Push(Encoding.ASCII.GetBytes("\x1b[?1006l")); // disable
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[?1006h")); // enable
+        consumer.Push(System.Text.Encoding.ASCII.GetBytes("\x1b[?1006l")); // disable
 
         Assert.False(vtc.SgrMouseMode);
     }
@@ -271,7 +271,7 @@ public sealed class TerminalControlTests
         control.Arrange(new Rect(0, 0, 800, 600));
         control.Session = vm;
         // ANSI palette colour 31 (red) — no explicit RGB, so ForegroundRgb is null
-        control.PushBytesForTest(Encoding.ASCII.GetBytes("\x1b[31mA"));
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("\x1b[31mA"));
 
         using var renderTarget = new RenderTargetBitmap(new PixelSize(800, 600), new Vector(96, 96));
         var ex = Record.Exception(() =>

@@ -335,7 +335,7 @@ public partial class TerminalControl : Control
         if (seq is null)
             return;
 
-        var bytes = Encoding.UTF8.GetBytes(seq);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(seq);
         _ = Session.Stream.WriteAsync(bytes).AsTask();
         e.Handled = true;
     }
@@ -350,7 +350,7 @@ public partial class TerminalControl : Control
             ? $"\x1b[200~{e.Text}\x1b[201~"
             : e.Text;
 
-        var bytes = Encoding.UTF8.GetBytes(text);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
         _ = Session.Stream.WriteAsync(bytes).AsTask();
         e.Handled = true;
     }
