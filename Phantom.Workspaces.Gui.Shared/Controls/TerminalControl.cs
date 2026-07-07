@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Phantom.Workspaces.Gui.Shared.Encoding;
 using Phantom.Workspaces.Gui.Shared.Models;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
@@ -409,7 +410,149 @@ public partial class TerminalControl : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Press, e.KeyModifiers, mode);
+            e.Handled = true;
+            return;
+        }
+        
         Focus();
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            if (!ShouldSendMotionEvent(mode, e.GetCurrentPoint(this).Properties))
+                return;
+            
+            SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Motion, e.KeyModifiers, mode);
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            if (_mouseModeState.TrackingMode == VtMouseTrackingMode.X10)
+                return;
+            
+            SendMouseVtSequence(e.GetCurrentPoint(this), MouseEventType.Release, e.KeyModifiers, mode);
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        
+        if (_mouseModeState.EffectiveMode is { } mode)
+        {
+            int button = e.Delta.Y > 0 ? 64 : 65;
+            SendScrollWheelVtSequence(e.GetCurrentPoint(this), button, e.KeyModifiers, mode);
+            e.Handled = true;
+        }
+    }
+
+    private bool ShouldSendMotionEvent(VtMouseMode mode, PointerPointProperties props)
+    {
+        if (_mouseModeState.TrackingMode == VtMouseTrackingMode.X10)
+            return false;
+        
+        if (_mouseModeState.TrackingMode == VtMouseTrackingMode.Button)
+        {
+            return props.IsLeftButtonPressed || props.IsMiddleButtonPressed || props.IsRightButtonPressed;
+        }
+        
+        return true;
+    }
+
+    private void SendMouseVtSequence(PointerPoint point, MouseEventType eventType, KeyModifiers keyMods, VtMouseMode mode)
+    {
+        if (_vtc is null || Session is null)
+            return;
+        
+        int col = Math.Clamp((int)(point.Position.X / _cellWidth) + 1, 1, _vtc.VisibleColumns);
+        int row = Math.Clamp((int)(point.Position.Y / _cellHeight) + 1, 1, _vtc.VisibleRows);
+        
+        int button = DetermineButton(point.Properties, eventType);
+        var modifiers = MapModifiers(keyMods);
+        
+        var seq = VtMouseEncoder.Encode(button, eventType, modifiers, col, row, mode);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(seq);
+        _ = Session.Stream.WriteAsync(bytes).AsTask();
+    }
+
+    private void SendScrollWheelVtSequence(PointerPoint point, int button, KeyModifiers keyMods, VtMouseMode mode)
+    {
+        if (_vtc is null || Session is null)
+            return;
+        
+        int col = Math.Clamp((int)(point.Position.X / _cellWidth) + 1, 1, _vtc.VisibleColumns);
+        int row = Math.Clamp((int)(point.Position.Y / _cellHeight) + 1, 1, _vtc.VisibleRows);
+        
+        var modifiers = MapModifiers(keyMods);
+        
+        var seq = VtMouseEncoder.Encode(button, MouseEventType.Press, modifiers, col, row, mode);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(seq);
+        _ = Session.Stream.WriteAsync(bytes).AsTask();
+    }
+
+    private static int DetermineButton(PointerPointProperties props, MouseEventType eventType)
+    {
+        if (eventType == MouseEventType.Motion)
+        {
+            if (props.IsLeftButtonPressed)
+                return 0;
+            if (props.IsMiddleButtonPressed)
+                return 1;
+            if (props.IsRightButtonPressed)
+                return 2;
+            return 0;
+        }
+        
+        if (eventType == MouseEventType.Press)
+        {
+            if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
+                return 0;
+            if (props.PointerUpdateKind == PointerUpdateKind.MiddleButtonPressed)
+                return 1;
+            if (props.PointerUpdateKind == PointerUpdateKind.RightButtonPressed)
+                return 2;
+        }
+        
+        if (eventType == MouseEventType.Release)
+        {
+            if (props.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased)
+                return 0;
+            if (props.PointerUpdateKind == PointerUpdateKind.MiddleButtonReleased)
+                return 1;
+            if (props.PointerUpdateKind == PointerUpdateKind.RightButtonReleased)
+                return 2;
+        }
+        
+        return 0;
+    }
+
+    private static MouseModifiers MapModifiers(KeyModifiers keyMods)
+    {
+        var modifiers = MouseModifiers.None;
+        
+        if ((keyMods & KeyModifiers.Shift) != 0)
+            modifiers |= MouseModifiers.Shift;
+        if ((keyMods & KeyModifiers.Alt) != 0)
+            modifiers |= MouseModifiers.Alt;
+        if ((keyMods & KeyModifiers.Control) != 0)
+            modifiers |= MouseModifiers.Ctrl;
+        
+        return modifiers;
     }
 
     private static string? MapKey(Key key, KeyModifiers mods)

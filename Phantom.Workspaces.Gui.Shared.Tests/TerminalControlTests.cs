@@ -703,6 +703,150 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
+    // ── TerminalControl – VT mouse reporting ──────────────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingEnabled_WritesVtSequenceToInput()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Enable button tracking mode
+        var modeBytes = System.Text.Encoding.UTF8.GetBytes("\x1b[?1002h");
+        control.MouseModeState.Apply(modeBytes);
+        control.PushBytesForTest(modeBytes);
+        
+        // Verify mouse mode is set
+        Assert.NotNull(control.MouseModeState.EffectiveMode);
+
+        // Raise a pointer pressed event
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(100, 50), 0, pressProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        
+        control.RaiseEvent(pressArgs);
+
+        // Should write a VT mouse sequence
+        var written = stream.ToArray();
+        Assert.True(written.Length > 0);
+        Assert.Equal(0x1b, written[0]); // ESC
+        Assert.Equal((byte)'[', written[1]);
+        Assert.Equal((byte)'M', written[2]);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingEnabled_X10Mode_SuppressesMotionEvents()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Enable X10 mode
+        var modeBytes = System.Text.Encoding.UTF8.GetBytes("\x1b[?1000h");
+        control.MouseModeState.Apply(modeBytes);
+        control.PushBytesForTest(modeBytes);
+
+        // Raise press event
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(100, 50), 0, pressProps, KeyModifiers.None, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        
+        control.RaiseEvent(pressArgs);
+
+        var pressLength = stream.Length;
+        Assert.True(pressLength > 0);
+
+        // Raise motion event
+        var motionProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.Other);
+        var motionArgs = new PointerEventArgs(InputElement.PointerMovedEvent, control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(110, 60), 0, motionProps, KeyModifiers.None);
+        
+        control.RaiseEvent(motionArgs);
+
+        // Stream length should not change (X10 suppresses motion)
+        Assert.Equal(pressLength, stream.Length);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingEnabled_ScrollWheel_WritesButton64Or65()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Enable button tracking mode
+        var modeBytes = System.Text.Encoding.UTF8.GetBytes("\x1b[?1002h");
+        control.MouseModeState.Apply(modeBytes);
+        control.PushBytesForTest(modeBytes);
+
+        // Raise scroll up event (Delta.Y > 0)
+        var scrollProps = new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other);
+        var scrollArgs = new PointerWheelEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(100, 50), 0, scrollProps, KeyModifiers.None, new Vector(0, 1));
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(scrollArgs, InputElement.PointerWheelChangedEvent);
+        
+        control.RaiseEvent(scrollArgs);
+
+        var written = stream.ToArray();
+        // Button 64 for scroll up: 64 + 32 = 96 = '`'
+        Assert.Contains((byte)'`', written);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_MouseReportingEnabled_ModifierKeys_EncodedInSequence()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Enable button tracking mode
+        var modeBytes = System.Text.Encoding.UTF8.GetBytes("\x1b[?1002h");
+        control.MouseModeState.Apply(modeBytes);
+        control.PushBytesForTest(modeBytes);
+
+        // Raise pointer press with Shift held
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(100, 50), 0, pressProps, KeyModifiers.Shift, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        
+        control.RaiseEvent(pressArgs);
+
+        var written = stream.ToArray();
+        // Button 0 with Shift modifier: 0 + 4 = 4, plus 32 = 36 = '$'
+        Assert.Contains((byte)'$', written);
+    }
+
     // ── ChunkedStream helper ──────────────────────────────────────────────────────────────────
 
     /// <summary>
