@@ -435,17 +435,44 @@ public sealed class AgentViewModelEditorTreeTests
 
     private static async Task WaitForMcpToolsLoadedAsync(AgentChat chat)
     {
-        const int timeoutMs = 30_000;
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        cts.CancelAfter(timeoutMs);
-        while (chat.GetToolSnapshot().Count == 0 && !cts.Token.IsCancellationRequested)
+        if (chat.GetToolSnapshot().Count > 0)
         {
-            await Task.Delay(100, cts.Token);
+            return;
         }
 
-        if (cts.Token.IsCancellationRequested)
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnToolsChanged(object? _, EventArgs __)
         {
-            throw new TimeoutException($"MCP tools did not load within {timeoutMs}ms");
+            if (chat.GetToolSnapshot().Count > 0)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.ToolsChanged += OnToolsChanged;
+        try
+        {
+            if (chat.GetToolSnapshot().Count > 0)
+            {
+                return;
+            }
+
+            const int timeoutMs = 30_000;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            cts.CancelAfter(timeoutMs);
+
+            try
+            {
+                await signal.Task.WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"MCP tools did not load within {timeoutMs}ms");
+            }
+        }
+        finally
+        {
+            chat.ToolsChanged -= OnToolsChanged;
         }
     }
 }
