@@ -162,11 +162,6 @@ public partial class TerminalControl : Control
         _resizeCts?.Cancel();
         _resizeCts?.Dispose();
         _resizeCts = null;
-
-        if (_sessionLifetime is not null && Session is not null)
-        {
-            Session = null;
-        }
     }
 
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
