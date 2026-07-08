@@ -1858,6 +1858,79 @@ public sealed class TerminalControlTests
         window.Close();
     }
 
+    // ── ScheduleResize timer does not leak after detach (issue #784) ─────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_ScheduleResize_DoesNotLeakAfterVisualTreeDetach()
+    {
+        var resizeCallCount = 0;
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Session = vm;
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        // Removing from the visual tree stops the pending DispatcherTimer.
+        panel.Children.Remove(control);
+
+        var countAfterDetach = resizeCallCount;
+
+        // Pumping the dispatcher must NOT fire any pending resize.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(countAfterDetach, resizeCallCount);
+        window.Close();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_ScheduleResize_DoesNotLeakAfterSessionDetach()
+    {
+        var resizeCallCount = 0;
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Measure/Arrange a second time to schedule a resize timer.
+        control.Measure(new Size(900, 700));
+        control.Arrange(new Rect(0, 0, 900, 700));
+
+        // Detaching the session stops the pending DispatcherTimer.
+        control.Session = null;
+
+        var countAfterDetach = resizeCallCount;
+
+        // Pumping the dispatcher must NOT fire any pending resize.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(countAfterDetach, resizeCallCount);
+    }
+
     // ── Helper for tests ──────────────────────────────────────────────────────────────────────
 
     private static TerminalControl CreateControlWithSession()

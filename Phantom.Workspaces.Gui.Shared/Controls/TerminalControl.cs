@@ -105,7 +105,7 @@ public partial class TerminalControl : Control
 
     internal TimeSpan ResizeDebounceDelay { get; set; } = TimeSpan.FromMilliseconds(50);
 
-    private CancellationTokenSource? _resizeCts;
+    private DispatcherTimer? _resizeTimer;
     private bool _isDragging;
 
     // Test infrastructure - allows tests to override pointer position
@@ -151,9 +151,8 @@ public partial class TerminalControl : Control
 
     private void DetachSession()
     {
-        _resizeCts?.Cancel();
-        _resizeCts?.Dispose();
-        _resizeCts = null;
+        _resizeTimer?.Stop();
+        _resizeTimer = null;
         
         _ = _sessionLifetime?.DisposeAsync();
         _sessionLifetime = null;
@@ -165,9 +164,8 @@ public partial class TerminalControl : Control
     {
         base.OnDetachedFromVisualTree(e);
 
-        _resizeCts?.Cancel();
-        _resizeCts?.Dispose();
-        _resizeCts = null;
+        _resizeTimer?.Stop();
+        _resizeTimer = null;
     }
 
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
@@ -269,14 +267,14 @@ public partial class TerminalControl : Control
 
     private void ScheduleResize()
     {
-        _resizeCts?.Cancel();
-        _resizeCts = new CancellationTokenSource();
-        var token = _resizeCts.Token;
-        _ = Task.Delay(ResizeDebounceDelay, token).ContinueWith(
-            _ => Dispatcher.UIThread.Post(ApplyResize),
-            CancellationToken.None,
-            TaskContinuationOptions.NotOnCanceled,
-            TaskScheduler.Default);
+        _resizeTimer?.Stop();
+        _resizeTimer = new DispatcherTimer(ResizeDebounceDelay, DispatcherPriority.Normal, Dispatcher.UIThread, (_, _) =>
+        {
+            _resizeTimer?.Stop();
+            _resizeTimer = null;
+            ApplyResize();
+        });
+        _resizeTimer.Start();
     }
 
     private void ApplyResize()
