@@ -500,3 +500,5 @@ mongo-data
 mongo-data-playspace
 /build-output.txt
 Avalonia.Licensing.Local.props
+
+dumps/
