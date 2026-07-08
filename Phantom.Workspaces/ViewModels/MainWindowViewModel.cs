@@ -2188,12 +2188,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         NotifyCollectionChangedEventHandler handler = (_, e) =>
         {
             this.SyncPaneTabsFromDockChange(workspacePane, documentDock, e);
-            RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
+            this.RefreshGlobalAltShortcutLabels();
         };
         collection.CollectionChanged += handler;
         this.innerDockSubscriptions[workspacePane.Id] = handler;
 
-        RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
+        this.RefreshGlobalAltShortcutLabels();
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
@@ -2403,6 +2403,91 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     9 => "0",
                     _ => null,
                 };
+            }
+        }
+    }
+
+    private void RefreshGlobalAltShortcutLabels()
+    {
+        var nonDefaultPanes = this.WorkspacePanes
+            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal) 
+                     && !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
+            .ToList();
+        
+        if (nonDefaultPanes.Count <= 1)
+        {
+            foreach (var pane in nonDefaultPanes)
+            {
+                RefreshTabAltShortcutLabels(pane, this.dockFactory.GetDocumentForTab);
+            }
+            return;
+        }
+        
+        var allTabs = ComputeGlobalTabOrder();
+        for (var i = 0; i < allTabs.Count; i++)
+        {
+            var doc = allTabs[i];
+            doc.EffectiveTabHeader.AltShortcutLabel = i switch
+            {
+                < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
+                9 => "0",
+                _ => null,
+            };
+        }
+    }
+
+    private List<WorkspaceDocument> ComputeGlobalTabOrder()
+    {
+        var allDocuments = new List<WorkspaceDocument>();
+        
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (string.Equals(pane.Id, "default-workspace", StringComparison.Ordinal))
+                continue;
+            
+            if (pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
+                continue;
+            
+            if (pane.ContentLayout is null) continue;
+            
+            var docks = FindAllDocumentDocksInVisualOrder(pane.ContentLayout);
+            foreach (var dock in docks)
+            {
+                if (dock.VisibleDockables is null) continue;
+                
+                foreach (var dockable in dock.VisibleDockables)
+                {
+                    if (dockable is WorkspaceDocument doc)
+                    {
+                        allDocuments.Add(doc);
+                    }
+                }
+            }
+        }
+        
+        return allDocuments;
+    }
+
+    private List<IDocumentDock> FindAllDocumentDocksInVisualOrder(IDockable root)
+    {
+        var result = new List<IDocumentDock>();
+        FindAllDocumentDocksRecursive(root, result);
+        return result;
+    }
+
+    private void FindAllDocumentDocksRecursive(IDockable dockable, List<IDocumentDock> result)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            result.Add(documentDock);
+            return;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                FindAllDocumentDocksRecursive(child, result);
             }
         }
     }

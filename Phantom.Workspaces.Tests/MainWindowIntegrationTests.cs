@@ -4670,12 +4670,26 @@ public sealed class MainWindowIntegrationTests
 
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
-        // This test will fail until the implementation is complete
-        // Left pane tabs should be numbered 1-2, right pane 3-4
         var dockA = FindDocumentDockIn(paneA.ContentLayout!);
         var dockB = FindDocumentDockIn(paneB.ContentLayout!);
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
+
+        var docsA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var docsB = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        
+        Assert.Equal(2, docsA.Count);
+        Assert.Equal(2, docsB.Count);
+        
+        Assert.Equal("split-h-a1", docsA[0].Id);
+        Assert.Equal("split-h-a2", docsA[1].Id);
+        Assert.Equal("split-h-b1", docsB[0].Id);
+        Assert.Equal("split-h-b2", docsB[1].Id);
+        
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("4", docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -4730,11 +4744,319 @@ public sealed class MainWindowIntegrationTests
 
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
-        // This test will fail until the implementation is complete
         var dockA = FindDocumentDockIn(paneA.ContentLayout!);
         var dockB = FindDocumentDockIn(paneB.ContentLayout!);
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
+
+        var docsA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var docsB = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        
+        Assert.Equal(2, docsA.Count);
+        Assert.Equal(2, docsB.Count);
+        
+        Assert.Equal("split-v-a1", docsA[0].Id);
+        Assert.Equal("split-v-a2", docsA[1].Id);
+        Assert.Equal("split-v-b1", docsB[0].Id);
+        Assert.Equal("split-v-b2", docsB[1].Id);
+        
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("4", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_ThreePanes_OrderIsLeftToRightTopToBottom()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab030001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab030002-0000-4000-8000-000000000002");
+        var workspaceCId = new EntityId("ab030003-0000-4000-8000-000000000003");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab030001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-3-left"]],
+              "display-name": { "default": "Split 3 Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab030002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-3-right"]],
+              "display-name": { "default": "Split 3 Right" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceCId,
+            """
+            {
+              "entity-id": "ab030003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-3-bottom"]],
+              "display-name": { "default": "Split 3 Bottom" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceCId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+        var paneC = viewModel.WorkspacePanes.First(p => p.Id == workspaceCId.ToString());
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-3-a1", Title = "A1" };
+        await viewModel.OpenTabAsync(tabA1);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "split-3-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        viewModel.SelectedWorkspacePane = paneC;
+        var tabC1 = new WebViewModel("https://c1.example.com") { Id = "split-3-c1", Title = "C1" };
+        await viewModel.OpenTabAsync(tabC1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        var dockC = FindDocumentDockIn(paneC.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+        Assert.NotNull(dockC);
+
+        var docA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docB = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docC = dockC!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        
+        Assert.Equal("split-3-a1", docA.Id);
+        Assert.Equal("split-3-b1", docB.Id);
+        Assert.Equal("split-3-c1", docC.Id);
+        
+        Assert.Equal("1", docA.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docB.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docC.EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_DragReorderInSecondaryPane_GlobalLabelsCorrect()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab040001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab040002-0000-4000-8000-000000000002");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab040001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "drag-sec-left"]],
+              "display-name": { "default": "Drag Sec Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab040002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "drag-sec-right"]],
+              "display-name": { "default": "Drag Sec Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "drag-sec-a1", Title = "A1" };
+        await viewModel.OpenTabAsync(tabA1);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "drag-sec-b1", Title = "B1" };
+        var tabB2 = new WebViewModel("https://b2.example.com") { Id = "drag-sec-b2", Title = "B2" };
+        await viewModel.OpenTabAsync(tabB1);
+        await viewModel.OpenTabAsync(tabB2);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockB);
+        
+        var visibleDockables = dockB!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docB2 = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "drag-sec-b2");
+        visibleDockables.Move(visibleDockables.IndexOf(docB2), 0);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        Assert.NotNull(dockA);
+
+        var docA1 = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docsB = dockB.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        
+        Assert.Equal("drag-sec-a1", docA1.Id);
+        Assert.Equal("drag-sec-b2", docsB[0].Id);
+        Assert.Equal("drag-sec-b1", docsB[1].Id);
+        
+        Assert.Equal("1", docA1.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_NewTabOpenedInSecondaryPane_ReceivesCorrectLabel()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab050001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab050002-0000-4000-8000-000000000002");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab050001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "new-sec-left"]],
+              "display-name": { "default": "New Sec Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab050002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "new-sec-right"]],
+              "display-name": { "default": "New Sec Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "new-sec-a1", Title = "A1" };
+        var tabA2 = new WebViewModel("https://a2.example.com") { Id = "new-sec-a2", Title = "A2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "new-sec-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+
+        var docsA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var docB1 = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        
+        Assert.Equal("new-sec-a1", docsA[0].Id);
+        Assert.Equal("new-sec-a2", docsA[1].Id);
+        Assert.Equal("new-sec-b1", docB1.Id);
+        
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docB1.EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_TabClosedFromPrimaryPane_SecondaryPaneLabelsRenumbered()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab060001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab060002-0000-4000-8000-000000000002");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab060001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "close-prim-left"]],
+              "display-name": { "default": "Close Prim Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab060002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "close-prim-right"]],
+              "display-name": { "default": "Close Prim Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "close-prim-a1", Title = "A1" };
+        var tabA2 = new WebViewModel("https://a2.example.com") { Id = "close-prim-a2", Title = "A2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "close-prim-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        viewModel.CloseTab(tabA1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+
+        var docA2 = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docB1 = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        
+        Assert.Equal("close-prim-a2", docA2.Id);
+        Assert.Equal("close-prim-b1", docB1.Id);
+        
+        Assert.Equal("1", docA2.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docB1.EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
