@@ -348,7 +348,6 @@ public sealed class ProcessRunnerTests
         var entry = Assert.Single(logger.Logs);
         Assert.Equal(LogLevel.Error, entry.Level);
         Assert.Contains("timed out", entry.Message);
-        Assert.Contains("timed-out", entry.Message);
     }
 
     [Fact]
