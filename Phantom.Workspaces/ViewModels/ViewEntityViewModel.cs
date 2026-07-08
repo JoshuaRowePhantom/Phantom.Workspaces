@@ -75,7 +75,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         }
     }
 
-    public string ExpandArrow => this.isExpanded ? "▼" : "▶";
+    public string ExpandArrow => this.isExpanded ? "▴" : "▾";
 
     public RelayCommand ToggleExpandCommand { get; }
 

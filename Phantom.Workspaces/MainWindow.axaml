@@ -158,7 +158,7 @@
                                 <StackPanel Margin="{Binding IndentMargin}"
                                             Spacing="6">
                                     <Border IsVisible="{Binding HasTraversedChildren}" Classes="entity-card-expand-section">
-                                        <Button Content="{Binding ExpandArrow}" Command="{Binding ToggleExpandCommand}" />
+                                        <Button Classes="entity-card-expand-button" Content="{Binding ExpandArrow}" Command="{Binding ToggleExpandCommand}" />
                                     </Border>
                                     <ContentControl Content="{Binding EntityCardNode}" />
                                 </StackPanel>
