@@ -11,6 +11,24 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentChatEditorControlTests
 {
     [Fact]
+    public void AgentChatEditorControl_AutoScrollCheckbox_HasToolTipMentioningScrollLockKey()
+    {
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "agent-chat-autoscroll-toggle",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        var checkboxStart = axamlContent.IndexOf("agent-chat-autoscroll-toggle", StringComparison.Ordinal);
+        var checkboxEnd = axamlContent.IndexOf("/>", checkboxStart, StringComparison.Ordinal);
+        var checkboxXaml = axamlContent.Substring(checkboxStart, checkboxEnd - checkboxStart);
+
+        Assert.Contains("ToolTip.Tip", checkboxXaml, StringComparison.Ordinal);
+        Assert.Contains("Scroll Lock", checkboxXaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DetailContentSlots_ItemsPanel_IsPanel_NotStackPanel()
     {
         // Issue #764: The ItemsControl for DetailContentSlots must use Panel (base Panel, not

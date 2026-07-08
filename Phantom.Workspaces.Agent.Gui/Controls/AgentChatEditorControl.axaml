@@ -58,6 +58,7 @@
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"
                                   VerticalAlignment="Center"
+                                  ToolTip.Tip="Toggle auto-scroll (Scroll Lock)"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <Button Classes="agent-chat-status-line-reasoning-toggle"
