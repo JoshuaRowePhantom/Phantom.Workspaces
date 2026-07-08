@@ -214,21 +214,55 @@
                                                     <ItemsControl ItemsSource="{Binding Lines}">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate x:DataType="vm:GitDiffLine">
-                                                                <Grid ColumnDefinitions="40,40,*">
-                                                                    <TextBlock Grid.Column="0"
-                                                                               Text="{Binding OldLineNumber}"
-                                                                               Foreground="#888888"
-                                                                               TextAlignment="Right"
-                                                                               Padding="0,0,4,0" />
-                                                                    <TextBlock Grid.Column="1"
-                                                                               Text="{Binding NewLineNumber}"
-                                                                               Foreground="#888888"
-                                                                               TextAlignment="Right"
-                                                                               Padding="0,0,4,0" />
-                                                                    <TextBlock Grid.Column="2"
-                                                                               Text="{Binding Content}"
-                                                                               TextWrapping="NoWrap" />
-                                                                </Grid>
+                                                                <!-- Use binding path to access parent GitDiffViewModel -->
+                                                                <Panel>
+                                                                    <!-- Unified mode layout (when SideBySide is false) -->
+                                                                    <Grid ColumnDefinitions="40,40,*" IsVisible="{Binding !$parent[ItemsControl;2].((vm:GitDiffViewModel)DataContext).SideBySide}">
+                                                                        <TextBlock Grid.Column="0"
+                                                                                   Text="{Binding OldLineNumber}"
+                                                                                   Foreground="#888888"
+                                                                                   TextAlignment="Right"
+                                                                                   Padding="0,0,4,0" />
+                                                                        <TextBlock Grid.Column="1"
+                                                                                   Text="{Binding NewLineNumber}"
+                                                                                   Foreground="#888888"
+                                                                                   TextAlignment="Right"
+                                                                                   Padding="0,0,4,0" />
+                                                                        <TextBlock Grid.Column="2"
+                                                                                   Text="{Binding Content}"
+                                                                                   TextWrapping="NoWrap" />
+                                                                    </Grid>
+
+                                                                    <!-- Side-by-side mode layout (when SideBySide is true) -->
+                                                                    <Grid ColumnDefinitions="40,*,4,40,*" IsVisible="{Binding $parent[ItemsControl;2].((vm:GitDiffViewModel)DataContext).SideBySide}">
+                                                                        <!-- Left side (old content) - show for Context and Removed lines -->
+                                                                        <TextBlock Grid.Column="0"
+                                                                                   Text="{Binding OldLineNumber}"
+                                                                                   Foreground="#888888"
+                                                                                   TextAlignment="Right"
+                                                                                   Padding="0,0,4,0"
+                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Added}}" />
+                                                                        <TextBlock Grid.Column="1"
+                                                                                   Text="{Binding Content}"
+                                                                                   TextWrapping="NoWrap"
+                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Added}}" />
+
+                                                                        <!-- Separator -->
+                                                                        <Border Grid.Column="2" Background="#22888888" />
+
+                                                                        <!-- Right side (new content) - show for Context and Added lines -->
+                                                                        <TextBlock Grid.Column="3"
+                                                                                   Text="{Binding NewLineNumber}"
+                                                                                   Foreground="#888888"
+                                                                                   TextAlignment="Right"
+                                                                                   Padding="0,0,4,0"
+                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Removed}}" />
+                                                                        <TextBlock Grid.Column="4"
+                                                                                   Text="{Binding Content}"
+                                                                                   TextWrapping="NoWrap"
+                                                                                   IsVisible="{Binding Kind, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter={x:Static vm:GitDiffLineKind.Removed}}" />
+                                                                    </Grid>
+                                                                </Panel>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>

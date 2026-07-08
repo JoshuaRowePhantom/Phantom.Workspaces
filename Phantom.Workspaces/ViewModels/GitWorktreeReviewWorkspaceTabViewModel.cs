@@ -89,7 +89,17 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     public bool SideBySide
     {
         get => this.sideBySide;
-        set => this.SetProperty(ref this.sideBySide, value);
+        set
+        {
+            if (this.SetProperty(ref this.sideBySide, value))
+            {
+                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+            }
+        }
     }
 
     public bool FullFile
@@ -206,7 +216,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                     {
                         foreach (var entry in patch)
                         {
-                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, this.contextLines));
+                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, this.contextLines, this.sideBySide));
                         }
                     }
                 }
