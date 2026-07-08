@@ -21,20 +21,37 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 /// </summary>
 public sealed class GitHubDevTunnelAuthTokenProvider : IDevTunnelAuthTokenProvider
 {
-    public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
+    private readonly IGitHubAccountUpsertService? accountUpsertService;
+
+    public GitHubDevTunnelAuthTokenProvider(IGitHubAccountUpsertService? accountUpsertService = null)
+    {
+        this.accountUpsertService = accountUpsertService;
+    }
+
+    public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
     {
         // Steps 1 + 2: GITHUB_TOKEN env var, then `gh auth token` CLI.
         var token = GitHubAuthTokenResolver.Resolve();
         if (!string.IsNullOrWhiteSpace(token))
         {
-            return Task.FromResult(token);
+            if (this.accountUpsertService is not null)
+            {
+                await this.accountUpsertService.UpsertForTokenAsync(token, cancellationToken).ConfigureAwait(false);
+            }
+
+            return token;
         }
 
         // Step 3: OS keychain cache (populated by a previously completed device flow).
         var cachedToken = TryGetCachedDeviceFlowToken();
         if (!string.IsNullOrWhiteSpace(cachedToken))
         {
-            return Task.FromResult(cachedToken);
+            if (this.accountUpsertService is not null)
+            {
+                await this.accountUpsertService.UpsertForTokenAsync(cachedToken, cancellationToken).ConfigureAwait(false);
+            }
+
+            return cachedToken;
         }
 
         // Step 4: GitHub Device Flow.
@@ -56,3 +73,4 @@ public sealed class GitHubDevTunnelAuthTokenProvider : IDevTunnelAuthTokenProvid
         return null;
     }
 }
+
