@@ -1373,5 +1373,179 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.True(totalContextLines <= 20, $"Expected <= 20 context lines (default 10 before + 10 after), got {totalContextLines}");
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_TriggersRebuild()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            var lines = new List<string> { "line1" };
+            for (int i = 2; i <= 100; i++)
+            {
+                lines.Add($"line{i}");
+            }
+            File.WriteAllText(Path.Combine(this.repoDir, "file.txt"), string.Join("\n", lines));
+            Commands.Stage(repo, "*");
+            repo.Commit("Add file with many lines", sig, sig);
+
+            lines[50] = "MODIFIED LINE 51";
+            File.WriteAllText(Path.Combine(this.repoDir, "file.txt"), string.Join("\n", lines));
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            while (vm.FileDiffs.Count == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+
+            vm.ContextLines = 5;
+
+            await diffRebuildCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Equal(5, vm.ContextLines);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_Zero_ShowsOnlyChangedLines()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            var lines = new List<string> { "line1" };
+            for (int i = 2; i <= 100; i++)
+            {
+                lines.Add($"line{i}");
+            }
+            File.WriteAllText(Path.Combine(this.repoDir, "file.txt"), string.Join("\n", lines));
+            Commands.Stage(repo, "*");
+            repo.Commit("Add file with many lines", sig, sig);
+
+            lines[50] = "MODIFIED LINE 51";
+            File.WriteAllText(Path.Combine(this.repoDir, "file.txt"), string.Join("\n", lines));
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+
+            vm.ContextLines = 0;
+
+            await diffRebuildCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            var diff = vm.FileDiffs.FirstOrDefault();
+            Assert.NotNull(diff);
+
+            var totalContextLines = diff.Hunks.SelectMany(h => h.Lines).Count(l => l.Kind == GitDiffLineKind.Context);
+            Assert.Equal(0, totalContextLines);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_LargeValue_ShowsExtendedContext()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            var lines = new List<string> { "line1" };
+            for (int i = 2; i <= 100; i++)
+            {
+                lines.Add($"line{i}");
+            }
+            File.WriteAllText(Path.Combine(this.repoDir, "file.txt"), string.Join("\n", lines));
+            Commands.Stage(repo, "*");
+            repo.Commit("Add file with many lines", sig, sig);
+
+            lines[50] = "MODIFIED LINE 51";
+            File.WriteAllText(Path.Combine(this.repoDir, "file.txt"), string.Join("\n", lines));
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            while (vm.FileDiffs.Count == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+
+            vm.ContextLines = 15;
+
+            await diffRebuildCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            var diff = vm.FileDiffs.FirstOrDefault();
+            Assert.NotNull(diff);
+
+            var totalContextLines = diff.Hunks.SelectMany(h => h.Lines).Count(l => l.Kind == GitDiffLineKind.Context);
+            Assert.True(totalContextLines >= 30, $"Expected >= 30 context lines (15 before + 15 after), got {totalContextLines}");
+        }
+    }
 }
 
