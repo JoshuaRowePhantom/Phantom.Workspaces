@@ -33,12 +33,6 @@ public sealed class EntityRepository
 
     public IDataAccessLayer DataAccessLayer { get; }
 
-    public static EntityRepository Create(
-        RepositorySource repositorySource)
-    {
-        return CreateAsync(repositorySource).GetAwaiter().GetResult();
-    }
-
     public static async Task<EntityRepository> CreateAsync(
         RepositorySource repositorySource,
         string? userComputerProfileOverride = null)

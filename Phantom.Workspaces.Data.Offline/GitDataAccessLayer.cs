@@ -1,3 +1,4 @@
+using System.Threading;
 using LibGit2Sharp;
 using Phantom.Workspaces.Data;
 
@@ -9,7 +10,7 @@ namespace Phantom.Workspaces.Data.Offline;
 /// </summary>
 public sealed class GitDataAccessLayer : IDataAccessLayer
 {
-    private readonly object updateLock = new();
+    private readonly SemaphoreSlim updateSemaphore = new(1, 1);
     private readonly FilesystemDataAccessLayer filesystemDataAccessLayer;
 
     public GitDataAccessLayer(
@@ -150,11 +151,14 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        lock (this.updateLock)
+        await this.updateSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return this.UpdateCoreAsync(request, cancellationToken).GetAwaiter().GetResult();
+            return await this.UpdateCoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.updateSemaphore.Release();
         }
     }
 
