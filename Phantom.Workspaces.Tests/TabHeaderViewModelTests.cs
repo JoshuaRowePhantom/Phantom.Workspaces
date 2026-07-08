@@ -442,6 +442,41 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
+    // ── DockDataTemplates — DataTemplate presence for Dock header scope (#775) ─
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_TabHeaderViewModel()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_AgentRunningIndicatorTabHeaderItemViewModel()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
