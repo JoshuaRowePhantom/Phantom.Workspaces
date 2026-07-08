@@ -16,6 +16,9 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     /// <summary>Optional tool-entity property overriding the tunnel name (defaults to hostname).</summary>
     public const string TunnelNameProperty = "tunnel-name";
 
+    /// <summary>Timeout for install/uninstall/status operations.</summary>
+    private static readonly TimeSpan TunnelOperationTimeout = TimeSpan.FromMinutes(5);
+
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider;
     private readonly ILogger<RunVsCodeTunnelTool> logger;
     private readonly Func<string, string, CancellationToken, Task<(string Output, int ExitCode)>>? cliRunner;
@@ -39,44 +42,51 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var cliPath = this.ResolveCliPath(context.Tool.Data);
-        var tunnelName = this.ResolveTunnelName(context.Tool.Data);
-
-        var (status, statusError) = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
-
-        if (status == VsCodeTunnelServiceStatus.CliNotFound)
-            return WorkspaceToolExecutionResult.Failure($"Failed to start VS Code CLI: {statusError}");
-
-        if (status == VsCodeTunnelServiceStatus.NotInstalled)
+        try
         {
-            var installExitCode = await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
-            if (installExitCode != 0)
-                return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
+            var cliPath = this.ResolveCliPath(context.Tool.Data);
+            var tunnelName = this.ResolveTunnelName(context.Tool.Data);
+
+            var (status, statusError) = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+
+            if (status == VsCodeTunnelServiceStatus.CliNotFound)
+                return WorkspaceToolExecutionResult.Failure($"Failed to start VS Code CLI: {statusError}");
+
+            if (status == VsCodeTunnelServiceStatus.NotInstalled)
+            {
+                var installExitCode = await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
+                if (installExitCode != 0)
+                    return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
+            }
+            else if (status == VsCodeTunnelServiceStatus.Stopped)
+            {
+                var uninstallExitCode = await this.UninstallServiceAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+                if (uninstallExitCode != 0)
+                    return WorkspaceToolExecutionResult.Failure($"Failed to uninstall VS Code tunnel service: exit code {uninstallExitCode}");
+
+                var installExitCode = await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
+                if (installExitCode != 0)
+                    return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
+            }
+
+            if (status != VsCodeTunnelServiceStatus.Running)
+            {
+                var (postInstallStatus, _) = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+                if (postInstallStatus != VsCodeTunnelServiceStatus.Running)
+                    return WorkspaceToolExecutionResult.Failure("VS Code tunnel service did not start after installation");
+            }
+
+            var tunnelStatusOutput = await this.GetTunnelStatusOutputAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+            var resultContent = !string.IsNullOrWhiteSpace(tunnelStatusOutput)
+                ? tunnelStatusOutput
+                : "VS Code tunnel service is running.";
+
+            return new WorkspaceToolExecutionResult { ResultContent = resultContent };
         }
-        else if (status == VsCodeTunnelServiceStatus.Stopped)
+        catch (TimeoutException ex)
         {
-            var uninstallExitCode = await this.UninstallServiceAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
-            if (uninstallExitCode != 0)
-                return WorkspaceToolExecutionResult.Failure($"Failed to uninstall VS Code tunnel service: exit code {uninstallExitCode}");
-
-            var installExitCode = await this.InstallServiceAsync(cliPath, tunnelName, context.CancellationToken).ConfigureAwait(false);
-            if (installExitCode != 0)
-                return WorkspaceToolExecutionResult.Failure($"Failed to install VS Code tunnel service: exit code {installExitCode}");
+            return WorkspaceToolExecutionResult.Failure($"VS Code tunnel operation timed out: {ex.Message}");
         }
-
-        if (status != VsCodeTunnelServiceStatus.Running)
-        {
-            var (postInstallStatus, _) = await this.GetServiceStatusAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
-            if (postInstallStatus != VsCodeTunnelServiceStatus.Running)
-                return WorkspaceToolExecutionResult.Failure("VS Code tunnel service did not start after installation");
-        }
-
-        var tunnelStatusOutput = await this.GetTunnelStatusOutputAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
-        var resultContent = !string.IsNullOrWhiteSpace(tunnelStatusOutput)
-            ? tunnelStatusOutput
-            : "VS Code tunnel service is running.";
-
-        return new WorkspaceToolExecutionResult { ResultContent = resultContent };
     }
 
     private string ResolveTunnelName(JsonElement? toolData)
@@ -162,7 +172,10 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     private async Task<(string Output, int ExitCode)> DefaultRunCliAsync(
         string cliPath, string arguments, CancellationToken cancellationToken)
     {
-        var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, arguments);
+        var parameters = VsCodeCliLocator.BuildRunProcessParameters(
+            cliPath,
+            arguments,
+            TunnelOperationTimeout);
         var result = await ProcessRunner.RunAndLogAsync(
             parameters,
             this.logger,

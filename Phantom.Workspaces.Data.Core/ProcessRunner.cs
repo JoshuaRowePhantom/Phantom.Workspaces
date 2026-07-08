@@ -126,8 +126,9 @@ public static class ProcessRunner
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            var partialOutput = string.Join(Environment.NewLine, combinedLines);
             throw new TimeoutException(
-                $"Process '{parameters.Command}' did not complete within the allotted {parameters.Timeout}.");
+                $"Process '{parameters.Command}' did not complete within the allotted {parameters.Timeout}. Partial output:\n{partialOutput}");
         }
 
         await stdoutTask.ConfigureAwait(false);
@@ -141,8 +142,9 @@ public static class ProcessRunner
     }
 
     /// <summary>
-    /// Runs a process and, if the exit code is non-zero, logs the combined stdout+stderr output
-    /// via the supplied <paramref name="logger"/> at Warning level before returning the result.
+    /// Runs a process and logs the combined stdout+stderr output via the supplied
+    /// <paramref name="logger"/>. Logs at Debug level on success (exit code 0), at Warning level
+    /// on non-zero exit, and at Error level on timeout.
     /// </summary>
     public static async Task<ProcessResult> RunAndLogAsync(
         RunProcessParameters parameters,
@@ -150,13 +152,37 @@ public static class ProcessRunner
         string? operationDescription = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await RunProcessAsync(parameters, cancellationToken).ConfigureAwait(false);
+        ProcessResult result;
+        try
+        {
+            result = await RunProcessAsync(parameters, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException ex)
+        {
+            logger.LogError(
+                ex,
+                "Process '{Command}' timed out after {Timeout}{Description}. {ExceptionMessage}",
+                parameters.Command,
+                parameters.Timeout,
+                operationDescription is null ? string.Empty : $" ({operationDescription})",
+                ex.Message);
+            throw;
+        }
+
         if (result.ExitCode != 0)
         {
             logger.LogWarning(
                 "Process '{Command}' exited with code {ExitCode}{Description}.\nOutput:\n{Output}",
                 parameters.Command,
                 result.ExitCode,
+                operationDescription is null ? string.Empty : $" ({operationDescription})",
+                result.StandardOutAndError);
+        }
+        else if (!string.IsNullOrWhiteSpace(result.StandardOutAndError))
+        {
+            logger.LogDebug(
+                "Process '{Command}' completed successfully{Description}.\nOutput:\n{Output}",
+                parameters.Command,
                 operationDescription is null ? string.Empty : $" ({operationDescription})",
                 result.StandardOutAndError);
         }

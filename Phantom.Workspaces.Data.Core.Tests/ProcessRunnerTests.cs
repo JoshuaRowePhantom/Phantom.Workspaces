@@ -292,6 +292,84 @@ public sealed class ProcessRunnerTests
         Assert.Equal(42, result.ExitCode);
     }
 
+    [Fact]
+    public async Task RunAndLogAsync_ProcessSucceeds_LogsStdoutAtDebugLevel()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "echo test-output && exit 0"]),
+            logger);
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Debug, entry.Level);
+        Assert.Contains("test-output", entry.Message);
+    }
+
+    [Fact]
+    public async Task RunAndLogAsync_ProcessSucceeds_LogsStderrAtDebugLevel()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "echo test-error 1>&2 && exit 0"]),
+            logger);
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Debug, entry.Level);
+        Assert.Contains("test-error", entry.Message);
+    }
+
+    [Fact]
+    public async Task RunAndLogAsync_ProcessTimesOut_LogsOutputAtErrorLevel()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await ProcessRunner.RunAndLogAsync(
+                new RunProcessParameters(
+                    "cmd.exe",
+                    ["/c", "echo timed-out && ping -n 9999 127.0.0.1"],
+                    Timeout: TimeSpan.FromMilliseconds(100)),
+                logger));
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Error, entry.Level);
+        Assert.Contains("timed out", entry.Message);
+        Assert.Contains("timed-out", entry.Message);
+    }
+
+    [Fact]
+    public async Task RunProcessAsync_TimeoutExpires_ThrowsTimeoutException()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parameters = new RunProcessParameters(
+            Command: "cmd.exe",
+            Arguments: ["/c", "ping", "-n", "9999", "127.0.0.1"],
+            Timeout: TimeSpan.FromMilliseconds(50));
+
+        var ex = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await ProcessRunner.RunProcessAsync(parameters));
+
+        Assert.Contains("did not complete within", ex.Message);
+    }
+
     private sealed class FakeLogger : ILogger
     {
         public List<(LogLevel Level, string Message)> Logs { get; } = [];
