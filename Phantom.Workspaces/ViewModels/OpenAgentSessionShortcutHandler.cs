@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
@@ -19,8 +20,9 @@ using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
+public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDisposable
 {
+    private readonly ViewModelLifetime lifetime = new();
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable? runningAgentChatTable;
@@ -34,6 +36,8 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         this.trustedExecutorSelector = trustedExecutorSelector;
         this.runningAgentChatTable = runningAgentChatTable;
     }
+
+    public ValueTask DisposeAsync() => lifetime.DisposeAsync();
 
     public override bool ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
@@ -54,6 +58,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         // while still allowing the same session to be open in multiple panes simultaneously,
         // sharing a single AgentChat via RunningAgentChatTable.
         var paneId = mainWindowViewModel.SelectedWorkspacePane?.Id;
+
+        string? agentSessionId = null;
+        if (entityViewModel.Data is System.Text.Json.JsonElement entityDataElement
+            && entityDataElement.TryGetProperty("agent-session-id", out var agentSidEl)
+            && agentSidEl.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            agentSessionId = agentSidEl.GetString();
+        }
+
         var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
             Id = paneId is not null ? $"{paneId}-{entityViewModel.EntityId}" : entityViewModel.EntityId.ToString(),
@@ -61,13 +74,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             DockRegion = "full",
             Entity = entityViewModel,
             NotificationService = mainWindowViewModel.NotificationService,
-            AgentSessionId = entityViewModel.EntityId.ToString(),
+            AgentSessionId = agentSessionId,
         };
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
         // Complete initialization in the background
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
-        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
+        lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
 
         return true;
     }
@@ -80,7 +93,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
     {
         try
         {
-            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, foregroundScheduler);
+            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, tab.Id, foregroundScheduler);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (result is var (agent, loggerFactory, lease))
@@ -132,9 +145,92 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         };
 
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
-        _ = Task.Run(() => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
+        lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
 
         return loadingTab;
+    }
+
+    /// <summary>
+    /// Creates an agent chat for the given session in the <see cref="IRunningAgentChatTable"/>,
+    /// enqueues <paramref name="resumePrompt"/> as the first user message, and returns the
+    /// acquired lease. Returns <see langword="null"/> when the table is unavailable or the
+    /// entity data is missing required fields.
+    /// </summary>
+    internal async Task<RunningAgentChatLease?> TryStartAutoResumeAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        string resumePrompt,
+        TaskScheduler foregroundScheduler)
+    {
+        if (this.runningAgentChatTable is null)
+        {
+            return null;
+        }
+
+        if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
+            || !agentSessionEntityData.TryGetProperty("agent-session-id", out var agentSessionIdElement)
+            || agentSessionIdElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(agentSessionIdElement.GetString())
+            || (!agentSessionEntityData.TryGetProperty("agent-source-entity-id", out var agentDefinitionEntityIdElement)
+                && !agentSessionEntityData.TryGetProperty("agent-definition-entity-id", out agentDefinitionEntityIdElement))
+            || agentDefinitionEntityIdElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(agentDefinitionEntityIdElement.GetString())
+            || !Guid.TryParse(agentDefinitionEntityIdElement.GetString(), out var agentDefinitionEntityIdValue))
+        {
+            return null;
+        }
+
+        var agentSessionId = agentSessionIdElement.GetString();
+        var agentDefinitionEntityId = new EntityId(agentDefinitionEntityIdValue);
+        var parameterValues = agentSessionEntityData.TryGetProperty("parameter-values", out var pvElement)
+            ? ReadStringDictionary(pvElement)
+            : null;
+        var agentDefinitionEntity = (await mainWindowViewModel.EntityBroker.GetEntitiesAsync([agentDefinitionEntityId]))
+            .FirstOrDefault();
+        if (agentDefinitionEntity?.Data is not JsonElement agentSourceEntityData)
+        {
+            return null;
+        }
+
+        var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel);
+
+        CreateAgentChatRequest createAgentChatRequest;
+        if (agentSourceEntityData.TryGetProperty("definition", out var definitionElement))
+        {
+            createAgentChatRequest = new CreateAgentChatRequest
+            {
+                AgentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText()),
+                AgentSessionId = agentSessionId,
+                AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
+            };
+        }
+        else if (agentSourceEntityData.TryGetProperty("manifest", out var manifestElement))
+        {
+            createAgentChatRequest = new CreateAgentChatRequest
+            {
+                AgentManifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText()),
+                Parameters = parameterValues,
+                ToolResourceFactory = agentServices.ToolResourceFactory,
+                AgentSessionId = agentSessionId,
+                AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
+            };
+        }
+        else
+        {
+            return null;
+        }
+
+        var lease = await this.runningAgentChatTable.AcquireAsync(
+            new AgentSessionId(agentSessionId!),
+            createAgentChatRequest.AgentDefinition,
+            createAgentChatRequest.AgentServices,
+            agentSessionEntity.DisplayName,
+            agentSessionEntity.EntityId.ToString());
+
+        lease.AgentChat.EnqueueUserMessage(resumePrompt);
+        return lease;
     }
 
     public async Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
@@ -159,6 +255,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
     private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)?> TryBuildAgentAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
+        string agentSessionTabId,
         TaskScheduler foregroundScheduler)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
@@ -223,8 +320,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
         if (this.runningAgentChatTable is not null)
         {
             lease = await this.runningAgentChatTable.AcquireAsync(
-                agentSessionId!,
-                () => this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel));
+                new AgentSessionId(agentSessionId!),
+                createAgentChatRequest.AgentDefinition,
+                createAgentChatRequest.AgentServices,
+                agentSessionEntity.DisplayName,
+                agentSessionEntity.EntityId.ToString());
             agentChat = lease.AgentChat;
         }
         else
@@ -232,13 +332,27 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
             agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
         }
 
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionTabId);
+
+        var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
+        var trustedExecutorIdentifier = createAgentChatRequest.AgentDefinition is not null
+            && owningProfileEntityId != default
+            && owningProfileEntityId != localProfileEntityId
+            ? owningProfileEntityId.ToString()
+            : TrustProfile.LocalClientInstance;
 
         agent.ConfigureSlashCommands(
             () => new SlashCommandContext
             {
                 AgentChat = agentChat,
                 AgentSessionEntityId = agentSessionEntity.EntityId.ToString(),
+                TrustedExecutorIdentifier = trustedExecutorIdentifier,
+                CurrentAutoResume = agentSessionEntity.Data is JsonElement entityDataSnapshot
+                    ? AutoResumeService.ReadFromEntityData(entityDataSnapshot)
+                    : null,
+                UpdateAutoResumeAsync = (newSettings, ct) =>
+                    UpdateAutoResumeInEntityAsync(mainWindowViewModel, agentSessionEntity, newSettings),
                 CurrentParameterValues = ReadStringDictionary(
                     agentSessionEntity.Data is JsonElement d
                     && d.TryGetProperty("parameter-values", out var pv) ? pv : default),
@@ -381,6 +495,58 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler
                     {
                         EntityChangeMode = EntityChangeMode.Replace,
                         Data = mergedDoc.RootElement.Clone(),
+                    },
+                ],
+            });
+    }
+
+    private static async Task UpdateAutoResumeInEntityAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel agentSessionEntity,
+        AutoResumeSettings? newSettings)
+    {
+        if (agentSessionEntity.Data is not JsonElement currentData)
+        {
+            return;
+        }
+
+        var node = JsonNode.Parse(currentData.GetRawText())!.AsObject();
+        if (newSettings is null)
+        {
+            node.Remove("auto-resume");
+        }
+        else
+        {
+            var autoResumeNode = new JsonObject
+            {
+                ["trusted-executor"] = newSettings.TrustedExecutor,
+            };
+            if (newSettings.ResumePrompt is not null)
+            {
+                autoResumeNode["resume-prompt"] = newSettings.ResumePrompt;
+            }
+
+            node["auto-resume"] = autoResumeNode;
+        }
+
+        var updated = JsonSerializer.SerializeToElement(node);
+        await mainWindowViewModel.EntityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = $"Update auto-resume for {agentSessionEntity.DisplayName}.",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        ConcurrencyTag = agentSessionEntity.ConcurrencyTag,
+                        Data = updated,
                     },
                 ],
             });

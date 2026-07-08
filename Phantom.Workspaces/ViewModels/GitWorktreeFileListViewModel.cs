@@ -64,6 +64,9 @@ public sealed class GitWorktreeFileListViewModel : ViewModelBase
         catch (LibGit2SharpException)
         {
         }
+        catch (ArgumentException)
+        {
+        }
 
         // Merge by path
         var merged = entries

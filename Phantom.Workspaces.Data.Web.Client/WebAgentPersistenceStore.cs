@@ -82,6 +82,44 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
         return result?.Messages ?? [];
     }
 
+    public async ValueTask AddSubAgentLinkAsync(
+        string parentSessionId,
+        string childSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var dto = new AddSubAgentLinkRequest
+        {
+            ParentSessionId = parentSessionId,
+            ChildSessionId = childSessionId,
+        };
+
+        using var response = await this.httpClient
+            .PostAsJsonAsync("/agent/persistence/sub-agent-links/add", dto, SerializerOptions, cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await this.httpClient
+            .PostAsJsonAsync(
+                "/agent/persistence/sub-agent-links/read",
+                new ReadSubAgentChildIdsRequest { ParentSessionId = parentSessionId },
+                SerializerOptions,
+                cancellationToken)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content
+            .ReadFromJsonAsync<ReadSubAgentChildIdsResponse>(SerializerOptions, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result?.ChildSessionIds.Select(static id => new AgentSessionId(id)).ToList()
+            ?? (IReadOnlyList<AgentSessionId>)Array.Empty<AgentSessionId>();
+    }
+
     private static PersistedAgentDto ToDto(PersistedAgent agent) => new()
     {
         AgentSessionId = agent.AgentSessionId,

@@ -23,6 +23,7 @@ internal static class ChatOutputHtmlRenderer
 {
     public const string HistoryContainerId = "chat-history";
     public const string RunningContainerId = "chat-running";
+    public const string RunningSubAgentsContainerId = "running-subagents";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
 
@@ -207,7 +208,8 @@ internal static class ChatOutputHtmlRenderer
         string messageId,
         string roleLabel,
         IReadOnlyList<(string ElementId, string Html)> contents,
-        DateTimeOffset? timestamp = null)
+        DateTimeOffset? timestamp = null,
+        string? jumpLinkHtml = null)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
@@ -219,11 +221,33 @@ internal static class ChatOutputHtmlRenderer
             builder.Append(content.Html);
         }
 
-        builder.Append("</div></div>");
+        builder.Append("</div>");
+        if (jumpLinkHtml is not null)
+        {
+            builder.Append(jumpLinkHtml);
+        }
+
+        builder.Append("</div>");
         return builder.ToString();
     }
 
-    /// <summary>Builds the empty running-item container that hosts the running turn's messages.</summary>
+    /// <summary>
+    /// Renders the '→ Open sub-agent' jump link element for a tool-result message whose
+    /// <see cref="Phantom.Workspaces.Llm.AgentChatHistoryItem.ParentToolCallId"/> maps to a running
+    /// sub-agent. Clicking the element posts <c>{ type: "navigateToAgent", agentId }</c> to the host.
+    /// </summary>
+    public static string RenderSubAgentJumpLink(string agentId)
+    {
+        var builder = new StringBuilder();
+        builder.Append("<div class=\"chat-subagent-jump\">");
+        builder.Append("<button class=\"chat-jump-link\" data-navigate-agent-id=\"")
+            .Append(HtmlEscape(agentId)).Append("\">");
+        builder.Append("→ Open sub-agent");
+        builder.Append("</button></div>");
+        return builder.ToString();
+    }
+
+
     public static string RenderRunningItemContainer(string runningItemId)
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
 

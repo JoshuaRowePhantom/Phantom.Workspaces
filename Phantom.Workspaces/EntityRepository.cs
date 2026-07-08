@@ -33,28 +33,31 @@ public sealed class EntityRepository
 
     public IDataAccessLayer DataAccessLayer { get; }
 
-    public static EntityRepository Create(
-        RepositorySource repositorySource)
-    {
-        return CreateAsync(repositorySource).GetAwaiter().GetResult();
-    }
-
     public static async Task<EntityRepository> CreateAsync(
         RepositorySource repositorySource,
         string? userComputerProfileOverride = null)
     {
         var underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(repositorySource).ConfigureAwait(false);
         var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
-        var coreDataAccessLayer = isWebSource
-            ? underlyingDataAccessLayer
-            : new MergeProcessingDataAccessLayer(
+        IDataAccessLayer innerDataAccessLayer;
+        if (isWebSource)
+        {
+            innerDataAccessLayer = underlyingDataAccessLayer;
+        }
+        else
+        {
+            var schemaAccessor = new SchemaAccessor(underlyingDataAccessLayer);
+            innerDataAccessLayer = new MergeProcessingDataAccessLayer(
                 new ReferentialIntegrityDataAccessLayer(
-                    new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer)));
+                    new SchemaValidatingDataAccessLayer(underlyingDataAccessLayer, schemaAccessor),
+                    schemaAccessor));
+        }
         if (!isWebSource)
         {
-            await EnsureSeedDataIfNeededAsync(coreDataAccessLayer).ConfigureAwait(false);
+            await EnsureSeedDataIfNeededAsync(innerDataAccessLayer).ConfigureAwait(false);
         }
 
+        var coreDataAccessLayer = new ScheduleDataAccessLayer(innerDataAccessLayer);
         var workspaceEntitySession = await WorkspaceEntitySessionBootstrapper.InitializeAsync(coreDataAccessLayer, userComputerProfileOverride).ConfigureAwait(false);
         var repository = new EntityRepository(repositorySource, coreDataAccessLayer, workspaceEntitySession);
         return repository;

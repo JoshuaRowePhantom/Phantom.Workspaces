@@ -1,0 +1,26 @@
+{
+  "entity-id": "c9fb05c1-6d3a-4bfc-b8c0-0b527845243a",
+  "entity-types": [
+    "entity",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-dock-layout.json"
+    ]
+  ],
+  "display-name": {
+    "default": "Workspace Dock Layout Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/workspace-dock-layout-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/workspace-dock-layout.json"
+  }
+}

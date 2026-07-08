@@ -17,7 +17,7 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces
 
 - Read the full body and all comments.
 - Note the reporter's login — needed if there are open questions.
-- Check for linked design docs under `c:\dev\phantom.workspaces-design\docs\design\`.
+- Check for linked design docs under `docs/design`.
 
 ## Step 2 — Check for open questions
 
@@ -35,25 +35,7 @@ If the issue is ambiguous or missing information needed to implement safely:
 
 If the issue is clear, continue to Step 3.
 
-## Step 3 — Create a branch from `features`
-
-`C:\dev\phantom.workspaces-design` must stay in **detached HEAD** state at all times — never check out `features` or any feature branch there. Create the new branch directly from the detached HEAD (which must be at the `features` tip):
-
-```powershell
-cd C:\dev\phantom.workspaces-design
-git checkout -b <branch-name>
-git checkout --detach   # immediately re-detach; the branch now exists but HEAD is detached
-```
-
-If the main directory is not at the `features` tip, sync it first without checking out the branch:
-
-```powershell
-git fetch origin features:features   # update the features ref without checking it out
-```
-
-Choose a short, descriptive branch name (e.g. `fix/tab-icons`, `feat/default-workspace`).
-
-## Step 4 — Create or reuse a worktree in `worktrees/`
+## Step 3 — Create or reuse a worktree in `worktrees/`
 
 Worktrees are named with plain numbers: `1`, `2`, `3`, etc. Pick the lowest-numbered worktree that has **no associated branch** (i.e. is checked out to `features` or detached HEAD — meaning it is free to use).
 
@@ -83,6 +65,17 @@ All subsequent work runs from inside the worktree:
 Push-Location C:\dev\phantom.workspaces-design\worktrees\<N>
 ```
 
+## Step 4 — Create a branch from `features`
+
+The current working directory must stay in **detached HEAD** state at all times — never check out `features` or any feature branch there. Create the new branch directly from the features branch:
+
+Choose a short, descriptive branch name that includes the bug number (e.g. `fix/555-tab-icons`, `feat/104-default-workspace`).
+
+```powershell
+cd worktree-directory-name-here
+git checkout -b <branch-name> features
+```
+
 ## Step 5 — Design and document
 
 Post a comment on the issue summarising:
@@ -94,7 +87,7 @@ Post a comment on the issue summarising:
 gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "## Design`n`n..."
 ```
 
-Update any relevant design doc in `c:\dev\phantom.workspaces-design\docs\design\` if the change affects documented design.
+Update any relevant design doc in `docs/design` within the worktree if the change affects documented design.
 
 ## Step 6 — Plan and document tests
 
@@ -115,7 +108,7 @@ Write the planned tests before any implementation code. Tests may initially fail
 Patterns to follow:
 - Unit tests → appropriate `*.Tests` project
 - Integration tests → `Phantom.Workspaces.Tests\MainWindowIntegrationTests.cs` or a nearby focused file
-- Deterministic synchronisation only — no `Task.Delay` or timing-based waits
+- Deterministic synchronisation only — no `Task.Delay` or timing-based waits, no fixed dispatcher-pass pumping (repeated `RunAsync(DispatcherPriority.Background, …)`)
 - Simple test doubles for interfaces; no Moq unless already present in that project
 
 ## Step 8 — Implement
@@ -128,21 +121,23 @@ Make the minimal changes to make the tests pass. Do not fix unrelated issues.
 
 ## Step 9 — Build and run tests
 
-First, verify the entire solution builds (this catches errors in projects excluded from the test suite):
+### 9a — Build the full solution first (mandatory)
 
 ```powershell
 dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
 ```
 
-All lines matching `error ` must be zero. Fix any build errors before proceeding.
+All lines matching `error ` must be zero. **If any build errors appear, stop here and fix them before running tests or committing. Do not proceed past this point with a broken build.**
 
-Then run the fast test suite:
+This step is required because `.\scripts\run-tests.ps1` only compiles projects that have test assemblies. Library projects with no corresponding test project (e.g. `Phantom.Workspaces.Data.Web.Client`) are not compiled by the test runner — compile errors there go undetected unless this build step is run first.
+
+### 9b — Run the fast test suite
 
 ```powershell
 .\scripts\run-tests.ps1 -Mode fast
 ```
 
-### 9a — Check for hang dumps before reading results
+### 9c — Check for hang dumps before reading results
 
 After the test run completes, before reading `test-results.log`, check for `.dmp` files produced by a crashed or timed-out test host:
 
@@ -156,7 +151,7 @@ if ($dumps) {
 
 If dumps are present, invoke the `diagnose-hang-dump` skill now and record the resulting issue number before continuing.
 
-### 9b — Search for related bugs before rerunning
+### 9d — Search for related bugs before rerunning
 
 Read `scripts\test-results.log`. All suites must show `Failed: 0`. Fix any failures before proceeding.
 
@@ -213,7 +208,7 @@ Run the full suite only when the change touches the filesystem or Git repository
 .\scripts\run-tests.ps1 -Mode full
 ```
 
-## Step 9b — Verify code quality
+## Step 9e — Verify code quality
 
 Apply the shared code verification criteria from `.github/skills/shared/CODE-VERIFICATION.md`.
 Inspect the code you just wrote against every criterion in that file.
@@ -230,6 +225,39 @@ git commit -m "Fix #<NUMBER>: <short description>
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
+
+## Step 10b — Merge `features` and validate
+
+Pull any upstream changes from `features` before verifying or merging back:
+
+```powershell
+git merge features --no-edit
+dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
+.\scripts\run-tests.ps1 -Mode fast
+```
+
+Resolve any conflicts, then verify the build and tests:
+
+All `error ` lines from the build must be zero. Read `scripts\test-results.log`. If either the build or any tests fail:
+1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
+2. If the failure is unrelated to the merge or your changes (pre-existing flaky test), apply the root cause analysis process from Step 9 — read the failure, confirm it is clearly unrelated, attempt a second run, and document the specific root cause in a filed next-up bug before proceeding. Otherwise fix the failing test or code.
+3. Run tests again.
+4. Repeat until `Failed: 0` across all suites.
+
+**Do not proceed to Step 10c until all tests pass.**
+
+## Step 10c — Validate implementation
+
+Spawn a `verify-closed-issue` subagent for this issue. In the subagent prompt, specify:
+
+- **Working directory:** the current worktree path (e.g. `C:\dev\phantom.workspaces-design\worktrees\<N>`)
+- **Branch under review:** the feature branch name (e.g. `fix/…` or `feat/…`)
+- Instruct the subagent to `cd` into the worktree and use the branch-diff commands from Step 2 of `verify-closed-issue` to identify commits and file changes unique to this branch before searching for implementation
+
+The subagent will report its outcome as `OUTCOME: verified`, `OUTCOME: failed-verification`, or `OUTCOME: superseded`. **No labels will be applied to the issue** — `verify-closed-issue` is read-only in this context; labels are applied by `verify-closed-issues` after the issue is closed.
+
+- If the subagent reports `OUTCOME: verified` → proceed to Step 11.
+- If the subagent reports `OUTCOME: failed-verification` → fix all identified gaps and re-run validation before continuing. **Do not proceed to Step 11 if validation fails.**
 
 ## Step 11 — Post a resolution comment
 
@@ -250,30 +278,7 @@ gh issue comment <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --body "##
 **Commit:** $sha"
 ```
 
-## Step 12 — Merge `features` into the branch
-
-Pull any upstream changes from `features` before merging back:
-
-```powershell
-git merge features --no-edit
-```
-
-Resolve any conflicts, then **build the full solution and run the fast test suite**:
-
-```powershell
-dotnet build --no-incremental 2>&1 | Select-String -Pattern "error " | Select-Object -First 20
-.\scripts\run-tests.ps1 -Mode fast
-```
-
-All `error ` lines from the build must be zero. Read `scripts\test-results.log`. If either the build or any tests fail:
-1. Diagnose the failure — it may be a merge conflict residual, a test that now clashes with upstream changes, or a regression introduced by the merge.
-2. If the failure is unrelated to the merge or your changes (pre-existing flaky test), apply the root cause analysis process from Step 9 — read the failure, confirm it is clearly unrelated, attempt a second run, and document the specific root cause in a filed next-up bug before proceeding. Otherwise fix the failing test or code.
-3. Run tests again.
-4. Repeat until `Failed: 0` across all suites.
-
-**Do not proceed to Step 13 until all tests pass.**
-
-## Step 13 — Fast-forward `features` to the feature branch
+## Step 12 — Fast-forward `features` to the feature branch
 
 Use `git fetch` to fast-forward the `features` ref without checking it out, so other worktrees remain free to update it:
 
@@ -290,7 +295,7 @@ git checkout --detach
 Pop-Location
 ```
 
-`git fetch . <branch>:features` fast-forwards `features` to the tip of the feature branch without a checkout. It fails (non-fast-forward) if `features` is not a direct ancestor — if that happens, return to step 12.
+`git fetch . <branch>:features` fast-forwards `features` to the tip of the feature branch without a checkout. It fails (non-fast-forward) if `features` is not a direct ancestor — if that happens, return to step 10b.
 
 ---
 
@@ -302,12 +307,14 @@ Pop-Location
 4. All work (file edits, builds, tests, commits) runs from inside the worktree directory. Never edit files directly in `C:\dev\phantom.workspaces-design`.
 5. `C:\dev\phantom.workspaces-design` must always remain in **detached HEAD** state. Never check out `features` or any feature branch there.
 6. Tests must pass before committing (step 9 before step 10).
-7. After merging `features` into the branch (step 12), always build the full solution and run tests; fix any failures before fast-forwarding.
-8. Use `git fetch . "<branch>:features"` to update the `features` ref (step 13); if it fails (non-fast-forward), return to step 12.
-9. At the end of step 13, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
+7. After merging `features` into the branch (step 10b), always build the full solution and run tests; fix any failures before verifying or fast-forwarding.
+8. Use `git fetch . "<branch>:features"` to update the `features` ref (step 12); if it fails (non-fast-forward), return to step 10b.
+9. At the end of step 12, always `git checkout --detach` inside the worktree to free it for reuse (leaves it in detached HEAD state with no associated branch).
 10. Do not push any branch unless explicitly instructed.
 11. Never commit without passing tests.
 12. Never use `dotnet test` directly — always `.\scripts\run-tests.ps1`.
 13. Each issue gets its own commit. Do not batch multiple issues into one commit.
 14. If there are open questions, assign back to the reporter and stop — do not guess.
 15. Always include the `Co-authored-by: Copilot` trailer in every commit message.
+16. The full-solution `dotnet build --no-incremental` (Step 9a) must report zero `error ` lines before `run-tests.ps1` is invoked. A passing test run does not substitute for a clean build — library projects with no test assembly will not be compiled by the test runner.
+17. After merging `features` (Step 10b), validation via a `verify-closed-issue` subagent (Step 10c) must pass before posting the resolution comment or closing the issue.

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Linq;
+using System.Text.Json.Serialization;
 using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -12,16 +13,49 @@ public class WorkspaceDocument : Document
     private readonly TabHeaderViewModel cachedTabHeader;
     private IStatusItem? subscribedTabStatus;
 
+    /// <summary>
+    /// Parameterless constructor for JSON deserialization. <see cref="TabViewModel"/> is
+    /// null until <see cref="Initialize"/> is called.
+    /// </summary>
+    public WorkspaceDocument()
+    {
+        this.statusIndicator = new StatusTabHeaderItemViewModel();
+        this.cachedTabHeader = new TabHeaderViewModel { Title = string.Empty };
+        this.cachedTabHeader.Items.Add(this.statusIndicator);
+    }
+
     public WorkspaceDocument(WorkspaceTabViewModel tabViewModel)
     {
-        this.TabViewModel = tabViewModel;
+        this.statusIndicator = new StatusTabHeaderItemViewModel();
+        this.cachedTabHeader = new TabHeaderViewModel { Title = string.Empty };
+
+        this.InitializeCore(tabViewModel);
+    }
+
+    /// <summary>
+    /// Wires a stub document (from the parameterless constructor) to its tab view model.
+    /// Called by <see cref="WorkspaceDocumentGenerator.PrepareDocumentContainer"/> and
+    /// after dock layout restore. No-ops if the document is already initialized.
+    /// </summary>
+    internal void Initialize(WorkspaceTabViewModel tabViewModel)
+    {
+        if (base.Context is null)
+            this.InitializeCore(tabViewModel);
+    }
+
+    private void InitializeCore(WorkspaceTabViewModel tabViewModel)
+    {
+        base.Context = tabViewModel;
         this.Id = tabViewModel.Id;
         this.baseTitle = ComputeBaseTitle(tabViewModel);
         this.Title = this.baseTitle;
         this.CanClose = true;
 
-        this.statusIndicator = new StatusTabHeaderItemViewModel();
-        this.cachedTabHeader = new TabHeaderViewModel { Title = this.baseTitle };
+        // Preserve any descriptor that was set by JSON deserialization; only compute
+        // from the tab when restoring a fresh (stub) document.
+        this.Descriptor ??= BuildDescriptor(tabViewModel);
+
+        this.cachedTabHeader.Title = this.baseTitle;
         this.RebuildTabHeaderItems();
         this.UpdateStatusRunning();
 
@@ -46,20 +80,22 @@ public class WorkspaceDocument : Document
 
     private void UpdateStatusRunning()
     {
-        this.statusIndicator.Status.RunningStatus = this.TabViewModel.TabStatus?.RunningStatus ?? RunningStatus.Idle;
+        this.statusIndicator.Status.RunningStatus = this.TabViewModel?.TabStatus?.RunningStatus ?? RunningStatus.Idle;
     }
 
     private void OnTabViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (this.TabViewModel is not { } tabVm) return;
+
         if (e.PropertyName is nameof(WorkspaceTabViewModel.Title) or nameof(WorkspaceTabViewModel.TabHeader))
         {
-            this.baseTitle = ComputeBaseTitle(this.TabViewModel);
+            this.baseTitle = ComputeBaseTitle(tabVm);
             this.RebuildTabHeaderItems();
             this.UpdateTitle();
         }
         else if (e.PropertyName is nameof(WorkspaceTabViewModel.TabStatus))
         {
-            this.SubscribeToTabStatus(this.TabViewModel.TabStatus);
+            this.SubscribeToTabStatus(tabVm.TabStatus);
             this.UpdateStatusRunning();
         }
     }
@@ -69,8 +105,10 @@ public class WorkspaceDocument : Document
     /// <see cref="StatusTabHeaderItemViewModel"/> as the last item,
     /// preceded by any icon items from <see cref="WorkspaceTabViewModel.TabHeader"/>.
     /// </summary>
+    [JsonIgnore]
     public TabHeaderViewModel EffectiveTabHeader => this.cachedTabHeader;
 
+    [JsonIgnore]
     public bool HasUnreadNotification
     {
         get => this.hasUnreadNotification;
@@ -90,7 +128,7 @@ public class WorkspaceDocument : Document
     private void RebuildTabHeaderItems()
     {
         this.cachedTabHeader.Items.Clear();
-        if (this.TabViewModel.TabHeader is { Items: { } items })
+        if (this.TabViewModel?.TabHeader is { Items: { } items })
         {
             foreach (var item in items.Where(i => i is not StatusTabHeaderItemViewModel))
             {
@@ -116,5 +154,40 @@ public class WorkspaceDocument : Document
         return title.Length > 20 ? title[..17] + "..." : title;
     }
 
-    public WorkspaceTabViewModel TabViewModel { get; }
+    /// <summary>
+    /// The tab view model wired by <see cref="InitializeCore"/> or <see cref="Initialize"/>.
+    /// Always null until one of those is called. <c>base.Context</c> holds the same reference
+    /// at runtime; <c>Context</c> has <c>[IgnoreDataMember]</c> on the base class so it is
+    /// never written to the dock-layout JSON. <c>Owner</c> back-references are serialized
+    /// as <c>$ref</c> markers by <c>ReferenceHandler.Preserve</c>; no shadow is needed.
+    /// </summary>
+    [JsonIgnore]
+    public WorkspaceTabViewModel? TabViewModel => base.Context as WorkspaceTabViewModel;
+
+    /// <summary>
+    /// Serializable descriptor embedded in the dock-layout JSON. Set by <see cref="InitializeCore"/>
+    /// when first wiring a fresh document, preserved during deserialization so that the
+    /// JSON-restored value is not overwritten when <see cref="Initialize"/> wires the tab VM.
+    /// </summary>
+    public DockTabDescriptor? Descriptor { get; set; }
+
+    /// <summary>
+    /// Builds a <see cref="DockTabDescriptor"/> from a live tab view model, capturing the
+    /// identity information needed to recreate the tab on restore.
+    /// </summary>
+    internal static DockTabDescriptor? BuildDescriptor(WorkspaceTabViewModel tab)
+    {
+        if (tab.Entity is { } entity)
+        {
+            if (tab is AgentSessionWorkspaceTabViewModel)
+                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString());
+
+            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open");
+        }
+
+        if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
+            return new BrowserDockTabDescriptor(webVm.AddressBarUrl);
+
+        return null;
+    }
 }

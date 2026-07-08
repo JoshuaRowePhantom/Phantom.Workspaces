@@ -45,6 +45,7 @@
             "echo",
             "github-models",
             "github-copilot",
+            "github-copilot-subagent",
             "ollama",
             "openai",
             "azure"
@@ -74,6 +75,23 @@
             },
             "apiKey": {
               "type": "string"
+            },
+            "providerType": {
+              "type": "string",
+              "description": "Provider type understood by the Copilot runtime. Defaults to 'openai'."
+            },
+            "wireApi": {
+              "type": "string",
+              "description": "Wire API the endpoint speaks. Defaults to 'chat-completions'."
+            },
+            "wireModel": {
+              "type": "string",
+              "description": "Wire model name when it differs from the model id."
+            },
+            "headers": {
+              "type": "object",
+              "description": "Extra request headers forwarded to the custom endpoint.",
+              "additionalProperties": { "type": "string" }
             }
           }
         },

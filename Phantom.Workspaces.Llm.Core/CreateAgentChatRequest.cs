@@ -48,4 +48,19 @@ public struct CreateAgentChatRequest
     /// regardless of which thread builds the request.
     /// </summary>
     public TaskScheduler? ForegroundScheduler { get; init; }
+
+    /// <summary>
+    /// Cancellation token to observe during chat creation. Passed to the persistence store
+    /// factory and other async operations within <see cref="AgentFactory.CreateAgentChatAsync"/>.
+    /// </summary>
+    public CancellationToken CancellationToken { get; init; }
+
+    /// <summary>
+    /// Overrides the factory used to create a persistence store from a
+    /// <see cref="ChatHistoryProviderDefinition"/> extracted from the agent definition's
+    /// <c>chat-history</c> tool options. When <see langword="null"/>,
+    /// <see cref="AgentPersistenceStoreFactory.CreateAsync"/> is used.
+    /// Intended for testing.
+    /// </summary>
+    public Func<ChatHistoryProviderDefinition, CancellationToken, ValueTask<IAgentPersistenceStore>>? PersistenceStoreFactory { get; init; }
 }

@@ -34,10 +34,11 @@
         "Title": { "type": "string" },
         "CanClose": { "type": "boolean" },
         "Proportion": {
-          "type": "number",
-          "description": "Fractional width/height of this item in a split layout. Values sum to 1.0 across siblings.",
-          "minimum": 0,
-          "maximum": 1
+          "description": "Fractional width/height in a split. Dock serialises double.NaN as the string \"NaN\".",
+          "oneOf": [
+            { "type": "number" },
+            { "type": "string", "const": "NaN" }
+          ]
         },
         "VisibleDockables": {
           "type": "array",

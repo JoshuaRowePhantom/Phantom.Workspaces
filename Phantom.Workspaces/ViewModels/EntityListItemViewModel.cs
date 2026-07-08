@@ -37,15 +37,15 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public EntityCardViewModel Card => this.Node.Card;
 
-    public int Order { get; }
+    public int Order { get; private set; }
 
-    public int Level { get; }
+    public int Level { get; private set; }
 
     public string ItemKey { get; }
 
-    public string? ParentItemKey { get; }
+    public string? ParentItemKey { get; private set; }
 
-    public IReadOnlyCollection<string> ChildItemKeys { get; }
+    public IReadOnlyCollection<string> ChildItemKeys { get; private set; }
 
     public bool HasChildren => this.ChildItemKeys.Count > 0;
 
@@ -127,6 +127,37 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
             this.Node.IsExpanded = value;
             this.RaisePropertyChanged(nameof(this.ExpandArrow));
+        }
+    }
+
+    internal void UpdateStructuralData(
+        int order,
+        int level,
+        string? parentItemKey,
+        IReadOnlyCollection<string> childItemKeys)
+    {
+        bool levelChanged = this.Level != level;
+        bool childItemKeysChanged = !this.ChildItemKeys.SequenceEqual(childItemKeys);
+
+        this.Order = order;
+        this.Level = level;
+        this.ParentItemKey = parentItemKey;
+        this.ChildItemKeys = childItemKeys.ToArray();
+
+        if (levelChanged)
+        {
+            this.RaisePropertyChanged(nameof(this.Level));
+            this.RaisePropertyChanged(nameof(this.IndentMargin));
+        }
+
+        if (childItemKeysChanged)
+        {
+            this.RaisePropertyChanged(nameof(this.ChildItemKeys));
+            this.RaisePropertyChanged(nameof(this.HasChildren));
+            this.RaisePropertyChanged(nameof(this.StickyRow));
+            this.RaisePropertyChanged(nameof(this.ContentCornerRadius));
+            this.RaisePropertyChanged(nameof(this.ExpandSectionCornerRadius));
+            this.ToggleExpandCommand.RaiseCanExecuteChanged();
         }
     }
 

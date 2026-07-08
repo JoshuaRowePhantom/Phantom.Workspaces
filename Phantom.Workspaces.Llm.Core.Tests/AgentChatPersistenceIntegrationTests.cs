@@ -288,5 +288,11 @@ public class AgentChatPersistenceIntegrationTests
 
         public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
             => this.inner.ReadMessagesAsync(request, cancellationToken);
+
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => this.inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
+
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => this.inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
     }
 }

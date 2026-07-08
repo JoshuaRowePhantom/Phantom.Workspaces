@@ -153,6 +153,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             {
                 Data = nextDataBson,
                 TypeNames = typeNames.ToArray(),
+                Names = hasData && nextDataBson is not null ? ReadNameComponents(nextDataBson).ToArray() : [],
                 Embedding = embedding,
                 IsDeleted = !hasData,
                 ModifiedTimeUtc = nowUtc,
@@ -205,10 +206,48 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         ArgumentNullException.ThrowIfNull(request);
 
         var timestamps = request.Timestamps?.ToArray() ?? [null];
-        var allDocuments = await _entityCollection
-            .Find(FilterDefinition<MongoDbEntityDocument>.Empty)
+
+        if (request.Entities.Count == 0)
+        {
+            return new GetResult
+            {
+                Batches = timestamps
+                    .Select(static t => new TimestampedEntityBatch { Timestamp = t, Entities = [] })
+                    .ToList(),
+            };
+        }
+
+        // Build a targeted MongoDB filter from the entity sub-requests.
+        var entityFilterDocument = BuildGetFilterDocument(request.Entities);
+        var entityDocuments = await _entityCollection
+            .Find(new BsonDocumentFilterDefinition<MongoDbEntityDocument>(entityFilterDocument))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        // If relationships are requested, also load relationship documents not already in the
+        // entity result set so that ResolveRelationshipsForEntity can find them.
+        List<MongoDbEntityDocument> allDocuments = entityDocuments;
+        var hasRelationshipRequests = request.RelationshipsToReturn != null
+                                      || request.Entities.Any(static e => e.RelationshipsToReturn != null);
+        if (hasRelationshipRequests && entityDocuments.Count > 0)
+        {
+            var loadedIds = entityDocuments.Select(static d => d.Id).ToHashSet(StringComparer.Ordinal);
+            var relationshipDocFilter = new BsonDocumentFilterDefinition<MongoDbEntityDocument>(
+                new BsonDocument
+                {
+                    { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
+                    { "current.data.participants", new BsonDocument("$exists", true) },
+                });
+            var relationshipDocs = await _entityCollection
+                .Find(relationshipDocFilter)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var extra = relationshipDocs.Where(d => !loadedIds.Contains(d.Id)).ToList();
+            if (extra.Count > 0)
+            {
+                allDocuments = [.. entityDocuments, .. extra];
+            }
+        }
 
         var batches = new List<TimestampedEntityBatch>(timestamps.Length);
         foreach (var timestamp in timestamps)
@@ -250,6 +289,68 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             Batches = batches,
         };
+    }
+
+    /// <summary>
+    /// Builds a targeted MongoDB filter document from a list of entity sub-requests.
+    /// Returns an empty document (<c>{}</c>) when a full collection scan is required.
+    /// </summary>
+    /// <remarks>
+    /// The returned filter should be used as a pre-filter only; <c>ResolveMatchingDocuments</c>
+    /// applies the authoritative in-memory post-filter for correctness.
+    /// </remarks>
+    internal static BsonDocument BuildGetFilterDocument(IReadOnlyCollection<GetEntityRequest> entities)
+    {
+        if (entities.Count == 0)
+        {
+            return new BsonDocument();
+        }
+
+        var perRequestClauses = new BsonArray();
+
+        foreach (var entity in entities)
+        {
+            if (entity.EntityId is { } entityId)
+            {
+                perRequestClauses.Add(new BsonDocument("_id", entityId.ToString()));
+                continue;
+            }
+
+            var subClauses = new List<BsonDocument>();
+
+            if (entity.EntityTypeNames?.Values is { Length: > 0 } typeNames)
+            {
+                subClauses.Add(new BsonDocument("current.type-names",
+                    new BsonDocument("$in", new BsonArray(typeNames.Select(n => (BsonValue)new BsonString(n))))));
+            }
+
+            if (entity.EntityName is { } entityName
+                && entity.EnumerateChildren == EnumerateChildrenAction.EnumerateSelf)
+            {
+                // MongoDB array-element equality: {field: value} matches when value is an element of field.
+                // current.names stores string[][], so {current.names: [c0, c1]} matches documents
+                // where [c0, c1] is one of the stored name-component arrays.
+                subClauses.Add(new BsonDocument("current.names",
+                    new BsonArray(entityName.Components.Select(c => (BsonValue)new BsonString(c)))));
+            }
+
+            if (subClauses.Count > 0)
+            {
+                var clause = subClauses.Count == 1
+                    ? subClauses[0]
+                    : new BsonDocument("$and", new BsonArray(subClauses));
+                perRequestClauses.Add(clause);
+            }
+            else
+            {
+                // No targeted filter available for this sub-request; fall back to full collection scan.
+                return new BsonDocument();
+            }
+        }
+
+        return perRequestClauses.Count == 1
+            ? perRequestClauses[0].AsBsonDocument
+            : new BsonDocument("$or", perRequestClauses);
     }
 
     public async Task<QueryResult> QueryAsync(
@@ -1748,6 +1849,13 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         [BsonElement("type-names")]
         public string[] TypeNames { get; init; } = [];
+
+        /// <summary>
+        /// Denormalized name-component arrays, one entry per entity name. Mirrors the output of
+        /// <see cref="ReadNameComponents"/> and is used to build targeted MongoDB name filters.
+        /// </summary>
+        [BsonElement("names")]
+        public string[][] Names { get; init; } = [];
 
         [BsonElement("embedding")]
         [BsonIgnoreIfNull]

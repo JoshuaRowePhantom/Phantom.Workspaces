@@ -67,4 +67,43 @@
             </dock:DockControl.DataTemplates>
         </dock:DockControl>
     </DataTemplate>
+
+    <!-- These DataTemplates are duplicated from WorkspaceDataTemplates.axaml so that they are
+         reachable from within Dock.Avalonia's tab-header rendering scope, which does not walk
+         up to the App-level DataTemplates collection (same class of issue as #374). -->
+    <DataTemplate DataType="vm:TabHeaderViewModel">
+        <Grid HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding Title}" />
+                <ItemsControl ItemsSource="{Binding Items}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="2" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+            <!-- Alt+Shift+N shortcut badge: visible only for panes 1–10; fades in when Alt+Shift is held -->
+            <Border Classes="alt-index-badge"
+                    Classes.alt-held="{Binding IsShortcutBadgeVisible}"
+                    IsVisible="{Binding AltShortcutLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    ZIndex="10">
+                <TextBlock Text="{Binding AltShortcutLabel}"
+                           Classes="caption"
+                           HorizontalAlignment="Center" />
+            </Border>
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+        <ProgressBar Classes="glyph-indicator pulsating-brain"
+                     IsIndeterminate="{Binding IsRunning}" />
+    </DataTemplate>
+
+    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
+        <ProgressBar Classes="glyph-indicator exclamation-indicator"
+                     IsIndeterminate="{Binding HasUnread}" />
+    </DataTemplate>
 </DataTemplates>

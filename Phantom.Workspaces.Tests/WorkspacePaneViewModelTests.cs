@@ -30,7 +30,7 @@ public sealed class WorkspacePaneViewModelTests
         Assert.Single(pane.Tabs);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task EntityWorkspaceTabViewModel_UsesEntityCardNodeWithDeleteCommand()
     {
         var deleteInvocations = 0;

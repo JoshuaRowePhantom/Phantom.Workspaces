@@ -1,5 +1,3 @@
-using AgentSchema;
-using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 
@@ -15,6 +13,22 @@ public interface IAgentPersistenceStore
 
     ValueTask<ChatMessage[]> ReadMessagesAsync(
         ReadMessagesRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Persists a parent→child session ID link. Idempotent — calling twice with the same pair is safe.
+    /// </summary>
+    ValueTask AddSubAgentLinkAsync(
+        string parentSessionId,
+        string childSessionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns all child session IDs that were registered under <paramref name="parentSessionId"/>.
+    /// Returns an empty list when no children are known.
+    /// </summary>
+    ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
+        string parentSessionId,
         CancellationToken cancellationToken = default);
 }
 
@@ -50,3 +64,5 @@ public readonly record struct ReadMessagesRequest
 {
     public required string AgentSessionId { get; init; }
 }
+
+

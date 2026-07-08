@@ -1,9 +1,0 @@
-{
-  "entity-id": "4390816a-6ed9-419a-9bba-975c4a0bd90d",
-  "entity-types": ["entity", "entity-type-view"],
-  "names": [["entity-type-views", "agent-session"]],
-  "display-name": {
-    "default": "Agent Session View"
-  },
-  "fields": []
-}

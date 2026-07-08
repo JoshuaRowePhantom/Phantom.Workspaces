@@ -1,0 +1,97 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             xmlns:models="using:Phantom.Workspaces.Models"
+             xmlns:converters="using:Phantom.Workspaces.Converters"
+             x:Class="Phantom.Workspaces.Controls.UsageTrackerControl"
+             x:CompileBindings="False"
+             Focusable="False">
+    <Border Classes="notifications-panel"
+            Width="420"
+            MaxHeight="520">
+        <Grid RowDefinitions="Auto,*">
+            <Border Grid.Row="0"
+                    Padding="12,8">
+                <TextBlock Text="AI Usage"
+                           FontWeight="SemiBold" />
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
+                          MaxHeight="460">
+                <ItemsControl ItemsSource="{Binding Accounts}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="models:UsageAccount">
+                            <Border Padding="10,8"
+                                    Margin="4,3"
+                                    BorderThickness="0,0,0,1"
+                                    BorderBrush="{DynamicResource Theme.Surface.Popup.Border}">
+                                <StackPanel Spacing="6">
+                                    <!-- Account title as hyperlink -->
+                                    <HyperlinkButton NavigateUri="{Binding SettingsUrl}"
+                                                     Padding="0"
+                                                     FontWeight="SemiBold">
+                                        <TextBlock>
+                                            <Run Text="{Binding Product}" />
+                                            <Run Text=" - " />
+                                            <Run Text="{Binding UserName}" />
+                                        </TextBlock>
+                                    </HyperlinkButton>
+
+                                    <!-- Metrics list -->
+                                    <ItemsControl ItemsSource="{Binding Metrics}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="models:UsageMetric">
+                                                <Grid ColumnDefinitions="120,*,120"
+                                                      Margin="0,2">
+                                                    <!-- Metric title -->
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding Title}"
+                                                               Classes="muted"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11" />
+
+                                                    <!-- Quantity presentation -->
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding QuantityPresentation}"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11"
+                                                               Margin="4,0" />
+
+                                                    <!-- Progress bar: yellow used / light green remaining / black text overlay -->
+                                                    <Panel Grid.Column="2"
+                                                           Height="14">
+                                                        <!-- Remaining (light green background) -->
+                                                        <Border Name="RemainingBar"
+                                                                Background="#90EE90"
+                                                                CornerRadius="3"
+                                                                HorizontalAlignment="Stretch" />
+                                                        <!-- Used (yellow fill, left-aligned, width proportional) -->
+                                                        <Border Name="UsedBar"
+                                                                Background="#FFDD00"
+                                                                CornerRadius="3"
+                                                                HorizontalAlignment="Left"
+                                                                Width="{Binding FractionUsed,
+                                                                    Converter={x:Static converters:FractionToWidthConverter.Instance},
+                                                                    ConverterParameter=120}" />
+                                                        <!-- Percentage text overlay -->
+                                                        <TextBlock HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="Black"
+                                                                   FontSize="9"
+                                                                   FontWeight="Bold"
+                                                                   Text="{Binding FractionUsed,
+                                                                       Converter={x:Static converters:FractionToPercentageConverter.Instance}}" />
+                                                    </Panel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</UserControl>

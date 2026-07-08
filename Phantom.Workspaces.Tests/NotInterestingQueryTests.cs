@@ -9,7 +9,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class NotInterestingQueryTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ExcludingNotInteresting_RemovesNotInterestingTargetsFromQueryResults()
     {
         var ct = TestContext.Current.CancellationToken;

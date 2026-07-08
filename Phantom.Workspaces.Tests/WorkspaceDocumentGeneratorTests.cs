@@ -20,8 +20,22 @@ public sealed class WorkspaceDocumentGeneratorTests
 
         var result = generator.CreateDocumentContainer(StubDock.Instance, tab, 0);
 
-        var doc = Assert.IsType<WorkspaceDocument>(result);
+        // CreateDocumentContainer returns a parameterless stub; TabViewModel is wired
+        // by the subsequent PrepareDocumentContainer call.
+        Assert.IsType<WorkspaceDocument>(result);
+    }
+
+    [Fact]
+    public void PrepareDocumentContainer_WiresTabViewModel()
+    {
+        var generator = new WorkspaceDocumentGenerator();
+        var tab = new EntityWorkspaceTabViewModel { Id = "tab-wire", Title = "Wire Tab" };
+        var doc = new WorkspaceDocument();
+
+        generator.PrepareDocumentContainer(StubDock.Instance, doc, tab, 0);
+
         Assert.Same(tab, doc.TabViewModel);
+        Assert.Equal("tab-wire", doc.Id);
     }
 
     [Fact]

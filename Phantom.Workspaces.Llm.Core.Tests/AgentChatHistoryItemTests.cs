@@ -23,4 +23,21 @@ public sealed class AgentChatHistoryItemTests
 
         Assert.Equal(expected, item.Timestamp);
     }
+
+    [Fact]
+    public void AgentChatHistoryItem_ParentToolCallId_DefaultsToNull()
+    {
+        var item = new AgentChatHistoryItem { Role = ChatRole.Assistant };
+
+        Assert.Null(item.ParentToolCallId);
+    }
+
+    [Fact]
+    public void AgentChatHistoryItem_ParentToolCallId_CanBeSet()
+    {
+        const string expected = "tool-call-abc-123";
+        var item = new AgentChatHistoryItem { Role = ChatRole.Assistant, ParentToolCallId = expected };
+
+        Assert.Equal(expected, item.ParentToolCallId);
+    }
 }

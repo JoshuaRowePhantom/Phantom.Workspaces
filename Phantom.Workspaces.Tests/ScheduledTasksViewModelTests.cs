@@ -9,7 +9,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ScheduledTasksViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_LoadsScheduledTasks_WithResolvedParticipantNames()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -55,7 +55,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(viewModel.HasScheduledTasks);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task TogglePause_PersistsHostPauseState_AndUpdatesButtonText()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -97,7 +97,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(await restarted.RefreshAsync(hostId, TestContext.Current.CancellationToken));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task HasPauseControl_IsFalse_WhenNoPauseServiceSupplied()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -110,7 +110,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.False(viewModel.IsPaused);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ScheduledToolsRunning_IsNull_WhenNoHostProvided()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -122,7 +122,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Null(viewModel.ScheduledToolsRunning);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ScheduledToolsRunning_IsNotNull_WhenHostProvided()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -138,7 +138,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.NotNull(viewModel.ScheduledToolsRunning);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SelectedTask_WhenSet_SelectedToolRowReturnsMatchingToolRow()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -191,7 +191,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Equal("stub", viewModel.SelectedToolRow.ToolType);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SelectedTask_WhenClearedToNull_SelectedToolRowIsNull()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -207,7 +207,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Null(viewModel.SelectedToolRow);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ScheduledTaskItemViewModel_HasFailure_SyncedFromRunningViewModelOnRefresh()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -253,7 +253,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.False(task.IsRunning);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SelectedTask_WhenTaskHasNoToolRow_SelectedToolRowIsNull()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -299,7 +299,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Null(viewModel.SelectedToolRow);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SelectedTask_WhenTaskHasNoToolRow_HasNoRunsForSelectedTask_IsTrue()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -346,7 +346,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(viewModel.HasNoRunsForSelectedTask);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SelectedTask_WhenClearedAfterSelection_HasNoRunsForSelectedTask_IsFalse()
     {
         var broker = await EntityBroker.CreateInitializedAsync(

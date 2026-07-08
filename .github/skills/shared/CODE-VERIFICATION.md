@@ -18,6 +18,7 @@ Apply these criteria when inspecting newly written or modified code and tests. E
 - **Disabled or quarantined tests:** No tests introduced as part of the implementation may be marked `[Skip]`, `xunit.skip`, commented out, or placed in a category that is excluded from the standard fast test run. Such tests indicate untested code.
 - **Unresolved TODOs:** No unresolved TODOs in new code unless each TODO is backed by a filed open issue. A TODO without a corresponding open issue is a verification failure. If TODOs exist and are backed by issues, note the issue numbers in the verification comment.
 - **Timing-dependent tests:** No tests that use `Task.Delay`, `Thread.Sleep`, fixed timeouts, or polling loops as their primary synchronization mechanism. Tests must succeed deterministically using event-driven or state-driven synchronization.
+- **No fixed dispatcher-pass pumping:** Tests must not synchronise by calling a fixed number of background dispatcher passes (repeated `RunAsync(DispatcherPriority.Background, …)` or equivalent). Use event-driven `TaskCompletionSource` synchronisation instead, anchored to an observable state change.
 
 ### Code quality — file a bug but do not fail verification
 

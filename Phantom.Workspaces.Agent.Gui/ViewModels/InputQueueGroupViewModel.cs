@@ -12,6 +12,7 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
     private readonly RelayCommand toggleComposerCommand;
     private readonly RelayCommand removeQueueCommand;
     private readonly RelayCommand<QueueImmediacyOption> setImmediacyCommand;
+    private readonly object itemsLock = new();
     private bool isComposerVisible;
 
     public InputQueueGroupViewModel(InputQueueViewModel parent, AgentChatQueue queue, QueueComposerViewModel composer)
@@ -125,16 +126,22 @@ public sealed class InputQueueGroupViewModel : ViewModelBase, IDisposable, IQueu
 
     public void Refresh()
     {
-        if (this.Items.Count > 0)
-        {
-            this.Items.Clear();
-        }
+        // Snapshot the queue items before touching this.Items so the source cannot be
+        // modified mid-loop, then serialise all mutations to this.Items under a lock to
+        // prevent concurrent Refresh() calls from racing on the ObservableCollection.
+        var queueItems = this.queue.Items.ToList();
 
-        var queueItems = this.queue.Items;
-        for (var index = 0; index < queueItems.Count; index++)
+        lock (this.itemsLock)
         {
-            var message = queueItems[index];
-            this.Items.Add(new InputQueueEntryViewModel(this.parent, this.queue, message));
+            if (this.Items.Count > 0)
+            {
+                this.Items.Clear();
+            }
+
+            foreach (var message in queueItems)
+            {
+                this.Items.Add(new InputQueueEntryViewModel(this.parent, this.queue, message));
+            }
         }
 
         this.RaisePropertyChanged(nameof(this.ItemCount));

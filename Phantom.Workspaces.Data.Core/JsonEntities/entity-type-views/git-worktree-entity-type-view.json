@@ -1,0 +1,14 @@
+{
+  "entity-id": "b8c3a468-ccf6-4f67-9973-0820dfaecc8e",
+  "entity-types": ["entity", "entity-type-view"],
+  "names": [["entity-type-views", "git-worktree"]],
+  "display-name": {
+    "default": "Git Worktree View"
+  },
+  "fields": [
+    { "field-path": ["path"] },
+    { "field-path": ["git", "branch"] },
+    { "field-path": ["git", "head-commit"] },
+    { "field-path": ["target-branch"] }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/user-account.json",
+  "$comment": "user-account entities live under a user entity and are named: [\"users\", \"username\", \"<username>\", \"user-accounts\", \"<provider-hostname>\"] e.g. [\"users\", \"username\", \"jrowe\", \"user-accounts\", \"github.com\"]",
+  "description": "Schema for user-account entities representing a user account on an external provider.",
+  "allOf": [
+    {
+      "$ref": "entity.json"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "entity-types": {
+      "type": "array",
+      "items": {
+        "$ref": "core.json#/$defs/entity-type-id"
+      },
+      "contains": {
+        "const": "user-account"
+      }
+    },
+    "provider": {
+      "type": "string",
+      "format": "uri",
+      "description": "Provider base URL, e.g. https://github.com"
+    },
+    "user-name": {
+      "type": "string",
+      "description": "The account username on this provider"
+    }
+  },
+  "required": ["entity-types", "provider", "user-name"]
+}

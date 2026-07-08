@@ -182,6 +182,13 @@ public sealed record WorkspacesConfiguration
     public string? UserComputerProfileOverride { get; init; }
 
     /// <summary>
+    /// Testing only: when <see langword="true"/>, skips opening the startup workspace during
+    /// <c>InitializeAsync</c>. Prevents the built-in getting-started workspace from being opened
+    /// in tests that inspect tab or workspace state. Not for production use.
+    /// </summary>
+    public bool SkipStartupWorkspace { get; init; }
+
+    /// <summary>
     /// Projects the configured data-access profile into a <see cref="RepositorySource"/>
     /// consumable by <see cref="EntityRepository"/>.
     /// </summary>

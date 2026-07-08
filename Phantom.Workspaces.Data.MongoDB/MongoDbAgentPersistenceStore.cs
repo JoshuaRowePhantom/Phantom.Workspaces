@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Data.MongoDB;
@@ -12,6 +13,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
     private readonly IMongoCollection<MongoDbPersistedSessionDocument> sessionsCollection;
     private readonly IMongoCollection<MongoDbPersistedDefinitionDocument> definitionsCollection;
     private readonly IMongoCollection<MongoDbPersistedMessageDocument> messagesCollection;
+    private readonly IMongoCollection<MongoDbSubAgentManifestDocument> subAgentManifestCollection;
 
     public MongoDbAgentPersistenceStore(
         IMongoDatabase database,
@@ -26,6 +28,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         this.sessionsCollection = database.GetCollection<MongoDbPersistedSessionDocument>($"{collectionName}-sessions");
         this.definitionsCollection = database.GetCollection<MongoDbPersistedDefinitionDocument>($"{collectionName}-definitions");
         this.messagesCollection = database.GetCollection<MongoDbPersistedMessageDocument>($"{collectionName}-messages");
+        this.subAgentManifestCollection = database.GetCollection<MongoDbSubAgentManifestDocument>($"{collectionName}-sub-agent-manifests");
     }
 
     public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
@@ -161,6 +164,43 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         return lastMessage is null ? 0 : lastMessage.Sequence + 1;
     }
 
+    public async ValueTask AddSubAgentLinkAsync(
+        string parentSessionId,
+        string childSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(childSessionId);
+
+        var document = new MongoDbSubAgentManifestDocument
+        {
+            Id = $"{parentSessionId}/{childSessionId}",
+            ParentSessionId = parentSessionId,
+            ChildSessionId = childSessionId,
+        };
+
+        await this.subAgentManifestCollection.ReplaceOneAsync(
+                filter: Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(static x => x.Id, document.Id),
+                replacement: document,
+                options: new ReplaceOptions { IsUpsert = true },
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(
+        string parentSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSessionId);
+
+        var documents = await this.subAgentManifestCollection
+            .Find(Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(static x => x.ParentSessionId, parentSessionId))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return documents.Select(static d => new AgentSessionId(d.ChildSessionId)).ToList();
+    }
+
     private sealed record MongoDbPersistedSessionDocument
     {
         [BsonId]
@@ -193,5 +233,15 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public long Sequence { get; init; }
 
         public BsonDocument Payload { get; init; } = new();
+    }
+
+    private sealed record MongoDbSubAgentManifestDocument
+    {
+        [BsonId]
+        public string Id { get; init; } = string.Empty;
+
+        public string ParentSessionId { get; init; } = string.Empty;
+
+        public string ChildSessionId { get; init; } = string.Empty;
     }
 }

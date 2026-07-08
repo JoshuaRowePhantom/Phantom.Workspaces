@@ -25,3 +25,20 @@ public sealed record ReadMessagesResponse
 {
     public required ChatMessage[] Messages { get; init; }
 }
+
+public sealed record AddSubAgentLinkRequest
+{
+    public required string ParentSessionId { get; init; }
+
+    public required string ChildSessionId { get; init; }
+}
+
+public sealed record ReadSubAgentChildIdsRequest
+{
+    public required string ParentSessionId { get; init; }
+}
+
+public sealed record ReadSubAgentChildIdsResponse
+{
+    public required string[] ChildSessionIds { get; init; }
+}

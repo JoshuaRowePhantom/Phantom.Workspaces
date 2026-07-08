@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.Text.Json;
+using System.Threading;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -7,7 +8,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrowserWorkspaceTabViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_TracksParentChildMetadataAndExpansion()
     {
         var broker = await CreateBrokerAsync();
@@ -97,9 +98,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         Assert.Equal(0, rootItem.StickyRow);
         Assert.Equal(1, parentItem.StickyRow);
         Assert.Null(childItem.StickyRow);
+
+        await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_FolderItem_ExpandsViaItemToggleCommand()
     {
         var broker = await CreateBrokerAsync();
@@ -174,9 +177,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
             viewModel,
             item => string.Equals(item.ItemKey, "[\"tools\",\"git-workspace-scan\"]", StringComparison.Ordinal));
         Assert.Equal(folderItem.ItemKey, childItem.ParentItemKey);
+
+        await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -244,9 +249,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
         Assert.Equal("# Heading\n\nBody", markdownEditor.TextContent);
+
+        await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsLocalizedMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -314,9 +321,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
         Assert.Equal("# Heading\n\nBody", markdownEditor.TextContent);
+
+        await viewModel.DisposeAsync();
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task BrowserList_UsesJsonSchemaFieldEditor_ForSchemaField()
     {
         var broker = await CreateBrokerAsync();
@@ -382,6 +391,185 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         var schemaField = Assert.Single(noteTypeItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "schema");
         var schemaEditor = Assert.IsType<JsonSchemaFieldEditorViewModel>(schemaField);
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
+
+        await viewModel.DisposeAsync();
+    }
+
+    // Regression test for #644: when many SubscribeChildPathAsync completions fire concurrent
+    // RebuildTreeAsync() calls, the coalescing loop must ensure all entities become visible
+    // without a test-host timeout caused by N×M parallel rebuilds.
+    [PhantomAvaloniaFact]
+    public async Task BrowserList_CoalescesRebuildRequests_WhenManySubscriptionsComplete()
+    {
+        var broker = await CreateBrokerAsync();
+
+        // Seed several entities at distinct paths so that BuildChildrenAsync triggers a
+        // SubscribeChildPathAsync call for each, causing multiple concurrent RebuildTreeAsync()
+        // fire-and-forget calls during the initial build.
+        for (int i = 1; i <= 6; i++)
+        {
+            var id = new EntityId($"{i:D8}-{i:D4}-{i:D4}-{i:D4}-{i:D12}");
+            await SeedSnapshotAsync(
+                broker,
+                CreateSnapshot(
+                    id,
+                    new Timestamp(DateTimeOffset.UtcNow, i.ToString()),
+                    $$"""
+                    {
+                      "entity-id": "{{id}}",
+                      "entity-types": ["entity", "folder"],
+                      "names": [["folder-{{i}}"]]
+                    }
+                    """));
+        }
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-tab-coalesce",
+            Title = "Entity Browser",
+        };
+
+        // All six folders must become visible; concurrent rebuild coalescing ensures this
+        // completes without the test-host timeout that the pre-fix N×M cascade caused.
+        for (int i = 1; i <= 6; i++)
+        {
+            var folderKey = $"[\"folder-{i}\"]";
+            await WaitForItemAsync(
+                viewModel,
+                item => string.Equals(item.ItemKey, folderKey, StringComparison.Ordinal));
+        }
+
+        await viewModel.DisposeAsync();
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task DisposeAsync_DuringRebuild_DoesNotHang()
+    {
+        var broker = await CreateBrokerAsync();
+
+        // Seed an entity with a field that requires type resolution (triggers Task.Run in CreateFieldEditorAsync).
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                new Timestamp(DateTimeOffset.UtcNow, "1"),
+                """
+                {
+                  "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  "entity-types": ["entity"],
+                  "names": [["dispose-test"]],
+                  "display-name": { "default": "Dispose Test" },
+                  "content": "some text value"
+                }
+                """));
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-dispose-test",
+            Title = "Dispose Test",
+        };
+
+        // Dispose immediately — the rebuild launched in the constructor may still be in progress.
+        // Without the cancellation fix, the in-flight Task.Run continuations would keep posting
+        // work to the Avalonia dispatcher after the test ends, causing ResetForUnitTests to time out.
+        await viewModel.DisposeAsync();
+
+        // If we reach here and the dispatcher drains cleanly after this test completes, the fix works.
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task DisposeAsync_UnsubscribesCollectionChangedEvents()
+    {
+        var broker = await CreateBrokerAsync();
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-unsub-test",
+            Title = "Unsub Test",
+        };
+
+        await viewModel.DisposeAsync();
+
+        // After disposal, adding a new entity must not trigger any rebuild that would post
+        // work to the dispatcher — the CollectionChanged handler was unsubscribed.
+        var rebuildTriggered = false;
+        viewModel.EntityList.Items.CollectionChanged += (_, _) => { rebuildTriggered = true; };
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                new Timestamp(DateTimeOffset.UtcNow, "1"),
+                """
+                {
+                  "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  "entity-types": ["entity"],
+                  "names": [["unsub-test"]],
+                  "display-name": { "default": "Unsub Test" }
+                }
+                """));
+
+        // Give the dispatcher a chance to process any would-be continuations.
+        await Task.Yield();
+
+        Assert.False(rebuildTriggered, "EntityList must not be updated after DisposeAsync unsubscribes events.");
     }
 
     private static Task<EntityBroker> CreateBrokerAsync()

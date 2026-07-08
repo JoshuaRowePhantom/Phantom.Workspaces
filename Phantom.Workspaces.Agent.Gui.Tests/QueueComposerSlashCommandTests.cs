@@ -1,9 +1,11 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
 using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Linq;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -48,7 +50,7 @@ public sealed class QueueComposerSlashCommandTests
         inputQueue.Dispose();
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Submit_WithNonSlashText_QueuesNormally_WithoutCallingInterceptor()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -82,25 +84,19 @@ public sealed class QueueComposerSlashCommandTests
         var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         var composer = inputQueue.DefaultComposer;
 
-        // Subscribe before Submit so we never miss the addition event.
-        // The processing loop (started in AgentChat.InitializeAsync) may dequeue the item immediately
-        // after it is enqueued, so asserting Items.Count after Submit is a race condition.
-        // The Changed event fires synchronously on the submitting thread inside Enqueue, so the
-        // flag is always set before Submit() returns, regardless of the processing loop.
-        var itemWasQueued = false;
-        chat.DefaultInputQueue.Changed += (_, _) =>
-        {
-            if (chat.DefaultInputQueue.Items.Count > 0)
-            {
-                itemWasQueued = true;
-            }
-        };
-
         // No interceptor set.
         composer.InputText = "/working-directory C:\\Foo";
         composer.Submit();
 
-        Assert.True(itemWasQueued);
+        // Wait for the echo LLM to process the queued item. chat.History is a
+        // ReadOnlyObservableCollection that only grows, so the CollectionChanged-based
+        // wait is race-free: the condition is evaluated on the same thread that mutates
+        // the collection, and the history is never cleared between entries.
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2,
+            "slash text to be queued and processed by the echo LLM");
+
+        Assert.Equal("/working-directory C:\\Foo",
+            string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static c => c.Text)));
 
         inputQueue.Dispose();
     }
@@ -254,5 +250,40 @@ public sealed class QueueComposerSlashCommandTests
         Assert.Equal("/some/path", capturedPartialArgs);
 
         inputQueue.Dispose();
+    }
+
+    private static async Task WaitForConditionAsync(
+        INotifyCollectionChanged collection,
+        Func<bool> condition,
+        string description)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        collection.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task;
+        }
+        finally
+        {
+            collection.CollectionChanged -= OnCollectionChanged;
+        }
     }
 }

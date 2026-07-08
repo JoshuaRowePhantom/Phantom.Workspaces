@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Dock.Avalonia.Controls;
+using Dock.Model;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm;
@@ -11,6 +12,14 @@ namespace Phantom.Workspaces.ViewModels;
 public class WorkspaceDockFactory : Factory
 {
     private readonly MainWindowViewModel mainWindowViewModel;
+
+    private readonly DockState dockState = new();
+
+    /// <summary>
+    /// Captures and restores <see cref="Dock.Model.Core.IDocumentContent.Content"/> state
+    /// so that open document content is preserved across dock-layout serialization round-trips.
+    /// </summary>
+    public DockState DockState => dockState;
 
     /// <summary>
     /// Registry mapping tab IDs to their dock documents. Populated by
@@ -39,7 +48,22 @@ public class WorkspaceDockFactory : Factory
     /// Removes the document registration for the given tab ID (called when a document is cleared).
     /// </summary>
     public void UnregisterDocument(string tabId)
-        => this.documentsByTabId.Remove(tabId);
+    {
+        this.documentsByTabId.Remove(tabId);
+        this.DockableLocator?.Remove(tabId);
+    }
+
+    /// <summary>
+    /// Registers a document for the given tab ID (called when restoring from dock-layout JSON).
+    /// Also updates <see cref="IDockFactory.DockableLocator"/> so the Dock library can locate
+    /// the document by ID when re-wiring the layout.
+    /// </summary>
+    public void RegisterDocument(string tabId, WorkspaceDocument document)
+    {
+        this.documentsByTabId[tabId] = document;
+        if (this.DockableLocator is not null)
+            this.DockableLocator[tabId] = () => this.documentsByTabId.GetValueOrDefault(tabId);
+    }
 
     /// <summary>
     /// Returns the <see cref="WorkspacePaneDocument"/> registered for the given pane ID, or null if none.
@@ -116,18 +140,22 @@ public class WorkspaceDockFactory : Factory
         return root;
     }
 
+    public override void OnDockableClosed(IDockable? dockable)
+    {
+        base.OnDockableClosed(dockable);
+        if (dockable is WorkspaceDocument { TabViewModel: { } tabVm })
+            mainWindowViewModel.OnDockableTabClosed(tabVm);
+    }
+
     public override void InitLayout(IDockable layout)
     {
-        ContextLocator = new Dictionary<string, Func<object?>>
-        {
-            ["Root"] = () => mainWindowViewModel,
-        };
+        if (ContextLocator is null)
+            ContextLocator = new Dictionary<string, Func<object?>>();
+        ContextLocator["Root"] = () => mainWindowViewModel;
 
-        DockableLocator = new Dictionary<string, Func<IDockable?>>
-        {
-        };
+        DockableLocator ??= new Dictionary<string, Func<IDockable?>>();
 
-        HostWindowLocator = new Dictionary<string, Func<IHostWindow?>>
+        HostWindowLocator ??= new Dictionary<string, Func<IHostWindow?>>
         {
             [nameof(IDockWindow)] = () => new PhantomHostWindow(),
         };

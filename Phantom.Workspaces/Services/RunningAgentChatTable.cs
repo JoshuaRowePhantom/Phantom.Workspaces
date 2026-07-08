@@ -1,117 +1,91 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using AgentSchema;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
+using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
 namespace Phantom.Workspaces.Services;
 
+/// <summary>
+/// Wraps <see cref="IRunningAgentChatFactory"/> and maintains a parallel
+/// <see cref="ObservableCollection{T}"/> of <see cref="RunningAgentChatWithEntityInfo"/> by
+/// mirroring <see cref="IRunningAgentChatFactory.RunningSessions"/> and enriching each entry
+/// with workspace entity display information supplied at <see cref="AcquireAsync"/> time.
+///
+/// Threading: <see cref="IRunningAgentChatFactory.RunningSessions"/> mutations are already
+/// dispatched on the foreground scheduler (established in the factory implementation). The
+/// <see cref="System.Collections.Specialized.INotifyCollectionChanged.CollectionChanged"/>
+/// handler therefore runs on the foreground scheduler automatically; all mutations to
+/// <see cref="RunningSessions"/> happen on the foreground scheduler with no additional marshalling.
+/// </summary>
 public sealed class RunningAgentChatTable : IRunningAgentChatTable
 {
-    private sealed class Entry
-    {
-        public Task<AgentChat> ChatTask { get; }
-        private readonly List<RunningAgentChatLease> leases = [];
-
-        public Entry(Task<AgentChat> chatTask) => this.ChatTask = chatTask;
-
-        public void AddLease(RunningAgentChatLease lease) => this.leases.Add(lease);
-
-        public bool RemoveLease(RunningAgentChatLease lease) => this.leases.Remove(lease);
-
-        public bool HasLeases => this.leases.Count > 0;
-    }
-
-    private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly Dictionary<string, Entry> entries = new(StringComparer.Ordinal);
+    private readonly IRunningAgentChatFactory _factory;
+    private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId)> _entityInfo = new();
+    private readonly object _entityInfoLock = new();
+    private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
 
     /// <inheritdoc/>
-    public event EventHandler? SessionsChanged;
+    public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions => _runningSessions;
+
+    public RunningAgentChatTable(IRunningAgentChatFactory factory)
+    {
+        _factory = factory;
+        factory.RunningSessions.CollectionChanged += OnFactorySessionsChanged;
+    }
 
     /// <inheritdoc/>
-    public int SessionCount
+    public async Task<RunningAgentChatLease> AcquireAsync(
+        AgentSessionId sessionId,
+        AgentDefinition? definition = null,
+        AgentServices? agentServices = null,
+        string entityName = "",
+        string? entityId = null,
+        CancellationToken ct = default)
     {
-        get
+        // Store entity info before calling the factory so the CollectionChanged handler can read it
+        // when the factory posts the Add mutation on the foreground scheduler.
+        lock (_entityInfoLock)
         {
-            this.gate.Wait();
-            try
+            _entityInfo.TryAdd(sessionId, (entityName, entityId));
+        }
+
+        return await _factory.GetOrCreateAsync(sessionId, definition, agentServices, ct);
+    }
+
+    private void OnFactorySessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Add && e.NewItems is not null)
+        {
+            foreach (RunningAgentChat added in e.NewItems)
             {
-                return this.entries.Count;
+                var (name, id) = GetEntityInfo(added.SessionId);
+                _runningSessions.Add(new RunningAgentChatWithEntityInfo(added, name, id));
             }
-            finally
+        }
+        else if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        {
+            foreach (RunningAgentChat removed in e.OldItems)
             {
-                this.gate.Release();
+                for (var i = _runningSessions.Count - 1; i >= 0; i--)
+                {
+                    if (_runningSessions[i].SessionId == removed.SessionId)
+                    {
+                        _runningSessions.RemoveAt(i);
+                        break;
+                    }
+                }
             }
         }
     }
 
-    public async Task<RunningAgentChatLease> AcquireAsync(string sessionKey, Func<Task<AgentChat>> factory)
+    private (string EntityName, string? EntityId) GetEntityInfo(AgentSessionId sessionId)
     {
-        bool sessionAdded;
-        RunningAgentChatLease lease;
-
-        await this.gate.WaitAsync();
-        try
+        lock (_entityInfoLock)
         {
-            sessionAdded = !this.entries.TryGetValue(sessionKey, out var entry);
-            if (sessionAdded)
-            {
-                entry = new Entry(factory());
-                this.entries[sessionKey] = entry;
-            }
-
-            var agentChat = await entry!.ChatTask;
-            lease = new RunningAgentChatLease(this, sessionKey, agentChat);
-            entry.AddLease(lease);
-        }
-        finally
-        {
-            this.gate.Release();
-        }
-
-        if (sessionAdded)
-        {
-            this.SessionsChanged?.Invoke(this, EventArgs.Empty);
-        }
-
-        return lease;
-    }
-
-    internal async Task ReleaseAsync(string sessionKey, RunningAgentChatLease lease)
-    {
-        AgentChat? chatToDispose = null;
-        bool sessionRemoved;
-
-        await this.gate.WaitAsync();
-        try
-        {
-            if (!this.entries.TryGetValue(sessionKey, out var entry))
-            {
-                return;
-            }
-
-            entry.RemoveLease(lease);
-
-            if (!entry.HasLeases)
-            {
-                this.entries.Remove(sessionKey);
-                chatToDispose = await entry.ChatTask;
-                sessionRemoved = true;
-            }
-            else
-            {
-                sessionRemoved = false;
-            }
-        }
-        finally
-        {
-            this.gate.Release();
-        }
-
-        if (chatToDispose is not null)
-        {
-            await chatToDispose.DisposeAsync();
-        }
-
-        if (sessionRemoved)
-        {
-            this.SessionsChanged?.Invoke(this, EventArgs.Empty);
+            return _entityInfo.TryGetValue(sessionId, out var info) ? info : ("", null);
         }
     }
 }
+

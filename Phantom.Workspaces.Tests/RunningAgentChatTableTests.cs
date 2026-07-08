@@ -1,152 +1,286 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class RunningAgentChatTableTests
 {
-    private static Task<AgentChat> CreateEchoAgentChatAsync()
-        => AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+    // ── FakeRunningAgentChatFactory ────────────────────────────────────────────
+
+    private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
+    {
+        private readonly TaskScheduler _foregroundScheduler;
+        private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry)> _sessions = new();
+
+        public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
+
+        public FakeRunningAgentChatFactory(TaskScheduler? foregroundScheduler = null)
         {
-            AgentDefinition = AgentDefinition.FromJson("""
+            _foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
+        }
+
+        public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        {
+            bool isNew;
+            lock (_sessions)
+            {
+                if (_sessions.TryGetValue(sessionId, out var existing))
                 {
-                    "kind": "prompt",
-                    "name": "test-echo",
-                    "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
-                    "tools": []
+                    _sessions[sessionId] = (existing.RefCount + 1, existing.Entry);
+                    isNew = false;
                 }
-                """),
-            AgentSessionId = Guid.NewGuid().ToString("n"),
-        });
+                else
+                {
+                    var entry = new RunningAgentChat(sessionId, this);
+                    _sessions[sessionId] = (1, entry);
+                    isNew = true;
+                }
+            }
 
-    [Fact]
-    public async Task AcquireAsync_SameSessionKey_ReturnsSameAgentChat()
-    {
-        var table = new RunningAgentChatTable();
-        var key = "test-session-same-chat";
+            if (isNew)
+            {
+                var entryToAdd = _sessions[sessionId].Entry;
+                await Task.Factory.StartNew(
+                    () => RunningSessions.Add(entryToAdd),
+                    CancellationToken.None,
+                    TaskCreationOptions.None,
+                    _foregroundScheduler);
+            }
 
-        var lease1 = await table.AcquireAsync(key, CreateEchoAgentChatAsync);
-        var lease2 = await table.AcquireAsync(key, CreateEchoAgentChatAsync);
-
-        try
-        {
-            Assert.Same(lease1.AgentChat, lease2.AgentChat);
+            return new RunningAgentChatLease(sessionId, null!, () => RemoveRefAsync(sessionId));
         }
-        finally
+
+        public Task<RunningAgentChatLease> CreateAsync(
+            AgentDefinition definition,
+            AgentSessionId sessionId,
+            AgentServices? services = null,
+            CancellationToken ct = default)
+            => GetAsync(sessionId, ct);
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            CancellationToken ct = default)
+            => GetAsync(sessionId, ct);
+
+        private async ValueTask RemoveRefAsync(AgentSessionId sessionId)
         {
-            await lease1.DisposeAsync();
-            await lease2.DisposeAsync();
+            bool shouldRemove;
+            RunningAgentChat? entryToRemove;
+
+            lock (_sessions)
+            {
+                if (!_sessions.TryGetValue(sessionId, out var existing))
+                {
+                    return;
+                }
+
+                if (existing.RefCount <= 1)
+                {
+                    _sessions.Remove(sessionId);
+                    shouldRemove = true;
+                    entryToRemove = existing.Entry;
+                }
+                else
+                {
+                    _sessions[sessionId] = (existing.RefCount - 1, existing.Entry);
+                    shouldRemove = false;
+                    entryToRemove = null;
+                }
+            }
+
+            if (shouldRemove && entryToRemove is not null)
+            {
+                await Task.Factory.StartNew(
+                    () => RunningSessions.Remove(entryToRemove),
+                    CancellationToken.None,
+                    TaskCreationOptions.None,
+                    _foregroundScheduler);
+            }
         }
     }
 
-    [Fact]
-    public async Task AcquireAsync_SameSessionKey_FactoryCalledOnce()
+    private sealed class CapturingScheduler : TaskScheduler
     {
-        var table = new RunningAgentChatTable();
-        var key = "test-session-factory-once";
-        var callCount = 0;
+        public bool WasInvoked { get; set; }
 
-        Task<AgentChat> Factory()
+        protected override IEnumerable<Task>? GetScheduledTasks() => null;
+
+        protected override void QueueTask(Task task)
         {
-            callCount++;
-            return CreateEchoAgentChatAsync();
+            WasInvoked = true;
+            TryExecuteTask(task);
         }
 
-        var lease1 = await table.AcquireAsync(key, Factory);
-        var lease2 = await table.AcquireAsync(key, Factory);
-
-        try
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
         {
-            Assert.Equal(1, callCount);
-        }
-        finally
-        {
-            await lease1.DisposeAsync();
-            await lease2.DisposeAsync();
+            WasInvoked = true;
+            return TryExecuteTask(task);
         }
     }
 
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
     [Fact]
-    public async Task AcquireAsync_DifferentSessionKeys_ReturnDifferentChats()
+    public async Task AcquireAsync_AddsEntityInfoToRunningSessions()
     {
-        var table = new RunningAgentChatTable();
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-entity-info");
 
-        var lease1 = await table.AcquireAsync("key-a", CreateEchoAgentChatAsync);
-        var lease2 = await table.AcquireAsync("key-b", CreateEchoAgentChatAsync);
+        await using var lease = await table.AcquireAsync(sessionId, entityName: "My Entity", entityId: "entity-id-1", ct: TestContext.Current.CancellationToken);
 
-        try
-        {
-            Assert.NotSame(lease1.AgentChat, lease2.AgentChat);
-        }
-        finally
-        {
-            await lease1.DisposeAsync();
-            await lease2.DisposeAsync();
-        }
+        var entry = Assert.Single(table.RunningSessions);
+        Assert.Equal("My Entity", entry.EntityName);
+        Assert.Equal("entity-id-1", entry.EntityId);
+        Assert.Equal(sessionId, entry.SessionId);
     }
 
     [Fact]
-    public async Task ReleaseLastLease_DisposesChat()
+    public async Task AcquireAsync_LastLeaseDisposed_RemovesFromRunningSessions()
     {
-        var table = new RunningAgentChatTable();
-        var key = "test-session-release-last";
-        var callCount = 0;
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-remove-last");
 
-        Task<AgentChat> Factory()
-        {
-            callCount++;
-            return CreateEchoAgentChatAsync();
-        }
+        var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        Assert.Single(table.RunningSessions);
 
-        var lease1 = await table.AcquireAsync(key, Factory);
-        var lease2 = await table.AcquireAsync(key, Factory);
-        Assert.Equal(1, callCount);
+        await lease.DisposeAsync();
+
+        Assert.Empty(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_TwoLeasesForSameSession_RemovedOnlyOnLastDispose()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-two-leases");
+
+        var lease1 = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        var lease2 = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+
+        Assert.Single(table.RunningSessions);
 
         await lease1.DisposeAsync();
+        Assert.Single(table.RunningSessions);
+
         await lease2.DisposeAsync();
+        Assert.Empty(table.RunningSessions);
+    }
 
-        // After all leases released, a new acquire should call factory again
-        var lease3 = await table.AcquireAsync(key, Factory);
+    [Fact]
+    public async Task AcquireAsync_EntityInfoPreservedForDurationOfSession()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-entity-preserved");
+
+        var lease1 = await table.AcquireAsync(sessionId, entityName: "Preserved Entity", entityId: "entity-42", ct: TestContext.Current.CancellationToken);
+        // A second acquire (e.g., a second tab) should not overwrite entity info.
+        var lease2 = await table.AcquireAsync(sessionId, ct: TestContext.Current.CancellationToken);
+
         try
         {
-            Assert.Equal(2, callCount);
+            var entry = Assert.Single(table.RunningSessions);
+            Assert.Equal("Preserved Entity", entry.EntityName);
+            Assert.Equal("entity-42", entry.EntityId);
         }
         finally
         {
-            await lease3.DisposeAsync();
+            await lease1.DisposeAsync();
+            await lease2.DisposeAsync();
         }
     }
 
     [Fact]
-    public async Task ReleaseFirstLease_ChatStillAlive()
+    public async Task AcquireAsync_AddToRunningSessions_HappensOnForegroundScheduler()
     {
-        var table = new RunningAgentChatTable();
-        var key = "test-session-release-first";
-        var callCount = 0;
+        var scheduler = new CapturingScheduler();
+        var factory = new FakeRunningAgentChatFactory(scheduler);
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-scheduler-add");
 
-        Task<AgentChat> Factory()
-        {
-            callCount++;
-            return CreateEchoAgentChatAsync();
-        }
+        await using var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
 
-        var lease1 = await table.AcquireAsync(key, Factory);
-        var lease2 = await table.AcquireAsync(key, Factory);
+        Assert.True(scheduler.WasInvoked);
+    }
 
-        await lease1.DisposeAsync();
+    [Fact]
+    public async Task AcquireAsync_RemoveFromRunningSessions_HappensOnForegroundScheduler()
+    {
+        var scheduler = new CapturingScheduler();
+        var factory = new FakeRunningAgentChatFactory(scheduler);
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-scheduler-remove");
 
-        // After one lease released, new acquire on same key should NOT call factory again
-        var lease3 = await table.AcquireAsync(key, Factory);
-        try
-        {
-            Assert.Equal(1, callCount);
-            Assert.Same(lease2.AgentChat, lease3.AgentChat);
-        }
-        finally
-        {
-            await lease2.DisposeAsync();
-            await lease3.DisposeAsync();
-        }
+        var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        scheduler.WasInvoked = false;
+
+        await lease.DisposeAsync();
+
+        Assert.True(scheduler.WasInvoked);
+    }
+
+    [Fact]
+    public async Task RunningAgentChatWithEntityInfo_AcquireLeaseAsync_DelegatesToUnderlyingRunningAgentChat()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-delegate");
+
+        await using var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(table.RunningSessions);
+
+        // AcquireLeaseAsync on the wrapper delegates to the underlying RunningAgentChat
+        await using var secondLease = await entry.AcquireLeaseAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, secondLease.SessionId);
+
+        // Dispose the second lease — session remains alive (lease from AcquireAsync still held)
+        await secondLease.DisposeAsync();
+        Assert.Single(table.RunningSessions);
+    }
+
+    [Fact]
+    public async Task RunningAgentChatWithEntityInfo_SessionId_MatchesFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-id-match");
+
+        await using var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(table.RunningSessions);
+        Assert.Equal(sessionId, entry.SessionId);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_MultipleDifferentSessions_EachHasCorrectEntityInfo()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionA = new AgentSessionId("session-multi-a");
+        var sessionB = new AgentSessionId("session-multi-b");
+
+        await using var leaseA = await table.AcquireAsync(sessionA, entityName: "Entity A", entityId: "id-a", ct: TestContext.Current.CancellationToken);
+        await using var leaseB = await table.AcquireAsync(sessionB, entityName: "Entity B", entityId: "id-b", ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, table.RunningSessions.Count);
+
+        var entryA = table.RunningSessions.First(r => r.SessionId == sessionA);
+        var entryB = table.RunningSessions.First(r => r.SessionId == sessionB);
+
+        Assert.Equal("Entity A", entryA.EntityName);
+        Assert.Equal("id-a", entryA.EntityId);
+        Assert.Equal("Entity B", entryB.EntityName);
+        Assert.Equal("id-b", entryB.EntityId);
     }
 }

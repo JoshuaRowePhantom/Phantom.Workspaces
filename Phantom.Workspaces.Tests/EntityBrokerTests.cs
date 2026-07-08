@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrokerTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task CreateInitializedAsync_PopulatesRepositoryForInMemorySource()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -20,7 +20,7 @@ public sealed class EntityBrokerTests
         Assert.NotEmpty(snapshots);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task CreateSubscriptionAsync_LoadsBindableEntities()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -49,7 +49,7 @@ public sealed class EntityBrokerTests
         Assert.Equal("task", entity.EntityType);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_UpdatesBindableEntityObject()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -93,7 +93,7 @@ public sealed class EntityBrokerTests
         Assert.Contains("\"Updated\"", entity.Data?.GetRawText(), StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_SkipsCollectedSubscriptions()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -127,8 +127,11 @@ public sealed class EntityBrokerTests
         await SeedSnapshotAsync(broker, initialSnapshot);
         var weakEntity = await CreateCollectedEntityAsync(broker, entityId);
 
-        ForceGarbageCollection();
-        Assert.False(weakEntity.TryGetTarget(out _));
+        while (IsWeakReferenceAlive(weakEntity))
+        {
+            ForceGarbageCollection();
+            await Task.Yield();
+        }
 
         var snapshots = await broker.EntityRepository.ExportEntitySnapshotsAsync(ct);
         var concurrencyTag = Assert.Contains(entityId, snapshots).ConcurrencyTag;
@@ -136,7 +139,7 @@ public sealed class EntityBrokerTests
         await broker.RefreshAsync(ct);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task UpdateAsync_UpdatesSubscribedEntityWithoutRefreshAsync()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -192,7 +195,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(entityId, changedEntityIds);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribeGetAsync_LoadsInitialResults()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -246,7 +249,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(secondId, resultIds);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_SubscribedGetRerunsGetAndReplacesResultCollection()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -321,7 +324,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(secondId, resultIds);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_SubscribedGet_UsesIncrementalCollectionNotifications()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -401,7 +404,7 @@ public sealed class EntityBrokerTests
         Assert.DoesNotContain(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, actions);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_SubscribedGet_DoesNotClearAndRecreateCollection_WhenMembershipUnchanged()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -465,7 +468,7 @@ public sealed class EntityBrokerTests
         Assert.Equal("Stable (updated)", subscribedGet.Results[0].DisplayName);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribeQueryAsync_ReturnsActionableInterestTargetsForUser()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -541,7 +544,7 @@ public sealed class EntityBrokerTests
         Assert.Equal(taskId, Assert.Single(subscribedQuery.Results).EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribeQueryAsync_RefreshesAutomaticallyWhenMatchingEntityAdded()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -647,7 +650,7 @@ public sealed class EntityBrokerTests
         Assert.Contains(subscribedQuery.Results, e => e.EntityId == sessionId2);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SubscribeQueryAsync_RefreshesAutomaticallyWhenMatchingEntityDeleted()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -749,7 +752,7 @@ public sealed class EntityBrokerTests
         Assert.Equal(sessionId2, remaining.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_SkipsCollectedSubscribedGet()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -770,15 +773,19 @@ public sealed class EntityBrokerTests
 
         var weakRef = await CreateCollectedSubscribedGetAsync(broker, request, ct);
 
-        ForceGarbageCollection();
-        Assert.False(weakRef.TryGetTarget(out _));
+        await Task.Yield(); // flush inline async state machines off the call stack before GC
+        while (IsWeakReferenceAlive(weakRef))
+        {
+            ForceGarbageCollection();
+            await Task.Yield();
+        }
 
         await broker.RefreshAsync(ct);
 
         Assert.Equal(0, broker.ActiveSubscribedGetCount);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task RefreshAsync_SkipsCollectedSubscribedQuery()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -801,8 +808,12 @@ public sealed class EntityBrokerTests
 
         var weakRef = await CreateCollectedSubscribedQueryAsync(broker, request, ct);
 
-        ForceGarbageCollection();
-        Assert.False(weakRef.TryGetTarget(out _));
+        await Task.Yield(); // flush inline async state machines off the call stack before GC
+        while (IsWeakReferenceAlive(weakRef))
+        {
+            ForceGarbageCollection();
+            await Task.Yield();
+        }
 
         await broker.RefreshAsync(ct);
 
@@ -846,6 +857,10 @@ public sealed class EntityBrokerTests
         return new WeakReference<SubscribedQuery>(sub);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool IsWeakReferenceAlive<T>(WeakReference<T> weakRef) where T : class
+        => weakRef.TryGetTarget(out _);
+
     private static void ForceGarbageCollection()
     {
         GC.Collect();
@@ -882,7 +897,7 @@ public sealed class EntityBrokerTests
             TestContext.Current.CancellationToken);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task GetEntitiesAsync_WithDuplicateEntityIdAcrossBatches_DoesNotThrowAndReturnsEntityOnce()
     {
         var ct = TestContext.Current.CancellationToken;

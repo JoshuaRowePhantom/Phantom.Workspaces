@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacesSettingsViewModelTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Repository_ActiveSettings_ResolvesBySubtype()
     {
         var viewModel = new RepositoryConnectionSettingsViewModel
@@ -27,7 +27,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.IsType<DevTunnelWebSettingsViewModel>(viewModel.ActiveSettings);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Repository_IsValid_DelegatesToActiveSubtype()
     {
         var viewModel = new RepositoryConnectionSettingsViewModel { Mode = DataAccessMode.Web };
@@ -48,7 +48,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.True(viewModel.IsValid);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalMongoContainer_DataDirectory_DefaultsToWizardDefault_WhenProfileHasNone()
     {
         var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile());
@@ -57,7 +57,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.False(string.IsNullOrWhiteSpace(settings.DataDirectory));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalMongoContainer_DataDirectory_PreservesConfiguredValue()
     {
         var settings = new LocalMongoContainerSettingsViewModel(
@@ -66,7 +66,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Equal("D:/explicit/mongo", settings.DataDirectory);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalMongoContainer_FreshProfile_PreFillsDefaultsAndIsValid()
     {
         var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile());
@@ -80,7 +80,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.True(settings.IsValid);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalMongoContainer_PreservesConfiguredNames()
     {
         var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile
@@ -95,7 +95,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Equal("custom-db", settings.DatabaseName);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void LocalMongoContainer_IsValid_RequiresDataDirectory()
     {
         var settings = new LocalMongoContainerSettingsViewModel(new DataAccessConnectionProfile())
@@ -115,7 +115,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.True(settings.IsValid);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Repository_ToProfile_UsesActiveSubtype()
     {
         var viewModel = new RepositoryConnectionSettingsViewModel { Mode = DataAccessMode.DevTunnelWeb };
@@ -127,7 +127,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Equal("https://host.devtunnels.ms/", profile.WebEndpoint);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Settings_CanSave_TracksSectionValidity()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
@@ -150,7 +150,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.True(raised);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Settings_SaveAsync_PersistsConfiguration_UsedByWizardAndDialog()
     {
         var path = CreateTempConfigPath();
@@ -176,7 +176,7 @@ public sealed class WorkspacesSettingsViewModelTests
         }
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Windows_BindSharedViewModel_AndConstruct()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
@@ -189,7 +189,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Same(settings, dialog.DataContext);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Settings_Sections_ExposeRepositoryAndRemoteAccess()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
@@ -212,7 +212,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Same(settings.Sections[0], settings.SelectedSection);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Settings_SelectedSection_IgnoresNullSelection()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
@@ -226,7 +226,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Equal("Remote access", settings.SelectedSection.Title);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void BuildConfiguration_ProjectsUserComputerProfileOverride()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
@@ -240,7 +240,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Null(settings.BuildConfiguration().UserComputerProfileOverride);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Settings_WithoutProfileController_HasNoProfileSection()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
@@ -250,7 +250,7 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.DoesNotContain(settings.Sections, section => section.Title == "Profile");
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public void Settings_WithProfileController_AddsLiveProfileSection()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());

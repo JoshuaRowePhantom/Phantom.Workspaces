@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.ViewModels;
 /// is opened ephemerally by <see cref="StartShellOnProfileShortcutHandler"/>; no entity or
 /// relationship is created.
 /// </summary>
-public sealed class ShellTabViewModel : WorkspaceTabViewModel, IAsyncDisposable
+public sealed class ShellTabViewModel : WorkspaceTabViewModel
 {
     private readonly ITerminalSession session;
 
@@ -32,5 +32,9 @@ public sealed class ShellTabViewModel : WorkspaceTabViewModel, IAsyncDisposable
     /// <summary>The view model the terminal control binds to.</summary>
     public TerminalSessionViewModel TerminalSession { get; }
 
-    public ValueTask DisposeAsync() => this.session.DisposeAsync();
+    public override async ValueTask DisposeAsync()
+    {
+        await this.session.DisposeAsync();
+        await base.DisposeAsync();
+    }
 }

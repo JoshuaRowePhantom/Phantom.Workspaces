@@ -495,4 +495,52 @@ public sealed class NotificationsViewModelTests
         Assert.Equal("tab-2", viewModel.Rows[0].TabKey);
         Assert.Equal("tab-1", viewModel.Rows[1].TabKey);
     }
+
+    // ── NavigateCommand tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void NavigateCommand_WhenAutoClosing_DoesNotCloseImmediately()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        Assert.True(viewModel.IsOpen);
+        Assert.True(viewModel.IsAutoClosing);
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        row.NavigateCommand.Execute(null);
+
+        Assert.True(viewModel.IsOpen);
+    }
+
+    [Fact]
+    public void NavigateCommand_WhenAutoClosing_IsAutoClosingRemainsTrue()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        Assert.True(viewModel.IsAutoClosing);
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        row.NavigateCommand.Execute(null);
+
+        Assert.True(viewModel.IsAutoClosing);
+    }
+
+    [Fact]
+    public void NavigateCommand_InvokesNavigateCallback()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        string? navigatedTabKey = null;
+        var viewModel = new NotificationsViewModel(service, key => navigatedTabKey = key);
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        row.NavigateCommand.Execute(null);
+
+        Assert.Equal("tab-1", navigatedTabKey);
+    }
 }
