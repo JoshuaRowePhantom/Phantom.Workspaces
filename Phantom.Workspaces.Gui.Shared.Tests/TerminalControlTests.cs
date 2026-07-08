@@ -356,6 +356,68 @@ public sealed class TerminalControlTests
         Assert.Equal(30, result.Value.B);
     }
 
+    // ── Cell metrics – pixel snapping (issue #708) ───────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellWidth_IsWholePixel()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        Assert.True(control.CellWidth > 0, "CellWidth must be positive");
+        Assert.Equal(Math.Floor(control.CellWidth), control.CellWidth);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellHeight_IsWholePixel()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        Assert.True(control.CellHeight > 0, "CellHeight must be positive");
+        Assert.Equal(Math.Floor(control.CellHeight), control.CellHeight);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellHeight_HasNoExtraLeading()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        // Compute the expected height using glyph metrics (ascent+descent, no line gap).
+        var typeface = new Typeface("Cascadia Mono,Cascadia Code,Consolas,Courier New,monospace");
+        var m = typeface.GlyphTypeface.Metrics;
+        double expected = Math.Ceiling((Math.Abs(m.Ascent) + Math.Abs(m.Descent)) * 12.0 / m.DesignEmHeight);
+
+        Assert.Equal(expected, control.CellHeight);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_AdjacentCellOrigins_LandOnWholePixels()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        // Every column origin must be an integer so box-drawing characters tile without sub-pixel gaps.
+        for (int col = 0; col <= 200; col++)
+        {
+            double x = col * control.CellWidth;
+            Assert.Equal(Math.Floor(x), x);
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────────────────────
 
     private static readonly MethodInfo ResolveFgMethod =

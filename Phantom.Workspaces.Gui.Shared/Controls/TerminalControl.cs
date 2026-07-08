@@ -97,6 +97,10 @@ public partial class TerminalControl : Control
     private double _cellWidth;
     private double _cellHeight;
 
+    // Exposed for tests.
+    internal double CellWidth => _cellWidth;
+    internal double CellHeight => _cellHeight;
+
     // ── Resize debounce ───────────────────────────────────────────────────────────────────────
 
     internal TimeSpan ResizeDebounceDelay { get; set; } = TimeSpan.FromMilliseconds(50);
@@ -235,18 +239,26 @@ public partial class TerminalControl : Control
         ScheduleResize();
     }
 
-    private void MeasureCells()
+    internal void MeasureCells()
     {
+        var typeface = new Typeface(MonoFamily);
+
         var tf = new FormattedText(
             "M",
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface(MonoFamily),
+            typeface,
             TermFontSize,
             Brushes.White);
 
-        _cellWidth = tf.Width;
-        _cellHeight = tf.Height;
+        // Snap to whole pixels so col * _cellWidth always lands on an integer boundary —
+        // fractional widths accumulate sub-pixel error that breaks box-drawing characters.
+        _cellWidth = Math.Ceiling(tf.Width);
+
+        // Derive height from glyph metrics (ascent + descent only, no line gap / leading),
+        // then round up to a whole pixel so rows tile without vertical gaps.
+        var m = typeface.GlyphTypeface.Metrics;
+        _cellHeight = Math.Ceiling((Math.Abs(m.Ascent) + Math.Abs(m.Descent)) * TermFontSize / m.DesignEmHeight);
     }
 
     private int ComputeColumns() =>
