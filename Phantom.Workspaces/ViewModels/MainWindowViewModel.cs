@@ -5,8 +5,10 @@ using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
@@ -70,6 +72,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
     private ScheduledToolsRunningViewModel? scheduledToolsRunning;
     private RunningAgentBrainViewModel? runningAgentBrain;
+    private UsageTrackerViewModel? usageTracker;
+    private Services.UsageMetricsService? usageMetricsService;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -464,6 +468,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     /// <summary>
+    /// The usage-tracker toolbar button and popup view model.
+    /// Null until <see cref="InitializeAsync"/> has initialized the usage tracker.
+    /// </summary>
+    internal UsageTrackerViewModel? UsageTracker
+    {
+        get => this.usageTracker;
+        private set => this.SetProperty(ref this.usageTracker, value);
+    }
+
+    /// <summary>
     /// Returns an <see cref="AgentTabInfo"/> for every open agent-session tab that is in the
     /// <see cref="AgentTabState.Ready"/> state, across all workspace panes.
     /// </summary>
@@ -534,6 +548,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.InitializeWebHostAsync();
         await this.InitializeScheduledToolsAsync();
         await this.InitializeAutoResumeAsync();
+        await this.InitializeUsageTrackerAsync();
     }
 
     /// <summary>
@@ -624,6 +639,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.autoResumeLeases.Add(lease);
             }
         }
+    }
+
+    private async Task InitializeUsageTrackerAsync()
+    {
+        if (this.entityBroker is not { } broker)
+        {
+            return;
+        }
+
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var metrics = new Models.UsageMetrics(foregroundScheduler);
+        var vm = new UsageTrackerViewModel(metrics);
+        this.UsageTracker = vm;
+
+        var providers = new List<Services.UsageProviders.IUsageProvider>
+        {
+            new Services.UsageProviders.GitHubCopilotUsageProvider(new HttpClient()),
+            new Services.UsageProviders.GitHubActionsUsageProvider(new HttpClient()),
+        };
+        this.usageMetricsService = new Services.UsageMetricsService(
+            dataAccessLayer,
+            metrics,
+            providers,
+            TimeProvider.System);
+        await this.usageMetricsService.StartAsync(CancellationToken.None);
     }
 
     private async Task<IReadOnlyList<string>> ResolveHostNameComponentsAsync(EntityId hostEntityId)
@@ -3927,6 +3968,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.scheduledToolsPause?.Dispose();
         this.scheduledToolsRunning?.Dispose();
         this.runningAgentBrain?.Dispose();
+        this.usageTracker?.Dispose();
+
+        if (this.usageMetricsService is not null)
+        {
+            await this.usageMetricsService.DisposeAsync();
+        }
 
         if (this.devTunnelHostService is not null)
         {

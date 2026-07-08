@@ -1,0 +1,34 @@
+{
+  "entity-id": "e2f3a4b5-c6d7-e8f9-a0b1-c2d3e4f5a6b7",
+  "entity-display-order": 185,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/user-account.json"
+    ],
+    [
+      "entity-types",
+      "user-account"
+    ]
+  ],
+  "display-name": {
+    "default": "User Account Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# User Account Entity Type\n\nRepresents a user's account on an external provider (e.g. GitHub). Used by the AI spend tracker to discover which provider accounts exist so usage metrics can be fetched.\n\n## Properties\n\n- **provider** (required): Provider base URL (e.g. `https://github.com`).\n- **user-name** (required): The account username on this provider.\n\n## Naming convention\n\nUser-account entities live under a `user` entity and are named:\n```\n[\"users\", \"username\", \"<username>\", \"user-accounts\", \"<provider-hostname>\"]\n```\nFor example: `[\"users\", \"username\", \"jrowe\", \"user-accounts\", \"github.com\"]`"
+      }
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/user-account.json"
+  }
+}

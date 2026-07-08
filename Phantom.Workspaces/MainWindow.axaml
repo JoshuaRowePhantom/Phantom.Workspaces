@@ -101,6 +101,22 @@
                         </Popup>
                     </Panel>
 
+                    <Panel IsVisible="{Binding UsageTracker.TopRightLabel, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <Button x:Name="UsageTrackerButton"
+                                Classes="settings-gear"
+                                ToolTip.Tip="AI Usage"
+                                Command="{Binding UsageTracker.ToggleOpenCommand}">
+                            <TextBlock Text="{Binding UsageTracker.TopRightLabel}"
+                                       FontSize="11" />
+                        </Button>
+                        <Popup IsOpen="{Binding UsageTracker.IsOpen, Mode=TwoWay}"
+                               PlacementTarget="{Binding #UsageTrackerButton}"
+                               IsLightDismissEnabled="True"
+                               Focusable="False">
+                            <controls:UsageTrackerControl DataContext="{Binding UsageTracker}" />
+                        </Popup>
+                    </Panel>
+
                     <Panel>
                         <Button x:Name="NotificationBellButton"
                                 Classes="settings-gear"
