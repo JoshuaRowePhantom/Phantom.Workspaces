@@ -9,9 +9,12 @@
         <Border Grid.Row="0" Classes="workspace-field-row" Padding="8">
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <TextBlock Text="Target branch:" VerticalAlignment="Center" />
-                <TextBox Text="{Binding TargetBranch}"
-                         Width="200"
-                         VerticalAlignment="Center" />
+                <ComboBox ItemsSource="{Binding BranchNames}"
+                          SelectedItem="{Binding TargetBranch}"
+                          IsEditable="True"
+                          IsTextSearchEnabled="True"
+                          Width="200"
+                          VerticalAlignment="Center" />
                 <TextBlock Text="Refreshing…"
                            IsVisible="{Binding IsRefreshing}"
                            Classes="muted"

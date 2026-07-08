@@ -28,8 +28,10 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         this.CommitList = new GitWorktreeCommitListViewModel();
         this.FileList = new GitWorktreeFileListViewModel();
         this.FileDiffs = new ObservableCollection<GitDiffViewModel>();
+        this.BranchNames = new ObservableCollection<string>();
 
         this.targetBranch = GetDefaultTargetBranch(entityViewModel, repositoryPath);
+        LoadBranchNames(repositoryPath, this.BranchNames);
 
         if (repositoryPath is not null)
         {
@@ -113,6 +115,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     public GitWorktreeFileListViewModel FileList { get; }
 
     public ObservableCollection<GitDiffViewModel> FileDiffs { get; }
+
+    public ObservableCollection<string> BranchNames { get; }
 
     public async Task RefreshAsync(CancellationToken ct = default)
     {
@@ -327,5 +331,28 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         return "main";
+    }
+
+    private static void LoadBranchNames(string? repositoryPath, ObservableCollection<string> branchNames)
+    {
+        if (repositoryPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            foreach (var branch in repo.Branches)
+            {
+                branchNames.Add(branch.FriendlyName);
+            }
+        }
+        catch (RepositoryNotFoundException)
+        {
+        }
+        catch (LibGit2SharpException)
+        {
+        }
     }
 }

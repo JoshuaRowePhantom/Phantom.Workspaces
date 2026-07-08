@@ -1133,5 +1133,89 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.Equal("Files changed", vm.FileListHeader);
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task BranchDropdown_PopulatedWithRepoBranches_LoadsAllBranches()
+    {
+        this.InitRepoWithBranch("main");
+
+        using var repo = new Repository(this.repoDir);
+        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+        
+        repo.CreateBranch("feature-1");
+        repo.CreateBranch("feature-2");
+        repo.CreateBranch("develop");
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}}
+            }
+            """);
+
+        await using (vm)
+        {
+            Assert.NotNull(vm.BranchNames);
+            Assert.Contains("main", vm.BranchNames);
+            Assert.Contains("feature-1", vm.BranchNames);
+            Assert.Contains("feature-2", vm.BranchNames);
+            Assert.Contains("develop", vm.BranchNames);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task BranchDropdown_SelectBranch_UpdatesTargetBranch()
+    {
+        var vm = CreateViewModel("""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" }
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            var sentinel = new GitCommitModel
+            {
+                Oid = "sentinel",
+                ShortMessage = "sentinel",
+                AuthorName = string.Empty,
+                AuthorDate = DateTimeOffset.MinValue,
+            };
+            vm.CommitList.Commits.Add(sentinel);
+
+            var refreshCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var wasRefreshing = false;
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(vm.IsRefreshing))
+                {
+                    if (vm.IsRefreshing)
+                    {
+                        wasRefreshing = true;
+                    }
+                    else if (wasRefreshing)
+                    {
+                        refreshCompleted.TrySetResult(true);
+                    }
+                }
+            };
+
+            vm.TargetBranch = "feature-branch";
+
+            await refreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.Equal("feature-branch", vm.TargetBranch);
+            Assert.Empty(vm.CommitList.Commits);
+        }
+    }
 }
 
