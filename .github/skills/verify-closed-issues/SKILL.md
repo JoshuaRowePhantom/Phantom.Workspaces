@@ -54,7 +54,7 @@ For each unverified issue (in ascending number order):
 1. Launch a `general-purpose` subagent in **background** mode with:
    - A clear statement at the top: **"Verify issue #NUMBER only. Do not fetch the closed-issues list."**
    - The full issue number and title.
-   - The repository path: `C:\dev\Phantom.Workspaces`.
+   - The repository path: `C:\dev\Phantom.Workspaces-Main`.
    - The design repo path: `C:\dev\phantom.workspaces-design`.
    - The full `verify-closed-issue` skill protocol.
 

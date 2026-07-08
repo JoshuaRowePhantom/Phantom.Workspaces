@@ -44,13 +44,13 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,
 
 ## Step 2 — Find corresponding code on `features`
 
-All inspection is done in `C:\dev\Phantom.Workspaces`, which tracks the `features` branch.
+All inspection is done in `C:\dev\Phantom.Workspaces-Main`, which tracks the `main` branch.
 
 Search for the files, classes, and methods the issue describes:
 
 ```powershell
 # Find commits referencing this issue
-git --no-pager log features --grep="#<NUMBER>" --oneline
+git --no-pager log main --grep="#<NUMBER>" --oneline
 
 # Search for relevant identifiers (class names, method names, file names from the issue)
 # Use grep and glob to locate implementation files
