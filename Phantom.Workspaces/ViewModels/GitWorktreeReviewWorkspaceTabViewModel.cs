@@ -105,7 +105,17 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     public bool FullFile
     {
         get => this.fullFile;
-        set => this.SetProperty(ref this.fullFile, value);
+        set
+        {
+            if (this.SetProperty(ref this.fullFile, value))
+            {
+                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+            }
+        }
     }
 
     public int ContextLines
@@ -168,6 +178,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
         var newDiffs = new List<GitDiffViewModel>();
 
+        var effectiveContextLines = this.fullFile ? int.MaxValue / 2 : this.contextLines;
+
         try
         {
             using var repo = new Repository(this.RepositoryPath);
@@ -187,7 +199,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                             DiffTargets.WorkingDirectory,
                             new[] { fileEntry.RelativePath },
                             new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
-                            new CompareOptions { ContextLines = this.contextLines });
+                            new CompareOptions { ContextLines = effectiveContextLines });
                     }
                     else if (commit.IsStaged)
                     {
@@ -196,7 +208,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                             DiffTargets.Index,
                             new[] { fileEntry.RelativePath },
                             new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
-                            new CompareOptions { ContextLines = this.contextLines });
+                            new CompareOptions { ContextLines = effectiveContextLines });
                     }
                     else
                     {
@@ -208,7 +220,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                                 c.Tree,
                                 new[] { fileEntry.RelativePath },
                                 new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
-                                new CompareOptions { ContextLines = this.contextLines });
+                                new CompareOptions { ContextLines = effectiveContextLines });
                         }
                     }
 
@@ -216,7 +228,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                     {
                         foreach (var entry in patch)
                         {
-                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, this.contextLines, this.sideBySide));
+                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, effectiveContextLines, this.sideBySide));
                         }
                     }
                 }
