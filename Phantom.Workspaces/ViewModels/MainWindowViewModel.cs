@@ -2525,7 +2525,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             foreach (var tab in pane.Tabs)
             {
                 if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                    doc.EffectiveTabHeader.IsAltHeld = value;
+                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = value;
             }
         }
     }

@@ -261,6 +261,38 @@ public sealed class TabHeaderViewModelTests
         Assert.True(raised);
     }
 
+    // ── IsShortcutBadgeVisible ───────────────────────────────────────────────
+
+    [Fact]
+    public void TabHeaderViewModel_IsShortcutBadgeVisible_DefaultFalse()
+    {
+        var vm = new TabHeaderViewModel { Title = "T" };
+        Assert.False(vm.IsShortcutBadgeVisible);
+    }
+
+    [Fact]
+    public void TabHeaderViewModel_IsShortcutBadgeVisible_RaisesPropertyChanged()
+    {
+        var vm = new TabHeaderViewModel { Title = "T" };
+        var raised = false;
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(vm.IsShortcutBadgeVisible))
+                raised = true;
+        };
+
+        vm.IsShortcutBadgeVisible = true;
+
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void TabHeaderViewModel_DoesNotHaveIsAltHeldProperty()
+    {
+        var property = typeof(TabHeaderViewModel).GetProperty("IsAltHeld");
+        Assert.Null(property);
+    }
+
     // ── RefreshTabAltShortcutLabels ──────────────────────────────────────────
 
     private static (WorkspacePaneViewModel pane, System.Collections.Generic.Dictionary<string, WorkspaceDocument> docs)

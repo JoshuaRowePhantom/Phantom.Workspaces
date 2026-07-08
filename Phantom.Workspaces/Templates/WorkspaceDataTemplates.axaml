@@ -472,7 +472,7 @@
             </StackPanel>
             <!-- Alt+N shortcut badge: visible only for tabs 1–10; fades in when Alt is held -->
             <Border Classes="alt-index-badge"
-                    Classes.alt-held="{Binding IsAltHeld}"
+                    Classes.alt-held="{Binding IsShortcutBadgeVisible}"
                     IsVisible="{Binding AltShortcutLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Top"
