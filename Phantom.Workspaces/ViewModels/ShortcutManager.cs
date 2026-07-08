@@ -9,7 +9,7 @@ public sealed class ShortcutManager
     private readonly List<ShortcutHandler> shortcutHandlers = [];
     // When adding a new Shortcut, also update ResolveShortcut and the entity_invoke_shortcut
     // tool description in WorkspaceGuiContextProvider.EntityInvokeShortcutTool.
-    private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.Edit, Shortcut.Clone, Shortcut.Review, Shortcut.Delete, Shortcut.StartAgentSession, Shortcut.StartShell];
+    private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.Edit, Shortcut.Clone, Shortcut.Review, Shortcut.VsCode, Shortcut.Delete, Shortcut.StartAgentSession, Shortcut.StartShell];
 
     public IEnumerable<Shortcut> GetShortcutsFor(
         MainWindowViewModel mainWindowViewModel,

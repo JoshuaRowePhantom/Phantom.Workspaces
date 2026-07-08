@@ -314,7 +314,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 },
                 "shortcut": {
                   "type": "string",
-                  "enum": ["Open", "Json", "Delete", "Review", "StartAgentSession", "StartShell"],
+                  "enum": ["Open", "Json", "Delete", "Review", "VsCode", "StartAgentSession", "StartShell"],
                   "description": "The shortcut to invoke. 'Open' opens the entity as a workspace pane, tab, or agent chat session — use this for all open/navigate operations."
                 }
               },
@@ -337,6 +337,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             + "Shortcuts: 'Open' opens the entity (workspace pane, tab, agent chat session — use this for all open/navigate operations), "
             + "'Json' toggles raw JSON view, 'Delete' deletes the entity, "
             + "'Review' reviews changes for a git-worktree entity, "
+            + "'VsCode' opens the entity in VS Code, "
             + "'StartAgentSession' starts an agent session on the entity's profile, "
             + "'StartShell' starts a shell on the entity's profile. "
             + "Opening anything navigates to it and pushes a navigation history entry so the user can Ctrl+\u2212 back.";
@@ -368,7 +369,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             {
                 return Serialize(new
                 {
-                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, Json, Delete, Review, StartAgentSession, StartShell.",
+                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, Json, Delete, Review, VsCode, StartAgentSession, StartShell.",
                 });
             }
 
@@ -401,6 +402,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             "Json" => Shortcut.Json,
             "Delete" => Shortcut.Delete,
             "Review" => Shortcut.Review,
+            "VsCode" => Shortcut.VsCode,
             "StartAgentSession" => Shortcut.StartAgentSession,
             "StartShell" => Shortcut.StartShell,
             _ => null,
