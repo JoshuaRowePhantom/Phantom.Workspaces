@@ -39,8 +39,8 @@ public sealed class MongoDbGetAsyncFilterTests
             new GetEntityRequest { EntityTypeNames = typeNames },
         ]);
 
-        Assert.True(filter.Contains("current.type-names"), "Filter must target current.type-names");
-        var inValues = filter["current.type-names"]["$in"].AsBsonArray
+        Assert.True(filter.Contains("current.data.entity-types"), "Filter must target current.data.entity-types");
+        var inValues = filter["current.data.entity-types"]["$in"].AsBsonArray
             .Select(static v => v.AsString)
             .ToArray();
         Assert.Contains("note", inValues, StringComparer.Ordinal);
@@ -59,8 +59,8 @@ public sealed class MongoDbGetAsyncFilterTests
             },
         ]);
 
-        Assert.True(filter.Contains("current.names"), "Filter must target current.names");
-        var components = filter["current.names"].AsBsonArray.Select(static v => v.AsString).ToArray();
+        Assert.True(filter.Contains("current.data.names"), "Filter must target current.data.names");
+        var components = filter["current.data.names"].AsBsonArray.Select(static v => v.AsString).ToArray();
         Assert.Equal(["workspace", "dev"], components);
     }
 
@@ -76,8 +76,8 @@ public sealed class MongoDbGetAsyncFilterTests
             },
         ]);
 
-        Assert.True(filter.Contains("current.names"), "Filter must target current.names");
-        var components = filter["current.names"].AsBsonArray.Select(static v => v.AsString).ToArray();
+        Assert.True(filter.Contains("current.data.names"), "Filter must target current.data.names");
+        var components = filter["current.data.names"].AsBsonArray.Select(static v => v.AsString).ToArray();
         Assert.Equal(["my-entity"], components);
     }
 
@@ -96,8 +96,8 @@ public sealed class MongoDbGetAsyncFilterTests
 
         Assert.True(filter.Contains("$and"), "Filter must use $and to combine type and name");
         var andClauses = filter["$and"].AsBsonArray.Select(static v => v.AsBsonDocument).ToArray();
-        Assert.Contains(andClauses, c => c.Contains("current.type-names"));
-        Assert.Contains(andClauses, c => c.Contains("current.names"));
+        Assert.Contains(andClauses, c => c.Contains("current.data.entity-types"));
+        Assert.Contains(andClauses, c => c.Contains("current.data.names"));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public sealed class MongoDbGetAsyncFilterTests
         var orClauses = filter["$or"].AsBsonArray.Select(static v => v.AsBsonDocument).ToArray();
         Assert.Equal(2, orClauses.Length);
         Assert.Contains(orClauses, c => c.Contains("_id"));
-        Assert.Contains(orClauses, c => c.Contains("current.type-names"));
+        Assert.Contains(orClauses, c => c.Contains("current.data.entity-types"));
     }
 
     [Fact]
@@ -134,9 +134,9 @@ public sealed class MongoDbGetAsyncFilterTests
     }
 
     [Fact]
-    public void BuildGetFilterDocument_ByEntityNameChildren_WithNoTypeFilter_ProducesEmptyDocument()
+    public void BuildGetFilterDocument_ByEntityNameChildren_WithNoTypeFilter_ProducesNameParentPrefixesFilter()
     {
-        // EnumerateChildren with no type filter cannot be expressed as a targeted filter.
+        // EnumerateChildren with no type filter can now be targeted via name-parent-prefixes.
         var filter = MongoDbEntityDataAccessLayer.BuildGetFilterDocument(
         [
             new GetEntityRequest
@@ -146,13 +146,14 @@ public sealed class MongoDbGetAsyncFilterTests
             },
         ]);
 
-        Assert.Empty(filter);
+        Assert.True(filter.Contains("current.name-parent-prefixes"),
+            "EnumerateChildren must target current.name-parent-prefixes");
     }
 
     [Fact]
-    public void BuildGetFilterDocument_ByEntityNameChildren_WithTypeFilter_ProducesTypeFilter()
+    public void BuildGetFilterDocument_ByEntityNameChildren_WithTypeFilter_ProducesAndFilter()
     {
-        // EnumerateChildren with a type filter: pre-filter by type, post-filter handles prefix match.
+        // EnumerateChildren with a type filter: AND of type + name-parent-prefixes.
         var filter = MongoDbEntityDataAccessLayer.BuildGetFilterDocument(
         [
             new GetEntityRequest
@@ -163,13 +164,31 @@ public sealed class MongoDbGetAsyncFilterTests
             },
         ]);
 
-        Assert.True(filter.Contains("current.type-names"), "Filter must target current.type-names");
+        Assert.True(filter.Contains("$and"), "Filter must use $and for type + name combination");
+        var andClauses = filter["$and"].AsBsonArray.Select(static v => v.AsBsonDocument).ToArray();
+        Assert.Contains(andClauses, c => c.Contains("current.data.entity-types"));
+        Assert.Contains(andClauses, c => c.Contains("current.name-parent-prefixes"));
     }
 
     [Fact]
-    public void BuildGetFilterDocument_MixedTargetedAndNonTargeted_ProducesEmptyDocument()
+    public void BuildGetFilterDocument_ByEntityNameAllChildren_ProducesNameParentPrefixesFilter()
     {
-        // When any sub-request requires full scan, the whole filter falls back to full scan.
+        var filter = MongoDbEntityDataAccessLayer.BuildGetFilterDocument(
+        [
+            new GetEntityRequest
+            {
+                EntityName = new EntityName("workspace"),
+                EnumerateChildren = EnumerateChildrenAction.EnumerateAllChildren,
+            },
+        ]);
+
+        Assert.True(filter.Contains("current.name-parent-prefixes"),
+            "EnumerateAllChildren must target current.name-parent-prefixes");
+    }
+
+    [Fact]
+    public void BuildGetFilterDocument_MixedIdAndAllChildren_ProducesOrFilter()
+    {
         var filter = MongoDbEntityDataAccessLayer.BuildGetFilterDocument(
         [
             new GetEntityRequest { EntityId = EntityA },
@@ -180,6 +199,9 @@ public sealed class MongoDbGetAsyncFilterTests
             },
         ]);
 
-        Assert.Empty(filter);
+        Assert.True(filter.Contains("$or"), "Mixed id+allChildren must use $or");
+        var orClauses = filter["$or"].AsBsonArray.Select(static v => v.AsBsonDocument).ToArray();
+        Assert.Contains(orClauses, c => c.Contains("_id"));
+        Assert.Contains(orClauses, c => c.Contains("current.name-parent-prefixes"));
     }
 }

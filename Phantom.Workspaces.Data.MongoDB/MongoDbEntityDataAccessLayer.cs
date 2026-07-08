@@ -123,7 +123,6 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var nextTag = new ConcurrencyTag(nextVersionId.ToString());
             var hasData = change.Data is not null;
             var nextDataBson = hasData ? MongoEntityData.ToBsonDocument(change.Data!.Value) : null;
-            var typeNames = ExtractTypeNames(change.Data);
 
             var updatedDocument = currentDocument ?? new MongoDbEntityDocument
             {
@@ -149,11 +148,16 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 embedding = embeddings[0].Values.ToArray();
             }
 
+            var participantIds = ExtractParticipantIds(change.Data);
+            var nameParentPrefixes = hasData && nextDataBson is not null
+                ? ComputeNameParentPrefixes(nextDataBson)
+                : [];
+
             updatedDocument.Current = new MongoDbCurrentProjection
             {
                 Data = nextDataBson,
-                TypeNames = typeNames.ToArray(),
-                Names = hasData && nextDataBson is not null ? ReadNameComponents(nextDataBson).ToArray() : [],
+                ParticipantIds = participantIds,
+                NameParentPrefixes = nameParentPrefixes,
                 Embedding = embedding,
                 IsDeleted = !hasData,
                 ModifiedTimeUtc = nowUtc,
@@ -320,18 +324,31 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
             if (entity.EntityTypeNames?.Values is { Length: > 0 } typeNames)
             {
-                subClauses.Add(new BsonDocument("current.type-names",
+                subClauses.Add(new BsonDocument(MongoDbGetFilterBuilder.EntityTypesField,
                     new BsonDocument("$in", new BsonArray(typeNames.Select(n => (BsonValue)new BsonString(n))))));
             }
 
-            if (entity.EntityName is { } entityName
-                && entity.EnumerateChildren == EnumerateChildrenAction.EnumerateSelf)
+            if (entity.EntityName is { } entityName)
             {
-                // MongoDB array-element equality: {field: value} matches when value is an element of field.
-                // current.names stores string[][], so {current.names: [c0, c1]} matches documents
-                // where [c0, c1] is one of the stored name-component arrays.
-                subClauses.Add(new BsonDocument("current.names",
-                    new BsonArray(entityName.Components.Select(c => (BsonValue)new BsonString(c)))));
+                switch (entity.EnumerateChildren)
+                {
+                    case EnumerateChildrenAction.EnumerateSelf:
+                        subClauses.Add(new BsonDocument(MongoDbGetFilterBuilder.NamesField,
+                            new BsonArray(entityName.Components.Select(c => (BsonValue)new BsonString(c)))));
+                        break;
+
+                    case EnumerateChildrenAction.EnumerateChildren:
+                        var prefixClauseChildren = new BsonDocument(MongoDbGetFilterBuilder.NameParentPrefixesField,
+                            new BsonArray(entityName.Components.Select(c => (BsonValue)new BsonString(c))));
+                        subClauses.Add(prefixClauseChildren);
+                        break;
+
+                    case EnumerateChildrenAction.EnumerateAllChildren:
+                        var prefixClauseAll = new BsonDocument(MongoDbGetFilterBuilder.NameParentPrefixesField,
+                            new BsonArray(entityName.Components.Select(c => (BsonValue)new BsonString(c))));
+                        subClauses.Add(prefixClauseAll);
+                        break;
+                }
             }
 
             if (subClauses.Count > 0)
@@ -343,7 +360,6 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             }
             else
             {
-                // No targeted filter available for this sub-request; fall back to full collection scan.
                 return new BsonDocument();
             }
         }
@@ -373,7 +389,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
             _entityCollection.CollectionNamespace.CollectionName);
-        var translator = new MongoDbQueryTranslator();
+        var translator = new MongoDbQueryFilterBuilder();
 
         var batches = new List<TimestampedQueryBatch>();
         foreach (var timestamp in timestamps)
@@ -488,7 +504,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             // Non-deleted relationship documents (those carrying a participants object).
             new("$match", new BsonDocument
             {
-                { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
+                { MongoDbQueryFilterBuilder.IsDeletedField, new BsonDocument("$ne", true) },
                 { "current.data.participants", new BsonDocument("$exists", true) },
             }),
         };
@@ -497,7 +513,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         if (TryResolveRequestedRelationshipTypes(relationshipRequests, out var requestedTypes))
         {
             pipeline.Add(new BsonDocument("$match", new BsonDocument(
-                MongoDbQueryTranslator.TypeNamesField, new BsonDocument("$in", new BsonArray(requestedTypes)))));
+                MongoDbQueryFilterBuilder.EntityTypesField, new BsonDocument("$in", new BsonArray(requestedTypes)))));
         }
 
         // Keep only relationships referencing one of the requested entities, and emit one row per
@@ -572,6 +588,135 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     }
 
     /// <summary>
+    /// Ensures the five required query indexes exist on the entity collection. This is idempotent and
+    /// should be called once on startup before serving any queries.
+    /// </summary>
+    public async Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
+    {
+        var indexModels = new CreateIndexModel<MongoDbEntityDocument>[]
+        {
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.EntityTypesField)),
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.NamesField)),
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.NameParentPrefixesField)),
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.ParticipantIdsField)),
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending("current.modified-time-utc")),
+        };
+
+        await _entityCollection.Indexes.CreateManyAsync(indexModels, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Backfills <c>current.name-parent-prefixes</c> and <c>current.participant-ids</c> on any
+    /// documents that are missing those fields (written before this schema version), and removes the
+    /// obsolete <c>current.names</c> and <c>current.type-names</c> fields. Processes up to 500
+    /// documents per <c>bulkWrite</c> batch. Idempotent — safe to call multiple times.
+    /// </summary>
+    public async Task MigrateAsync(CancellationToken cancellationToken = default)
+    {
+        const int BatchSize = 500;
+        var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
+            _entityCollection.CollectionNamespace.CollectionName);
+
+        // Find all non-deleted docs that are missing the new name-parent-prefixes field.
+        var filter = new BsonDocument
+        {
+            { MongoDbGetFilterBuilder.NameParentPrefixesField, new BsonDocument("$exists", false) },
+            { MongoDbGetFilterBuilder.IsDeletedField, new BsonDocument("$ne", true) },
+        };
+
+        var cursor = await bsonCollection
+            .Find(filter)
+            .ToCursorAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var batch = new List<BsonDocument>(BatchSize);
+        while (await cursor.MoveNextAsync(cancellationToken).ConfigureAwait(false))
+        {
+            batch.AddRange(cursor.Current);
+            while (batch.Count >= BatchSize)
+            {
+                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], cancellationToken)
+                    .ConfigureAwait(false);
+                batch.RemoveRange(0, BatchSize);
+            }
+        }
+
+        if (batch.Count > 0)
+        {
+            await ApplyMigrationBatchAsync(bsonCollection, batch, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task ApplyMigrationBatchAsync(
+        IMongoCollection<BsonDocument> collection,
+        List<BsonDocument> docs,
+        CancellationToken cancellationToken)
+    {
+        var writes = new List<WriteModel<BsonDocument>>(docs.Count);
+
+        foreach (var doc in docs)
+        {
+            var id = doc["_id"];
+            var current = doc["current"].AsBsonDocument;
+            var data = current.Contains("data") && current["data"] is BsonDocument d ? d : null;
+
+            // Compute name-parent-prefixes from data.names
+            var prefixArray = new BsonArray();
+            if (data is not null)
+            {
+                foreach (var nameComponents in ReadNameComponents(data))
+                {
+                    for (var i = 1; i < nameComponents.Length; i++)
+                    {
+                        prefixArray.Add(new BsonArray(nameComponents[..i].Select(s => (BsonValue)new BsonString(s))));
+                    }
+                }
+            }
+
+            // Compute participant-ids from data.participants
+            var participantIdsArray = new BsonArray();
+            if (data is not null)
+            {
+                var dataJson = MongoEntityData.ToJsonElement(data);
+                if (RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(dataJson, out var ids))
+                {
+                    foreach (var id2 in ids)
+                    {
+                        participantIdsArray.Add(new BsonString(id2.ToString()));
+                    }
+                }
+            }
+
+            var update = new BsonDocument
+            {
+                {
+                    "$set", new BsonDocument
+                    {
+                        { "current.name-parent-prefixes", prefixArray },
+                        { "current.participant-ids", participantIdsArray },
+                    }
+                },
+                {
+                    "$unset", new BsonDocument
+                    {
+                        { "current.names", "" },
+                        { "current.type-names", "" },
+                    }
+                },
+            };
+
+            writes.Add(new UpdateOneModel<BsonDocument>(
+                new BsonDocumentFilterDefinition<BsonDocument>(new BsonDocument("_id", id)),
+                new BsonDocumentUpdateDefinition<BsonDocument>(update)));
+        }
+
+        if (writes.Count > 0)
+        {
+            await collection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Ensures the Atlas vector search index over the current-version embedding field exists and is
     /// in a functional state. This requires an Atlas-capable deployment (Atlas, or the
     /// mongodb/mongodb-atlas-local image); community MongoDB does not support search indexes.
@@ -617,7 +762,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     new BsonDocument
                     {
                         { "type", "vector" },
-                        { "path", MongoDbQueryTranslator.EmbeddingField },
+                        { "path", MongoDbQueryFilterBuilder.EmbeddingField },
                         { "numDimensions", _embeddingsProvider.Dimensions },
                         { "similarity", "cosine" },
                     },
@@ -736,7 +881,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// </summary>
     private async Task<List<BsonDocument>> ExecuteParticipationClauseAsync(
         IMongoCollection<BsonDocument> bsonCollection,
-        MongoDbQueryTranslator translator,
+        MongoDbQueryFilterBuilder translator,
         EntityParticipationQueryClause clause,
         IReadOnlyList<EntityParticipationQueryClause> exclusions,
         CancellationToken cancellationToken)
@@ -749,8 +894,8 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             // Non-deleted relationship documents carrying one of the requested types (native match).
             new("$match", new BsonDocument
             {
-                { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
-                { MongoDbQueryTranslator.TypeNamesField, new BsonDocument("$in", relationshipTypes) },
+                { MongoDbQueryFilterBuilder.IsDeletedField, new BsonDocument("$ne", true) },
+                { MongoDbQueryFilterBuilder.EntityTypesField, new BsonDocument("$in", relationshipTypes) },
             }),
         };
 
@@ -789,7 +934,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
             { "as", "entity" },
         }));
         pipeline.Add(new BsonDocument("$unwind", "$entity"));
-        pipeline.Add(new BsonDocument("$match", new BsonDocument("entity." + MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true))));
+        pipeline.Add(new BsonDocument("$match", new BsonDocument("entity." + MongoDbQueryFilterBuilder.IsDeletedField, new BsonDocument("$ne", true))));
         // Deduplicate participant entities (a shared participant referenced by several relationships).
         pipeline.Add(new BsonDocument("$group", new BsonDocument
         {
@@ -817,12 +962,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     {
                         new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$and", new BsonArray
                         {
-                            new BsonDocument("$ne", new BsonArray { "$" + MongoDbQueryTranslator.IsDeletedField, true }),
+                            new BsonDocument("$ne", new BsonArray { "$" + MongoDbQueryFilterBuilder.IsDeletedField, true }),
                             new BsonDocument("$gt", new BsonArray
                             {
                                 new BsonDocument("$size", new BsonDocument("$setIntersection", new BsonArray
                                 {
-                                    new BsonDocument("$ifNull", new BsonArray { "$" + MongoDbQueryTranslator.TypeNamesField, new BsonArray() }),
+                                    new BsonDocument("$ifNull", new BsonArray { "$" + MongoDbQueryFilterBuilder.EntityTypesField, new BsonArray() }),
                                     exclusionTypes,
                                 })),
                                 0,
@@ -848,7 +993,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// </summary>
     private async Task<List<BsonDocument>> ExecuteTransitClauseAsync(
         IMongoCollection<BsonDocument> bsonCollection,
-        MongoDbQueryTranslator translator,
+        MongoDbQueryFilterBuilder translator,
         TransitQueryClause clause,
         CancellationToken cancellationToken)
     {
@@ -873,12 +1018,12 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                         // Relationship must be non-deleted and of the requested type.
                         new BsonDocument("$match", new BsonDocument("$expr", new BsonDocument("$and", new BsonArray
                         {
-                            new BsonDocument("$ne", new BsonArray { "$" + MongoDbQueryTranslator.IsDeletedField, true }),
+                            new BsonDocument("$ne", new BsonArray { "$" + MongoDbQueryFilterBuilder.IsDeletedField, true }),
                             new BsonDocument("$gt", new BsonArray
                             {
                                 new BsonDocument("$size", new BsonDocument("$setIntersection", new BsonArray
                                 {
-                                    new BsonDocument("$ifNull", new BsonArray { "$" + MongoDbQueryTranslator.TypeNamesField, new BsonArray() }),
+                                    new BsonDocument("$ifNull", new BsonArray { "$" + MongoDbQueryFilterBuilder.EntityTypesField, new BsonArray() }),
                                     relationshipTypes,
                                 })),
                                 0,
@@ -905,7 +1050,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 { "as", "destEntity" },
             }),
             new("$unwind", "$destEntity"),
-            new("$match", new BsonDocument("destEntity." + MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true))),
+            new("$match", new BsonDocument("destEntity." + MongoDbQueryFilterBuilder.IsDeletedField, new BsonDocument("$ne", true))),
             // Deduplicate destination entities (a shared destination referenced by several relationships).
             new("$group", new BsonDocument
             {
@@ -929,7 +1074,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// </summary>
     private async Task<List<BsonDocument>> ExecuteEntityClauseAsync(
         IMongoCollection<BsonDocument> bsonCollection,
-        MongoDbQueryTranslator translator,
+        MongoDbQueryFilterBuilder translator,
         QueryClause clause,
         CancellationToken cancellationToken)
     {
@@ -953,7 +1098,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var filter = translator.TranslateToFilter(clause);
         var find = bsonCollection.Find(filter);
-        if (MongoDbQueryTranslator.GetResultLimit(clause) is { } limit && limit >= 0)
+        if (MongoDbQueryFilterBuilder.GetResultLimit(clause) is { } limit && limit >= 0)
         {
             find = find.Limit(limit);
         }
@@ -1067,7 +1212,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// </summary>
     private async Task<List<BsonDocument>> ExecuteFilterWithParticipationExclusionsAsync(
         IMongoCollection<BsonDocument> bsonCollection,
-        MongoDbQueryTranslator translator,
+        MongoDbQueryFilterBuilder translator,
         QueryClause filterClause,
         IReadOnlyList<EntityParticipationQueryClause> exclusions,
         CancellationToken cancellationToken)
@@ -1075,7 +1220,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         // Execute the filter to get matching entity documents.
         var filter = translator.TranslateToFilter(filterClause);
         var find = bsonCollection.Find(filter);
-        if (MongoDbQueryTranslator.GetResultLimit(filterClause) is { } limit && limit >= 0)
+        if (MongoDbQueryFilterBuilder.GetResultLimit(filterClause) is { } limit && limit >= 0)
         {
             find = find.Limit(limit);
         }
@@ -1112,8 +1257,8 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             new("$match", new BsonDocument
             {
-                { MongoDbQueryTranslator.IsDeletedField, new BsonDocument("$ne", true) },
-                { MongoDbQueryTranslator.TypeNamesField, new BsonDocument("$in", relationshipTypes) },
+                { MongoDbQueryFilterBuilder.IsDeletedField, new BsonDocument("$ne", true) },
+                { MongoDbQueryFilterBuilder.EntityTypesField, new BsonDocument("$in", relationshipTypes) },
             }),
         };
 
@@ -1554,17 +1699,31 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         return JsonElement.DeepEquals(MongoEntityData.ToJsonElement(currentData), nextData.Value);
     }
 
-    private static IReadOnlyCollection<string> ExtractTypeNames(
-        JsonElement? data)
+    private static string[] ExtractParticipantIds(JsonElement? data)
     {
         if (data is null || data.Value.ValueKind != JsonValueKind.Object)
         {
             return [];
         }
 
-        var typeNames = data.Value.ExtractStringArray("type-names").ToList();
-        typeNames.AddRange(data.Value.ExtractStringArray("entity-types"));
-        return typeNames.Distinct(StringComparer.Ordinal).ToArray();
+        return RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(data.Value, out var ids)
+            ? ids.Select(static id => id.ToString()).ToArray()
+            : [];
+    }
+
+    private static string[][] ComputeNameParentPrefixes(BsonDocument data)
+    {
+        var prefixes = new List<string[]>();
+        foreach (var nameComponents in ReadNameComponents(data))
+        {
+            // Store all proper prefixes (length 1 to length-1), not the empty prefix or full name.
+            for (var i = 1; i < nameComponents.Length; i++)
+            {
+                prefixes.Add(nameComponents[..i]);
+            }
+        }
+
+        return prefixes.ToArray();
     }
 
     private static IEnumerable<MongoDbEntityDocument> ResolveMatchingDocuments(
@@ -1847,15 +2006,20 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         [BsonIgnoreIfNull]
         public BsonDocument? Data { get; init; }
 
-        [BsonElement("type-names")]
-        public string[] TypeNames { get; init; } = [];
+        /// <summary>
+        /// Flat list of all participant entity IDs extracted from the <c>participants</c> object.
+        /// Enables efficient relationship lookup via a multikey index on <c>current.participant-ids</c>.
+        /// </summary>
+        [BsonElement("participant-ids")]
+        public string[] ParticipantIds { get; init; } = [];
 
         /// <summary>
-        /// Denormalized name-component arrays, one entry per entity name. Mirrors the output of
-        /// <see cref="ReadNameComponents"/> and is used to build targeted MongoDB name filters.
+        /// All proper prefix sub-arrays for every entity name. For a name <c>["a","b","c"]</c> this
+        /// stores <c>["a"]</c> and <c>["a","b"]</c>. Enables efficient child/descendant queries via a
+        /// multikey index on <c>current.name-parent-prefixes</c>.
         /// </summary>
-        [BsonElement("names")]
-        public string[][] Names { get; init; } = [];
+        [BsonElement("name-parent-prefixes")]
+        public string[][] NameParentPrefixes { get; init; } = [];
 
         [BsonElement("embedding")]
         [BsonIgnoreIfNull]
