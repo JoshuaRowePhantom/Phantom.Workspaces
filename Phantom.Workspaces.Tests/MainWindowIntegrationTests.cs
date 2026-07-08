@@ -4632,6 +4632,215 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
+    // ── IsShiftHeld / PropagateBadgeVisibility tests (#774) ──────────────────
+
+    [Fact]
+    public async Task IsShiftHeld_DefaultIsFalse()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        Assert.False(viewModel.IsShiftHeld);
+    }
+
+    [Fact]
+    public async Task IsShiftHeld_SetToTrue_RaisesPropertyChanged()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var raised = false;
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(viewModel.IsShiftHeld))
+                raised = true;
+        };
+
+        viewModel.IsShiftHeld = true;
+
+        Assert.True(raised);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltOnly_ContentTabBadgesVisible()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-alt-only-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = true;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-alt-only-a");
+        Assert.True(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltOnly_PaneTabBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("77400001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "77400001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-alt-pane-hidden"]],
+              "display-name": { "default": "Badge Alt Pane Hidden" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = true;
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneDoc = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>().First();
+        Assert.False(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltAndShift_ContentTabBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-altshift-content-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = true;
+        viewModel.IsShiftHeld = true;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-altshift-content-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltAndShift_PaneTabBadgesVisible()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("77400002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "77400002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-altshift-pane-visible"]],
+              "display-name": { "default": "Badge AltShift Pane Visible" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        viewModel.IsAltHeld = true;
+        viewModel.IsShiftHeld = true;
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneDoc = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane.Id == workspaceId.ToString());
+        Assert.True(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_ShiftOnly_AllBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-shift-only-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = false;
+        viewModel.IsShiftHeld = true;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-shift-only-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_NeitherModifier_AllBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-neither-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = false;
+        viewModel.IsShiftHeld = false;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-neither-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task IsShiftHeldChanged_TriggersPropagate_PaneTabsUpdated()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("77400003-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "77400003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-shift-change-pane"]],
+              "display-name": { "default": "Badge Shift Change Pane" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        viewModel.IsAltHeld = true;
+        viewModel.IsShiftHeld = false;
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneDoc = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane.Id == workspaceId.ToString());
+        Assert.False(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+
+        // Flip IsShiftHeld while IsAltHeld=true — pane badge should become visible
+        viewModel.IsShiftHeld = true;
+        Assert.True(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task IsAltHeldChanged_TriggersPropagate_ContentTabsUpdated()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-alt-change-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = false;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-alt-change-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+
+        // Flip IsAltHeld while IsShiftHeld=false — content badge should become visible
+        viewModel.IsAltHeld = true;
+        Assert.True(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
     {

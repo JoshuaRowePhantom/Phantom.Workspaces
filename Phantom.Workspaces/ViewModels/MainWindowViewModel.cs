@@ -79,6 +79,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
     private bool isAltHeld;
+    private bool isShiftHeld;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
@@ -272,7 +273,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.SetProperty(ref this.isAltHeld, value))
             {
-                this.PropagateIsAltHeldToTabHeaders(value);
+                this.PropagateBadgeVisibility(value, this.isShiftHeld);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True while the Shift key is physically held down. Used together with <see cref="IsAltHeld"/>
+    /// to determine which badge type is active: Alt alone → content-tab badges; Alt+Shift → pane-tab badges.
+    /// Set by <see cref="MainWindow"/> keyboard handlers.
+    /// </summary>
+    public bool IsShiftHeld
+    {
+        get => this.isShiftHeld;
+        set
+        {
+            if (this.SetProperty(ref this.isShiftHeld, value))
+            {
+                this.PropagateBadgeVisibility(this.isAltHeld, value);
             }
         }
     }
@@ -2014,12 +2032,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Wire up accelerator-key callbacks so Alt+1–0 and IsAltHeld work when this tab's WebView has focus.
         if (tab is WebViewModel webVm)
         {
-            webVm.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            webVm.AltKeyStateChanged += (_, held) =>
+            {
+                this.IsAltHeld = held;
+                if (!held) this.IsShiftHeld = false;
+            };
             webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
         }
         else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
         {
-            agentTab.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            agentTab.AltKeyStateChanged += (_, held) =>
+            {
+                this.IsAltHeld = held;
+                if (!held) this.IsShiftHeld = false;
+            };
             agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
         }
 
@@ -2549,15 +2575,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return allDocuments;
     }
 
-    private void PropagateIsAltHeldToTabHeaders(bool value)
+    private void PropagateBadgeVisibility(bool isAltHeld, bool isShiftHeld)
     {
+        // Content tabs: badge visible when Alt held WITHOUT Shift.
+        var contentBadge = isAltHeld && !isShiftHeld;
         foreach (var pane in this.WorkspacePanes)
         {
             foreach (var tab in pane.Tabs)
             {
                 if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = value;
+                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = contentBadge;
             }
+        }
+
+        // Workspace pane tabs: badge visible when Alt+Shift both held.
+        var paneBadge = isAltHeld && isShiftHeld;
+        foreach (var pane in this.WorkspacePanes)
+        {
+            var paneDoc = this.dockFactory.GetPaneDocument(pane.Id);
+            if (paneDoc is not null)
+                paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible = paneBadge;
         }
     }
 
