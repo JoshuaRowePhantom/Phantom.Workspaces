@@ -2409,17 +2409,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void RefreshGlobalAltShortcutLabels()
     {
-        var nonDefaultPanes = this.WorkspacePanes
-            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal) 
-                     && !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
+        var activePanes = this.WorkspacePanes
+            .Where(p => !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal) 
+                     && p.ContentLayout is not null)
             .ToList();
         
-        if (nonDefaultPanes.Count <= 1)
+        var nonDefaultPanes = activePanes
+            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal))
+            .ToList();
+        
+        if (nonDefaultPanes.Count == 0 && activePanes.Count == 1)
         {
-            foreach (var pane in nonDefaultPanes)
-            {
-                RefreshTabAltShortcutLabels(pane, this.dockFactory.GetDocumentForTab);
-            }
+            RefreshTabAltShortcutLabels(activePanes[0], this.dockFactory.GetDocumentForTab);
+            return;
+        }
+        
+        if (nonDefaultPanes.Count == 1)
+        {
+            RefreshTabAltShortcutLabels(nonDefaultPanes[0], this.dockFactory.GetDocumentForTab);
             return;
         }
         
@@ -2450,46 +2457,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             
             if (pane.ContentLayout is null) continue;
             
-            var docks = FindAllDocumentDocksInVisualOrder(pane.ContentLayout);
-            foreach (var dock in docks)
+            var dock = FindDocumentDock(pane.ContentLayout);
+            if (dock?.VisibleDockables is null) continue;
+            
+            foreach (var dockable in dock.VisibleDockables)
             {
-                if (dock.VisibleDockables is null) continue;
-                
-                foreach (var dockable in dock.VisibleDockables)
+                if (dockable is WorkspaceDocument doc)
                 {
-                    if (dockable is WorkspaceDocument doc)
-                    {
-                        allDocuments.Add(doc);
-                    }
+                    allDocuments.Add(doc);
                 }
             }
         }
         
         return allDocuments;
-    }
-
-    private List<IDocumentDock> FindAllDocumentDocksInVisualOrder(IDockable root)
-    {
-        var result = new List<IDocumentDock>();
-        FindAllDocumentDocksRecursive(root, result);
-        return result;
-    }
-
-    private void FindAllDocumentDocksRecursive(IDockable dockable, List<IDocumentDock> result)
-    {
-        if (dockable is IDocumentDock documentDock)
-        {
-            result.Add(documentDock);
-            return;
-        }
-
-        if (dockable is IDock dock && dock.VisibleDockables is not null)
-        {
-            foreach (var child in dock.VisibleDockables)
-            {
-                FindAllDocumentDocksRecursive(child, result);
-            }
-        }
     }
 
     private void PropagateIsAltHeldToTabHeaders(bool value)
