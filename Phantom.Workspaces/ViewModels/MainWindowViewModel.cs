@@ -1724,6 +1724,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.SelectedWorkspacePane = this.WorkspacePanes[index];
 
+        var paneDoc = this.dockFactory.GetPaneDocument(this.SelectedWorkspacePane.Id);
+        if (paneDoc is not null)
+        {
+            this.dockFactory.SetActiveDockable(paneDoc);
+        }
+
         var notifTab = this.SelectedWorkspacePane.SelectedTab
             ?? this.SelectedWorkspacePane.Tabs.FirstOrDefault();
         if (notifTab is not null)

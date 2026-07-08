@@ -1211,6 +1211,106 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WithTwoPanes_ActivatesCorrectDockDocument()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77200001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77200001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-active-a"]],
+              "display-name": { "default": "Goto Pane Active A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77200001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77200001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-active-b"]],
+              "display-name": { "default": "Goto Pane Active B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        var activePaneDoc = workspacesDock!.ActiveDockable as WorkspacePaneDocument;
+        Assert.NotNull(activePaneDoc);
+        Assert.Equal(viewModel.WorkspacePanes[1].Id, activePaneDoc!.WorkspacePane.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WithTwoPanes_ActivatesFirstPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77200002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77200002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-first-a"]],
+              "display-name": { "default": "Goto Pane First A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77200002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77200002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-first-b"]],
+              "display-name": { "default": "Goto Pane First B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Navigate to pane 1 first, then back to 0
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var activePaneDoc = workspacesDock!.ActiveDockable as WorkspacePaneDocument;
+        Assert.NotNull(activePaneDoc);
+        Assert.Equal(viewModel.WorkspacePanes[0].Id, activePaneDoc!.WorkspacePane.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
