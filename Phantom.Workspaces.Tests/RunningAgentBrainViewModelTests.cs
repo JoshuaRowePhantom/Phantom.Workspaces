@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using AgentSchema;
+using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
@@ -384,5 +386,152 @@ public sealed class RunningAgentBrainViewModelTests
         
         // Verify the header text is correct
         Assert.Contains("Running sub-agents", axaml, StringComparison.Ordinal);
+    }
+
+    // ── Sorting by activity ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Refresh_SortsRows_ByLastActivityAtDescending()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-A", "Agent A");
+        table.AddSession("session-B", "Agent B");
+
+        var vm = CreateBrainVm(table, []);
+        Assert.Equal(2, vm.Rows.Count);
+
+        // Give session-A an older timestamp so session-B should sort first.
+        var rowA = vm.Rows.First(r => r.SessionKey == "session-A");
+        rowA.UpdateLastActivityAt(DateTime.UtcNow - TimeSpan.FromSeconds(10));
+
+        vm.Refresh();
+
+        Assert.Equal("session-B", vm.Rows[0].SessionKey);
+        Assert.Equal("session-A", vm.Rows[1].SessionKey);
+    }
+
+    [Fact]
+    public void Rows_InitialOrder_MostRecentActivityFirst()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-old", "Old Agent");
+        table.AddSession("session-new", "New Agent");
+
+        var vm = CreateBrainVm(table, []);
+
+        // Set an older timestamp on session-old to simulate it having had activity earlier.
+        var rowOld = vm.Rows.First(r => r.SessionKey == "session-old");
+        rowOld.UpdateLastActivityAt(DateTime.UtcNow - TimeSpan.FromSeconds(5));
+
+        // Calling Refresh() triggers ResortRows() at the end.
+        vm.Refresh();
+
+        Assert.Equal("session-new", vm.Rows[0].SessionKey);
+    }
+
+    [Fact]
+    public void Rows_StableOrder_WhenNoActivityChanges()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent 1");
+        table.AddSession("session-2", "Agent 2");
+
+        var vm = CreateBrainVm(table, []);
+
+        // Capture the current order.
+        var firstKey = vm.Rows[0].SessionKey;
+        var secondKey = vm.Rows[1].SessionKey;
+
+        // Multiple Refresh() calls without any activity changes must not reorder.
+        vm.Refresh();
+        vm.Refresh();
+
+        Assert.Equal(firstKey, vm.Rows[0].SessionKey);
+        Assert.Equal(secondKey, vm.Rows[1].SessionKey);
+    }
+
+    [Fact]
+    public void ResortRows_MovesSessionWithNewerActivityToTop()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-A", "Agent A");
+        table.AddSession("session-B", "Agent B");
+
+        var vm = CreateBrainVm(table, []);
+
+        // Give session-A an older timestamp; session-B should be first.
+        var rowA = vm.Rows.First(r => r.SessionKey == "session-A");
+        rowA.UpdateLastActivityAt(DateTime.UtcNow - TimeSpan.FromSeconds(5));
+        vm.ResortRows();
+
+        Assert.Equal("session-B", vm.Rows[0].SessionKey);
+
+        // Simulate new activity on session-A.
+        rowA.UpdateLastActivityAt(DateTime.UtcNow + TimeSpan.FromSeconds(5));
+        vm.ResortRows();
+
+        Assert.Equal("session-A", vm.Rows[0].SessionKey);
+    }
+
+    [Fact]
+    public async Task Rows_ResortedToTop_WhenSessionReceivesHistoryItem()
+    {
+        var agentDefinitionJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """;
+
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
+
+        var chatA = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
+        var chatB = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
+
+        await using var agentVmA = new AgentViewModel(chatA, "session-A", new ObservableLoggerFactory());
+        await using var agentVmB = new AgentViewModel(chatB, "session-B", new ObservableLoggerFactory());
+
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "tab-A", Title = "A", AgentSessionId = "session-A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "tab-B", Title = "B", AgentSessionId = "session-B" };
+        tabA.SetReady(agentVmA, new ObservableLoggerFactory());
+        tabB.SetReady(agentVmB, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-A", "Agent A");
+        table.AddSession("session-B", "Agent B");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () =>
+            [
+                new AgentTabInfo("pane-1", "Workspace", tabA),
+                new AgentTabInfo("pane-1", "Workspace", tabB),
+            ],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        // Give session-A an older activity timestamp so session-B is initially first.
+        var rowA = vm.Rows.First(r => r.SessionKey == "session-A");
+        rowA.UpdateLastActivityAt(DateTime.UtcNow - TimeSpan.FromSeconds(5));
+        vm.ResortRows();
+
+        Assert.Equal("session-B", vm.Rows[0].SessionKey);
+
+        // Adding a history item to chatA fires History.CollectionChanged synchronously,
+        // which the ViewModel handles by calling UpdateLastActivityAt + ResortRows.
+        chatA.History.Add(new AgentChatHistoryItem
+        {
+            Role = Microsoft.Extensions.AI.ChatRole.Assistant,
+            Contents = [new Microsoft.Extensions.AI.TextContent("hello")],
+            Timestamp = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Equal("session-A", vm.Rows[0].SessionKey);
+
+        vm.Dispose();
     }
 }
