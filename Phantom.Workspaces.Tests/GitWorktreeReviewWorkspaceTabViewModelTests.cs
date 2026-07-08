@@ -1547,5 +1547,120 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.True(totalContextLines >= 30, $"Expected >= 30 context lines (15 before + 15 after), got {totalContextLines}");
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task SideBySide_WhenToggled_TriggersRebuildFileDiffs()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "source.txt"), "line one\nline two\nline three\n");
+            Commands.Stage(repo, "*");
+            repo.Commit("Add source.txt", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "source.txt"), "line one\nmodified line two\nline three\n");
+            Commands.Stage(repo, "*");
+            repo.Commit("Modify source.txt", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            Assert.NotEmpty(vm.FileDiffs);
+            Assert.All(vm.FileDiffs, diff => Assert.False(diff.SideBySide));
+
+            var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+
+            vm.SideBySide = true;
+
+            await diffRebuildCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.NotEmpty(vm.FileDiffs);
+            Assert.All(vm.FileDiffs, diff => Assert.True(diff.SideBySide));
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 10_000)]
+    public async Task SideBySide_WhenToggled_PreservesExistingFileDiffContent()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+
+            var featureBranch = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, featureBranch);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "data.txt"), "alpha\nbeta\ngamma\ndelta\n");
+            Commands.Stage(repo, "*");
+            repo.Commit("Add data.txt", sig, sig);
+
+            File.WriteAllText(Path.Combine(this.repoDir, "data.txt"), "alpha\nBETA\ngamma\ndelta\nextra\n");
+            Commands.Stage(repo, "*");
+            repo.Commit("Modify data.txt", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        var vm = CreateViewModel($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """);
+
+        await using (vm)
+        {
+            await Task.Yield();
+
+            Assert.NotEmpty(vm.FileDiffs);
+            var initialDiff = vm.FileDiffs[0];
+            var initialRelativePath = initialDiff.RelativePath;
+            var initialLinesAdded = initialDiff.LinesAdded;
+            var initialLinesRemoved = initialDiff.LinesRemoved;
+            var initialHunkCount = initialDiff.Hunks.Count;
+            Assert.False(initialDiff.SideBySide);
+
+            var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
+
+            vm.SideBySide = true;
+
+            await diffRebuildCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            Assert.NotEmpty(vm.FileDiffs);
+            var rebuiltDiff = vm.FileDiffs[0];
+
+            Assert.Equal(initialRelativePath, rebuiltDiff.RelativePath);
+            Assert.Equal(initialLinesAdded, rebuiltDiff.LinesAdded);
+            Assert.Equal(initialLinesRemoved, rebuiltDiff.LinesRemoved);
+            Assert.Equal(initialHunkCount, rebuiltDiff.Hunks.Count);
+            Assert.True(rebuiltDiff.SideBySide);
+        }
+    }
 }
 
