@@ -5,17 +5,13 @@ namespace Phantom.Workspaces.Agent.Cli.Tests;
 
 public sealed class AgentCliEchoProviderTests
 {
+    static readonly string cliExePath = Path.Combine(
+        Path.GetDirectoryName(typeof(AgentCliEchoProviderTests).Assembly.Location)!,
+        "Phantom.Workspaces.Agent.Cli.exe");
+
     [Fact]
     public async Task Run_WithEchoProvider_RespondsToUserInput()
     {
-        var repositoryRoot = FindRepositoryRoot();
-        var cliExePath = Path.Combine(
-            repositoryRoot.FullName,
-            "Phantom.Workspaces.Agent.Cli",
-            "bin",
-            "Debug",
-            "net10.0",
-            "Phantom.Workspaces.Agent.Cli.exe");
         Assert.True(File.Exists(cliExePath), $"Expected CLI executable at '{cliExePath}'.");
 
         using var process = new Process
@@ -23,7 +19,6 @@ public sealed class AgentCliEchoProviderTests
             StartInfo = new ProcessStartInfo
             {
                 FileName = cliExePath,
-                WorkingDirectory = repositoryRoot.FullName,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -69,14 +64,6 @@ public sealed class AgentCliEchoProviderTests
     [Fact]
     public async Task Run_WithEchoProvider_StdinCloseWaitsForAssistantTurn()
     {
-        var repositoryRoot = FindRepositoryRoot();
-        var cliExePath = Path.Combine(
-            repositoryRoot.FullName,
-            "Phantom.Workspaces.Agent.Cli",
-            "bin",
-            "Debug",
-            "net10.0",
-            "Phantom.Workspaces.Agent.Cli.exe");
         Assert.True(File.Exists(cliExePath), $"Expected CLI executable at '{cliExePath}'.");
 
         using var process = new Process
@@ -84,7 +71,6 @@ public sealed class AgentCliEchoProviderTests
             StartInfo = new ProcessStartInfo
             {
                 FileName = cliExePath,
-                WorkingDirectory = repositoryRoot.FullName,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -138,21 +124,5 @@ public sealed class AgentCliEchoProviderTests
                 return;
             }
         }
-    }
-
-    private static DirectoryInfo FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
-            {
-                return current;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
     }
 }

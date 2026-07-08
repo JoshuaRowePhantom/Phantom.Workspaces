@@ -1,0 +1,141 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Phantom.Workspaces.Agent.Gui.Controls;
+
+namespace Phantom.Workspaces.Agent.Gui.Tests;
+
+public sealed class AgentChatEditorControlTests
+{
+    [Fact]
+    public void AgentChatEditorControl_AutoScrollCheckbox_HasToolTipMentioningScrollLockKey()
+    {
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "agent-chat-autoscroll-toggle",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        var checkboxStart = axamlContent.IndexOf("agent-chat-autoscroll-toggle", StringComparison.Ordinal);
+        var checkboxEnd = axamlContent.IndexOf("/>", checkboxStart, StringComparison.Ordinal);
+        var checkboxXaml = axamlContent.Substring(checkboxStart, checkboxEnd - checkboxStart);
+
+        Assert.Contains("ToolTip.Tip", checkboxXaml, StringComparison.Ordinal);
+        Assert.Contains("Scroll Lock", checkboxXaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DetailContentSlots_ItemsPanel_IsPanel_NotStackPanel()
+    {
+        // Issue #764: The ItemsControl for DetailContentSlots must use Panel (base Panel, not
+        // StackPanel) as its items panel. StackPanel measures children with infinite height,
+        // causing the AgentChatOutputControl (WebView host) to report DesiredSize = 0 and
+        // collapse the entire control. Panel provides finite constraints and allows items to
+        // fill the available space.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "ItemsSource=\"{Binding DetailContentSlots}\"",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "<ItemsControl.ItemsPanel>",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "<ItemsPanelTemplate>",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "<Panel/>",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "<StackPanel/>",
+            axamlContent,
+            StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_ConversationSlot_FillsAvailableHeight()
+    {
+        // Issue #764: Verify that the ContentControl for the conversation slot receives a
+        // non-zero finite height constraint during measure. When ItemsControl defaults to
+        // StackPanel, children are measured with infinite height, causing WebView to collapse
+        // to zero. With Panel as the items panel, children receive the finite constraint from
+        // the parent and can render properly.
+        var control = new AgentChatEditorControl();
+
+        // Navigate to the EditorGrid (Grid.Column="2") which contains the ItemsControl
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        Assert.NotNull(editorGrid);
+
+        // Find the ItemsControl for DetailContentSlots in column 2
+        var detailPanel = editorGrid.Children
+            .OfType<Panel>()
+            .FirstOrDefault(p => Grid.GetColumn(p) == 2);
+        Assert.NotNull(detailPanel);
+
+        var itemsControl = detailPanel.Children.OfType<ItemsControl>().FirstOrDefault();
+        Assert.NotNull(itemsControl);
+
+        // Verify that the ItemsPanel is Panel (or subclass), not StackPanel
+        var itemsPresenterProperty = typeof(ItemsControl)
+            .GetProperty("ItemsPanel", BindingFlags.Instance | BindingFlags.Public);
+        Assert.NotNull(itemsPresenterProperty);
+
+        var itemsPanelTemplate = itemsPresenterProperty.GetValue(itemsControl) as ITemplate<Panel>;
+        Assert.NotNull(itemsPanelTemplate);
+
+        var panel = itemsPanelTemplate.Build();
+        Assert.NotNull(panel);
+
+        // The panel must be base Panel, not StackPanel
+        Assert.IsType<Panel>(panel);
+        Assert.IsNotType<StackPanel>(panel);
+    }
+
+    private static string ReadAxaml(string fileName)
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var filePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Agent.Gui",
+            "Controls",
+            fileName);
+
+        return File.ReadAllText(filePath);
+    }
+
+    private static DirectoryInfo FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return current;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
+
+    private static T GetField<T>(object instance, string fieldName) where T : class
+    {
+        var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"Could not find field '{fieldName}'.");
+
+        return Assert.IsAssignableFrom<T>(field.GetValue(instance));
+    }
+}

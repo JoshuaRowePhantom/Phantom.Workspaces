@@ -32,6 +32,7 @@ public partial class MainWindow : Window
             if (this.DataContext is MainWindowViewModel vm)
             {
                 vm.IsAltHeld = false;
+                vm.IsShiftHeld = false;
                 vm.NavStackPopup.Dismiss();
             }
         };
@@ -61,6 +62,7 @@ public partial class MainWindow : Window
         if (e.Key is Key.LeftAlt or Key.RightAlt)
         {
             viewModel.IsAltHeld = true;
+            viewModel.IsShiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             return;
         }
 
@@ -234,6 +236,9 @@ public partial class MainWindow : Window
         }
 
         if (e.Key is Key.LeftAlt or Key.RightAlt)
+        {
             viewModel.IsAltHeld = false;
+            viewModel.IsShiftHeld = false;
+        }
     }
 }

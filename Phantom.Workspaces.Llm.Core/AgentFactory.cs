@@ -185,8 +185,12 @@ public static class AgentFactory
     public static ChatClientResult CreateChatClient(
         AgentDefinition agent,
         AgentServices? services,
-        AgentInputQueueManager? queueManager = null)
+        AgentInputQueueManager? queueManager = null,
+        IApiKeyResolver? apiKeyResolver = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
+        var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
+
         var model = (agent as PromptAgent)?.Model;
         if (model is null || string.IsNullOrEmpty(model.Id))
         {
@@ -202,13 +206,14 @@ public static class AgentFactory
         return provider switch
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
-            "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model), queueManager),
-            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager),
+            "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
+            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
+            "github-copilot-subagent" => new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent"),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, ollama, openai, azure"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure"),
         };
     }
 
@@ -235,9 +240,11 @@ public static class AgentFactory
     private static ChatClientResult CreateGitHubCopilotResult(
         Model model,
         AgentServices? services,
-        AgentInputQueueManager? queueManager)
+        AgentInputQueueManager? queueManager,
+        IApiKeyResolver resolver,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
-        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager);
+        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver, subAgentChatRegistry);
         return new ChatClientResult(client, displayName);
     }
 
@@ -333,6 +340,8 @@ public static class AgentFactory
         IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
             ?? new InMemoryAgentPersistenceStore();
 
+        var ct = createAgentChatRequest.CancellationToken;
+
         // Try to extract chat-history tool from agent definition (skipped if override is provided)
         if (services?.AgentPersistenceStoreOverride is null
             && requestedAgentDefinition is PromptAgent promptAgent
@@ -350,9 +359,9 @@ public static class AgentFactory
                     // Convert the connection options to JSON then deserialize as ChatHistoryProviderDefinition
                     var connectionJson = System.Text.Json.JsonSerializer.Serialize(connectionDict);
                     var definition = ChatHistoryProviderDefinition.FromJson(connectionJson);
-                    configuredStore = AgentPersistenceStoreFactory.CreateAsync(
-                        definition,
-                        CancellationToken.None).GetAwaiter().GetResult();
+                    var storeFactory = createAgentChatRequest.PersistenceStoreFactory
+                        ?? AgentPersistenceStoreFactory.CreateAsync;
+                    configuredStore = await storeFactory(definition, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -362,17 +371,40 @@ public static class AgentFactory
             }
         }
 
-        return await AgentChat.CreateAsync(
+        // Wire AgentSessionToolsetFactory when a running-agent-chat factory is available.
+        // The factory needs the parent AgentChat, which is set on agentChatRef after CreateAsync returns.
+        AgentChatRef? agentChatRef = null;
+        AgentServices? effectiveServices = services;
+        if (services?.RunningAgentChatFactory is IRunningAgentChatFactory runningFactory)
+        {
+            var sessionId = createAgentChatRequest.AgentSessionId ?? Guid.NewGuid().ToString("n");
+            var sessionContext = new CurrentSessionContext { AgentSessionId = sessionId };
+            agentChatRef = new AgentChatRef();
+            var sessionToolsetFactory = ToolsetFactory.CreateAgentSessionToolsetFactory(
+                agentChatRef,
+                sessionContext,
+                runningFactory,
+                services.ToolsetFactory ?? ToolsetFactory.CreateDefaultToolsetFactory());
+            effectiveServices = services with { ToolsetFactory = sessionToolsetFactory };
+        }
+
+        var chat = await AgentChat.CreateAsync(
             new InternalCreateAgentChatRequest
             {
                 AgentDefinition = requestedAgentDefinition,
                 AgentSessionId = createAgentChatRequest.AgentSessionId,
-                AgentServices = services,
+                AgentServices = effectiveServices,
                 ConfiguredStore = configuredStore,
                 ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
                 ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
             });
+
+        // Complete the late-bound reference so AgentSessionToolset tools can access the parent chat.
+        if (agentChatRef is not null)
+            agentChatRef.Chat = chat;
+
+        return chat;
     }
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
@@ -456,7 +488,7 @@ public static class AgentFactory
         }
     }
 
-    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model)
+    private static (IChatClient client, string displayName) CreateGitHubModelsClient(Model model, IApiKeyResolver resolver)
     {
         var connection = model.Connection as ApiKeyConnection
             ?? throw new InvalidOperationException("GitHub provider requires an ApiKeyConnection.");
@@ -465,7 +497,7 @@ public static class AgentFactory
             ? GitHubModelsInferenceEndpoint
             : connection.Endpoint;
 
-        var apiKey = ResolveApiKey(connection.ApiKey, "github-models");
+        var apiKey = resolver.ResolveApiKey(connection.ApiKey, "github-models");
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub provider requires a model id.");
 
@@ -493,8 +525,12 @@ public static class AgentFactory
     private static (IChatClient client, string displayName) CreateGitHubCopilotClient(
         Model model,
         AgentServices? services,
-        AgentInputQueueManager? queueManager = null)
+        AgentInputQueueManager? queueManager = null,
+        IApiKeyResolver? resolver = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
+        resolver ??= EnvironmentApiKeyResolver.Instance;
+
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub Copilot provider requires a model id.");
 
@@ -507,7 +543,7 @@ public static class AgentFactory
             // BYOK mode: a custom endpoint is supplied — authenticate to that endpoint, not GitHub.
             var resolvedApiKey = string.IsNullOrWhiteSpace(conn.ApiKey)
                 ? null
-                : ResolveApiKey(conn.ApiKey, "github-copilot");
+                : resolver.ResolveApiKey(conn.ApiKey, "github-copilot");
 
             // Optional BYOK configuration fields come from options.additionalProperties in the
             // manifest because AgentSchema.ApiKeyConnection does not carry an AdditionalProperties
@@ -553,7 +589,7 @@ public static class AgentFactory
             gitHubToken = model.Connection switch
             {
                 ApiKeyConnection apiKeyConn when !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey)
-                    => ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
+                    => resolver.ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
                 _ => null,
             };
             displayName = $"GitHub Copilot ({modelId})";
@@ -566,7 +602,8 @@ public static class AgentFactory
             services?.LoggerFactory,
             byokOptions: byokOptions,
             queueManager: queueManager,
-            modelOptions: model.Options);
+            modelOptions: model.Options,
+            subAgentChatRegistry: subAgentChatRegistry);
 
         return (client, displayName);
     }

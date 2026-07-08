@@ -23,6 +23,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
     private bool isAnyRunning;
     private bool isOpen;
+    private bool _disposed;
 
     // Per-row subscriptions: sessionKey → (tab, tabHandler, agentHandler)
     private readonly List<(string sessionKey, AgentSessionWorkspaceTabViewModel tab,
@@ -78,6 +79,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     /// </summary>
     public void Refresh()
     {
+        if (this._disposed) return;
         this.IsAnyRunning = this.table.RunningSessions.Count > 0;
 
         // Build lookup: agentSessionId → AgentTabInfo (only Ready tabs with a known session ID)
@@ -91,7 +93,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         var currentSessionKeys = new HashSet<string>(
-            this.table.RunningSessions.Select(s => s.SessionKey),
+            this.table.RunningSessions.Select(s => s.SessionId.Value),
             StringComparer.Ordinal);
 
         // Remove rows for sessions no longer in the table
@@ -112,9 +114,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         // Add or update a row for each active session
-        foreach (var session in this.table.RunningSessions)
+        foreach (var session in this.table.RunningSessions.ToList())
         {
-            var sessionKey = session.SessionKey;
+            var sessionKey = session.SessionId.Value;
             var hasTab = tabsBySessionId.TryGetValue(sessionKey, out var tabInfo);
             var existing = this.Rows.FirstOrDefault(r =>
                 string.Equals(r.SessionKey, sessionKey, StringComparison.Ordinal));
@@ -173,9 +175,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             activateCommand: activateCmd);
     }
 
-    private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChat session)
+    private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChatWithEntityInfo session)
     {
-        var capturedSessionKey = session.SessionKey;
+        var capturedSessionKey = session.SessionId.Value;
 
         ICommand activateCmd = new RelayCommand(_ =>
         {
@@ -313,6 +315,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        this._disposed = true;
         this.table.RunningSessions.CollectionChanged -= this.OnSessionsChanged;
 
         foreach (var (_, tab, tabHandler, agentHandler) in this.rowSubscriptions)

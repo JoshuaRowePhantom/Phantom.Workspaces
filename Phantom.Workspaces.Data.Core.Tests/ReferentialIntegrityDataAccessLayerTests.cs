@@ -1245,4 +1245,103 @@ public sealed class ReferentialIntegrityDataAccessLayerTests : DataAccessLayerNo
         public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
             => this.inner.GetChangedEntitiesAsync(request, cancellationToken);
     }
+
+    [Fact]
+    public async Task SchemaValidating_And_ReferentialIntegrity_ShareSingleSchemaAccessorInstance()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var queryCounter = new SchemaQueryCountingDataAccessLayer(inner);
+        var schemaAccessor = new SchemaAccessor(queryCounter);
+        var ridl = new ReferentialIntegrityDataAccessLayer(queryCounter, schemaAccessor);
+
+        var errors = await new SchemaPopulator(ridl).Populate();
+        Assert.Empty(errors);
+
+        // Warm up — first write triggers schema query
+        var warmupId = new EntityId("ff000001-0000-0000-0000-000000000001");
+        await RequireUpdateSucceedsAsync(ridl, CreateUpdateRequest(
+            CreateUpdateMetadata("warmup"),
+            new[] { CreateNamedEntityChange(warmupId, null, new[] { "warmup" }) }));
+
+        queryCounter.ResetCount();
+
+        var entityId = new EntityId("ff000001-0000-0000-0000-000000000002");
+        await RequireUpdateSucceedsAsync(ridl, CreateUpdateRequest(
+            CreateUpdateMetadata("shared accessor write"),
+            new[] { CreateNamedEntityChange(entityId, null, new[] { "shared-accessor-entity" }) }));
+
+        // With a shared singleton accessor, the second write must not re-query schemas.
+        Assert.Equal(0, queryCounter.JsonSchemaQueryCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ParallelCalls_DoNotIssueRedundantSchemaFetches()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var queryCounter = new SchemaQueryCountingDataAccessLayer(inner);
+        var schemaAccessor = new SchemaAccessor(queryCounter);
+        var ridl = new ReferentialIntegrityDataAccessLayer(queryCounter, schemaAccessor);
+
+        var errors = await new SchemaPopulator(ridl).Populate();
+        Assert.Empty(errors);
+
+        queryCounter.ResetCount();
+
+        const int workerCount = 8;
+        using var startBarrier = new Barrier(workerCount);
+
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(i => Task.Run(async () =>
+            {
+                startBarrier.SignalAndWait();
+                var id = new EntityId($"ff000002-0000-0000-0000-{i:D12}");
+                await RequireUpdateSucceedsAsync(ridl, CreateUpdateRequest(
+                    CreateUpdateMetadata($"parallel write {i}"),
+                    new[] { CreateNamedEntityChange(id, null, new[] { $"parallel-entity-{i}" }) }));
+            }))
+            .ToArray();
+
+        await Task.WhenAll(workers);
+
+        // The AsyncTaskCache ensures at most one schema query runs, even under high concurrency.
+        Assert.Equal(1, queryCounter.JsonSchemaQueryCount);
+    }
+
+    private sealed class SchemaQueryCountingDataAccessLayer : IDataAccessLayer
+    {
+        private readonly IDataAccessLayer _inner;
+        private int _jsonSchemaQueryCount;
+
+        public SchemaQueryCountingDataAccessLayer(IDataAccessLayer inner) => _inner = inner;
+
+        public int JsonSchemaQueryCount => _jsonSchemaQueryCount;
+        public void ResetCount() => Interlocked.Exchange(ref _jsonSchemaQueryCount, 0);
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+            => _inner.GetAsync(request, cancellationToken);
+
+        public async Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+        {
+            if (request.Clauses.Any(static c => c.ClauseIdentifier.Value == "json-schema"))
+            {
+                Interlocked.Increment(ref _jsonSchemaQueryCount);
+            }
+
+            return await _inner.QueryAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+            => _inner.UpdateAsync(request, cancellationToken);
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => _inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => _inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+            => _inner.GetChangedEntitiesAsync(request, cancellationToken);
+    }
 }

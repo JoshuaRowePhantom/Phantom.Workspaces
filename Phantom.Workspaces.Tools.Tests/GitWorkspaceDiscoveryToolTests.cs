@@ -78,6 +78,164 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         Assert.NotNull(discoveredWorktree);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_RootRepo_DoesNotHaveOwningRepositorySet()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "root-no-owning"));
+        var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "root-repo"));
+        InitializeGitRepository(rootRepoPath, "https://example.com/root.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", rootRepoPath));
+        Assert.NotNull(entity);
+        var rawData = entity.Data?.GetRawText() ?? string.Empty;
+        Assert.DoesNotContain("owning-repository", rawData, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LinkedWorktree_HasOwningRepositorySet()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "linked-owning"));
+        var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "root-repo"));
+        var linkedWorktreePath = Path.GetFullPath(Path.Combine(scanRoot, "linked-wt"));
+        InitializeGitRepository(rootRepoPath, "https://example.com/root.git");
+        AddLinkedWorktree(rootRepoPath, "linked-wt", linkedWorktreePath);
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
+        Assert.NotNull(entity);
+        var rawData = entity.Data?.GetRawText() ?? string.Empty;
+        Assert.Contains("\"owning-repository\"", rawData, StringComparison.Ordinal);
+        Assert.Contains(EscapeForJsonString(rootRepoPath), rawData, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LinkedWorktreeOutsideRootDirectory_StillDiscovered()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "outside-scan"));
+        var outsideRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "outside-linked-wt"));
+        var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "root-repo"));
+        var linkedWorktreePath = Path.GetFullPath(Path.Combine(outsideRoot, "wt"));
+        Directory.CreateDirectory(outsideRoot);
+        InitializeGitRepository(rootRepoPath, "https://example.com/outside.git");
+        AddLinkedWorktree(rootRepoPath, "outside-wt", linkedWorktreePath);
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
+        Assert.NotNull(entity);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LinkedWorktreeOutsideRootDirectory_HasOwningRepositorySet()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "outside-owning"));
+        var outsideRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "outside-owning-wt"));
+        var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "root-repo"));
+        var linkedWorktreePath = Path.GetFullPath(Path.Combine(outsideRoot, "wt"));
+        Directory.CreateDirectory(outsideRoot);
+        InitializeGitRepository(rootRepoPath, "https://example.com/outside-owning.git");
+        AddLinkedWorktree(rootRepoPath, "outside-owning-wt", linkedWorktreePath);
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
+        Assert.NotNull(entity);
+        var rawData = entity.Data?.GetRawText() ?? string.Empty;
+        Assert.Contains("\"owning-repository\"", rawData, StringComparison.Ordinal);
+        Assert.Contains(EscapeForJsonString(rootRepoPath), rawData, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LinkedWorktreeInsideRootDirectory_NotDuplicated()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "dedup-inside"));
+        var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "root-repo"));
+        var linkedWorktreePath = Path.GetFullPath(Path.Combine(scanRoot, "linked-inside"));
+        InitializeGitRepository(rootRepoPath, "https://example.com/dedup.git");
+        AddLinkedWorktree(rootRepoPath, "linked-inside", linkedWorktreePath);
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        Assert.Equal(
+            1,
+            await CountEntitiesByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath)));
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
+        Assert.NotNull(entity);
+        var rawData = entity.Data?.GetRawText() ?? string.Empty;
+        Assert.Contains("\"owning-repository\"", rawData, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OwningRepositoryPath_IsNormalized()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "normalized-owning"));
+        var rootRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "norm-repo"));
+        var linkedWorktreePath = Path.GetFullPath(Path.Combine(scanRoot, "norm-linked"));
+        InitializeGitRepository(rootRepoPath, "https://example.com/norm.git");
+        AddLinkedWorktree(rootRepoPath, "norm-linked", linkedWorktreePath);
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
+        Assert.NotNull(entity);
+        var rawData = entity.Data?.GetRawText() ?? string.Empty;
+        // Verify owning-repository equals the normalized path (Path.GetFullPath form, no trailing separator)
+        Assert.Contains($"\"owning-repository\":\"{EscapeForJsonString(rootRepoPath)}\"", rawData, StringComparison.Ordinal);
+    }
+
+    private static void AddLinkedWorktree(string rootRepoPath, string worktreeName, string worktreePath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(worktreePath)!);
+        using var repository = new Repository(rootRepoPath);
+        repository.Worktrees.Add(worktreeName, worktreePath, isLocked: false);
+    }
+
     public void Dispose()
     {
         TryDeleteDirectory(this.temporaryRootPath);

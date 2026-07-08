@@ -23,6 +23,10 @@
         "const": "git-worktree"
       }
     },
+    "owning-repository": {
+      "type": "string",
+      "description": "Filesystem path of the git repository that owns this worktree. Present when this is a linked worktree; absent when this is a standalone (main) worktree."
+    },
     "target-branch": {
       "type": "string",
       "description": "The branch this worktree's changes are compared against in the review view (e.g. 'main', 'develop')."

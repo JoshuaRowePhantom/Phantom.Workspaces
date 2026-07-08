@@ -164,8 +164,63 @@ public sealed class AgentSessionShortcutContext
     private static async Task<IAgentPersistenceStore> CreateAgentPersistenceStoreAsync(
         RepositorySource repositorySource)
     {
-        if (repositorySource is not MongoDbRepositorySource mongoSource
-            || string.IsNullOrWhiteSpace(mongoSource.ContainerName)
+        return repositorySource switch
+        {
+            WebRepositorySource webSource => CreateWebAgentPersistenceStore(webSource),
+            DevTunnelNameRepositorySource devTunnelSource => await CreateDevTunnelAgentPersistenceStoreAsync(devTunnelSource).ConfigureAwait(false),
+            MongoDbRepositorySource mongoSource => await CreateMongoDbAgentPersistenceStoreAsync(mongoSource).ConfigureAwait(false),
+            _ => AgentPersistenceStoreFactory.CreateInMemory(),
+        };
+    }
+
+    private static IAgentPersistenceStore CreateWebAgentPersistenceStore(WebRepositorySource repositorySource)
+    {
+        if (string.IsNullOrWhiteSpace(repositorySource.Endpoint))
+        {
+            throw new InvalidOperationException("Web repository source requires an endpoint URL.");
+        }
+
+        string? devTunnelAccessToken = null;
+        Func<string?>? devTunnelAccessTokenResolver = null;
+        if (repositorySource.UseGitHubAuthToken)
+        {
+            devTunnelAccessToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+            if (string.IsNullOrWhiteSpace(devTunnelAccessToken))
+            {
+                throw new InvalidOperationException(
+                    "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
+            }
+
+            devTunnelAccessTokenResolver = () => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+        }
+
+        return new Data.Web.Client.WebClientAgentPersistenceStore(repositorySource.Endpoint, devTunnelAccessToken, devTunnelAccessTokenResolver);
+    }
+
+    private static async Task<IAgentPersistenceStore> CreateDevTunnelAgentPersistenceStoreAsync(
+        DevTunnelNameRepositorySource repositorySource)
+    {
+        var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
+            .CreateEndpointResolver();
+
+        var reconnectingStore = new Services.DevTunnel.ReconnectingWebAgentPersistenceStore(
+            resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
+                repositorySource.TunnelName,
+                repositorySource.AccessMode,
+                cancellationToken),
+            buildAgentPersistenceStore: resolution => new Data.Web.Client.WebClientAgentPersistenceStore(
+                resolution.BaseUri.ToString(),
+                resolution.TunnelAuthToken),
+            delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
+
+        await reconnectingStore.StartAsync().ConfigureAwait(false);
+        return reconnectingStore;
+    }
+
+    private static async Task<IAgentPersistenceStore> CreateMongoDbAgentPersistenceStoreAsync(
+        MongoDbRepositorySource mongoSource)
+    {
+        if (string.IsNullOrWhiteSpace(mongoSource.ContainerName)
             || string.IsNullOrWhiteSpace(mongoSource.RootCollectionName))
         {
             return AgentPersistenceStoreFactory.CreateInMemory();

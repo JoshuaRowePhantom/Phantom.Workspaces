@@ -210,15 +210,15 @@ public sealed class EntityBroker
 
         if (changedEntityIds.Count > 0)
         {
+            var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
+            var queriesChanged = await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
             this.Changed?.Invoke(
                 this,
                 new EntityBrokerChangedEventArgs
                 {
                     ChangedEntityIds = changedEntityIds.ToArray(),
+                    HasQueryMembershipChanges = getsChanged || queriesChanged,
                 });
-
-            await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
-            await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
         }
 
         return updateResult;
@@ -270,8 +270,8 @@ public sealed class EntityBroker
             }
         }
 
-        await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken);
-        await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken);
+        var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken);
+        var queriesChanged = await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken);
         if (changedEntityIds.Count == 0)
         {
             return;
@@ -282,6 +282,7 @@ public sealed class EntityBroker
             new EntityBrokerChangedEventArgs
             {
                 ChangedEntityIds = changedEntityIds.ToArray(),
+                HasQueryMembershipChanges = getsChanged || queriesChanged,
             });
     }
 
@@ -570,7 +571,7 @@ public sealed class EntityBroker
         }
     }
 
-    private async Task RefreshSubscribedGetsAsync(
+    private async Task<bool> RefreshSubscribedGetsAsync(
         ISet<EntityId> changedEntityIds,
         CancellationToken cancellationToken)
     {
@@ -597,13 +598,19 @@ public sealed class EntityBroker
             }
         }
 
+        bool anyMembershipChanged = false;
         foreach (var subscribedGet in liveSubscribedGets)
         {
-            await subscribedGet.RefreshAsync(cancellationToken, changedEntityIds);
+            if (await subscribedGet.RefreshAsync(cancellationToken, changedEntityIds))
+            {
+                anyMembershipChanged = true;
+            }
         }
+
+        return anyMembershipChanged;
     }
 
-    private async Task RefreshSubscribedQueriesAsync(
+    private async Task<bool> RefreshSubscribedQueriesAsync(
         ISet<EntityId> changedEntityIds,
         CancellationToken cancellationToken)
     {
@@ -630,16 +637,29 @@ public sealed class EntityBroker
             }
         }
 
+        bool anyMembershipChanged = false;
         foreach (var subscribedQuery in liveSubscribedQueries)
         {
-            await subscribedQuery.RefreshAsync(cancellationToken, changedEntityIds);
+            if (await subscribedQuery.RefreshAsync(cancellationToken, changedEntityIds))
+            {
+                anyMembershipChanged = true;
+            }
         }
+
+        return anyMembershipChanged;
     }
 }
 
 public sealed class EntityBrokerChangedEventArgs : EventArgs
 {
     public required IReadOnlyCollection<EntityId> ChangedEntityIds { get; init; }
+
+    /// <summary>
+    /// True when at least one subscribed <see cref="SubscribedGet"/> or <see cref="SubscribedQuery"/>
+    /// result set gained or lost members as a result of this change batch. False when the change
+    /// was purely a data update to entities already present in all subscriptions.
+    /// </summary>
+    public bool HasQueryMembershipChanges { get; init; }
 }
 
 public sealed class SubscribedGet
@@ -657,7 +677,7 @@ public sealed class SubscribedGet
 
     public ObservableCollection<SubscribedEntityViewModel> Results { get; } = [];
 
-    internal async Task RefreshAsync(
+    internal async Task<bool> RefreshAsync(
         CancellationToken cancellationToken = default,
         ISet<EntityId>? changedEntityIds = null)
     {
@@ -666,7 +686,7 @@ public sealed class SubscribedGet
             changedEntityIds,
             cancellationToken)).ToList();
 
-        SubscribedResults.Merge(this.Results, nextResults);
+        return SubscribedResults.Merge(this.Results, nextResults);
     }
 }
 
@@ -690,7 +710,7 @@ public sealed class SubscribedQuery
 
     public ObservableCollection<SubscribedEntityViewModel> Results { get; } = [];
 
-    internal async Task RefreshAsync(
+    internal async Task<bool> RefreshAsync(
         CancellationToken cancellationToken = default,
         ISet<EntityId>? changedEntityIds = null)
     {
@@ -699,23 +719,25 @@ public sealed class SubscribedQuery
             changedEntityIds,
             cancellationToken)).ToList();
 
-        SubscribedResults.Merge(this.Results, nextResults);
+        return SubscribedResults.Merge(this.Results, nextResults);
     }
 }
 
 /// <summary>Shared incremental merge of a subscribed result collection toward the next ordered result set.</summary>
 internal static class SubscribedResults
 {
-    public static void Merge(
+    public static bool Merge(
         ObservableCollection<SubscribedEntityViewModel> results,
         IReadOnlyList<SubscribedEntityViewModel> nextResults)
     {
+        bool membershipChanged = false;
         var nextIds = nextResults.Select(static result => result.EntityId).ToHashSet();
         for (var index = results.Count - 1; index >= 0; index--)
         {
             if (!nextIds.Contains(results[index].EntityId))
             {
                 results.RemoveAt(index);
+                membershipChanged = true;
             }
         }
 
@@ -736,6 +758,9 @@ internal static class SubscribedResults
             }
 
             results.Insert(targetIndex, expected);
+            membershipChanged = true;
         }
+
+        return membershipChanged;
     }
 }

@@ -8,37 +8,27 @@ public sealed class AgentFactorySteeringTests
     [Fact]
     public void CreateChatClient_GitHubModels_WithQueueManager_WrapsWithMiddleware()
     {
-        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
-        try
-        {
-            var agent = LoadGitHubModelsAgent();
-            var result = AgentFactory.CreateChatClient(agent, services: null, queueManager: new AgentInputQueueManager());
+        var agent = LoadGitHubModelsAgent();
+        var result = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            queueManager: new AgentInputQueueManager(),
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
 
-            Assert.IsType<ToolResultSteeringMiddleware>(result.ChatClient);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
-        }
+        Assert.IsType<ToolResultSteeringMiddleware>(result.ChatClient);
     }
 
     [Fact]
     public void CreateChatClient_GitHubModels_WithoutQueueManager_NoMiddleware()
     {
-        var original = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "test-token");
-        try
-        {
-            var agent = LoadGitHubModelsAgent();
-            var result = AgentFactory.CreateChatClient(agent, services: null, queueManager: null);
+        var agent = LoadGitHubModelsAgent();
+        var result = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            queueManager: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
 
-            Assert.IsNotType<ToolResultSteeringMiddleware>(result.ChatClient);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("GITHUB_TOKEN", original);
-        }
+        Assert.IsNotType<ToolResultSteeringMiddleware>(result.ChatClient);
     }
 
     [Fact]
@@ -78,4 +68,9 @@ public sealed class AgentFactorySteeringTests
               "tools": []
             }
             """);
+
+    private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
+    {
+        public string ResolveApiKey(string? apiKeyValue, string? serverName) => key;
+    }
 }

@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityClickShortcutHandlerTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Handle_ConfiguredEntityType_InvokesOpenViaManager()
     {
         var openRecorder = new RecordingOpenHandler();
@@ -18,7 +18,7 @@ public sealed class EntityClickShortcutHandlerTests
         shortcutManager.AddShortcutHandler(openRecorder);
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
 
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var workspace = CreateEntity("workspace");
 
         var handled = await clickHandler.Handle(mainWindowViewModel, Shortcut.Open, workspace);
@@ -29,7 +29,7 @@ public sealed class EntityClickShortcutHandlerTests
         Assert.Same(workspace, openRecorder.LastEntity);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task Handle_NonConfiguredEntityType_DoesNothing()
     {
         var openRecorder = new RecordingOpenHandler();
@@ -37,7 +37,7 @@ public sealed class EntityClickShortcutHandlerTests
         shortcutManager.AddShortcutHandler(openRecorder);
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
 
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var note = CreateEntity("note");
 
         var handled = await clickHandler.Handle(mainWindowViewModel, Shortcut.Open, note);
@@ -46,25 +46,25 @@ public sealed class EntityClickShortcutHandlerTests
         Assert.Equal(0, openRecorder.HandleCallCount);
     }
 
-    [AvaloniaFact]
-    public void ShouldApplyTo_MatchesOnlyConfiguredTypes()
+    [PhantomAvaloniaFact]
+    public async Task ShouldApplyTo_MatchesOnlyConfiguredTypes()
     {
         var shortcutManager = new ShortcutManager();
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
 
         Assert.True(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("workspace")));
         Assert.False(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
     }
 
-    [AvaloniaFact]
-    public void UnregisteredClickHandler_ContributesNoShortcutButton()
+    [PhantomAvaloniaFact]
+    public async Task UnregisteredClickHandler_ContributesNoShortcutButton()
     {
         // The production wiring keeps the click handler out of the manager, so it never affects the
         // buttons returned by GetShortcutsFor.
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
-        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var workspace = CreateEntity("workspace");
 
         var before = shortcutManager.GetShortcutsFor(mainWindowViewModel, workspace).ToArray();

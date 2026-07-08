@@ -5,6 +5,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
 {
     private bool isExpanded;
+    private string name;
 
     public AgentEditorNavigationItemViewModel(
         string id,
@@ -17,7 +18,7 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         bool isExpanded = false)
     {
         this.Id = id;
-        this.Name = name;
+        this.name = name;
         this.ToolId = toolId;
         this.Summary = summary;
         this.Tool = tool;
@@ -25,11 +26,21 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         this.Children = [.. children];
         this.IsExpanded = isExpanded;
         this.ToggleExpandCommand = new RelayCommand(() => this.IsExpanded = !this.IsExpanded, () => this.HasChildren);
+        this.Children.CollectionChanged += (_, _) =>
+        {
+            this.RaisePropertyChanged(nameof(this.HasChildren));
+            this.RaisePropertyChanged(nameof(this.NotHasChildren));
+            this.ToggleExpandCommand.RaiseCanExecuteChanged();
+        };
     }
 
     public string Id { get; }
 
-    public string Name { get; }
+    public string Name
+    {
+        get => this.name;
+        set => this.SetProperty(ref this.name, value);
+    }
 
     public string? ToolId { get; }
 

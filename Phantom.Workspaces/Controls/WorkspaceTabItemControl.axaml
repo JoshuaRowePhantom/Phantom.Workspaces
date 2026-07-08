@@ -5,7 +5,7 @@
     <StackPanel Orientation="Horizontal" Spacing="2">
         <!-- Running indicator (pulsating when IsRunning) -->
         <Border Width="20" Height="20" VerticalAlignment="Center">
-            <ProgressBar Classes="running-indicator"
+            <ProgressBar Classes="running-indicator running-indicator-agent"
                          IsIndeterminate="{Binding IsRunning}" />
         </Border>
         <!-- Exclamation slot (visible when IsInteresting) -->

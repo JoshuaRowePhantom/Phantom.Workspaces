@@ -34,13 +34,15 @@ gh issue view <NUMBER> --repo JoshuaRowePhantom/Phantom.Workspaces --json title,
 
 This step handles two cases:
 
-**Default case — inspecting the `features` tip in `C:\dev\Phantom.Workspaces`:**
+**Default case — inspecting the `features` tip in `C:\dev\Phantom.Workspaces-features`:**
 
-All inspection is done in `C:\dev\Phantom.Workspaces`, which tracks the `features` branch.
+All inspection is done in `C:\dev\Phantom.Workspaces-features`.
 
 Search for the files, classes, and methods the issue describes:
 
 ```powershell
+# Checkout the latest features branch in detached state
+git checkout -C C:\dev\Phantom.Workspaces-features -d features
 # Find commits referencing this issue
 git --no-pager log features --grep="#<NUMBER>" --oneline
 

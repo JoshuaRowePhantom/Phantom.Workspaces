@@ -18,7 +18,7 @@ public enum AgentTabState
     Failed,
 }
 
-public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, IAsyncDisposable
+public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 {
     private AgentTabState state = AgentTabState.Loading;
     private string? loadError;
@@ -249,7 +249,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         return "Agent run completed.";
     }
 
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (this.agent is not null)
         {
@@ -269,5 +269,6 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel, I
         }
 
         this.loggerFactory?.Dispose();
+        await base.DisposeAsync();
     }
 }

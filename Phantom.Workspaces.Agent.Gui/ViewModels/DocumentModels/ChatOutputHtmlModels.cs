@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia.Threading;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
@@ -25,6 +28,7 @@ internal sealed class ChatMessageHtmlModel
     private readonly Func<bool>? isDiagnosticsVisible;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
+    private readonly Func<string, string?>? resolveSubAgentId;
     private readonly List<ContentBinding> bindings = [];
     private AgentChatHistoryItem source;
     private string? renderedRoleLabel;
@@ -40,7 +44,8 @@ internal sealed class ChatMessageHtmlModel
         IChatOutputHtmlSink sink,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
-        IAgentStatusSink? statusSink = null)
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null)
     {
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         ArgumentNullException.ThrowIfNull(sink);
@@ -51,6 +56,7 @@ internal sealed class ChatMessageHtmlModel
         this.sink = sink;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
+        this.resolveSubAgentId = resolveSubAgentId;
         this.Render(emit: false);
     }
 
@@ -108,11 +114,22 @@ internal sealed class ChatMessageHtmlModel
     {
         var roleLabel = this.source.Role.Value;
         this.renderedRoleLabel = roleLabel;
+        string? jumpLinkHtml = null;
+        if (this.source.ParentToolCallId is { } parentToolCallId && this.resolveSubAgentId is not null)
+        {
+            var subAgentId = this.resolveSubAgentId(parentToolCallId);
+            if (subAgentId is not null)
+            {
+                jumpLinkHtml = ChatOutputHtmlRenderer.RenderSubAgentJumpLink(subAgentId);
+            }
+        }
+
         return ChatOutputHtmlRenderer.RenderMessage(
             this.ElementId,
             roleLabel,
             this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
-            this.source.Timestamp);
+            this.source.Timestamp,
+            jumpLinkHtml);
     }
 
     public void Update(AgentChatHistoryItem newSource)
@@ -338,6 +355,18 @@ internal sealed class ToolCallGroupHtmlModel
             ChatOutputUpdateLocation.Replace,
             ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.groupId, this.lastToolName, this.callCount));
     }
+
+    /// <summary>
+    /// Updates group state (call count, last tool name, and <see cref="ChatMessageHtmlModel.IsInserted"/>)
+    /// without emitting any sink operations. Used during initial population for items already in the DOM
+    /// (rendered by the chunk loader, so DOM calls are suppressed via <c>skipInitialItems</c>).
+    /// </summary>
+    internal void AppendItemStateOnly(ChatMessageHtmlModel model, string toolName)
+    {
+        this.callCount++;
+        this.lastToolName = toolName;
+        model.IsInserted = true;
+    }
 }
 
 /// <summary>
@@ -367,6 +396,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly string containerPath;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
+    private readonly Func<string, string?>? resolveSubAgentId;
+    private readonly int skipInitialItems;
+    private bool inInitialTransform;
+    private readonly Dictionary<string, RenderSlot> slotByCallId = [];
+    private int lastToolCallSlotIndex = -1;
 
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
@@ -377,7 +411,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         string containerPath,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
-        IAgentStatusSink? statusSink = null)
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null,
+        int skipInitialItems = 0)
         : base(source, target)
     {
         this.sink = sink;
@@ -387,11 +423,15 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.containerPath = containerPath;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
+        this.resolveSubAgentId = resolveSubAgentId;
+        this.skipInitialItems = skipInitialItems;
+        this.inInitialTransform = true;
         this.ApplyInitialTransform();
+        this.inInitialTransform = false;
     }
 
     protected override RenderSlot Create(AgentChatHistoryItem sourceItem)
-        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink));
+        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink, this.resolveSubAgentId));
 
     protected override void Update(RenderSlot target, AgentChatHistoryItem sourceItem)
         => target.Model.Update(sourceItem);
@@ -399,6 +439,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     protected override void OnInsert(int index, RenderSlot slot)
     {
         var sourceItem = this.Source[index];
+        var suppressSink = this.inInitialTransform && index < this.skipInitialItems;
+
+        // Maintain indexed lookup structures early, before any early returns.
+        this.AddCallIdsToIndex(sourceItem, slot);
 
         // If the new item contains only FunctionResultContent items, try to inject each result into
         // the preceding slot that owns the matching FunctionCallContent. When any result is injected
@@ -441,8 +485,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 if (prevSlot.Group is { } existingGroup)
                 {
                     // Extend the existing group: no new top-level DOM element needed.
-                    existingGroup.AppendItem(slot.Model, toolName);
+                    if (!suppressSink)
+                        existingGroup.AppendItem(slot.Model, toolName);
+                    else
+                        existingGroup.AppendItemStateOnly(slot.Model, toolName);
                     slot.Group = existingGroup;
+                    this.lastToolCallSlotIndex = index;
                     return;
                 }
 
@@ -454,32 +502,90 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                     var group = new ToolCallGroupHtmlModel(groupId, this.sink, prevToolName);
 
                     // Replace the previous standalone message with the group that wraps it.
-                    this.sink.UpdateContent(
-                        prevSlot.Model.ElementId,
-                        ChatOutputUpdateLocation.Replace,
-                        group.BuildHtml(prevSlot.Model.BuildHtml()));
+                    if (!suppressSink)
+                        this.sink.UpdateContent(
+                            prevSlot.Model.ElementId,
+                            ChatOutputUpdateLocation.Replace,
+                            group.BuildHtml(prevSlot.Model.BuildHtml()));
                     prevSlot.Group = group;
 
-                    group.AppendItem(slot.Model, toolName);
+                    if (!suppressSink)
+                        group.AppendItem(slot.Model, toolName);
+                    else
+                        group.AppendItemStateOnly(slot.Model, toolName);
                     slot.Group = group;
+                    this.lastToolCallSlotIndex = index;
                     return;
                 }
             }
         }
 
         // Standalone insert (non-tool-call, or first/isolated tool call with no adjacent group).
-        var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
-            this.Target,
-            index,
-            this.containerPath,
-            static s => s.Model.IsInserted,
-            static s => s.Group?.GroupId ?? s.Model.ElementId);
-        this.sink.UpdateContent(reference, location, slot.Model.BuildHtml());
+        if (!suppressSink)
+        {
+            var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
+                this.Target,
+                index,
+                this.containerPath,
+                static s => s.Model.IsInserted,
+                static s => s.Group?.GroupId ?? s.Model.ElementId);
+            this.sink.UpdateContent(reference, location, slot.Model.BuildHtml());
+        }
+
+        // Mark as inserted in both the live path and the skip path (Phase B already put it in the DOM).
         slot.Model.IsInserted = true;
+
+        if (IsToolCallOnlyItem(sourceItem) || slot.Group is not null)
+        {
+            this.lastToolCallSlotIndex = index;
+        }
     }
 
     protected override void OnRemoveAt(int index, RenderSlot slot)
-        => this.sink.RemoveContent(slot.Model.ElementId);
+    {
+        this.sink.RemoveContent(slot.Model.ElementId);
+        this.RemoveCallIdsFromIndex(slot);
+        if (index == this.lastToolCallSlotIndex)
+        {
+            this.lastToolCallSlotIndex = this.FindLastToolCallSlotIndexBelow(index);
+        }
+    }
+
+    private void AddCallIdsToIndex(AgentChatHistoryItem sourceItem, RenderSlot slot)
+    {
+        foreach (var content in sourceItem.Contents)
+        {
+            if (content is FunctionCallContent call && call.CallId is not null)
+            {
+                this.slotByCallId[call.CallId] = slot;
+            }
+        }
+    }
+
+    private void RemoveCallIdsFromIndex(RenderSlot slot)
+    {
+        var keysToRemove = this.slotByCallId
+            .Where(kvp => ReferenceEquals(kvp.Value, slot))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            this.slotByCallId.Remove(key);
+        }
+    }
+
+    private int FindLastToolCallSlotIndexBelow(int index)
+    {
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (IsToolCallOnlyItem(this.Source[i]) || this.Target[i].Group is not null)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
 
     /// <summary>
     /// Returns true when the item contains only <see cref="FunctionResultContent"/> items.
@@ -526,22 +632,15 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     /// the most recent slot whose source message contains a <see cref="FunctionCallContent"/> with
     /// the given <paramref name="callId"/>. Returns <see langword="null"/> if not found.
     /// </summary>
-    private RenderSlot? FindSlotWithCallId(string? callId)
+    internal RenderSlot? FindSlotWithCallId(string? callId)
     {
         if (callId is null)
         {
             return null;
         }
 
-        for (var i = this.Target.Count - 1; i >= 0; i--)
-        {
-            if (this.Target[i].Model.HasCallWithId(callId))
-            {
-                return this.Target[i];
-            }
-        }
-
-        return null;
+        this.slotByCallId.TryGetValue(callId, out var slot);
+        return slot;
     }
 
     /// <summary>
@@ -550,8 +649,13 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     /// or already belongs to a group. Returns -1 if the search reaches the start of the collection
     /// or hits any other kind of message.
     /// </summary>
-    private int FindPrecedingToolCallSlotIndex(int index)
+    internal int FindPrecedingToolCallSlotIndex(int index)
     {
+        if (index == 0 || this.lastToolCallSlotIndex < 0)
+        {
+            return -1;
+        }
+
         for (var i = index - 1; i >= 0; i--)
         {
             if (IsToolResultOnlyItem(this.Source[i]))
@@ -783,18 +887,37 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 /// Top-level chat-output model for the browser-hosted renderer. Mirrors the selectable-text output
 /// model but, instead of building an Avalonia inline tree, emits incremental HTML operations to an
 /// <see cref="IChatOutputHtmlSink"/> and requests a scroll-to-bottom after each content change.
+/// History is loaded asynchronously in three phases to keep the UI thread responsive.
 /// </summary>
 public sealed class ChatOutputHtmlModel : IDisposable
 {
+    /// <summary>Maximum number of history items processed in a single off-thread generation chunk.</summary>
+    public const int HistoryChunkSize = 200;
+
     private readonly IChatOutputHtmlSink sink;
     private readonly IReadOnlyList<AgentChatHistoryItem> historyItems;
     private readonly IReadOnlyList<AgentChatRunningItem> runningItems;
-    private readonly ChatMessageHtmlTransformer historyTransformer;
+    private readonly Func<bool> isReasoningVisible;
+    private readonly Func<bool>? isDiagnosticsVisible;
+    private readonly IToolVisualizerFactory? toolFactory;
+    private readonly IAgentStatusSink? statusSink;
+    private readonly Func<string, string?>? resolveSubAgentId;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
+    private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
     private readonly List<RenderSlot> historySlots = [];
     private readonly List<RunningChatItemHtmlModel> runningModels = [];
     private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = [];
+    private readonly CancellationTokenSource loadCts = new();
+    private ChatMessageHtmlTransformer? historyTransformer;
+    private bool historyLoading;
+    private List<NotifyCollectionChangedEventArgs>? bufferedHistoryEvents;
     private int idSequence;
+
+    /// <summary>
+    /// Task that completes when the history has been fully loaded and the live transformer is ready.
+    /// Exposed internally for tests to await before asserting history-related sink state.
+    /// </summary>
+    internal Task HistoryLoaded { get; }
 
     public ChatOutputHtmlModel(
         IReadOnlyList<AgentChatHistoryItem> historyItems,
@@ -803,7 +926,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IChatOutputHtmlSink sink,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
-        IAgentStatusSink? statusSink = null)
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null,
+        IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null,
+        IReadOnlyList<IRunningSubAgent>? ancestors = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
@@ -813,17 +939,23 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.historyItems = historyItems;
         this.runningItems = runningItems;
         this.sink = sink;
+        this.isReasoningVisible = isReasoningVisible;
+        this.isDiagnosticsVisible = isDiagnosticsVisible;
+        this.toolFactory = toolFactory;
+        this.statusSink = statusSink;
+        this.resolveSubAgentId = resolveSubAgentId;
 
-        this.historyTransformer = new ChatMessageHtmlTransformer(
-            historyItems,
-            this.historySlots,
-            sink,
-            isReasoningVisible,
-            this.NextId,
-            ChatOutputHtmlRenderer.HistoryContainerId,
-            isDiagnosticsVisible,
-            toolFactory,
-            statusSink);
+        // Phase A: take a snapshot of history for off-thread processing.
+        var snapshot = new List<AgentChatHistoryItem>(historyItems);
+        this.historyLoading = true;
+        this.bufferedHistoryEvents = [];
+
+        // Subscribe before Task.Run so no CollectionChanged events are missed.
+        if (historyItems is INotifyCollectionChanged historyChanged)
+        {
+            historyChanged.CollectionChanged += this.OnHistoryCollectionChanged;
+        }
+
         this.runningTransformer = new RunningChatItemsHtmlTransformer(
             runningItems,
             this.runningModels,
@@ -834,11 +966,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
             toolFactory,
             statusSink);
 
-        // Subscribe AFTER the transformers so, for any one collection-changed event, the DOM
-        // operations are emitted (by the transformer) before the trailing scroll request.
-        if (historyItems is INotifyCollectionChanged historyChanged)
+        if (subAgents is not null)
         {
-            historyChanged.CollectionChanged += this.OnHistoryCollectionChanged;
+            this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink);
         }
 
         if (runningItems is INotifyCollectionChanged runningChanged)
@@ -847,15 +977,129 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.SyncRunningItemSubscriptions();
-        this.sink.ScrollToBottom();
+
+        // Capture the token before Task.Run so that if Dispose() is called synchronously
+        // after construction (before the thread pool lambda starts), the lambda does not
+        // throw ObjectDisposedException when accessing loadCts.Token.
+        var loadToken = this.loadCts.Token;
+
+        // Fire off background history load; HistoryLoaded completes when Phase C finishes.
+        this.HistoryLoaded = Task.Run(() => this.LoadHistoryChunksAsync(snapshot, loadToken));
+    }
+
+    private async Task LoadHistoryChunksAsync(
+        List<AgentChatHistoryItem> snapshot,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var chunks = ComputeChunkRanges(snapshot);
+            var idBox = new int[1];
+
+            // Process chunks oldest-first so that each chunk is appended in DOM order
+            // and the integer IDs assigned by idBox match the index-order IDs that the
+            // live ChatMessageHtmlTransformer will assign in Phase C.
+            for (var chunkIndex = chunks.Count - 1; chunkIndex >= 0; chunkIndex--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var (start, end) = chunks[chunkIndex];
+                var chunkSlice = snapshot.GetRange(start, end - start);
+                var (cmds, _) = GenerateHistoryChunk(
+                    chunkSlice, idBox,
+                    this.isReasoningVisible, this.isDiagnosticsVisible,
+                    this.toolFactory, this.statusSink, this.resolveSubAgentId);
+
+                var isLastChunk = chunkIndex == 0;
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    this.sink.BeginBatch();
+
+                    foreach (var cmd in cmds)
+                    {
+                        if (cmd.Location is null)
+                        {
+                            this.sink.RemoveContent(cmd.Path);
+                        }
+                        else
+                        {
+                            this.sink.UpdateContent(cmd.Path, cmd.Location.Value, cmd.Content!);
+                        }
+                    }
+
+                    if (isLastChunk)
+                    {
+                        this.sink.ScrollToBottom();
+                    }
+
+                    this.sink.EndBatch();
+                });
+            }
+
+            // Phase C: construct live transformer and replay any buffered events.
+            var finalIdBox = idBox;
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                // Reset id sequence to 0 so ApplyInitialTransform assigns the same integer IDs to
+                // pre-existing history slots as Phase B did (which also started from 0, oldest-first).
+                // We save the running-items count to restore it afterward, preventing collisions.
+                var savedIdSequence = this.idSequence;
+                this.idSequence = 0;
+
+                // Construct the live transformer. ApplyInitialTransform skips items 0..snapshot.Count-1
+                // (rendered by chunks) and emits DOM ops for any items added to historyItems during load.
+                this.historyTransformer = new ChatMessageHtmlTransformer(
+                    this.historyItems,
+                    this.historySlots,
+                    this.sink,
+                    this.isReasoningVisible,
+                    this.NextId,
+                    ChatOutputHtmlRenderer.HistoryContainerId,
+                    this.isDiagnosticsVisible,
+                    this.toolFactory,
+                    this.statusSink,
+                    this.resolveSubAgentId,
+                    skipInitialItems: snapshot.Count);
+
+                // Ensure future ids don't collide with running-item ids allocated in Phase A.
+                this.idSequence = Math.Max(savedIdSequence, this.idSequence);
+
+                this.historyLoading = false;
+
+                if (this.bufferedHistoryEvents is { Count: > 0 })
+                {
+                    this.sink.ScrollToBottom();
+                }
+
+                this.bufferedHistoryEvents = null;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposed before loading completed; no further action needed.
+        }
     }
 
     /// <summary>Re-renders every message (for example, when reasoning visibility toggles).</summary>
     public void Refresh()
     {
-        foreach (var slot in this.historySlots)
+        if (!this.historyLoading)
         {
-            slot.Model.Refresh();
+            foreach (var slot in this.historySlots)
+            {
+                slot.Model.Refresh();
+            }
         }
 
         foreach (var model in this.runningModels)
@@ -886,8 +1130,111 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
     }
 
+    /// <summary>
+    /// Generates HTML commands for a slice of history items, callable off the UI thread.
+    /// Creates a <see cref="RecordingChatOutputHtmlSink"/>, runs a <see cref="ChatMessageHtmlTransformer"/>
+    /// over <paramref name="chunk"/>, and returns the recorded commands together with the id of the
+    /// first top-level element the transformer inserted into <see cref="ChatOutputHtmlRenderer.HistoryContainerId"/>.
+    /// </summary>
+    /// <param name="chunk">A read-only slice of history items to render.</param>
+    /// <param name="idBox">
+    /// A single-element array used as a shared mutable id counter. <c>idBox[0]</c> is read and
+    /// incremented by the id factory so successive chunk calls advance a global counter without
+    /// id collisions across chunks.
+    /// </param>
+    /// <param name="isReasoningVisible">Controls whether reasoning content is included.</param>
+    /// <param name="isDiagnosticsVisible">Controls whether diagnostic content is included; null means always visible.</param>
+    /// <param name="toolFactory">Optional tool visualizer factory; may be null.</param>
+    /// <param name="statusSink">Optional agent-status sink; may be null.</param>
+    /// <returns>
+    /// The recorded <see cref="SinkCommand"/> list and the element id of the first top-level DOM node
+    /// inserted by the transformer (<see langword="null"/> when <paramref name="chunk"/> is empty).
+    /// </returns>
+    internal static (IReadOnlyList<SinkCommand> Commands, string? FirstElementId)
+        GenerateHistoryChunk(
+            IReadOnlyList<AgentChatHistoryItem> chunk,
+            int[] idBox,
+            Func<bool> isReasoningVisible,
+            Func<bool>? isDiagnosticsVisible,
+            IToolVisualizerFactory? toolFactory,
+            IAgentStatusSink? statusSink,
+            Func<string, string?>? resolveSubAgentId = null)
+    {
+        var recording = new RecordingChatOutputHtmlSink();
+        var slots = new List<RenderSlot>();
+        using var transformer = new ChatMessageHtmlTransformer(
+            chunk, slots, recording,
+            isReasoningVisible, () => idBox[0]++,
+            ChatOutputHtmlRenderer.HistoryContainerId,
+            isDiagnosticsVisible, toolFactory, statusSink, resolveSubAgentId);
+
+        string? firstElementId = slots.Count > 0
+            ? (slots[0].Group?.GroupId ?? slots[0].Model.ElementId)
+            : null;
+
+        return (recording.Commands, firstElementId);
+    }
+
+    /// <summary>
+    /// Returns a list of <c>(Start, End)</c> index ranges for chunks of <paramref name="snapshot"/>,
+    /// newest-first. Each raw cut point (a multiple of <see cref="HistoryChunkSize"/> from the end)
+    /// is snapped backward past any contiguous tool-related run it falls inside, ensuring that tool-call
+    /// groups and their results are never split across independently generated chunks.
+    ///
+    /// <para>In pathological cases (e.g. a conversation consisting entirely of tool calls), snapping may
+    /// produce a single chunk covering the entire snapshot. This is intentional: the whole run must be
+    /// processed together for correct grouping.</para>
+    /// </summary>
+    internal static IReadOnlyList<(int Start, int End)> ComputeChunkRanges(
+        IReadOnlyList<AgentChatHistoryItem> snapshot)
+    {
+        var chunks = new List<(int Start, int End)>();
+        var i = snapshot.Count;
+        while (i > 0)
+        {
+            var rawStart = Math.Max(0, i - HistoryChunkSize);
+            var start = SnapCutPoint(snapshot, rawStart);
+            chunks.Add((start, i));
+            i = start;
+        }
+
+        return chunks;
+    }
+
+    private static int SnapCutPoint(IReadOnlyList<AgentChatHistoryItem> snapshot, int rawCut)
+    {
+        var k = rawCut;
+        while (k > 0 && IsToolRelated(snapshot[k - 1]))
+        {
+            k--;
+        }
+
+        return k;
+    }
+
+    private static bool IsToolRelated(AgentChatHistoryItem item)
+    {
+        if (item.Contents.Count == 0)
+        {
+            return false;
+        }
+
+        var allCalls = true;
+        var allResults = true;
+        foreach (var content in item.Contents)
+        {
+            if (content is not FunctionCallContent) { allCalls = false; }
+            if (content is not FunctionResultContent) { allResults = false; }
+        }
+
+        return allCalls || allResults;
+    }
+
     public void Dispose()
     {
+        this.loadCts.Cancel();
+        this.loadCts.Dispose();
+
         if (this.historyItems is INotifyCollectionChanged historyChanged)
         {
             historyChanged.CollectionChanged -= this.OnHistoryCollectionChanged;
@@ -904,14 +1251,24 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         this.runningItemHandlers.Clear();
+        this.subAgentsTransformer?.Dispose();
         this.runningTransformer.Dispose();
-        this.historyTransformer.Dispose();
+        this.historyTransformer?.Dispose();
     }
 
     private int NextId() => this.idSequence++;
 
     private void OnHistoryCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => this.sink.ScrollToBottom();
+    {
+        if (this.historyLoading)
+        {
+            this.bufferedHistoryEvents?.Add(e);
+        }
+        else
+        {
+            this.sink.ScrollToBottom();
+        }
+    }
 
     private void OnRunningCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

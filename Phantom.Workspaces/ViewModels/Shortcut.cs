@@ -20,6 +20,8 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public static Shortcut Edit { get; } = new("Edit", "✏️");
     public static Shortcut Clone { get; } = new("Clone", "⧉");
     public static Shortcut Review { get; } = new("Review", "±");
+    public static Shortcut VsCode { get; } = new("VsCode", "⌨");
+    public static Shortcut VsCodeWeb { get; } = new("VsCodeWeb", "🌐");
 
     public string Name { get; }
 
@@ -35,6 +37,8 @@ public sealed class Shortcut : IEquatable<Shortcut>
         "Edit" => "Edit entity",
         "Clone" => "Clone entity",
         "Review" => "Review changes",
+        "VsCode" => "Open in VS Code",
+        "VsCodeWeb" => "Open in VS Code Web",
         _ => this.Name,
     };
 

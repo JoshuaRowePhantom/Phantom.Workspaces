@@ -7,6 +7,45 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class AgentChatDisposalTests
 {
+    [Fact]
+    public async Task AgentChat_Dispose_DoesNotHang()
+    {
+        // The process loop is blocked on queueStateSignal.WaitAsync waiting for input.
+        // Disposal must cancel that wait so DisposeAsync returns promptly.
+        var client = new DeterministicTestChatClient();
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson);
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agent,
+            AgentServices = new AgentServices { ChatClientOverride = client },
+        });
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await chat.DisposeAsync().AsTask().WaitAsync(timeout.Token);
+    }
+
+    [Fact]
+    public async Task AgentChat_Dispose_CancelsProcessLoop()
+    {
+        // The process loop is in the middle of an LLM call (waiting for a response that will
+        // never arrive). Disposal must cancel the in-progress run and complete promptly.
+        var client = new DeterministicTestChatClient();
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson);
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agent,
+            AgentServices = new AgentServices { ChatClientOverride = client },
+        });
+
+        chat.EnqueueUserMessage("hello");
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        using var disposeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await chat.DisposeAsync().AsTask().WaitAsync(disposeTimeout.Token);
+    }
+
+
     private const string EchoAgentJson =
         """
         {

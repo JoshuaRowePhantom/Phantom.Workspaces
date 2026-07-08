@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using AgentSchema;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -12,22 +15,29 @@ public sealed class RunningAgentBrainViewModelTests
 {
     private sealed class FakeRunningAgentChatTable : IRunningAgentChatTable
     {
-        public ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
+        public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions { get; } = [];
 
         public void AddSession(string sessionKey, string entityName = "")
-            => this.RunningSessions.Add(new RunningAgentChat(null!, sessionKey, entityName));
+        {
+            var chat = new RunningAgentChat(new AgentSessionId(sessionKey), null!);
+            RunningSessions.Add(new RunningAgentChatWithEntityInfo(chat, entityName, null));
+        }
 
         public void RemoveSession(string sessionKey)
         {
-            var item = this.RunningSessions.FirstOrDefault(s =>
-                string.Equals(s.SessionKey, sessionKey, StringComparison.Ordinal));
+            var item = RunningSessions.FirstOrDefault(s =>
+                string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal));
             if (item is not null)
-            {
-                this.RunningSessions.Remove(item);
-            }
+                RunningSessions.Remove(item);
         }
 
-        public Task<RunningAgentChatLease> AcquireAsync(string sessionKey, Func<Task<Phantom.Workspaces.Llm.AgentChat>> factory, string entityName = "", string? entityId = null)
+        public Task<RunningAgentChatLease> AcquireAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? agentServices = null,
+            string entityName = "",
+            string? entityId = null,
+            CancellationToken ct = default)
             => throw new NotSupportedException("Not used in unit tests.");
     }
 
@@ -325,5 +335,19 @@ public sealed class RunningAgentBrainViewModelTests
         row.ActivateCommand.Execute(null);
 
         Assert.False(vm.IsOpen);
+    }
+
+    [Fact]
+    public void Refresh_AfterDispose_DoesNotThrow()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent Session");
+
+        var vm = CreateBrainVm(table, []);
+
+        vm.Dispose();
+        vm.Refresh();
+
+        // No exception should be thrown
     }
 }

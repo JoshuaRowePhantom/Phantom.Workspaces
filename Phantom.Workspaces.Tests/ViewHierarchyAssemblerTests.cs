@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ViewHierarchyAssemblerTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_NestsRelatedMembersUnderDedupedContextualParent()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -66,7 +66,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal([member1Id, member2Id], memberIds.OrderBy(id => id.Value).ToHashSet());
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_WithoutEntityTypeViews_ProducesFlatChildlessNodes()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -111,7 +111,7 @@ public sealed class ViewHierarchyAssemblerTests
             "traverse-relationships must include an entry with relationship-type-ids containing 'related'");
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_WithCollapsedDisposition_SetsIsExpandedFalseOnRootNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -163,7 +163,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.False(workspaceNode.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task AssembleAsync_WithoutDisposition_DefaultsToIsExpandedTrue()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -212,7 +212,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.True(taskNode.IsExpanded);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithRelatedEntity_RendersEntityAsChild()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -262,7 +262,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(noteId, childNode.Entity!.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithNoRelatedEntities_RendersFlat()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -394,7 +394,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(entities[3].EntityId, single.ChildEntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task ViewHierarchyAssembler_UsesAncestorRelationshipAsGroupNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -451,7 +451,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.All(groupNode.Children, static child => Assert.False(child.IsAncestorGroup));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_ShowsPullRequestsGroupedUnderRepository()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -546,7 +546,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(pr3Id, child.Entity!.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_ShowsEmptyRepositoryNode_WhenNoPrsExist()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -579,7 +579,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Empty(repoNode.Children);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_ShowsPullRequestsFromMultipleProviders()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -689,7 +689,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Contains("repository", parentEntityTypeNameValues, StringComparer.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_GroupsPullRequestsByRepositoryField()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -768,7 +768,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(pr2Id, repoBChild.Entity!.EntityId);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task PullRequestsView_PullRequestWithNoRepository_RendersUngrouped()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -863,8 +863,42 @@ public sealed class ViewHierarchyAssemblerTests
 
     private static async Task<EntityId> SeedAsync(IDataAccessLayer dataAccessLayer, string json)
     {
-        var guid = Guid.NewGuid();
         using var template = JsonDocument.Parse(json);
+
+        // If the template declares names, look up any entity that already carries the primary name
+        // (e.g. entity-type-views pre-seeded by SchemaPopulator).  Reusing the existing entity-id
+        // and concurrency-tag turns this into an update rather than a create, so the store never
+        // holds two entities with the same name and GetEntityTypeViewAsync always returns exactly
+        // one result — eliminating the non-deterministic FirstOrDefault() pick that caused flakiness.
+        EntityId? existingId = null;
+        ConcurrencyTag? existingConcurrencyTag = null;
+        if (template.RootElement.TryGetProperty("names", out var namesEl)
+            && namesEl.ValueKind == JsonValueKind.Array)
+        {
+            var firstNameEl = namesEl.EnumerateArray().FirstOrDefault();
+            if (firstNameEl.ValueKind == JsonValueKind.Array)
+            {
+                var components = firstNameEl.EnumerateArray()
+                    .Where(static e => e.ValueKind == JsonValueKind.String)
+                    .Select(static e => e.GetString()!)
+                    .ToArray();
+                if (components.Length > 0)
+                {
+                    var lookupResult = await dataAccessLayer.GetAsync(new GetRequest
+                    {
+                        Entities = [new GetEntityRequest { EntityName = new EntityName(components) }],
+                    });
+                    var existing = lookupResult.Batches.SelectMany(static b => b.Entities).FirstOrDefault();
+                    if (existing is not null)
+                    {
+                        existingId = existing.EntityId;
+                        existingConcurrencyTag = existing.ConcurrencyTag;
+                    }
+                }
+            }
+        }
+
+        var guid = existingId?.Value ?? Guid.NewGuid();
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
@@ -887,7 +921,7 @@ public sealed class ViewHierarchyAssemblerTests
                 new EntityChange
                 {
                     EntityId = new EntityId(guid),
-                    ConcurrencyTag = null,
+                    ConcurrencyTag = existingConcurrencyTag,
                     Data = document.RootElement.Clone(),
                     EntityChangeMode = EntityChangeMode.Replace,
                 },

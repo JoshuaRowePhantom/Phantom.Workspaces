@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using LibGit2Sharp;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
@@ -46,7 +47,26 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
             this.logger.LogInformation("Found {Count} git repositories in {Path}", discoveredWorktreePaths.Count - countBefore, scanRoot);
         }
 
-        foreach (var discoveredWorktreePath in discoveredWorktreePaths)
+        // owning-repository is null for root/standalone repos; set to root repo path for linked worktrees.
+        var allWorktrees = new SortedDictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in discoveredWorktreePaths)
+        {
+            allWorktrees[path] = null;
+        }
+
+        // Enumerate linked worktrees for every root repo found by the filesystem scan.
+        // Root repos have a .git directory; linked worktrees have a .git file.
+        foreach (var rootRepoPath in discoveredWorktreePaths.Where(
+                     p => Directory.Exists(Path.Combine(p, ".git"))))
+        {
+            GitRepositoryMetadataReader.EnumerateLinkedWorktrees(rootRepoPath, this.logger,
+                linkedWorktreePath =>
+                {
+                    allWorktrees[linkedWorktreePath] = rootRepoPath;
+                });
+        }
+
+        foreach (var (discoveredWorktreePath, owningRepositoryPath) in allWorktrees)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             var gitMetadata = GitRepositoryMetadataReader.TryReadMetadata(discoveredWorktreePath, this.logger);
@@ -88,6 +108,11 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
                 },
                 ["path"] = discoveredWorktreePath,
             };
+            if (!string.IsNullOrWhiteSpace(owningRepositoryPath))
+            {
+                entityData["owning-repository"] = owningRepositoryPath;
+            }
+
             if (gitObject.Count > 0)
             {
                 entityData["git"] = gitObject;

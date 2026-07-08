@@ -81,7 +81,7 @@ public class TabHeaderViewModel : ViewModelBase
 {
     private string title = string.Empty;
     private string? altShortcutLabel;
-    private bool isAltHeld;
+    private bool isShortcutBadgeVisible;
 
     public required string Title
     {
@@ -100,12 +100,13 @@ public class TabHeaderViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Mirrors <see cref="MainWindowViewModel.IsAltHeld"/>. Set by the VM whenever the Alt key state changes.
+    /// Controls whether the Alt+N / Alt+Shift+N shortcut badge overlay is visible on this tab.
+    /// Set by <see cref="MainWindowViewModel"/> when the relevant modifier combination is active.
     /// </summary>
-    public bool IsAltHeld
+    public bool IsShortcutBadgeVisible
     {
-        get => this.isAltHeld;
-        set => this.SetProperty(ref this.isAltHeld, value);
+        get => this.isShortcutBadgeVisible;
+        set => this.SetProperty(ref this.isShortcutBadgeVisible, value);
     }
 
     public ObservableCollection<TabHeaderItemViewModel> Items { get; } = [];

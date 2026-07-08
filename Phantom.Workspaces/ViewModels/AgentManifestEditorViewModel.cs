@@ -6,6 +6,8 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class AgentManifestEditorViewModel : WorkspaceTabViewModel
 {
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
+
     private readonly MainWindowViewModel mainWindowViewModel;
     private string manifestJson = string.Empty;
     private bool isDirty;
@@ -62,7 +64,7 @@ public sealed class AgentManifestEditorViewModel : WorkspaceTabViewModel
         try
         {
             using var doc = JsonDocument.Parse(json);
-            return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(doc.RootElement, IndentedJsonOptions);
         }
         catch
         {

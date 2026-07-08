@@ -29,27 +29,31 @@ public class WorkspaceDocument : Document
         this.statusIndicator = new StatusTabHeaderItemViewModel();
         this.cachedTabHeader = new TabHeaderViewModel { Title = string.Empty };
 
-        this.Descriptor = BuildDescriptor(tabViewModel);
         this.InitializeCore(tabViewModel);
     }
 
     /// <summary>
-    /// Wires a deserialized stub document to its tab view model. Called after the dock
-    /// layout is restored from JSON and the tab VMs have been recreated from
-    /// <see cref="Descriptor"/>.
+    /// Wires a stub document (from the parameterless constructor) to its tab view model.
+    /// Called by <see cref="WorkspaceDocumentGenerator.PrepareDocumentContainer"/> and
+    /// after dock layout restore. No-ops if the document is already initialized.
     /// </summary>
     internal void Initialize(WorkspaceTabViewModel tabViewModel)
     {
-        this.InitializeCore(tabViewModel);
+        if (base.Context is null)
+            this.InitializeCore(tabViewModel);
     }
 
     private void InitializeCore(WorkspaceTabViewModel tabViewModel)
     {
-        this.TabViewModel = tabViewModel;
+        base.Context = tabViewModel;
         this.Id = tabViewModel.Id;
         this.baseTitle = ComputeBaseTitle(tabViewModel);
         this.Title = this.baseTitle;
         this.CanClose = true;
+
+        // Preserve any descriptor that was set by JSON deserialization; only compute
+        // from the tab when restoring a fresh (stub) document.
+        this.Descriptor ??= BuildDescriptor(tabViewModel);
 
         this.cachedTabHeader.Title = this.baseTitle;
         this.RebuildTabHeaderItems();
@@ -150,14 +154,22 @@ public class WorkspaceDocument : Document
         return title.Length > 20 ? title[..17] + "..." : title;
     }
 
+    /// <summary>
+    /// The tab view model wired by <see cref="InitializeCore"/> or <see cref="Initialize"/>.
+    /// Always null until one of those is called. <c>base.Context</c> holds the same reference
+    /// at runtime; <c>Context</c> has <c>[IgnoreDataMember]</c> on the base class so it is
+    /// never written to the dock-layout JSON. <c>Owner</c> back-references are serialized
+    /// as <c>$ref</c> markers by <c>ReferenceHandler.Preserve</c>; no shadow is needed.
+    /// </summary>
     [JsonIgnore]
-    public WorkspaceTabViewModel? TabViewModel { get; private set; }
+    public WorkspaceTabViewModel? TabViewModel => base.Context as WorkspaceTabViewModel;
 
     /// <summary>
-    /// Serializable descriptor embedded in the dock-layout JSON. Set at construction time
-    /// from the tab view model, and read back during restore to recreate the tab VM.
+    /// Serializable descriptor embedded in the dock-layout JSON. Set by <see cref="InitializeCore"/>
+    /// when first wiring a fresh document, preserved during deserialization so that the
+    /// JSON-restored value is not overwritten when <see cref="Initialize"/> wires the tab VM.
     /// </summary>
-    public DockTabDescriptor? Descriptor { get; init; }
+    public DockTabDescriptor? Descriptor { get; set; }
 
     /// <summary>
     /// Builds a <see cref="DockTabDescriptor"/> from a live tab view model, capturing the

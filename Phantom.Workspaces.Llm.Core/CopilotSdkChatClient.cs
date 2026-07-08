@@ -39,8 +39,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly string? cliPath;
     private readonly ModelOptions? modelOptions;
     private readonly AgentInputQueueManager? queueManager;
+    private readonly ISubAgentChatRegistry? subAgentChatRegistry;
+    private readonly IGitHubAccountUpsertService? accountUpsertService;
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
+
+    private IRunningAgentChatFactory? runningAgentChatFactory;
+    private ISubAgentTable? subAgentTable;
 
     private CopilotClient? copilotClient;
     private CopilotSession? copilotSession;
@@ -98,6 +103,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Optional model-level options from the agent definition (for example <c>working-directory</c>).
     /// These are fixed for the lifetime of the client and are read at session creation time.
     /// </param>
+    /// <param name="subAgentChatRegistry">
+    /// Optional registry for sub-agent chat sessions. When supplied, sub-agent lifecycle events
+    /// (<c>SubagentStartedEvent</c>, <c>SubagentCompletedEvent</c>, <c>SubagentFailedEvent</c>) are
+    /// forwarded to the corresponding child <see cref="ISubAgentChat"/> sink.
+    /// </param>
+    /// <param name="accountUpsertService">
+    /// Optional service that auto-creates a <c>user-account</c> entity when the first Copilot client
+    /// session is established. When <see langword="null"/>, no upsert is performed.
+    /// </param>
     public CopilotSdkChatClient(
         string modelId,
         string displayName,
@@ -106,7 +120,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         CopilotByokOptions? byokOptions = null,
         string? cliPath = null,
         AgentInputQueueManager? queueManager = null,
-        ModelOptions? modelOptions = null)
+        ModelOptions? modelOptions = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null,
+        IGitHubAccountUpsertService? accountUpsertService = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -119,6 +135,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? null : cliPath;
         this.queueManager = queueManager;
         this.modelOptions = modelOptions;
+        this.subAgentChatRegistry = subAgentChatRegistry;
+        this.accountUpsertService = accountUpsertService;
     }
 
     /// <summary>
@@ -282,6 +300,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
+    /// <summary>
+    /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
+    /// <see cref="CopilotSdkTurnEventDispatcher"/> uses to create and register sub-agent
+    /// <see cref="AgentChat"/> instances when a <c>SubagentStartedEvent</c> arrives.
+    /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created,
+    /// in the same block that subscribes to <see cref="SteeringMessageForwarded"/> and
+    /// <see cref="SessionEstablished"/>.
+    /// </summary>
+    internal void SetSubAgentDependencies(IRunningAgentChatFactory? factory, ISubAgentTable? table)
+    {
+        this.runningAgentChatFactory = factory;
+        this.subAgentTable = table;
+    }
+
     /// <inheritdoc />
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -370,43 +402,28 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 SingleWriter = true,
             });
 
-            var eventSubscription = session.On(sessionEvent =>
+            var dispatcher = new CopilotSdkTurnEventDispatcher(
+                channel.Writer,
+                this.subAgentChatRegistry,
+                this.runningAgentChatFactory,
+                this.subAgentTable,
+                this.loggerFactory?.CreateLogger<CopilotSdkTurnEventDispatcher>());
+
+            // Fix for GitHub issue #765: serialize event dispatch via a channel to prevent concurrent
+            // DispatchAsync calls from corrupting internal dictionaries. SingleReader ensures the drain
+            // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
+            var eventChannel = Channel.CreateUnbounded<SessionEvent>(
+                new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+            var eventSubscription = session.On(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
+
+            var dispatchLoop = Task.Run(async () =>
             {
-                switch (sessionEvent)
+                await foreach (var sessionEvent in eventChannel.Reader.ReadAllAsync(turnCancellationToken))
                 {
-                    case AssistantMessageDeltaEvent delta when !string.IsNullOrEmpty(delta.Data.DeltaContent):
-                        channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, delta.Data.DeltaContent));
-                        break;
-                    case AssistantReasoningDeltaEvent reasoningDelta when !string.IsNullOrEmpty(reasoningDelta.Data.DeltaContent):
-                        channel.Writer.TryWrite(new ChatResponseUpdate
-                        {
-                            Role = ChatRole.Assistant,
-                            Contents = [new TextReasoningContent(reasoningDelta.Data.DeltaContent)],
-                        });
-                        break;
-                    case ToolExecutionStartEvent toolStart:
-                        channel.Writer.TryWrite(new ChatResponseUpdate
-                        {
-                            Role = ChatRole.Assistant,
-                            Contents = [CopilotToolEventMapper.MapToolStart(toolStart)],
-                        });
-                        break;
-                    case ToolExecutionCompleteEvent toolComplete:
-                        channel.Writer.TryWrite(new ChatResponseUpdate
-                        {
-                            Role = ChatRole.Tool,
-                            Contents = [CopilotToolEventMapper.MapToolComplete(toolComplete)],
-                        });
-                        break;
-                    case SessionErrorEvent error:
-                        channel.Writer.TryComplete(new InvalidOperationException(
-                            $"GitHub Copilot session error: {error.Data.Message}"));
-                        break;
-                    case SessionIdleEvent:
-                        channel.Writer.TryComplete();
-                        break;
+                    await dispatcher.DispatchAsync(sessionEvent).ConfigureAwait(false);
                 }
-            });
+            }, turnCancellationToken);
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
@@ -446,10 +463,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var subscription = new DelegateDisposable(() =>
             {
                 eventSubscription.Dispose();
+                eventChannel.Writer.Complete();
+                dispatchLoop.GetAwaiter().GetResult();
                 if (this.queueManager is not null)
                 {
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
                 }
+
+                _ = Task.Run(dispatcher.DisposeRemainingLeasesAsync);
             });
 
             return new StreamingTurnContext(
@@ -807,6 +828,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 var client = new CopilotClient(clientOptions);
                 await client.StartAsync(cancellationToken).ConfigureAwait(false);
                 this.copilotClient = client;
+
+                if (this.accountUpsertService is not null)
+                {
+                    // Resolve the token that the SDK is actually using. When this.gitHubToken is null
+                    // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
+                    var tokenForUpsert = this.gitHubToken ?? GitHubAuthTokenResolver.Resolve();
+                    if (!string.IsNullOrWhiteSpace(tokenForUpsert))
+                    {
+                        await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
 
             if (this.copilotSession is { } staleSession)

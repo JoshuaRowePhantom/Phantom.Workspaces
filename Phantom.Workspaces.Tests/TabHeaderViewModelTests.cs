@@ -261,6 +261,38 @@ public sealed class TabHeaderViewModelTests
         Assert.True(raised);
     }
 
+    // ── IsShortcutBadgeVisible ───────────────────────────────────────────────
+
+    [Fact]
+    public void TabHeaderViewModel_IsShortcutBadgeVisible_DefaultFalse()
+    {
+        var vm = new TabHeaderViewModel { Title = "T" };
+        Assert.False(vm.IsShortcutBadgeVisible);
+    }
+
+    [Fact]
+    public void TabHeaderViewModel_IsShortcutBadgeVisible_RaisesPropertyChanged()
+    {
+        var vm = new TabHeaderViewModel { Title = "T" };
+        var raised = false;
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(vm.IsShortcutBadgeVisible))
+                raised = true;
+        };
+
+        vm.IsShortcutBadgeVisible = true;
+
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void TabHeaderViewModel_DoesNotHaveIsAltHeldProperty()
+    {
+        var property = typeof(TabHeaderViewModel).GetProperty("IsAltHeld");
+        Assert.Null(property);
+    }
+
     // ── RefreshTabAltShortcutLabels ──────────────────────────────────────────
 
     private static (WorkspacePaneViewModel pane, System.Collections.Generic.Dictionary<string, WorkspaceDocument> docs)
@@ -316,9 +348,79 @@ public sealed class TabHeaderViewModelTests
         Assert.Null(docs["tab-10"].EffectiveTabHeader.AltShortcutLabel);
     }
 
+    // ── RefreshWorkspacePaneAltShortcutLabels ────────────────────────────────
+
+    private static (System.Collections.Generic.List<WorkspacePaneViewModel> panes,
+                    System.Collections.Generic.Dictionary<string, WorkspacePaneDocument> paneDocs)
+        CreatePanesWithPaneDocs(int count)
+    {
+        var panes = new System.Collections.Generic.List<WorkspacePaneViewModel>();
+        var paneDocs = new System.Collections.Generic.Dictionary<string, WorkspacePaneDocument>(System.StringComparer.Ordinal);
+        for (var i = 0; i < count; i++)
+        {
+            using var jsonDoc = System.Text.Json.JsonDocument.Parse(
+                $$$"""{"entity-id":"bbbb{{{i:D4}}}-0000-4000-8000-bbbbbbbbbbbb","entity-types":["entity","workspace"],"display-name":{"default":"Pane {{{i}}}"}}""");
+            var entity = new SubscribedEntityViewModel(
+                new EntitySnapshot
+                {
+                    EntityId = new EntityId($"bbbb{i:D4}-0000-4000-8000-bbbbbbbbbbbb"),
+                    ConcurrencyTag = new ConcurrencyTag("1"),
+                    ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
+                    Data = jsonDoc.RootElement.Clone(),
+                    Relationships = System.Array.Empty<EntitySnapshot>(),
+                });
+            var pane = new WorkspacePaneViewModel(entity);
+            panes.Add(pane);
+            paneDocs[pane.Id] = new WorkspacePaneDocument(pane);
+        }
+        return (panes, paneDocs);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_ThreePanes_LabelsAre1_2_3()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(3);
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Equal("1", paneDocs[panes[0].Id].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[panes[1].Id].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_TenPanes_TenthPaneLabelIs0()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(10);
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Equal("0", paneDocs[panes[9].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_EleventhPane_LabelIsNull()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(11);
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Null(paneDocs[panes[10].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_PaneDocumentNotFound_OtherPanesStillLabelled()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(3);
+        // Remove the middle pane doc to simulate missing registry entry
+        paneDocs.Remove(panes[1].Id);
+
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Equal("1", paneDocs[panes[0].Id].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -329,7 +431,7 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -340,9 +442,44 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
+    // ── DockDataTemplates — DataTemplate presence for Dock header scope (#775) ─
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_TabHeaderViewModel()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_AgentRunningIndicatorTabHeaderItemViewModel()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
     {
         var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
@@ -354,6 +491,20 @@ public sealed class TabHeaderViewModelTests
         var progressBar = Assert.IsType<ProgressBar>(control);
         Assert.Contains("glyph-indicator", progressBar.Classes);
         Assert.Contains("pulsating-brain", progressBar.Classes);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void NotificationIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
+    {
+        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
+        var templates = new WorkspaceDataTemplates();
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        var control = matchingTemplate.Build(viewModel);
+
+        var progressBar = Assert.IsType<ProgressBar>(control);
+        Assert.Contains("glyph-indicator", progressBar.Classes);
+        Assert.Contains("exclamation-indicator", progressBar.Classes);
     }
 
     // ── AgentSessionWorkspaceTabViewModel – SetReady wires tab header indicators

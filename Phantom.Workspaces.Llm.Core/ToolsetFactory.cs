@@ -106,6 +106,35 @@ public sealed class ToolsetFactory : IToolsetFactory
             underlyingToolsetFactory);
     }
 
+    /// <summary>
+    /// Creates a toolset factory that handles the <c>agent-session</c> tool kind by
+    /// constructing an <see cref="AgentSessionToolset"/> with the given parent chat and factory.
+    /// </summary>
+    public static IToolsetFactory CreateAgentSessionToolsetFactory(
+        AgentChat parentChat,
+        CurrentSessionContext currentSessionContext,
+        IRunningAgentChatFactory factory,
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        var chatRef = new AgentChatRef(parentChat);
+        return new AgentSessionToolsetFactory(chatRef, currentSessionContext, factory, underlyingToolsetFactory);
+    }
+
+    /// <summary>
+    /// Creates a toolset factory that handles the <c>agent-session</c> tool kind using a
+    /// late-bound <see cref="AgentChatRef"/> whose <see cref="AgentChatRef.Chat"/> will be
+    /// set after <see cref="AgentChat.CreateAsync"/> returns. Used in
+    /// <see cref="AgentFactory.CreateAgentChatAsync"/> wiring.
+    /// </summary>
+    internal static IToolsetFactory CreateAgentSessionToolsetFactory(
+        AgentChatRef parentChatRef,
+        CurrentSessionContext currentSessionContext,
+        IRunningAgentChatFactory factory,
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        return new AgentSessionToolsetFactory(parentChatRef, currentSessionContext, factory, underlyingToolsetFactory);
+    }
+
     public static IToolsetFactory CreateCurrentSessionToolsetFactory(
         IDataAccessLayer dataAccessLayer,
         CurrentSessionContext currentSessionContext,

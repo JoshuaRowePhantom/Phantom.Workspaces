@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using Avalonia.Threading;
@@ -60,7 +61,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
 
         if (this.Parameters.Count == 0)
         {
-            Dispatcher.UIThread.Post(async () => await this.StartSessionAsync());
+            Lifetime.Run(this.StartSessionAsync);
         }
     }
 
@@ -140,7 +141,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         this.StartSessionCommand.RaiseCanExecuteChanged();
     }
 
-    private async Task StartSessionAsync()
+    private async Task StartSessionAsync(CancellationToken ct = default)
     {
         if (this.ManifestEntity.Data is not JsonElement data)
         {
@@ -212,7 +213,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 {
                     await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetFailed(ex.Message));
                 }
-            });
+            }, ct);
         }
         else if (data.TryGetProperty("definition", out var definitionElement))
         {
@@ -241,7 +242,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 {
                     await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetFailed(ex.Message));
                 }
-            });
+            }, ct);
         }
     }
 

@@ -16,7 +16,7 @@ public sealed class ProfileStoreTests
         Assert.Equal("#D0D0D0", ProfileThemeSettings.Light.Surfaces.Popup.Border);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task GetOrInitializeProfileAsync_DefaultsThemeAndDebugging()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -48,7 +48,7 @@ public sealed class ProfileStoreTests
         }
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SetThemeAndDebuggingAsync_PreserveEachOther()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -118,7 +118,7 @@ public sealed class ProfileStoreTests
         }
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task SetThemeAsync_SwitchToLight_PopupColorsUpdateToLightValues()
     {
         var ct = TestContext.Current.CancellationToken;

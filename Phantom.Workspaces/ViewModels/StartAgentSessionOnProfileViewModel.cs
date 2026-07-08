@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
@@ -40,7 +41,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         this.preSelectedEntityId = preSelectedEntityId;
         this.initialParameterValues = initialParameterValues;
         this.CreateSessionCommand = new RelayCommand(async _ => await this.CreateSessionAsync(), _ => this.CanCreateSession());
-        _ = this.LoadAgentSourcesAsync();
+        Lifetime.Run(this.LoadAgentSourcesAsync);
     }
 
     public IReadOnlyDictionary<string, string>? InitialParameterValues => this.initialParameterValues;
@@ -78,7 +79,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         return this.SelectedAgentSource is not null && !this.IsCreatingSession;
     }
 
-    private async Task LoadAgentSourcesAsync()
+    private async Task LoadAgentSourcesAsync(CancellationToken ct = default)
     {
         try
         {

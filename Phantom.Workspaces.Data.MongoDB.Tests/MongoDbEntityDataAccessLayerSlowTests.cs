@@ -170,6 +170,106 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
         Assert.Null(deletedSnapshot.Data);
     }
 
+    [Fact]
+    public async Task GetAsync_ById_ReturnsCorrectSnapshot()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dataAccessLayer = CreateDataAccessLayer();
+        var otherId = new EntityId("c0ffee00-0000-0000-0000-000000000001");
+
+        await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes =
+            [
+                new EntityChange { EntityId = SampleEntityId, Data = ParseEntityData(SampleEntityId, "target"), EntityChangeMode = EntityChangeMode.Replace },
+                new EntityChange { EntityId = otherId, Data = ParseEntityData(otherId, "other"), EntityChangeMode = EntityChangeMode.Replace },
+            ],
+        });
+
+        var result = await dataAccessLayer.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityId = SampleEntityId }],
+        });
+
+        var snapshot = Assert.Single(Assert.Single(result.Batches).Entities);
+        Assert.Equal(SampleEntityId, snapshot.EntityId);
+        Assert.Contains("\"target\"", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetAsync_ByEntityType_ReturnsMatchingEntities()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dataAccessLayer = CreateDataAccessLayer();
+        var entityId = new EntityId("d1000000-0000-0000-0000-000000000001");
+        var noteId = new EntityId("d2000000-0000-0000-0000-000000000002");
+
+        await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes =
+            [
+                new EntityChange { EntityId = entityId, Data = ParseEntityData(entityId, "my-entity"), EntityChangeMode = EntityChangeMode.Replace },
+                new EntityChange { EntityId = noteId, Data = ParseEntityDataWithType(noteId, "my-note", "note"), EntityChangeMode = EntityChangeMode.Replace },
+            ],
+        });
+
+        var result = await dataAccessLayer.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityTypeNames = new EntityTypeNameSet(["note"]) }],
+        });
+
+        var snapshot = Assert.Single(Assert.Single(result.Batches).Entities);
+        Assert.Equal(noteId, snapshot.EntityId);
+    }
+
+    [Fact]
+    public async Task GetAsync_ByEntityName_ReturnsCorrectSnapshot()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dataAccessLayer = CreateDataAccessLayer();
+        var targetId = new EntityId("e1000000-0000-0000-0000-000000000001");
+        var otherId = new EntityId("e2000000-0000-0000-0000-000000000002");
+
+        await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed" } },
+            Changes =
+            [
+                new EntityChange { EntityId = targetId, Data = ParseEntityData(targetId, "alpha"), EntityChangeMode = EntityChangeMode.Replace },
+                new EntityChange { EntityId = otherId, Data = ParseEntityData(otherId, "beta"), EntityChangeMode = EntityChangeMode.Replace },
+            ],
+        });
+
+        var result = await dataAccessLayer.GetAsync(new GetRequest
+        {
+            Entities =
+            [
+                new GetEntityRequest
+                {
+                    EntityName = new EntityName("alpha"),
+                    EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                },
+            ],
+        });
+
+        var snapshot = Assert.Single(Assert.Single(result.Batches).Entities);
+        Assert.Equal(targetId, snapshot.EntityId);
+    }
+
+    [Fact]
+    public async Task GetAsync_EmptyEntities_ReturnsEmptyBatches()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dataAccessLayer = CreateDataAccessLayer();
+
+        var result = await dataAccessLayer.GetAsync(new GetRequest { Entities = [] });
+
+        Assert.Single(result.Batches);
+        Assert.Empty(Assert.Single(result.Batches).Entities);
+    }
+
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
         return new MongoDbEntityDataAccessLayer(_fixture.Database, MongoDbTestDatabaseFixture.EntityCollectionName);
@@ -184,6 +284,22 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
               {
                 "entity-id": "{{entityId}}",
                 "type-names": ["entity"],
+                "names": ["{{name}}"]
+              }
+              """);
+        return document.RootElement.Clone();
+    }
+
+    private static JsonElement ParseEntityDataWithType(
+        EntityId entityId,
+        string name,
+        string type)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+              {
+                "entity-id": "{{entityId}}",
+                "type-names": ["entity", "{{type}}"],
                 "names": ["{{name}}"]
               }
               """);

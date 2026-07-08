@@ -465,7 +465,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         var dal = new ReferentialIntegrityDataAccessLayer(underlying);
         var errors = await new SchemaPopulator(dal).Populate();
         Assert.Empty(errors);
-        return dal;
+        return new SchemaValidatingDataAccessLayer(dal);
     }
 }
 

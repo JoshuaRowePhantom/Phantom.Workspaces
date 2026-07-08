@@ -92,7 +92,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Content=\"{Binding SelectedEditorDetailContent}\"",
+            "ItemsSource=\"{Binding DetailContentSlots}\"",
             editorControlContent,
             StringComparison.Ordinal);
 
@@ -241,7 +241,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_NavigationPane_StartsCollapsed()
     {
         // Issue #24: the editor navigation pane should start collapsed when an agent chat view
@@ -261,7 +261,7 @@ public sealed class MainWindowAxamlTests
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_CanCollapseAndUncollapseNavigationPane()
     {
         var control = new AgentChatEditorControl();
@@ -375,7 +375,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void EditorControl_InterruptGesture_MatchesCtrlBreak_NotPlainCancel()
     {
         // Issue #21: Windows delivers the Pause/Break key as Key.Cancel (VK_CANCEL) whenever Ctrl is
@@ -395,7 +395,7 @@ public sealed class MainWindowAxamlTests
         Assert.False(new KeyGesture(Key.Cancel).Matches(ctrlBreak));
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public void EditorControl_UnholdGesture_MatchesCtrlShiftBreak()
     {
         // Issue #21: Ctrl+Shift+Break likewise arrives as Key.Cancel + Control + Shift, so the unhold

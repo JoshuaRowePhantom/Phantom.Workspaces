@@ -20,7 +20,11 @@ public sealed class GitHubAuthTokenResolverTests
             new RunProcessParameters("cmd.exe", ["/c", "echo", "ghs_testtoken"]));
 
         Assert.Equal("ghs_testtoken", result);
-        Assert.Empty(logger.Logs);
+        // Successful process execution logs at Debug level
+        if (logger.Logs.Any())
+        {
+            Assert.All(logger.Logs, log => Assert.Equal(LogLevel.Debug, log.Level));
+        }
     }
 
     [Fact]

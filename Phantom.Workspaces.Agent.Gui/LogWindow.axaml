@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Phantom.Workspaces.Agent.Gui"
+        xmlns:sharedControls="using:Phantom.Workspaces.Gui.Shared.Controls"
         x:Class="Phantom.Workspaces.Agent.Gui.LogWindow"
         x:Name="Root"
         x:DataType="local:LogWindow"
@@ -38,7 +39,7 @@
                 <ItemsControl x:Name="LogItems">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <SelectableTextBlock Text="{Binding}"
+                            <sharedControls:SafeSelectableTextBlock Text="{Binding}"
                                                  TextWrapping="{Binding LogTextWrapping, ElementName=Root}"
                                                  Classes="terminal-mono terminal-detail agent-log-line"/>
                         </DataTemplate>

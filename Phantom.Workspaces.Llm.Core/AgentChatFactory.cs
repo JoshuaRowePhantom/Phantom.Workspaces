@@ -1,0 +1,261 @@
+using AgentSchema;
+using MongoDB.Bson;
+using Phantom.Workspaces.Llm.Interfaces;
+using System.Collections.ObjectModel;
+using System.Linq;
+
+namespace Phantom.Workspaces.Llm;
+
+/// <summary>
+/// Reference-counted table of running <see cref="AgentChat"/> sessions.
+/// On first <see cref="GetAsync"/> for a session ID the factory loads the session from
+/// <see cref="IAgentPersistenceStore"/>, creates the chat, and adds it to
+/// <see cref="RunningSessions"/>. On the last lease being released the chat is removed
+/// from <see cref="RunningSessions"/> and disposed.
+/// All <see cref="RunningSessions"/> mutations are dispatched on the foreground scheduler.
+/// </summary>
+internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposable
+{
+    private sealed class Entry
+    {
+        public required AgentChat AgentChat { get; init; }
+        public int RefCount { get; set; }
+    }
+
+    private readonly IAgentPersistenceStore _store;
+    private readonly AgentServices _services;
+    private readonly TaskScheduler _foregroundScheduler;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Dictionary<AgentSessionId, Entry> _entries = new();
+    private readonly ObservableCollection<RunningAgentChat> _runningSessions = new();
+    private bool _disposed;
+
+    public ObservableCollection<RunningAgentChat> RunningSessions => _runningSessions;
+
+    public AgentChatFactory(
+        IAgentPersistenceStore store,
+        AgentServices services,
+        TaskScheduler foregroundScheduler)
+    {
+        _store = store;
+        _services = services;
+        _foregroundScheduler = foregroundScheduler;
+    }
+
+    public async Task<RunningAgentChatLease> GetOrCreateAsync(
+        AgentSessionId sessionId,
+        AgentDefinition? definition = null,
+        AgentServices? services = null,
+        CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+
+        AgentChat? newChat = null;
+        RunningAgentChatLease? existingLease = null;
+
+        try
+        {
+            if (_entries.TryGetValue(sessionId, out var existing))
+            {
+                existing.RefCount++;
+                existingLease = MakeLease(sessionId, existing.AgentChat);
+            }
+            else
+            {
+                var effectiveServices = services ?? _services;
+
+                if (definition is not null)
+                {
+                    var definitionJson = MongoDB.Bson.BsonDocument.Parse(definition.ToJson());
+                    await _store.StoreAsync(new StoreRequestAgent
+                    {
+                        Agent = new PersistedAgent
+                        {
+                            AgentSessionId = sessionId.Value!,
+                            AgentDefinitionJson = definitionJson,
+                        }
+                    }, ct);
+                }
+
+                var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+                {
+                    AgentDefinition = definition,
+                    AgentSessionId = sessionId.Value,
+                    AgentServices = effectiveServices,
+                    ConfiguredStore = _store,
+                    ClientOverride = effectiveServices.ChatClientOverride,
+                    ForegroundScheduler = _foregroundScheduler,
+                    CancellationToken = ct,
+                });
+                _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
+                newChat = chat;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (existingLease is not null)
+            return existingLease;
+
+        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+        return MakeLease(sessionId, newChat!);
+    }
+
+    public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+
+        AgentChat? newChat = null;
+        RunningAgentChatLease? existingLease = null;
+
+        try
+        {
+            if (_entries.TryGetValue(sessionId, out var existing))
+            {
+                existing.RefCount++;
+                existingLease = MakeLease(sessionId, existing.AgentChat);
+            }
+            else
+            {
+                var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+                {
+                    AgentDefinition = null,
+                    AgentSessionId = sessionId.Value,
+                    AgentServices = _services,
+                    ConfiguredStore = _store,
+                    ClientOverride = _services.ChatClientOverride,
+                    ForegroundScheduler = _foregroundScheduler,
+                    CancellationToken = ct,
+                });
+                _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
+                newChat = chat;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (existingLease is not null)
+            return existingLease;
+
+        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+        return MakeLease(sessionId, newChat!);
+    }
+
+    public async Task<RunningAgentChatLease> CreateAsync(
+        AgentDefinition definition,
+        AgentSessionId sessionId,
+        AgentServices? services = null,
+        CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+
+        AgentChat? newChat = null;
+
+        try
+        {
+            if (_entries.ContainsKey(sessionId))
+                throw new InvalidOperationException($"A session with ID '{sessionId}' is already running.");
+
+            var definitionJson = BsonDocument.Parse(definition.ToJson());
+            await _store.StoreAsync(new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = sessionId.Value!,
+                    AgentDefinitionJson = definitionJson,
+                }
+            }, ct);
+
+            var effectiveServices = services ?? _services;
+            var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                AgentSessionId = sessionId.Value,
+                AgentServices = effectiveServices,
+                ConfiguredStore = _store,
+                ClientOverride = effectiveServices.ChatClientOverride,
+                ForegroundScheduler = _foregroundScheduler,
+                CancellationToken = ct,
+            });
+            _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
+            newChat = chat;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+        return MakeLease(sessionId, newChat!);
+    }
+
+    private RunningAgentChatLease MakeLease(AgentSessionId sessionId, AgentChat agentChat)
+        => new RunningAgentChatLease(sessionId, agentChat, () => ReleaseAsync(sessionId));
+
+    private async ValueTask ReleaseAsync(AgentSessionId sessionId)
+    {
+        AgentChat? toDispose = null;
+
+        await _gate.WaitAsync();
+        try
+        {
+            if (_entries.TryGetValue(sessionId, out var entry))
+            {
+                entry.RefCount--;
+                if (entry.RefCount <= 0)
+                {
+                    _entries.Remove(sessionId);
+                    toDispose = entry.AgentChat;
+                }
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        if (toDispose is not null)
+        {
+            await PostToForegroundAsync(() =>
+            {
+                var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
+                if (item is not null)
+                    _runningSessions.Remove(item);
+            });
+
+            await toDispose.DisposeAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        List<AgentChat> toDispose;
+
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            toDispose = _entries.Values.Select(e => e.AgentChat).ToList();
+            _entries.Clear();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        await Task.WhenAll(toDispose.Select(c => c.DisposeAsync().AsTask()));
+    }
+
+    private Task PostToForegroundAsync(Action action)
+        => Task.Factory.StartNew(
+            action,
+            CancellationToken.None,
+            TaskCreationOptions.None,
+            _foregroundScheduler);
+}

@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -154,10 +155,10 @@ public sealed class WebViewModelTests
 
     // --- OpenExternalEntityShortcutHandler: default key → display name, title not fixed ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_DefaultKey_TitleIsDisplayName_AndBrowserCanOverride()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var handler = new OpenExternalEntityShortcutHandler();
@@ -179,10 +180,10 @@ public sealed class WebViewModelTests
 
     // --- OpenExternalEntityShortcutHandler: named key → key name as title, title fixed ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_NamedKey_TitleIsKeyName_AndBrowserCannotOverride()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var handler = new OpenExternalEntityShortcutHandler();
@@ -204,10 +205,10 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: explicit title from JSON wins and is pinned ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_ExplicitTitle_IsUsedAndPinned()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -261,10 +262,10 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: no explicit title + default key → display name, not pinned ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_DefaultKey_TitleIsDisplayName_NotFixed()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -317,10 +318,10 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: no explicit title + named key → key name, pinned ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_NamedKey_TitleIsKeyName_Fixed()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var entityBroker = GetEntityBroker(viewModel);
@@ -373,10 +374,10 @@ public sealed class WebViewModelTests
 
     // --- DuplicateBrowserTabCommand ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_OpensNewTabAtSameUrl()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://example.com", viewModel) { Id = "web-dup-1", Title = "Tab" };
@@ -392,10 +393,10 @@ public sealed class WebViewModelTests
         Assert.NotNull(duplicate);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_InsertsNewTabAfterSource()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://a.example.com", viewModel) { Id = "web-dup-a", Title = "A" };
@@ -417,10 +418,10 @@ public sealed class WebViewModelTests
         Assert.Equal(indexA + 1, indexDup);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNonBrowserTab_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         // Open an entity tab (non-browser tab).
@@ -436,10 +437,10 @@ public sealed class WebViewModelTests
         Assert.Equal(tabCountBeforeDuplicate, tabs3.Count);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNoActiveTab_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         // Do not open any tabs.
@@ -449,10 +450,10 @@ public sealed class WebViewModelTests
         Assert.Empty(viewModel.SelectedWorkspacePane.Tabs);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithEmptyUrl_IsNoOp()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("", viewModel) { Id = "web-empty-url", Title = "Tab" };
@@ -465,10 +466,10 @@ public sealed class WebViewModelTests
 
     // --- RaiseOpenNewWindow: new tab insertion position ---
 
-    [AvaloniaFact(Timeout = 15_000)]
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task RaiseOpenNewWindow_InsertsNewTabImmediatelyRightOfSourceTab()
     {
-        var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         // Open two tabs so we can verify relative insertion position.
@@ -552,6 +553,9 @@ public sealed class WebViewModelTests
         Assert.NotNull(prop);
         return Assert.IsType<EntityBroker>(prop!.GetValue(viewModel));
     }
+
+    private static MainWindowViewModel CreateTestMainWindowViewModel()
+        => new(new UnknownRepositorySource(), new WorkspacesConfiguration { SkipStartupWorkspace = true });
 
     private static async Task UpsertEntityAndLoadAsync(
         EntityBroker entityBroker,

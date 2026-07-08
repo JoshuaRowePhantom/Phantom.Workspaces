@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardFieldBuildingTests
 {
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsMarkdownEditorForNoteContent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -42,7 +42,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Contains("Body text here.", markdownEditor.TextContent, StringComparison.Ordinal);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_RendersNoteContentInline()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -87,7 +87,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.True(markdownEditor.ShowChrome);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_RendersNoFields_WhenEntityTypeViewHasEmptyFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -113,7 +113,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Empty(fieldEditors);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_RendersAllFields_WhenEntityTypeViewOmitsFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -139,7 +139,33 @@ public sealed class EntityCardFieldBuildingTests
         Assert.NotEmpty(fieldEditors);
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
+    public async Task FieldEditorFactory_RendersNoFields_WhenNoEntityTypeViewRegistered()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        // Empty catalog — no view registered for the entity type.
+        var entityTypeViewCatalog = new EntityTypeViewCatalog([]);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0f",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["agent-definitions", "example"]],
+              "display-name": { "default": "Example Agent" },
+              "template": { "display-name": "Example" }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "agent-definition");
+
+        Assert.Empty(fieldEditors);
+    }
+
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsEntityListEditorForEntityIdListFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -180,7 +206,7 @@ public sealed class EntityCardFieldBuildingTests
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_ResolvesEntityIdListIndependentOfEntityTypeOrder()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -220,7 +246,7 @@ public sealed class EntityCardFieldBuildingTests
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsBooleanToggleEditorForPausedField()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -255,7 +281,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Contains(fieldEditors, editor => editor.FieldName == "last-started");
     }
 
-    [AvaloniaFact]
+    [PhantomAvaloniaFact]
     public async Task FieldEditorFactory_BuildsBooleanToggleEditor_DefaultsFalse_WhenPausedAbsent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(

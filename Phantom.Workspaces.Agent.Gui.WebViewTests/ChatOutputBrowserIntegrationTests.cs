@@ -323,6 +323,246 @@ public sealed class ChatOutputBrowserIntegrationTests
             + $"<div class=\"chat-content chat-text\" data-copy-target id=\"{id}-c0\">{text}</div>"
             + "</div></div>";
 
+    private static string MessageWithTimestamp(string id, string utcIso)
+        => $"<div class=\"chat-message\" id=\"{id}\">"
+            + $"<div class=\"chat-header\" id=\"{id}-header\">"
+            + $"<span data-utc=\"{utcIso}\" id=\"{id}-ts\"></span>"
+            + "</div>"
+            + $"<div class=\"chat-contents\" id=\"{id}-contents\"></div>"
+            + "</div>";
+
+    [Fact]
+    public Task TimestampFormatter_InitOrder_NoTypeError()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var result = await EvalAsync(web, "typeof TimestampFormatter");
+                Assert.Equal("\"object\"", result);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_SameDay_FormatsTimeOnly()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var nowIso = await EvalAsync(web, "new Date().toISOString()");
+                // nowIso is JSON-encoded, strip surrounding quotes
+                var iso = nowIso.Trim('"');
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-0", iso)));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-0-ts').textContent");
+                // Same-day format contains only a time component (colon between digits), no month names
+                Assert.Matches(@"\d{1,2}:\d{2}", text.Trim('"'));
+                Assert.DoesNotMatch(@"[A-Za-z]{3}", text.Trim('"'));
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_DifferentDay_FormatsDateAndTime()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                // Year 2000 is guaranteed to be a different day from now
+                var oldIso = "2000-06-15T10:30:00.000Z";
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-1", oldIso)));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-1-ts').textContent");
+                var stripped = text.Trim('"');
+                // Different-day format contains a short month abbreviation
+                Assert.Matches(@"[A-Za-z]{3}", stripped);
+                // And a time component
+                Assert.Matches(@"\d{1,2}:\d{2}", stripped);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_InvalidDate_IsIgnored()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-2", "not-a-date")));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-2-ts').textContent");
+                // Formatter skips invalid dates; span has no original text content
+                Assert.Equal("\"\"", text);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task TimestampFormatter_StreamingUpdate_FormatsNewSpan()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var oldIso = "2000-06-15T10:30:00.000Z";
+                // Dynamically appended via the streaming update path - MutationObserver must format it
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history",
+                    "append",
+                    MessageWithTimestamp("ts-3", oldIso)));
+
+                var text = await EvalAsync(web, "document.getElementById('ts-3-ts').textContent");
+                var stripped = text.Trim('"');
+                // If the MutationObserver is registered, the span is formatted (non-empty, contains month)
+                Assert.NotEmpty(stripped);
+                Assert.Matches(@"[A-Za-z]{3}", stripped);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatOutput_StreamingTokens_Batched()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var web = new ControllableWebViewControl();
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            web.Ready += (_, _) => ready.TrySetResult();
+            var window = CreateOffscreenWindow(web);
+            try
+            {
+                window.Show();
+                web.HtmlShell = ShellHtml;
+                await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                
+                for (int i = 0; i < 10; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"msg-{i}", $"token{i}")));
+                    await Task.Delay(5);
+                }
+
+                await Task.Delay(50);
+
+                var lastElementText = await EvalAsync(web, "document.getElementById('msg-9-c0')?.textContent || 'not-found'");
+                Assert.Contains("token9", lastElementText, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatOutput_LongChat_RenderLatencyStable()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                for (int i = 0; i < 100; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"history-{i}", $"Historical message {i}")));
+                }
+
+                await Task.Delay(500);
+
+                var startTime = DateTime.UtcNow;
+                
+                for (int i = 0; i < 50; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"stream-{i}", $"Streaming token {i}")));
+                }
+
+                var lastElementText = string.Empty;
+                var attempts = 0;
+                while (attempts < 100 && !lastElementText.Contains("Streaming token 49"))
+                {
+                    lastElementText = await EvalAsync(web, "document.getElementById('stream-49-c0')?.textContent || ''");
+                    if (!lastElementText.Contains("Streaming token 49"))
+                    {
+                        await Task.Delay(10);
+                    }
+                    attempts++;
+                }
+
+                var elapsed = DateTime.UtcNow - startTime;
+                
+                Assert.Contains("Streaming token 49", lastElementText, StringComparison.Ordinal);
+                Assert.True(elapsed.TotalMilliseconds < 2000, $"Render took {elapsed.TotalMilliseconds}ms, expected < 2000ms");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatOutput_RenderGating_NoDroppedUpdates()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                for (int i = 0; i < 20; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"rapid-{i}", $"Token {i}")));
+                    await Task.Delay(1);
+                }
+
+                await Task.Delay(500);
+
+                for (int i = 0; i < 20; i++)
+                {
+                    var elementText = await EvalAsync(web, $"document.getElementById('rapid-{i}-c0')?.textContent || 'missing'");
+                    Assert.Contains($"Token {i}", elementText, StringComparison.Ordinal);
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static string LoadShellHtml()
     {
         var assembly = typeof(ChatOutputBrowserCommands).Assembly;

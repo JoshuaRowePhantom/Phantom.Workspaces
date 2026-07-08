@@ -228,6 +228,12 @@ public sealed class ReverseTrustedExecutionTests
             this.ReadMessageCallCount++;
             return ValueTask.FromResult(System.Array.Empty<ChatMessage>());
         }
+
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<Phantom.Workspaces.Llm.Interfaces.AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IReadOnlyList<Phantom.Workspaces.Llm.Interfaces.AgentSessionId>>(System.Array.Empty<Phantom.Workspaces.Llm.Interfaces.AgentSessionId>());
     }
 
 

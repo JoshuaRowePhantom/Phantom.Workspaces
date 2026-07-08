@@ -1,6 +1,6 @@
-using AgentSchema;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -267,5 +267,74 @@ public abstract class AgentPersistenceStoreContractTests
                 }
                 """),
         };
+    }
+
+    [Fact]
+    public async Task AddSubAgentLink_WritesParentChildPair()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        await store.AddSubAgentLinkAsync("parent-link-1", "child-link-1", CancellationToken.None);
+
+        var childIds = await store.ReadSubAgentChildIdsAsync("parent-link-1", CancellationToken.None);
+
+        var returned = Assert.Single(childIds);
+        Assert.Equal("child-link-1", returned.Value);
+    }
+
+    [Fact]
+    public async Task AddSubAgentLink_SameParentMultipleChildren_AllReturned()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        await store.AddSubAgentLinkAsync("parent-link-2", "child-link-2a", CancellationToken.None);
+        await store.AddSubAgentLinkAsync("parent-link-2", "child-link-2b", CancellationToken.None);
+
+        var childIds = await store.ReadSubAgentChildIdsAsync("parent-link-2", CancellationToken.None);
+
+        Assert.Equal(2, childIds.Count);
+        Assert.Contains(childIds, id => id.Value == "child-link-2a");
+        Assert.Contains(childIds, id => id.Value == "child-link-2b");
+    }
+
+    [Fact]
+    public async Task AddSubAgentLink_CalledTwiceWithSamePair_IsIdempotent()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        await store.AddSubAgentLinkAsync("parent-link-3", "child-link-3", CancellationToken.None);
+        await store.AddSubAgentLinkAsync("parent-link-3", "child-link-3", CancellationToken.None);
+
+        var childIds = await store.ReadSubAgentChildIdsAsync("parent-link-3", CancellationToken.None);
+
+        Assert.Single(childIds);
+        Assert.Equal("child-link-3", childIds[0].Value);
+    }
+
+    [Fact]
+    public async Task ReadSubAgentChildIds_UnknownParent_ReturnsEmpty()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        var childIds = await store.ReadSubAgentChildIdsAsync("parent-link-unknown", CancellationToken.None);
+
+        Assert.Empty(childIds);
+    }
+
+    [Fact]
+    public async Task ReadSubAgentChildIds_DoesNotReturnEntriesForOtherParents()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        await store.AddSubAgentLinkAsync("parent-link-4a", "child-link-4", CancellationToken.None);
+
+        var childIds = await store.ReadSubAgentChildIdsAsync("parent-link-4b", CancellationToken.None);
+
+        Assert.Empty(childIds);
     }
 }
