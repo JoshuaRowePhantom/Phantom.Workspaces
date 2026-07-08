@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -29,6 +30,10 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     private readonly List<(string sessionKey, AgentSessionWorkspaceTabViewModel tab,
         PropertyChangedEventHandler tabHandler,
         PropertyChangedEventHandler? agentHandler)> rowSubscriptions = [];
+
+    // History subscriptions: sessionKey → (history, handler)
+    private readonly Dictionary<string, (AgentChatHistoryCollection History, NotifyCollectionChangedEventHandler Handler)> historySubscriptions
+        = new(StringComparer.Ordinal);
 
     public RunningAgentBrainViewModel(
         IRunningAgentChatTable table,
@@ -154,6 +159,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         this.RaisePropertyChanged(nameof(this.HasRows));
+        this.ResortRows();
     }
 
     private RunningAgentRowViewModel CreateTabRow(string sessionKey, AgentTabInfo tabInfo)
@@ -191,6 +197,49 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             activateCommand: activateCmd);
     }
 
+    /// <summary>
+    /// Sorts <see cref="Rows"/> in place by <see cref="RunningAgentRowViewModel.LastActivityAt"/> descending
+    /// using <c>Move</c> operations to preserve item identity and avoid UI flicker.
+    /// </summary>
+    internal void ResortRows()
+    {
+        var sorted = this.Rows.OrderByDescending(r => r.LastActivityAt).ToList();
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            var current = this.Rows.IndexOf(sorted[i]);
+            if (current != i)
+            {
+                this.Rows.Move(current, i);
+            }
+        }
+    }
+
+    private void SubscribeHistory(string sessionKey, AgentViewModel agent)
+    {
+        var history = agent.AgentChat.History;
+        NotifyCollectionChangedEventHandler handler = (_, _) =>
+        {
+            var row = this.Rows.FirstOrDefault(r =>
+                string.Equals(r.SessionKey, sessionKey, StringComparison.Ordinal));
+            if (row is not null)
+            {
+                row.UpdateLastActivityAt(DateTime.UtcNow);
+                this.ResortRows();
+            }
+        };
+        ((INotifyCollectionChanged)history).CollectionChanged += handler;
+        this.historySubscriptions[sessionKey] = (history, handler);
+    }
+
+    private void UnsubscribeHistory(string sessionKey)
+    {
+        if (this.historySubscriptions.TryGetValue(sessionKey, out var sub))
+        {
+            ((INotifyCollectionChanged)sub.History).CollectionChanged -= sub.Handler;
+            this.historySubscriptions.Remove(sessionKey);
+        }
+    }
+
     private void SubscribeRow(string sessionKey, AgentSessionWorkspaceTabViewModel tab)
     {
         PropertyChangedEventHandler? agentHandler = null;
@@ -199,6 +248,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         {
             agentHandler = CreateAgentHandler(sessionKey);
             agent.PropertyChanged += agentHandler;
+            this.SubscribeHistory(sessionKey, agent);
         }
 
         PropertyChangedEventHandler tabHandler = (_, e) =>
@@ -206,12 +256,14 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             if (e.PropertyName == nameof(AgentSessionWorkspaceTabViewModel.Agent))
             {
                 this.UnsubscribeAgentHandler(sessionKey);
+                this.UnsubscribeHistory(sessionKey);
                 if (tab.Agent is { } newAgent)
                 {
                     this.UpdateRowThinking(sessionKey, newAgent.IsChatRunning);
                     var newAgentHandler = this.CreateAgentHandler(sessionKey);
                     newAgent.PropertyChanged += newAgentHandler;
                     this.UpdateRowAgentHandler(sessionKey, newAgentHandler);
+                    this.SubscribeHistory(sessionKey, newAgent);
                 }
             }
         };
@@ -253,6 +305,8 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
             this.rowSubscriptions.RemoveAt(i);
         }
+
+        this.UnsubscribeHistory(sessionKey);
     }
 
     private void UnsubscribeAgentHandler(string sessionKey)
@@ -328,5 +382,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         this.rowSubscriptions.Clear();
+
+        foreach (var (history, handler) in this.historySubscriptions.Values)
+        {
+            ((INotifyCollectionChanged)history).CollectionChanged -= handler;
+        }
+
+        this.historySubscriptions.Clear();
     }
 }

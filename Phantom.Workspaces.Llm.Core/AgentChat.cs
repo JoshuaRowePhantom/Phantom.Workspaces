@@ -640,6 +640,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private void AddHistoryItem(AgentChatHistoryItem item)
     {
+        this.lastUpdatedAt = DateTime.UtcNow;
         this.History.Add(item);
     }
 
