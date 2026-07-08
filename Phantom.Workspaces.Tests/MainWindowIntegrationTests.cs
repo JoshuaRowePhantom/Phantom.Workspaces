@@ -2695,6 +2695,34 @@ public sealed class MainWindowIntegrationTests
         return null;
     }
 
+    /// <summary>
+    /// Gets documents from a dock that correspond to tabs in the specified pane.
+    /// Filters out any placeholder or orphaned documents that may exist in the dock.
+    /// </summary>
+    private static List<WorkspaceDocument> GetPaneDocuments(WorkspacePaneViewModel pane, IDocumentDock dock)
+    {
+        return dock.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .Where(doc => doc.Context is WorkspaceTabViewModel tab && pane.Tabs.Contains(tab))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Waits for any fire-and-forget PopulateWorkspacePaneTabsAsync tasks to complete, then closes
+    /// the default tabs that were added to each pane during population. Call this after opening
+    /// workspaces and before opening test tabs so that pane.Tabs only contains the expected tabs.
+    /// </summary>
+    private static async Task CloseDefaultPaneTabsAsync(
+        MainWindowViewModel viewModel,
+        params WorkspacePaneViewModel[] panes)
+    {
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+        foreach (var pane in panes)
+            foreach (var tab in pane.Tabs.ToList())
+                viewModel.CloseTab(tab);
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+    }
+
     private static async Task WaitForWorkspaceTabAsync(IDocumentDock contentDock, string tabId)
     {
         if (contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) == true)
@@ -4655,6 +4683,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         // Open 2 tabs in each pane
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-h-a1", Title = "A1" };
@@ -4675,8 +4706,8 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
 
-        var docsA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
-        var docsB = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var docsA = GetPaneDocuments(paneA, dockA!);
+        var docsB = GetPaneDocuments(paneB, dockB!);
         
         Assert.Equal(2, docsA.Count);
         Assert.Equal(2, docsB.Count);
@@ -4729,6 +4760,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         // Open 2 tabs in each pane
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-v-a1", Title = "A1" };
@@ -4749,8 +4783,8 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
 
-        var docsA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
-        var docsB = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var docsA = GetPaneDocuments(paneA, dockA!);
+        var docsB = GetPaneDocuments(paneB, dockB!);
         
         Assert.Equal(2, docsA.Count);
         Assert.Equal(2, docsB.Count);
@@ -4816,6 +4850,9 @@ public sealed class MainWindowIntegrationTests
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
         var paneC = viewModel.WorkspacePanes.First(p => p.Id == workspaceCId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB, paneC);
+
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-3-a1", Title = "A1" };
         await viewModel.OpenTabAsync(tabA1);
@@ -4837,9 +4874,9 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(dockB);
         Assert.NotNull(dockC);
 
-        var docA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
-        var docB = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
-        var docC = dockC!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docA = GetPaneDocuments(paneA, dockA!).Single();
+        var docB = GetPaneDocuments(paneB, dockB!).Single();
+        var docC = GetPaneDocuments(paneC, dockC!).Single();
         
         Assert.Equal("split-3-a1", docA.Id);
         Assert.Equal("split-3-b1", docB.Id);
@@ -4887,6 +4924,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "drag-sec-a1", Title = "A1" };
         await viewModel.OpenTabAsync(tabA1);
@@ -4912,8 +4952,8 @@ public sealed class MainWindowIntegrationTests
         var dockA = FindDocumentDockIn(paneA.ContentLayout!);
         Assert.NotNull(dockA);
 
-        var docA1 = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
-        var docsB = dockB.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var docA1 = GetPaneDocuments(paneA, dockA!).Single();
+        var docsB = GetPaneDocuments(paneB, dockB);
         
         Assert.Equal("drag-sec-a1", docA1.Id);
         Assert.Equal("drag-sec-b2", docsB[0].Id);
@@ -4961,6 +5001,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "new-sec-a1", Title = "A1" };
         var tabA2 = new WebViewModel("https://a2.example.com") { Id = "new-sec-a2", Title = "A2" };
@@ -4978,8 +5021,8 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
 
-        var docsA = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
-        var docB1 = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docsA = GetPaneDocuments(paneA, dockA!);
+        var docB1 = GetPaneDocuments(paneB, dockB!).Single();
         
         Assert.Equal("new-sec-a1", docsA[0].Id);
         Assert.Equal("new-sec-a2", docsA[1].Id);
@@ -5027,6 +5070,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "close-prim-a1", Title = "A1" };
         var tabA2 = new WebViewModel("https://a2.example.com") { Id = "close-prim-a2", Title = "A2" };
@@ -5049,8 +5095,8 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
 
-        var docA2 = dockA!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
-        var docB1 = dockB!.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var docA2 = GetPaneDocuments(paneA, dockA!).Single();
+        var docB1 = GetPaneDocuments(paneB, dockB!).Single();
         
         Assert.Equal("close-prim-a2", docA2.Id);
         Assert.Equal("close-prim-b1", docB1.Id);

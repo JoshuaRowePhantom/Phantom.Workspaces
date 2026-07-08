@@ -2460,9 +2460,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var dock = FindDocumentDock(pane.ContentLayout);
             if (dock?.VisibleDockables is null) continue;
             
+            // Collect documents in the order they appear in the dock, but only include
+            // documents that correspond to a tab in the pane's Tabs collection. This filters
+            // out any placeholder or orphaned documents that may exist in the dock.
             foreach (var dockable in dock.VisibleDockables)
             {
-                if (dockable is WorkspaceDocument doc)
+                if (dockable is WorkspaceDocument doc 
+                    && doc.Context is WorkspaceTabViewModel tab
+                    && pane.Tabs.Contains(tab))
                 {
                     allDocuments.Add(doc);
                 }
