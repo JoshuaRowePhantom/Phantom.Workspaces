@@ -771,6 +771,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.dockFactory.InitLayout(layout);
         this.Layout = layout;
 
+        this.WorkspacePanes.CollectionChanged += (_, _) => this.RefreshWorkspacePaneAltShortcutLabels();
+        this.RefreshWorkspacePaneAltShortcutLabels();
+
         // Monitor workspace dock for closes
         var workspacesDock = FindDocumentDock(layout);
         if (workspacesDock?.VisibleDockables is System.Collections.Specialized.INotifyCollectionChanged collection)
@@ -2453,6 +2456,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
     }
+
+    internal static void RefreshWorkspacePaneAltShortcutLabels(
+        IReadOnlyList<WorkspacePaneViewModel> workspacePanes,
+        Func<string, WorkspacePaneDocument?> getPaneDocument)
+    {
+        for (var i = 0; i < workspacePanes.Count; i++)
+        {
+            var paneDoc = getPaneDocument(workspacePanes[i].Id);
+            if (paneDoc is not null)
+            {
+                paneDoc.EffectiveTabHeader.AltShortcutLabel = i switch
+                {
+                    < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
+                    9 => "0",
+                    _ => null,
+                };
+            }
+        }
+    }
+
+    private void RefreshWorkspacePaneAltShortcutLabels()
+        => RefreshWorkspacePaneAltShortcutLabels(this.WorkspacePanes, this.dockFactory.GetPaneDocument);
 
     private void RefreshGlobalAltShortcutLabels()
     {

@@ -4680,6 +4680,182 @@ public sealed class MainWindowIntegrationTests
 
     // ── Alt+N shortcut numbers — multi-pane scenarios (#614) ──────────────────
 
+    // ── Alt+Shift+N shortcut numbers — workspace pane label tests (#773) ─────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RefreshWorkspacePaneAltShortcutLabels_InitialState_LabelsAssigned()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77300001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77300001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-init-a"]],
+              "display-name": { "default": "Pane Label Init A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77300001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77300001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-init-b"]],
+              "display-name": { "default": "Pane Label Init B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        var paneDocs = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.True(paneDocs.Count >= 2);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RefreshWorkspacePaneAltShortcutLabels_OnPaneAdded_LabelsUpdated()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77300002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77300002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-add-a"]],
+              "display-name": { "default": "Pane Label Add A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77300002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77300002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-add-b"]],
+              "display-name": { "default": "Pane Label Add B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        var paneDocs = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Single(paneDocs);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        paneDocs = workspacesDock.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Equal(2, paneDocs.Count);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RefreshWorkspacePaneAltShortcutLabels_OnPaneRemoved_LabelsRenumbered()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77300003-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77300003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-remove-a"]],
+              "display-name": { "default": "Pane Label Remove A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77300003-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77300003-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-remove-b"]],
+              "display-name": { "default": "Pane Label Remove B" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdC = new EntityId("77300003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdC,
+            """
+            {
+              "entity-id": "77300003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-remove-c"]],
+              "display-name": { "default": "Pane Label Remove C" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdC });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        // Switch to pane B (index 1) so we can close it
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        Assert.True(paneBIndex >= 0);
+        var paneB = viewModel.WorkspacePanes[paneBIndex];
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
+
+        // Close pane B by passing it as the command parameter
+        viewModel.CloseWorkspaceCommand.Execute(paneB);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var paneDocs = workspacesDock.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Equal(2, paneDocs.Count);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DragReorder_WithinSinglePane_LabelsUpdateToReflectNewOrder()
     {

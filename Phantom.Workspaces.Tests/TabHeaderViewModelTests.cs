@@ -348,6 +348,76 @@ public sealed class TabHeaderViewModelTests
         Assert.Null(docs["tab-10"].EffectiveTabHeader.AltShortcutLabel);
     }
 
+    // ── RefreshWorkspacePaneAltShortcutLabels ────────────────────────────────
+
+    private static (System.Collections.Generic.List<WorkspacePaneViewModel> panes,
+                    System.Collections.Generic.Dictionary<string, WorkspacePaneDocument> paneDocs)
+        CreatePanesWithPaneDocs(int count)
+    {
+        var panes = new System.Collections.Generic.List<WorkspacePaneViewModel>();
+        var paneDocs = new System.Collections.Generic.Dictionary<string, WorkspacePaneDocument>(System.StringComparer.Ordinal);
+        for (var i = 0; i < count; i++)
+        {
+            using var jsonDoc = System.Text.Json.JsonDocument.Parse(
+                $$$"""{"entity-id":"bbbb{{{i:D4}}}-0000-4000-8000-bbbbbbbbbbbb","entity-types":["entity","workspace"],"display-name":{"default":"Pane {{{i}}}"}}""");
+            var entity = new SubscribedEntityViewModel(
+                new EntitySnapshot
+                {
+                    EntityId = new EntityId($"bbbb{i:D4}-0000-4000-8000-bbbbbbbbbbbb"),
+                    ConcurrencyTag = new ConcurrencyTag("1"),
+                    ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
+                    Data = jsonDoc.RootElement.Clone(),
+                    Relationships = System.Array.Empty<EntitySnapshot>(),
+                });
+            var pane = new WorkspacePaneViewModel(entity);
+            panes.Add(pane);
+            paneDocs[pane.Id] = new WorkspacePaneDocument(pane);
+        }
+        return (panes, paneDocs);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_ThreePanes_LabelsAre1_2_3()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(3);
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Equal("1", paneDocs[panes[0].Id].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[panes[1].Id].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_TenPanes_TenthPaneLabelIs0()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(10);
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Equal("0", paneDocs[panes[9].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_EleventhPane_LabelIsNull()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(11);
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Null(paneDocs[panes[10].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void RefreshWorkspacePaneAltShortcutLabels_PaneDocumentNotFound_OtherPanesStillLabelled()
+    {
+        var (panes, paneDocs) = CreatePanesWithPaneDocs(3);
+        // Remove the middle pane doc to simulate missing registry entry
+        paneDocs.Remove(panes[1].Id);
+
+        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
+
+        Assert.Equal("1", paneDocs[panes[0].Id].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
+    }
+
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
