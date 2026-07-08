@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
-using Avalonia.Threading;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Xunit;
 
@@ -15,18 +13,17 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 public sealed class ControllableWebViewAutoFlushTests
 {
     [PhantomAvaloniaFact]
-    public async Task ControllableWebView_AutoBatch_FlushesAfterTimer()
+    public void ControllableWebView_AutoBatch_FlushesAfterTimer()
     {
         var testBrowser = new TestControllableBrowser();
         testBrowser.SimulateReady();
 
         testBrowser.PostMessageToJavaScript("message1");
-        await Task.Delay(5);
         testBrowser.PostMessageToJavaScript("message2");
 
         Assert.Empty(testBrowser.InvokeScriptCalls);
 
-        await Task.Delay(25);
+        testBrowser.SimulateAutoFlushTimer();
 
         Assert.Single(testBrowser.InvokeScriptCalls);
         var call = testBrowser.InvokeScriptCalls[0];
@@ -52,39 +49,39 @@ public sealed class ControllableWebViewAutoFlushTests
     }
 
     [PhantomAvaloniaFact]
-    public async Task ControllableWebView_RenderGating_WaitsForAck()
+    public void ControllableWebView_RenderGating_WaitsForAck()
     {
         var testBrowser = new TestControllableBrowser();
         testBrowser.EnableRenderCompletionGating = true;
         testBrowser.SimulateReady();
 
         testBrowser.PostMessageToJavaScript("batch1-msg1");
-        await Task.Delay(25);
+        testBrowser.SimulateAutoFlushTimer();
 
         Assert.Single(testBrowser.InvokeScriptCalls);
 
         testBrowser.PostMessageToJavaScript("batch2-msg1");
-        await Task.Delay(25);
+        testBrowser.SimulateAutoFlushTimer();
 
         Assert.Single(testBrowser.InvokeScriptCalls);
     }
 
     [PhantomAvaloniaFact]
-    public async Task ControllableWebView_RenderGating_FlushesQueuedBatchAfterAck()
+    public void ControllableWebView_RenderGating_FlushesQueuedBatchAfterAck()
     {
         var testBrowser = new TestControllableBrowser();
         testBrowser.EnableRenderCompletionGating = true;
         testBrowser.SimulateReady();
 
         testBrowser.PostMessageToJavaScript("batch1-msg1");
-        await Task.Delay(25);
+        testBrowser.SimulateAutoFlushTimer();
 
         Assert.Single(testBrowser.InvokeScriptCalls);
         var firstCall = testBrowser.InvokeScriptCalls[0];
         Assert.Contains("\"generation\":1", firstCall, StringComparison.Ordinal);
 
         testBrowser.PostMessageToJavaScript("batch2-msg1");
-        await Task.Delay(25);
+        testBrowser.SimulateAutoFlushTimer();
 
         Assert.Single(testBrowser.InvokeScriptCalls);
 
@@ -100,7 +97,7 @@ public sealed class ControllableWebViewAutoFlushTests
     {
         private readonly List<string> pendingMessages = [];
         private readonly Queue<string> preReadyMessages = new();
-        private DispatcherTimer? autoFlushTimer;
+        private bool hasPendingAutoFlush;
         private bool isReady;
         private int pendingGeneration = 1;
         private bool waitingForAck;
@@ -127,6 +124,15 @@ public sealed class ControllableWebViewAutoFlushTests
             this.FlushPendingBatch();
         }
 
+        /// <summary>Deterministic stand-in for the DispatcherTimer tick that drives auto-flush.</summary>
+        public void SimulateAutoFlushTimer()
+        {
+            if (this.hasPendingAutoFlush)
+            {
+                this.FlushPendingBatch();
+            }
+        }
+
         public void AddStartupScript(string script)
         {
         }
@@ -140,15 +146,7 @@ public sealed class ControllableWebViewAutoFlushTests
             }
 
             this.pendingMessages.Add(message);
-
-            if (this.autoFlushTimer == null)
-            {
-                this.autoFlushTimer = new DispatcherTimer(
-                    TimeSpan.FromMilliseconds(16),
-                    DispatcherPriority.Background,
-                    (_, _) => this.FlushPendingBatch());
-                this.autoFlushTimer.Start();
-            }
+            this.hasPendingAutoFlush = true;
         }
 
         public void BeginBatch()
@@ -162,11 +160,7 @@ public sealed class ControllableWebViewAutoFlushTests
 
         private void FlushPendingBatch()
         {
-            if (this.autoFlushTimer != null)
-            {
-                this.autoFlushTimer.Stop();
-                this.autoFlushTimer = null;
-            }
+            this.hasPendingAutoFlush = false;
 
             if (this.pendingMessages.Count == 0)
             {
