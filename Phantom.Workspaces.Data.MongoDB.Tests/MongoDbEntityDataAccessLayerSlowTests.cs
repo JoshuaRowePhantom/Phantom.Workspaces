@@ -1,4 +1,6 @@
 using System.Text.Json;
+using MongoDB.Bson;
+using MongoDB.Driver;
 using Phantom.Workspaces.Data.Tests;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
@@ -168,6 +170,102 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
 
         var deletedSnapshot = Assert.Single(Assert.Single(getResult.Batches).Entities);
         Assert.Null(deletedSnapshot.Data);
+    }
+
+    [Fact]
+    public async Task GetAsync_DocumentWithUnknownCurrentField_DoesNotThrow()
+    {
+        await _fixture.ResetCollectionAsync();
+        var entityId = new EntityId("a1234567-89ab-cdef-0123-456789abcdef");
+        
+        // Insert a document directly into MongoDB with an unknown field in the 'current' subdocument
+        // This simulates a document written by newer code (e.g., fix/787 with name-parent-prefixes)
+        var collection = _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities");
+        var document = new BsonDocument
+        {
+            { "_id", new ObjectId() },
+            { "entity-id", entityId.ToString() },
+            { "concurrency-tag", "initial-tag" },
+            { "current", new BsonDocument
+                {
+                    { "data", new BsonDocument
+                        {
+                            { "entity-id", entityId.ToString() },
+                            { "type-names", new BsonArray { "entity" } },
+                            { "names", new BsonArray { "test-entity" } }
+                        }
+                    },
+                    { "type-names", new BsonArray { "entity" } },
+                    { "name-parent-prefixes", new BsonArray { "unknown-field-value" } }, // Unknown field
+                    { "is-deleted", false },
+                    { "modified-time-utc", DateTime.UtcNow },
+                    { "modified-version", "1" }
+                }
+            }
+        };
+        await collection.InsertOneAsync(document);
+
+        // Now try to read it using the data access layer - should not throw FormatException
+        var dataAccessLayer = CreateDataAccessLayer();
+        var getResult = await dataAccessLayer.GetAsync(new GetRequest
+        {
+            Entities =
+            [
+                new GetEntityRequest
+                {
+                    EntityId = entityId,
+                },
+            ],
+        });
+
+        var snapshot = Assert.Single(Assert.Single(getResult.Batches).Entities);
+        Assert.Equal(entityId, snapshot.EntityId);
+    }
+
+    [Fact]
+    public async Task MongoDbCurrentProjection_BsonIgnoreExtraElements_IsApplied()
+    {
+        await _fixture.ResetCollectionAsync();
+        
+        // This test verifies that the [BsonIgnoreExtraElements] attribute is present
+        // by directly deserializing a BSON document with extra fields
+        var entityId = new EntityId("b2345678-9abc-def0-1234-56789abcdef0");
+        
+        var collection = _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities");
+        var document = new BsonDocument
+        {
+            { "_id", new ObjectId() },
+            { "entity-id", entityId.ToString() },
+            { "concurrency-tag", "tag-1" },
+            { "current", new BsonDocument
+                {
+                    { "data", BsonNull.Value },
+                    { "type-names", new BsonArray { "entity" } },
+                    { "embedding", BsonNull.Value },
+                    { "is-deleted", false },
+                    { "modified-time-utc", DateTime.UtcNow },
+                    { "modified-version", "1" },
+                    { "extra-field-one", "should-be-ignored" },
+                    { "extra-field-two", new BsonArray { 1, 2, 3 } },
+                }
+            }
+        };
+        await collection.InsertOneAsync(document);
+
+        // Reading through the DAL should succeed without FormatException
+        var dataAccessLayer = CreateDataAccessLayer();
+        var exception = await Record.ExceptionAsync(async () =>
+        {
+            await dataAccessLayer.GetAsync(new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest { EntityId = entityId },
+                ],
+            });
+        });
+
+        Assert.Null(exception);
     }
 
     protected override IDataAccessLayer CreateDataAccessLayer()

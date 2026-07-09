@@ -1739,6 +1739,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         public MongoDbCurrentProjection? Current { get; set; }
     }
 
+    [BsonIgnoreExtraElements]
     private sealed class MongoDbCurrentProjection
     {
         /// <summary>The current version's entity data as native BSON, for native field/participant querying.</summary>
