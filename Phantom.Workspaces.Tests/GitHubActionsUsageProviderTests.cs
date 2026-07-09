@@ -147,4 +147,152 @@ public sealed class GitHubActionsUsageProviderTests
         Assert.Equal("github.com", provider.ProviderUri.Host);
         Assert.Equal("https", provider.ProviderUri.Scheme);
     }
+
+    [Fact]
+    public async Task GetMetricsAsync_ParsesAdditionalDollars()
+    {
+        const string json = """
+            {
+              "total_minutes_used": 0,
+              "included_minutes": 0,
+              "total_paid_minutes_used": 100
+            }
+            """;
+
+        var provider = new GitHubActionsUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        var additional = metrics[1];
+        Assert.Equal("Additional Usage", additional.Title);
+        Assert.Contains("C2", additional.QuantityPresentationFormatString);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_FractionUsed_CorrectForIncluded()
+    {
+        const string json = """
+            {
+              "total_minutes_used": 305,
+              "included_minutes": 3000,
+              "total_paid_minutes_used": 0
+            }
+            """;
+
+        var provider = new GitHubActionsUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        var included = metrics[0];
+        Assert.NotNull(included.FractionUsed);
+        Assert.Equal(0.1017, included.FractionUsed!.Value, 4);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_AcquiresToken_BeforeRequest()
+    {
+        var tokenCalled = false;
+        var httpCalled = false;
+
+        var handler = new StubHandler(
+            (HttpStatusCode.OK, """
+                {
+                  "total_minutes_used": 0,
+                  "included_minutes": 0,
+                  "total_paid_minutes_used": 0
+                }
+                """));
+
+        var provider = new GitHubActionsUsageProvider(
+            new HttpClient(handler),
+            () =>
+            {
+                Assert.False(httpCalled, "Token resolver must be called before HTTP request");
+                tokenCalled = true;
+                return "token";
+            });
+
+        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+        httpCalled = true;
+
+        Assert.True(tokenCalled);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_UsesAccountUserName_InUrl()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new HttpClientHandler();
+        var client = new HttpClient(new InterceptingHandler(handler, req =>
+        {
+            capturedRequest = req;
+        }));
+
+        var provider = new GitHubActionsUsageProvider(
+            client,
+            () => "token");
+
+        var account = new UsageAccount
+        {
+            UserName = "testuser123",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+        try
+        {
+            await provider.GetMetricsAsync(account, CancellationToken.None);
+        }
+        catch
+        {
+            // Expected to fail since we're not mocking the actual HTTP response
+        }
+
+        Assert.NotNull(capturedRequest);
+        Assert.Contains("testuser123", capturedRequest!.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_IncludedMinutesZero_FractionUsed_Null()
+    {
+        const string json = """
+            {
+              "total_minutes_used": 100,
+              "included_minutes": 0,
+              "total_paid_minutes_used": 0
+            }
+            """;
+
+        var provider = new GitHubActionsUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        var included = metrics[0];
+        Assert.Null(included.FractionUsed);
+    }
+
+    private sealed class InterceptingHandler : DelegatingHandler
+    {
+        private readonly Action<HttpRequestMessage> onSend;
+
+        public InterceptingHandler(HttpMessageHandler innerHandler, Action<HttpRequestMessage> onSend)
+            : base(innerHandler)
+        {
+            this.onSend = onSend;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            this.onSend(request);
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
 }

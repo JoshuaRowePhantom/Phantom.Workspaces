@@ -29,7 +29,7 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
     private readonly Func<string?> tokenResolver;
     private readonly ILogger<GitHubActionsUsageProvider> logger;
 
-    public Uri ProviderUri { get; } = new Uri("https://github.com/actions");
+    public Uri ProviderUri { get; } = new Uri("https://github.com");
 
     public GitHubActionsUsageProvider(
         HttpClient httpClient,
