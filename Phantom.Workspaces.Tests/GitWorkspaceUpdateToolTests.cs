@@ -18,7 +18,9 @@ public sealed class GitWorkspaceUpdateToolTests
 
     private static async Task<EntityId> SeedGitEntityAsync(IDataAccessLayer dal, string path, string? existingGitJson = null)
     {
-        var entityId = new EntityId(Guid.NewGuid());
+        // Use deterministic ID based on path (matching the new implementation)
+        var normalizedPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var entityId = DeterministicEntityId.Create("git-workspace", normalizedPath);
         var gitSection = existingGitJson is not null ? $@", ""git"": {existingGitJson}" : string.Empty;
         var json = $$"""
             {

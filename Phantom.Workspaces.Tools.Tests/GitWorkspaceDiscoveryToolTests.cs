@@ -368,6 +368,17 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         IDataAccessLayer dataAccessLayer,
         EntityName entityName)
     {
+        // After migration to deterministic IDs, entities are keyed by path, not name.
+        // Extract the path from the entity name and compute the deterministic ID.
+        if (entityName.Components.Length >= 2 && entityName.Components[0] == "git-worktrees")
+        {
+            var path = entityName.Components[1];
+            var normalizedPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+            var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+            var entity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+            return entity != null ? 1 : 0;
+        }
+
         var getResult = await dataAccessLayer.GetAsync(
             new GetRequest
             {
@@ -387,6 +398,16 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         IDataAccessLayer dataAccessLayer,
         EntityName entityName)
     {
+        // After migration to deterministic IDs, entities are keyed by path, not name.
+        // Extract the path from the entity name and compute the deterministic ID.
+        if (entityName.Components.Length >= 2 && entityName.Components[0] == "git-worktrees")
+        {
+            var path = entityName.Components[1];
+            var normalizedPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+            var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+            return await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        }
+
         var getResult = await dataAccessLayer.GetAsync(
             new GetRequest
             {
@@ -571,6 +592,192 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             e.Level == LogLevel.Information
             && e.Message.Contains("2", StringComparison.Ordinal)
             && e.Message.Contains(scanRoot, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Rediscovery_PreservesDisplayName()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "rediscovery-display"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/preserve-display.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+
+        // First run: create entity
+        await tool.ExecuteAsync(context);
+
+        // Manually customize display-name
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+        var entity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(entity);
+
+        var customizedJson = $$"""
+            {
+              "entity-id": "{{entity.EntityId}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": {{JsonSerializer.Serialize(entity.Data?.GetProperty("names"))}},
+              "display-name": {"default": "CustomDisplayName"},
+              "path": "{{EscapeForJsonString(repoPath)}}",
+              "git": {{JsonSerializer.Serialize(entity.Data?.GetProperty("git"))}}
+            }
+            """;
+        await UpsertEntityAsync(dataAccessLayer, entity.EntityId, customizedJson, entity.ConcurrencyTag);
+
+        // Second run: rediscover — should preserve custom display-name
+        await tool.ExecuteAsync(context);
+
+        var rediscoveredEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(rediscoveredEntity);
+        var displayName = rediscoveredEntity.Data?.GetProperty("display-name").GetProperty("default").GetString();
+        Assert.Equal("CustomDisplayName", displayName);
+    }
+
+    [Fact]
+    public async Task Rediscovery_PreservesNames()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "rediscovery-names"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/preserve-names.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+
+        // First run: create entity
+        await tool.ExecuteAsync(context);
+
+        // Manually add custom name
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+        var entity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(entity);
+
+        var customizedJson = $$"""
+            {
+              "entity-id": "{{entity.EntityId}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["custom-name", "preserved"], ["another", "name"]],
+              "display-name": {"default": "repo"},
+              "path": "{{EscapeForJsonString(repoPath)}}",
+              "git": {{JsonSerializer.Serialize(entity.Data?.GetProperty("git"))}}
+            }
+            """;
+        await UpsertEntityAsync(dataAccessLayer, entity.EntityId, customizedJson, entity.ConcurrencyTag);
+
+        // Second run: rediscover — should preserve custom names array
+        await tool.ExecuteAsync(context);
+
+        var rediscoveredEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(rediscoveredEntity);
+        var names = rediscoveredEntity.Data?.GetProperty("names").EnumerateArray().ToList();
+        Assert.Equal(2, names?.Count);
+        Assert.Equal("custom-name", names?[0].EnumerateArray().First().GetString());
+        Assert.Equal("preserved", names?[0].EnumerateArray().Skip(1).First().GetString());
+    }
+
+    [Fact]
+    public async Task Rediscovery_UpdatesGitSection()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "rediscovery-git"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/update-git.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+
+        // First run: create entity
+        await tool.ExecuteAsync(context);
+
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+        var entity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(entity);
+        var firstGitBranch = entity.Data?.GetProperty("git").GetProperty("branch").GetString();
+
+        // Make a commit to change HEAD
+        using (var repository = new Repository(repoPath))
+        {
+            File.WriteAllText(Path.Combine(repoPath, "file.txt"), "content");
+            Commands.Stage(repository, "*");
+            var signature = new Signature("test-user", "test@example.com", DateTimeOffset.UtcNow);
+            repository.Commit("second commit", signature, signature);
+        }
+
+        // Second run: rediscover — should update git section
+        await tool.ExecuteAsync(context);
+
+        var rediscoveredEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(rediscoveredEntity);
+        var secondGitBranch = rediscoveredEntity.Data?.GetProperty("git").GetProperty("branch").GetString();
+        var secondHeadCommit = rediscoveredEntity.Data?.GetProperty("git").GetProperty("head-commit").GetString();
+
+        Assert.Equal(firstGitBranch, secondGitBranch);
+        Assert.NotNull(secondHeadCommit);
+    }
+
+    [Fact]
+    public async Task Rediscovery_UsesDeterministicId_PreservesEntityId()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "rediscovery-id"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/preserve-id.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+
+        // First run: create entity
+        await tool.ExecuteAsync(context);
+
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+        var firstEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(firstEntity);
+
+        // Second run: rediscover — entity ID should be identical
+        await tool.ExecuteAsync(context);
+
+        var secondEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(secondEntity);
+        Assert.Equal(firstEntity.EntityId, secondEntity.EntityId);
+    }
+
+    private static async Task<EntitySnapshot?> GetEntityByIdAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId)
+    {
+        var getResult = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityId = entityId,
+                    },
+                ],
+            });
+        return getResult.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
     }
 }
 

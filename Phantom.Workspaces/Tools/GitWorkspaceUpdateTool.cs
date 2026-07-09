@@ -62,8 +62,11 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
             context.CancellationToken).ConfigureAwait(false);
 
         var entities = queryResult.Batches.SelectMany(static b => b.Entities).ToList();
+        var currentProfileNames = WorkspaceEntitySnapshotReader.GetEntityNames(context.CurrentComputerUserProfileEntity)
+            .ToArray();
 
-        var changes = new List<EntityChange>();
+        var added = 0;
+        var changed = 0;
         var unchanged = 0;
         var skipped = 0;
 
@@ -87,81 +90,39 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                 continue;
             }
 
-            var gitObject = new JsonObject();
+            var owningRepository = WorkspaceEntitySnapshotReader.TryGetStringProperty(entity, "owning-repository");
+            var normalizedPath = NormalizeRepositoryPath(path);
+            var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
-            if (!string.IsNullOrWhiteSpace(metadata.BranchName))
-            {
-                gitObject["branch"] = metadata.BranchName;
-            }
+            var incomingData = GitWorkspaceEntityData.Build(
+                path,
+                currentProfileNames,
+                metadata,
+                owningRepository);
 
-            if (!string.IsNullOrWhiteSpace(metadata.HeadCommitHash))
-            {
-                gitObject["head-commit"] = metadata.HeadCommitHash;
-            }
-
-            if (!string.IsNullOrWhiteSpace(metadata.OriginRemoteUrl))
-            {
-                gitObject["remotes"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["name"] = "origin",
-                        ["url"] = metadata.OriginRemoteUrl,
-                    });
-            }
-
-            if (IsGitSectionUnchanged(entity.Data, gitObject))
+            // Check if git section would be unchanged
+            if (IsEntityUnchanged(entity.Data, incomingData))
             {
                 unchanged++;
                 continue;
             }
 
-            var entityNode = JsonNode.Parse(entity.Data!.Value.GetRawText())!.AsObject();
+            var updateResult = await WorkspaceToolEntityUtilities.UpsertEntityByDeterministicIdAsync(
+                context.DataAccessLayer,
+                deterministicId,
+                incomingData,
+                GitWorkspaceEntityData.MergePreservingUserEditableFields,
+                "Refresh git workspace metadata.",
+                context.CancellationToken);
 
-            if (gitObject.Count > 0)
+            if (entity.Data is null)
             {
-                entityNode["git"] = gitObject;
+                added++;
             }
             else
             {
-                entityNode.Remove("git");
+                changed++;
             }
-
-            using var updatedDocument = JsonDocument.Parse(entityNode.ToJsonString());
-            changes.Add(new EntityChange
-            {
-                EntityId = entity.EntityId,
-                ConcurrencyTag = entity.ConcurrencyTag,
-                EntityChangeMode = EntityChangeMode.Replace,
-                Data = updatedDocument.RootElement.Clone(),
-            });
-        }
-
-        var added = 0;
-        var changed = 0;
-        if (changes.Count > 0)
-        {
-            var updateResult = await context.DataAccessLayer.UpdateAsync(
-                new UpdateRequest
-                {
-                    UpdateMetadata = new UpdateMetadata
-                    {
-                        Comment = new Markdown { Text = "Refresh git workspace metadata." },
-                    },
-                    Changes = changes,
-                },
-                context.CancellationToken).ConfigureAwait(false);
-
-            var failedCount = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Failed);
-            if (failedCount > 0)
-            {
-                this.logger.LogWarning(
-                    "Git workspace update: {Failed}/{Total} entity writes were rejected by the DAL.",
-                    failedCount,
-                    changes.Count);
-            }
-
-            added = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Added);
-            changed = updateResult.EntityResults.Count(r => r.UpdateState == UpdateState.Updated);
         }
 
         this.logger.LogInformation(
@@ -177,21 +138,61 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         };
     }
 
-    private static bool IsGitSectionUnchanged(JsonElement? entityData, JsonObject newGitObject)
+    private static bool IsEntityUnchanged(JsonElement? existingData, JsonObject incomingData)
     {
-        var hasNewGit = newGitObject.Count > 0;
-
-        if (entityData is not { } data || !data.TryGetProperty("git", out var existingGit))
-        {
-            return !hasNewGit;
-        }
-
-        if (!hasNewGit)
+        if (existingData is not { } existing)
         {
             return false;
         }
 
-        using var newGitDocument = JsonDocument.Parse(newGitObject.ToJsonString());
-        return JsonElement.DeepEquals(existingGit, newGitDocument.RootElement);
+        // Compare all system-managed fields: path, owning-repository, git
+        if (!JsonPropertyEquals(existing, incomingData, "path"))
+        {
+            return false;
+        }
+
+        if (!JsonPropertyEquals(existing, incomingData, "owning-repository"))
+        {
+            return false;
+        }
+
+        if (!JsonPropertyEquals(existing, incomingData, "git"))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool JsonPropertyEquals(JsonElement existing, JsonObject incoming, string propertyName)
+    {
+        var hasExisting = existing.TryGetProperty(propertyName, out var existingValue);
+
+        JsonNode? incomingValue = null;
+        var hasIncoming = incoming.ContainsKey(propertyName);
+        if (hasIncoming)
+        {
+            incomingValue = incoming[propertyName];
+        }
+
+        if (hasExisting != hasIncoming)
+        {
+            return false;
+        }
+
+        if (!hasExisting)
+        {
+            return true;
+        }
+
+        using var incomingDoc = JsonDocument.Parse(incomingValue!.ToJsonString());
+        return JsonElement.DeepEquals(existingValue, incomingDoc.RootElement);
+    }
+
+    private static string NormalizeRepositoryPath(string repositoryPath)
+    {
+        return Path.GetFullPath(repositoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .ToLowerInvariant();
     }
 }

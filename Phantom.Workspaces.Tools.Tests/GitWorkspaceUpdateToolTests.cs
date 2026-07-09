@@ -32,13 +32,14 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         InitializeGitRepository(repoPath, remoteUrl);
 
         var dataAccessLayer = new InMemoryDataAccessLayer();
-        var entityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var entityId = DeterministicEntityId.Create("git-workspace", normalizedPath);
         await UpsertEntityAsync(
             dataAccessLayer,
             entityId,
             $$"""
             {
-              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-id": "{{entityId}}",
               "entity-types": ["entity", "git"],
               "names": [["git", "{{EscapeForJsonString(repoPath)}}"]],
               "display-name": { "default": "real-repo" },
@@ -166,6 +167,154 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
 
         Assert.NotNull(result.ResultContent);
         Assert.Contains("1", result.ResultContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Refresh_PreservesDisplayName()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-display"));
+        InitializeGitRepository(repoPath, "https://example.com/refresh-display.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree"],
+              "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
+              "display-name": {"default": "CustomRefreshName"},
+              "path": "{{EscapeForJsonString(repoPath)}}"
+            }
+            """,
+            concurrencyTag: null);
+
+        var context = CreateContext(dataAccessLayer);
+        var tool = new GitWorkspaceUpdateTool();
+
+        await tool.ExecuteAsync(context);
+
+        var refreshedEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(refreshedEntity);
+        var displayName = refreshedEntity.Data?.GetProperty("display-name").GetProperty("default").GetString();
+        Assert.Equal("CustomRefreshName", displayName);
+    }
+
+    [Fact]
+    public async Task Refresh_PreservesNames()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-names"));
+        InitializeGitRepository(repoPath, "https://example.com/refresh-names.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree"],
+              "names": [["custom-refresh-name", "preserved"], ["another", "name"]],
+              "display-name": {"default": "repo"},
+              "path": "{{EscapeForJsonString(repoPath)}}"
+            }
+            """,
+            concurrencyTag: null);
+
+        var context = CreateContext(dataAccessLayer);
+        var tool = new GitWorkspaceUpdateTool();
+
+        await tool.ExecuteAsync(context);
+
+        var refreshedEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(refreshedEntity);
+        var names = refreshedEntity.Data?.GetProperty("names").EnumerateArray().ToList();
+        Assert.Equal(2, names?.Count);
+        Assert.Equal("custom-refresh-name", names?[0].EnumerateArray().First().GetString());
+        Assert.Equal("preserved", names?[0].EnumerateArray().Skip(1).First().GetString());
+    }
+
+    [Fact]
+    public async Task Refresh_UpdatesAllGitFields()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-git-fields"));
+        InitializeGitRepository(repoPath, "https://example.com/refresh-git-fields.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree"],
+              "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
+              "display-name": {"default": "repo"},
+              "path": "{{EscapeForJsonString(repoPath)}}",
+              "git": {"branch": "old-branch", "head-commit": "old-commit"}
+            }
+            """,
+            concurrencyTag: null);
+
+        var context = CreateContext(dataAccessLayer);
+        var tool = new GitWorkspaceUpdateTool();
+
+        await tool.ExecuteAsync(context);
+
+        var refreshedEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(refreshedEntity);
+        var git = refreshedEntity.Data?.GetProperty("git");
+        Assert.True(git.HasValue);
+        var hasBranch = git.Value.TryGetProperty("branch", out var branch);
+        var hasHeadCommit = git.Value.TryGetProperty("head-commit", out var headCommit);
+        Assert.True(hasBranch);
+        Assert.True(hasHeadCommit);
+        Assert.False(string.IsNullOrWhiteSpace(branch.GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(headCommit.GetString()));
+    }
+
+    [Fact]
+    public async Task Refresh_UsesDeterministicId_PreservesEntityId()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "refresh-id"));
+        InitializeGitRepository(repoPath, "https://example.com/refresh-id.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree"],
+              "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
+              "display-name": {"default": "repo"},
+              "path": "{{EscapeForJsonString(repoPath)}}"
+            }
+            """,
+            concurrencyTag: null);
+
+        var context = CreateContext(dataAccessLayer);
+        var tool = new GitWorkspaceUpdateTool();
+
+        await tool.ExecuteAsync(context);
+
+        var refreshedEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(refreshedEntity);
+        Assert.Equal(deterministicId, refreshedEntity.EntityId);
     }
 
     private static WorkspaceToolExecutionContext CreateContext(IDataAccessLayer dataAccessLayer)
