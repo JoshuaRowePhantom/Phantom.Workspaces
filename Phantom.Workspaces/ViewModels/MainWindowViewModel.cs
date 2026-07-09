@@ -681,7 +681,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             dataAccessLayer,
             metrics,
             providers,
-            TimeProvider.System);
+            TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<Services.UsageMetricsService>.Instance);
         await this.usageMetricsService.StartAsync(CancellationToken.None);
     }
 
