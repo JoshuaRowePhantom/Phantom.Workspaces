@@ -350,4 +350,39 @@ public sealed class RunningAgentBrainViewModelTests
 
         // No exception should be thrown
     }
+
+    // ── Issue #798: Verify no border styling ─────────────────────────────────
+
+    [Fact]
+    public void RunningAgentBrainViewModel_Row_HasNoBorderStyling()
+    {
+        // This test verifies that RunningAgentBrainControl.axaml doesn't wrap rows in Border elements
+        // The AXAML should have Button elements directly in the ItemTemplate, not wrapped in <Border Classes="interactive-row">
+        
+        // Find the AXAML file relative to the solution root
+        var currentDir = Directory.GetCurrentDirectory();
+        var solutionRoot = currentDir;
+        
+        // Navigate up until we find the solution root (contains Phantom.Workspaces directory)
+        while (!Directory.Exists(Path.Combine(solutionRoot, "Phantom.Workspaces")) && 
+               Path.GetDirectoryName(solutionRoot) is string parent)
+        {
+            solutionRoot = parent;
+        }
+
+        var axamlPath = Path.Combine(solutionRoot, "Phantom.Workspaces", "Controls", "RunningAgentBrainControl.axaml");
+
+        if (!File.Exists(axamlPath))
+        {
+            Assert.Fail($"Could not find RunningAgentBrainControl.axaml at {axamlPath}. Current directory: {currentDir}");
+        }
+
+        var axaml = File.ReadAllText(axamlPath);
+
+        // Verify no Border wrapper with interactive-row class in the ItemTemplate
+        Assert.DoesNotContain("<Border Classes=\"interactive-row\"", axaml, StringComparison.Ordinal);
+        
+        // Verify the header text is correct
+        Assert.Contains("Running sub-agents", axaml, StringComparison.Ordinal);
+    }
 }
