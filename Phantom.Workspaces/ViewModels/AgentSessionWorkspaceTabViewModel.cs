@@ -81,7 +81,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     public override void RequestFocusPrimaryControl()
     {
         base.RequestFocusPrimaryControl();
-        this.agent?.InputQueue.DefaultComposer.RequestFocusPrimaryControl();
+        this.agent?.InputQueue?.DefaultComposer.RequestFocusPrimaryControl();
     }
 
     public void SetReady(AgentViewModel agentViewModel, ObservableLoggerFactory factory)

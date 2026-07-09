@@ -86,7 +86,7 @@
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"
-                                                     IsVisible="{Binding Agent.AcceptsUserInput}"/>
+                                                     IsVisible="{Binding InputQueue, Converter={x:Static converters:NotNullConverter.Instance}}"/>
                 <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </DataTemplate>
