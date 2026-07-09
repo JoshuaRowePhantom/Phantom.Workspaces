@@ -197,25 +197,34 @@ public sealed class UsageMetricsService : IAsyncDisposable
 
             if (hasMetrics)
             {
-                // Update metrics
-                account.Metrics.Clear();
-                foreach (var metric in metrics)
+                // Update metrics - must marshal to foreground
+                await this.usageMetrics.MutateAsync(async () =>
                 {
-                    account.Metrics.Add(metric);
-                }
+                    account.Metrics.Clear();
+                    foreach (var metric in metrics)
+                    {
+                        account.Metrics.Add(metric);
+                    }
 
-                // Add account if not already visible
-                if (!isCurrentlyVisible)
-                {
-                    this.usageMetrics.Accounts.Add(account);
-                }
+                    // Add account if not already visible
+                    if (!isCurrentlyVisible)
+                    {
+                        this.usageMetrics.Accounts.Add(account);
+                    }
+
+                    await Task.CompletedTask;
+                }).ConfigureAwait(false);
             }
             else
             {
-                // Remove account if it was visible
+                // Remove account if it was visible - must marshal to foreground
                 if (isCurrentlyVisible)
                 {
-                    this.usageMetrics.Accounts.Remove(account);
+                    await this.usageMetrics.MutateAsync(async () =>
+                    {
+                        this.usageMetrics.Accounts.Remove(account);
+                        await Task.CompletedTask;
+                    }).ConfigureAwait(false);
                 }
             }
         }

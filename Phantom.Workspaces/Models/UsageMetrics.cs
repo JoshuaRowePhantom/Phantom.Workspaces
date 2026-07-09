@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.Models;
 
@@ -91,5 +94,29 @@ public sealed class UsageAccount
 /// </summary>
 public sealed class UsageMetrics
 {
+    private readonly TaskScheduler foregroundScheduler;
+
+    public UsageMetrics(TaskScheduler? foregroundScheduler = null)
+    {
+        this.foregroundScheduler = foregroundScheduler
+            ?? (SynchronizationContext.Current is not null
+                ? TaskScheduler.FromCurrentSynchronizationContext()
+                : new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler);
+    }
+
     public ObservableCollection<UsageAccount> Accounts { get; } = [];
+
+    /// <summary>
+    /// Marshals a mutation to the foreground scheduler so collections are modified on
+    /// the correct thread. All mutations to <see cref="Accounts"/> and account metrics
+    /// must go through this method.
+    /// </summary>
+    public Task MutateAsync(Func<Task> mutate)
+    {
+        return Task.Factory.StartNew(
+            mutate,
+            CancellationToken.None,
+            TaskCreationOptions.None,
+            this.foregroundScheduler).Unwrap();
+    }
 }
