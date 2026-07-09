@@ -7,6 +7,7 @@ using System.Threading;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
@@ -17,6 +18,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 {
     private readonly AgentChat agentChat;
     private readonly ObservableLoggerFactory loggerFactory;
+    private readonly ILogger logger;
     private readonly AgentChatConversationDetailViewModel conversationDetail;
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
@@ -25,6 +27,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly DiagnosticInspectorViewModel diagnosticsDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
+    private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
@@ -37,6 +40,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
+        this.logger = loggerFactory.CreateLogger<AgentViewModel>();
         this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
@@ -495,6 +499,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 d.Dispose();
         }
 
+        // Dispose sub-agent leases
+        foreach (var lease in this.subAgentLeases)
+        {
+            await lease.DisposeAsync();
+        }
+
         await Task.CompletedTask;
     }
 
@@ -527,12 +537,76 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
-        var subAgentChat = (AgentChat)subAgent;
+        // Handle both AgentChat (eager path from GetOrCreateAsync) and SubAgent (lazy path from RestoreSubAgentsAsync)
+        if (subAgent is AgentChat agentChat)
+        {
+            // Eager path: AgentChat added directly by GetOrCreateAsync
+            this.AddSubAgentSlotEager(subAgent, agentChat);
+            return;
+        }
+
+        if (subAgent is SubAgent sub)
+        {
+            var subAgentChat = sub.AgentChat;
+            if (subAgentChat is null)
+            {
+                // Lazy/restored path — materialise asynchronously
+                this.AddSubAgentSlotLazy(sub);
+                return;
+            }
+            // Eager path with SubAgent wrapper
+            this.AddSubAgentSlotEager(sub, subAgentChat);
+            return;
+        }
+
+        this.logger.LogWarning("Unknown IRunningSubAgent type: {Type}", subAgent.GetType().Name);
+    }
+
+    private void AddSubAgentSlotEager(IRunningSubAgent subAgent, AgentChat subAgentChat)
+    {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgentChat.DisplayName, this.loggerFactory);
         this.subAgentViewModels.Add(subAgentViewModel);
-        this.subAgentsContainerDetail.AddSlot(subAgent.AgentId, subAgentViewModel);
+        // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
+        this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel);
+    }
+
+    private void AddSubAgentSlotLazy(SubAgent stub)
+    {
+        // Capture the synchronization context from the calling thread (UI thread)
+        var syncContext = SynchronizationContext.Current;
+        
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var lease = await stub.AcquireLeaseAsync();
+                // Hold the lease for the lifetime of the slot
+                lock (this.subAgentLeases)
+                {
+                    this.subAgentLeases.Add(lease);
+                }
+                // Post back to the captured synchronization context (or UI thread)
+                if (syncContext is not null)
+                {
+                    syncContext.Post(_ => this.AddSubAgentSlotEager(stub, lease.AgentChat), null);
+                }
+                else if (Dispatcher.UIThread is not null)
+                {
+                    Dispatcher.UIThread.Post(() => this.AddSubAgentSlotEager(stub, lease.AgentChat));
+                }
+                else
+                {
+                    // Fallback for unit tests: call directly (risky but better than nothing)
+                    this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.logger.LogError(ex, "Failed to acquire lease for restored sub-agent {AgentId}", stub.SessionId.Value);
+            }
+        });
     }
 
     private void NavigateToSubAgent(string agentId)
