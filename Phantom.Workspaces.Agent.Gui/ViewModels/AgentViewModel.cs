@@ -537,7 +537,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
-        var subAgentChat = (AgentChat)subAgent;
+        // Extract the underlying AgentChat from both AgentChat instances and SubAgent wrappers.
+        AgentChat? subAgentChat = subAgent switch
+        {
+            AgentChat directChat => directChat,
+            SubAgent wrapper => wrapper.AgentChat,
+            _ => null
+        };
+
+        if (subAgentChat is null)
+        {
+            // Skip lazily-restored SubAgent wrappers that haven't been loaded yet.
+            return;
+        }
+
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
