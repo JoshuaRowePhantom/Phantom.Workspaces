@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
+using System.Threading;
 using Phantom.Workspaces.Models;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -8,6 +11,11 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class UsageTrackerViewModelTests
 {
+    public UsageTrackerViewModelTests()
+    {
+        Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+        Thread.CurrentThread.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
+    }
     [Fact]
     public void TopRightLabel_IsNull_WhenNoAccounts()
     {
@@ -133,5 +141,134 @@ public sealed class UsageTrackerViewModelTests
         metrics.Accounts.Add(account); // no metrics added
 
         Assert.Null(vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_TopRightLabel_ShowsMostRecentlyUpdatedMetric()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var account1 = new UsageAccount { Product = "GitHub Copilot", UserName = "user1" };
+        account1.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 500m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "minutes",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0)
+        });
+        metrics.Accounts.Add(account1);
+
+        var account2 = new UsageAccount { Product = "GitHub Actions", UserName = "user2" };
+        account2.Metrics.Add(new UsageMetric
+        {
+            Title = "Additional Usage",
+            QuantityUsed = 200m,
+            QuantityTotal = 1000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AIC",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0) // Later
+        });
+        metrics.Accounts.Add(account2);
+
+        Assert.Equal("200 / 1,000 AIC", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_TopRightLabel_FallsBackToFirstAccount_WhenNoLastUpdatedAt()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var account1 = new UsageAccount { Product = "GitHub Copilot", UserName = "user1" };
+        account1.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 500m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "minutes",
+            LastUpdatedAt = null
+        });
+        metrics.Accounts.Add(account1);
+
+        var account2 = new UsageAccount { Product = "GitHub Actions", UserName = "user2" };
+        account2.Metrics.Add(new UsageMetric
+        {
+            Title = "Additional Usage",
+            QuantityUsed = 200m,
+            QuantityTotal = 1000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AIC",
+            LastUpdatedAt = null
+        });
+        metrics.Accounts.Add(account2);
+
+        Assert.Equal("100 / 500 minutes", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_TopRightLabel_UpdatesWhenNewerMetricAppears()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var account1 = new UsageAccount { Product = "GitHub Copilot", UserName = "user1" };
+        account1.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 500m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "minutes",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0)
+        });
+        metrics.Accounts.Add(account1);
+
+        Assert.Equal("100 / 500 minutes", vm.TopRightLabel);
+
+        var account2 = new UsageAccount { Product = "GitHub Actions", UserName = "user2" };
+        account2.Metrics.Add(new UsageMetric
+        {
+            Title = "Additional Usage",
+            QuantityUsed = 200m,
+            QuantityTotal = 1000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AIC",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0) // Later
+        });
+        metrics.Accounts.Add(account2);
+
+        Assert.Equal("200 / 1,000 AIC", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_Dispose_UnsubscribesFromMetricEvents()
+    {
+        var metrics = new UsageMetrics();
+        var vm = new UsageTrackerViewModel(metrics);
+
+        var account = new UsageAccount { Product = "GitHub Copilot", UserName = "user1" };
+        var metric = new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 500m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "minutes",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0)
+        };
+        account.Metrics.Add(metric);
+        metrics.Accounts.Add(account);
+
+        var originalLabel = vm.TopRightLabel;
+
+        vm.Dispose();
+
+        metric.QuantityUsed = 999m;
+        
+        Assert.Equal(originalLabel, vm.TopRightLabel);
     }
 }
