@@ -4,11 +4,11 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class AgentChatToolsDetailViewModel : ViewModelBase
 {
-    private IReadOnlyList<AgentEditorNavigationItemViewModel> toolNavigationItems = [];
+    private ObservableCollection<AgentEditorNavigationItemViewModel> toolNavigationItems = [];
 
     public ObservableCollection<AgentEditorNavigationItemViewModel> DisplayedRootItems { get; } = [];
 
-    public void SetToolNavigationItems(IReadOnlyList<AgentEditorNavigationItemViewModel> toolNavigationItems)
+    public void SetToolNavigationItems(ObservableCollection<AgentEditorNavigationItemViewModel> toolNavigationItems)
     {
         this.toolNavigationItems = toolNavigationItems;
     }

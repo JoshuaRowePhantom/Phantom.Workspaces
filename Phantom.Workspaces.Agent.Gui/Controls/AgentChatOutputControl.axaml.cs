@@ -305,6 +305,10 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         switch (typeProp.GetString())
         {
+            case "renderComplete":
+            {
+                break;
+            }
             case "scrollState":
             {
                 var atBottom = root.TryGetProperty("atBottom", out var ab) && ab.GetBoolean();

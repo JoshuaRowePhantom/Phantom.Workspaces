@@ -10,6 +10,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Gui.Shared.ViewModels;
 using VtNetCore.VirtualTerminal;
@@ -353,6 +354,68 @@ public sealed class TerminalControlTests
         Assert.Equal(10, result.Value.R);
         Assert.Equal(20, result.Value.G);
         Assert.Equal(30, result.Value.B);
+    }
+
+    // ── Cell metrics – pixel snapping (issue #708) ───────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellWidth_IsWholePixel()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        Assert.True(control.CellWidth > 0, "CellWidth must be positive");
+        Assert.Equal(Math.Floor(control.CellWidth), control.CellWidth);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellHeight_IsWholePixel()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        Assert.True(control.CellHeight > 0, "CellHeight must be positive");
+        Assert.Equal(Math.Floor(control.CellHeight), control.CellHeight);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellHeight_HasNoExtraLeading()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        // Compute the expected height using glyph metrics (ascent+descent, no line gap).
+        var typeface = new Typeface("Cascadia Mono,Cascadia Code,Consolas,Courier New,monospace");
+        var m = typeface.GlyphTypeface.Metrics;
+        double expected = Math.Ceiling((Math.Abs(m.Ascent) + Math.Abs(m.Descent)) * 12.0 / m.DesignEmHeight);
+
+        Assert.Equal(expected, control.CellHeight);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_AdjacentCellOrigins_LandOnWholePixels()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        // Every column origin must be an integer so box-drawing characters tile without sub-pixel gaps.
+        for (int col = 0; col <= 200; col++)
+        {
+            double x = col * control.CellWidth;
+            Assert.Equal(Math.Floor(x), x);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────────────────
@@ -1206,7 +1269,7 @@ public sealed class TerminalControlTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void TerminalControl_MouseReportingDisabled_CtrlLeftClick_NoException()
+    public void TerminalControl_CtrlLeftClickOnUrl_RaisesNavigationRequestedEvent()
     {
         var stream = new MemoryStream();
         var vm = new TerminalSessionViewModel
@@ -1222,13 +1285,79 @@ public sealed class TerminalControlTests
 
         control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Visit https://example.com for details"));
 
+        // Subscribe to NavigationRequested event
+        string? navigatedUrl = null;
+        control.NavigationRequested += (_, url) => navigatedUrl = url;
+
         // Ctrl+left-click on the URL
         var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
         var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
         typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
         TerminalControl.TestPointerPositionOverride = new Point(50, 10);
         
-        // Should not throw (actual URL opening via Process.Start would require integration test)
+        control.RaiseEvent(pressArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.Equal("https://example.com", navigatedUrl);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CtrlLeftClickNotOnUrl_DoesNotRaiseNavigationRequested()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Plain text without URL"));
+
+        // Subscribe to NavigationRequested event
+        string? navigatedUrl = null;
+        control.NavigationRequested += (_, url) => navigatedUrl = url;
+
+        // Ctrl+left-click on plain text
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        
+        control.RaiseEvent(pressArgs);
+        TerminalControl.TestPointerPositionOverride = null;
+
+        Assert.Null(navigatedUrl);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_NavigationRequested_NullHandler_NoException()
+    {
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = static (_, _, _) => ValueTask.CompletedTask,
+        };
+
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        control.PushBytesForTest(System.Text.Encoding.ASCII.GetBytes("Visit https://example.com for details"));
+
+        // Ctrl+left-click without subscribing to NavigationRequested
+        var pressProps = new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed);
+        var pressArgs = new PointerPressedEventArgs(control, new Avalonia.Input.Pointer(0, PointerType.Mouse, true), control, new Point(50, 10), 0, pressProps, KeyModifiers.Control, 1);
+        typeof(Avalonia.Interactivity.RoutedEventArgs).GetProperty("RoutedEvent")!.SetValue(pressArgs, InputElement.PointerPressedEvent);
+        TerminalControl.TestPointerPositionOverride = new Point(50, 10);
+        
+        // Should not throw even without a subscriber
         control.RaiseEvent(pressArgs);
         TerminalControl.TestPointerPositionOverride = null;
 
@@ -1670,6 +1799,136 @@ public sealed class TerminalControlTests
         var control = CreateControlWithSession();
         control.PushBytesForTest(System.Text.Encoding.UTF8.GetBytes("\x1b]2;MyTitle\x07"));
         Assert.Equal("MyTitle", control.Title);
+    }
+
+    // ── OnDetachedFromVisualTree disposal (issue #643) ────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_OnDetachedFromVisualTree_CancelsPendingResize()
+    {
+        var resizeCallCount = 0;
+        var stream = new MemoryStream();
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = stream,
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        var initialResizeCount = resizeCallCount;
+        control.Measure(new Size(900, 700));
+        control.Arrange(new Rect(0, 0, 900, 700));
+
+        panel.Children.Remove(control);
+
+        Assert.Equal(initialResizeCount, resizeCallCount);
+        window.Close();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_OnDetachedFromVisualTree_NoSession_DoesNotThrow()
+    {
+        var control = new TerminalControl();
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        var ex = Record.Exception(() => panel.Children.Remove(control));
+
+        Assert.Null(ex);
+        window.Close();
+    }
+
+    // ── ScheduleResize timer does not leak after detach (issue #784) ─────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_ScheduleResize_DoesNotLeakAfterVisualTreeDetach()
+    {
+        var resizeCallCount = 0;
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Session = vm;
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        // Removing from the visual tree stops the pending DispatcherTimer.
+        panel.Children.Remove(control);
+
+        var countAfterDetach = resizeCallCount;
+
+        // Pumping the dispatcher must NOT fire any pending resize.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(countAfterDetach, resizeCallCount);
+        window.Close();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_ScheduleResize_DoesNotLeakAfterSessionDetach()
+    {
+        var resizeCallCount = 0;
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Measure/Arrange a second time to schedule a resize timer.
+        control.Measure(new Size(900, 700));
+        control.Arrange(new Rect(0, 0, 900, 700));
+
+        // Detaching the session stops the pending DispatcherTimer.
+        control.Session = null;
+
+        var countAfterDetach = resizeCallCount;
+
+        // Pumping the dispatcher must NOT fire any pending resize.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(countAfterDetach, resizeCallCount);
     }
 
     // ── Helper for tests ──────────────────────────────────────────────────────────────────────

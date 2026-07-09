@@ -85,14 +85,17 @@ internal static class VsCodeCliLocator
         };
     }
 
-    internal static RunProcessParameters BuildRunProcessParameters(string cliPath, string arguments)
+    internal static RunProcessParameters BuildRunProcessParameters(
+        string cliPath,
+        string arguments,
+        TimeSpan? timeout = null)
     {
         var argTokens = arguments.Split(' ');
         if (OperatingSystem.IsWindows() && cliPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
         {
-            return new RunProcessParameters("cmd.exe", ["/c", cliPath, ..argTokens]);
+            return new RunProcessParameters("cmd.exe", ["/c", cliPath, ..argTokens], Timeout: timeout);
         }
 
-        return new RunProcessParameters(cliPath, argTokens);
+        return new RunProcessParameters(cliPath, argTokens, Timeout: timeout);
     }
 }

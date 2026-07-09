@@ -1211,6 +1211,106 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WithTwoPanes_ActivatesCorrectDockDocument()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77200001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77200001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-active-a"]],
+              "display-name": { "default": "Goto Pane Active A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77200001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77200001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-active-b"]],
+              "display-name": { "default": "Goto Pane Active B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+
+        Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        var activePaneDoc = workspacesDock!.ActiveDockable as WorkspacePaneDocument;
+        Assert.NotNull(activePaneDoc);
+        Assert.Equal(viewModel.WorkspacePanes[1].Id, activePaneDoc!.WorkspacePane.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task GoToWorkspacePaneAtIndexCommand_WithTwoPanes_ActivatesFirstPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77200002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77200002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-first-a"]],
+              "display-name": { "default": "Goto Pane First A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77200002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77200002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-pane-first-b"]],
+              "display-name": { "default": "Goto Pane First B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        // Navigate to pane 1 first, then back to 0
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("1");
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute("0");
+
+        Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var activePaneDoc = workspacesDock!.ActiveDockable as WorkspacePaneDocument;
+        Assert.NotNull(activePaneDoc);
+        Assert.Equal(viewModel.WorkspacePanes[0].Id, activePaneDoc!.WorkspacePane.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2695,6 +2795,34 @@ public sealed class MainWindowIntegrationTests
         return null;
     }
 
+    /// <summary>
+    /// Gets documents from a dock that correspond to tabs in the specified pane.
+    /// Filters out any placeholder or orphaned documents that may exist in the dock.
+    /// </summary>
+    private static List<WorkspaceDocument> GetPaneDocuments(WorkspacePaneViewModel pane, IDocumentDock dock)
+    {
+        return dock.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .Where(doc => doc.Context is WorkspaceTabViewModel tab && pane.Tabs.Contains(tab))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Waits for any fire-and-forget PopulateWorkspacePaneTabsAsync tasks to complete, then closes
+    /// the default tabs that were added to each pane during population. Call this after opening
+    /// workspaces and before opening test tabs so that pane.Tabs only contains the expected tabs.
+    /// </summary>
+    private static async Task CloseDefaultPaneTabsAsync(
+        MainWindowViewModel viewModel,
+        params WorkspacePaneViewModel[] panes)
+    {
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+        foreach (var pane in panes)
+            foreach (var tab in pane.Tabs.ToList())
+                viewModel.CloseTab(tab);
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+    }
+
     private static async Task WaitForWorkspaceTabAsync(IDocumentDock contentDock, string tabId)
     {
         if (contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) == true)
@@ -3052,7 +3180,8 @@ public sealed class MainWindowIntegrationTests
     private static RunningAgentChatTable CreateTestRunningAgentChatTable()
     {
         var store = new InMemoryAgentPersistenceStore();
-        var factory = new AgentChatFactory(store, new AgentServices(), TaskScheduler.Default);
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
         return new RunningAgentChatTable(factory);
     }
 
@@ -4503,6 +4632,215 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
+    // ── IsShiftHeld / PropagateBadgeVisibility tests (#774) ──────────────────
+
+    [Fact]
+    public async Task IsShiftHeld_DefaultIsFalse()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        Assert.False(viewModel.IsShiftHeld);
+    }
+
+    [Fact]
+    public async Task IsShiftHeld_SetToTrue_RaisesPropertyChanged()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var raised = false;
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(viewModel.IsShiftHeld))
+                raised = true;
+        };
+
+        viewModel.IsShiftHeld = true;
+
+        Assert.True(raised);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltOnly_ContentTabBadgesVisible()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-alt-only-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = true;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-alt-only-a");
+        Assert.True(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltOnly_PaneTabBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("77400001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "77400001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-alt-pane-hidden"]],
+              "display-name": { "default": "Badge Alt Pane Hidden" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = true;
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneDoc = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>().First();
+        Assert.False(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltAndShift_ContentTabBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-altshift-content-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = true;
+        viewModel.IsShiftHeld = true;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-altshift-content-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltAndShift_PaneTabBadgesVisible()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("77400002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "77400002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-altshift-pane-visible"]],
+              "display-name": { "default": "Badge AltShift Pane Visible" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        viewModel.IsAltHeld = true;
+        viewModel.IsShiftHeld = true;
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneDoc = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane.Id == workspaceId.ToString());
+        Assert.True(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_ShiftOnly_AllBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-shift-only-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = false;
+        viewModel.IsShiftHeld = true;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-shift-only-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_NeitherModifier_AllBadgesHidden()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-neither-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsAltHeld = false;
+        viewModel.IsShiftHeld = false;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-neither-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task IsShiftHeldChanged_TriggersPropagate_PaneTabsUpdated()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("77400003-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "77400003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-shift-change-pane"]],
+              "display-name": { "default": "Badge Shift Change Pane" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        viewModel.IsAltHeld = true;
+        viewModel.IsShiftHeld = false;
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneDoc = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane.Id == workspaceId.ToString());
+        Assert.False(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+
+        // Flip IsShiftHeld while IsAltHeld=true — pane badge should become visible
+        viewModel.IsShiftHeld = true;
+        Assert.True(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task IsAltHeldChanged_TriggersPropagate_ContentTabsUpdated()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "badge-alt-change-a", Title = "Tab A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = false;
+
+        var documentDock = GetDocumentDock(viewModel);
+        var doc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "badge-alt-change-a");
+        Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+
+        // Flip IsAltHeld while IsShiftHeld=false — content badge should become visible
+        viewModel.IsAltHeld = true;
+        Assert.True(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
     {
@@ -4550,6 +4888,182 @@ public sealed class MainWindowIntegrationTests
     }
 
     // ── Alt+N shortcut numbers — multi-pane scenarios (#614) ──────────────────
+
+    // ── Alt+Shift+N shortcut numbers — workspace pane label tests (#773) ─────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RefreshWorkspacePaneAltShortcutLabels_InitialState_LabelsAssigned()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77300001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77300001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-init-a"]],
+              "display-name": { "default": "Pane Label Init A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77300001-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77300001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-init-b"]],
+              "display-name": { "default": "Pane Label Init B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        var paneDocs = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.True(paneDocs.Count >= 2);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RefreshWorkspacePaneAltShortcutLabels_OnPaneAdded_LabelsUpdated()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77300002-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77300002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-add-a"]],
+              "display-name": { "default": "Pane Label Add A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77300002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77300002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-add-b"]],
+              "display-name": { "default": "Pane Label Add B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        var paneDocs = workspacesDock!.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Single(paneDocs);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        paneDocs = workspacesDock.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Equal(2, paneDocs.Count);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RefreshWorkspacePaneAltShortcutLabels_OnPaneRemoved_LabelsRenumbered()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("77300003-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "77300003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-remove-a"]],
+              "display-name": { "default": "Pane Label Remove A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("77300003-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "77300003-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-remove-b"]],
+              "display-name": { "default": "Pane Label Remove B" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdC = new EntityId("77300003-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdC,
+            """
+            {
+              "entity-id": "77300003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "pane-label-remove-c"]],
+              "display-name": { "default": "Pane Label Remove C" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdC });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        // Switch to pane B (index 1) so we can close it
+        var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
+        Assert.True(paneBIndex >= 0);
+        var paneB = viewModel.WorkspacePanes[paneBIndex];
+        viewModel.GoToWorkspacePaneAtIndexCommand.Execute(paneBIndex.ToString());
+
+        // Close pane B by passing it as the command parameter
+        viewModel.CloseWorkspaceCommand.Execute(paneB);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var paneDocs = workspacesDock.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Equal(2, paneDocs.Count);
+        Assert.Equal("1", paneDocs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
+    }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task DragReorder_WithinSinglePane_LabelsUpdateToReflectNewOrder()
@@ -4654,6 +5168,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         // Open 2 tabs in each pane
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-h-a1", Title = "A1" };
@@ -4669,12 +5186,26 @@ public sealed class MainWindowIntegrationTests
 
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
-        // This test will fail until the implementation is complete
-        // Left pane tabs should be numbered 1-2, right pane 3-4
         var dockA = FindDocumentDockIn(paneA.ContentLayout!);
         var dockB = FindDocumentDockIn(paneB.ContentLayout!);
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
+
+        var docsA = GetPaneDocuments(paneA, dockA!);
+        var docsB = GetPaneDocuments(paneB, dockB!);
+        
+        Assert.Equal(2, docsA.Count);
+        Assert.Equal(2, docsB.Count);
+        
+        Assert.Equal("split-h-a1", docsA[0].Id);
+        Assert.Equal("split-h-a2", docsA[1].Id);
+        Assert.Equal("split-h-b1", docsB[0].Id);
+        Assert.Equal("split-h-b2", docsB[1].Id);
+        
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("4", docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -4714,6 +5245,9 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
         var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
 
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
         // Open 2 tabs in each pane
         viewModel.SelectedWorkspacePane = paneA;
         var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-v-a1", Title = "A1" };
@@ -4729,11 +5263,331 @@ public sealed class MainWindowIntegrationTests
 
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
-        // This test will fail until the implementation is complete
         var dockA = FindDocumentDockIn(paneA.ContentLayout!);
         var dockB = FindDocumentDockIn(paneB.ContentLayout!);
         Assert.NotNull(dockA);
         Assert.NotNull(dockB);
+
+        var docsA = GetPaneDocuments(paneA, dockA!);
+        var docsB = GetPaneDocuments(paneB, dockB!);
+        
+        Assert.Equal(2, docsA.Count);
+        Assert.Equal(2, docsB.Count);
+        
+        Assert.Equal("split-v-a1", docsA[0].Id);
+        Assert.Equal("split-v-a2", docsA[1].Id);
+        Assert.Equal("split-v-b1", docsB[0].Id);
+        Assert.Equal("split-v-b2", docsB[1].Id);
+        
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("4", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_ThreePanes_OrderIsLeftToRightTopToBottom()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab030001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab030002-0000-4000-8000-000000000002");
+        var workspaceCId = new EntityId("ab030003-0000-4000-8000-000000000003");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab030001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-3-left"]],
+              "display-name": { "default": "Split 3 Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab030002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-3-right"]],
+              "display-name": { "default": "Split 3 Right" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceCId,
+            """
+            {
+              "entity-id": "ab030003-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-3-bottom"]],
+              "display-name": { "default": "Split 3 Bottom" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceCId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+        var paneC = viewModel.WorkspacePanes.First(p => p.Id == workspaceCId.ToString());
+
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB, paneC);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "split-3-a1", Title = "A1" };
+        await viewModel.OpenTabAsync(tabA1);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "split-3-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        viewModel.SelectedWorkspacePane = paneC;
+        var tabC1 = new WebViewModel("https://c1.example.com") { Id = "split-3-c1", Title = "C1" };
+        await viewModel.OpenTabAsync(tabC1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        var dockC = FindDocumentDockIn(paneC.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+        Assert.NotNull(dockC);
+
+        var docA = GetPaneDocuments(paneA, dockA!).Single();
+        var docB = GetPaneDocuments(paneB, dockB!).Single();
+        var docC = GetPaneDocuments(paneC, dockC!).Single();
+        
+        Assert.Equal("split-3-a1", docA.Id);
+        Assert.Equal("split-3-b1", docB.Id);
+        Assert.Equal("split-3-c1", docC.Id);
+        
+        Assert.Equal("1", docA.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docB.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docC.EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_DragReorderInSecondaryPane_GlobalLabelsCorrect()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab040001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab040002-0000-4000-8000-000000000002");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab040001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "drag-sec-left"]],
+              "display-name": { "default": "Drag Sec Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab040002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "drag-sec-right"]],
+              "display-name": { "default": "Drag Sec Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "drag-sec-a1", Title = "A1" };
+        await viewModel.OpenTabAsync(tabA1);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "drag-sec-b1", Title = "B1" };
+        var tabB2 = new WebViewModel("https://b2.example.com") { Id = "drag-sec-b2", Title = "B2" };
+        await viewModel.OpenTabAsync(tabB1);
+        await viewModel.OpenTabAsync(tabB2);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockB);
+        
+        var visibleDockables = dockB!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docB2 = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "drag-sec-b2");
+        visibleDockables.Move(visibleDockables.IndexOf(docB2), 0);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        Assert.NotNull(dockA);
+
+        var docA1 = GetPaneDocuments(paneA, dockA!).Single();
+        var docsB = GetPaneDocuments(paneB, dockB);
+        
+        Assert.Equal("drag-sec-a1", docA1.Id);
+        Assert.Equal("drag-sec-b2", docsB[0].Id);
+        Assert.Equal("drag-sec-b1", docsB[1].Id);
+        
+        Assert.Equal("1", docA1.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_NewTabOpenedInSecondaryPane_ReceivesCorrectLabel()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab050001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab050002-0000-4000-8000-000000000002");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab050001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "new-sec-left"]],
+              "display-name": { "default": "New Sec Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab050002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "new-sec-right"]],
+              "display-name": { "default": "New Sec Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "new-sec-a1", Title = "A1" };
+        var tabA2 = new WebViewModel("https://a2.example.com") { Id = "new-sec-a2", Title = "A2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "new-sec-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+
+        var docsA = GetPaneDocuments(paneA, dockA!);
+        var docB1 = GetPaneDocuments(paneB, dockB!).Single();
+        
+        Assert.Equal("new-sec-a1", docsA[0].Id);
+        Assert.Equal("new-sec-a2", docsA[1].Id);
+        Assert.Equal("new-sec-b1", docB1.Id);
+        
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docB1.EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_TabClosedFromPrimaryPane_SecondaryPaneLabelsRenumbered()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab060001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab060002-0000-4000-8000-000000000002");
+        
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab060001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "close-prim-left"]],
+              "display-name": { "default": "Close Prim Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab060002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "close-prim-right"]],
+              "display-name": { "default": "Close Prim Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        // Close the default tabs added by PopulateWorkspacePaneTabsAsync before opening test tabs
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "close-prim-a1", Title = "A1" };
+        var tabA2 = new WebViewModel("https://a2.example.com") { Id = "close-prim-a2", Title = "A2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "close-prim-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        viewModel.CloseTab(tabA1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+
+        var docA2 = GetPaneDocuments(paneA, dockA!).Single();
+        var docB1 = GetPaneDocuments(paneB, dockB!).Single();
+        
+        Assert.Equal("close-prim-a2", docA2.Id);
+        Assert.Equal("close-prim-b1", docB1.Id);
+        
+        Assert.Equal("1", docA2.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docB1.EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -5514,6 +6368,88 @@ public sealed class MainWindowIntegrationTests
         var probe2 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
         Assert.NotSame(sharedChat, probe2.AgentChat); // new instance — old was disposed
         await probe2.DisposeAsync();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningAgentChatTable_Refresh_DoesNotThrow_WhenSessionRemovedConcurrently()
+    {
+        var table = CreateTestRunningAgentChatTable();
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var brain = viewModel.RunningAgentBrain;
+        Assert.NotNull(brain);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("aa070001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa070001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "refresh-race-echo"]],
+              "display-name": { "default": "Refresh Race Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "refresh-race-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var workspaceId = new EntityId("aa070002-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId,
+            """
+            {
+              "entity-id": "aa070002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "refresh-race-ws"]],
+              "display-name": { "default": "Refresh Race WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            CreateLocalTrustedExecutorSelector(),
+            table);
+
+        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+            viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(tab);
+
+        Assert.NotNull(tab.Lease);
+        Assert.Single(table.RunningSessions);
+
+        // Dispose the tab (which releases the lease and triggers removal from RunningSessions).
+        // With the bug (TaskScheduler.Default), the removal happens on a thread-pool thread.
+        // With the fix (FromCurrentSynchronizationContext), it marshals to the UI thread.
+        // Force Refresh to run multiple times concurrently to increase chance of catching the race.
+        var disposeTask = tab.DisposeAsync().AsTask();
+
+        for (int i = 0; i < 10; i++)
+        {
+            brain.Refresh();
+        }
+
+        await disposeTask;
+
+        // If the bug exists, one of the Refresh() calls may have thrown InvalidOperationException
+        // due to enumerating RunningSessions while it was being mutated on another thread.
+        // With the fix, all mutations happen on the UI thread, so no exception occurs.
+        Assert.Empty(table.RunningSessions);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

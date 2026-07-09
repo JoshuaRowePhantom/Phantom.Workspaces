@@ -5,8 +5,10 @@ using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
@@ -70,11 +72,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
     private ScheduledToolsRunningViewModel? scheduledToolsRunning;
     private RunningAgentBrainViewModel? runningAgentBrain;
+    private UsageTrackerViewModel? usageTracker;
+    private Services.UsageMetricsService? usageMetricsService;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
     private bool isAltHeld;
+    private bool isShiftHeld;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
@@ -131,6 +136,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new OpenInVsCodeShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new OpenInVsCodeWebShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity
@@ -266,7 +273,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.SetProperty(ref this.isAltHeld, value))
             {
-                this.PropagateIsAltHeldToTabHeaders(value);
+                this.PropagateBadgeVisibility(value, this.isShiftHeld);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True while the Shift key is physically held down. Used together with <see cref="IsAltHeld"/>
+    /// to determine which badge type is active: Alt alone → content-tab badges; Alt+Shift → pane-tab badges.
+    /// Set by <see cref="MainWindow"/> keyboard handlers.
+    /// </summary>
+    public bool IsShiftHeld
+    {
+        get => this.isShiftHeld;
+        set
+        {
+            if (this.SetProperty(ref this.isShiftHeld, value))
+            {
+                this.PropagateBadgeVisibility(this.isAltHeld, value);
             }
         }
     }
@@ -462,6 +486,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     /// <summary>
+    /// The usage-tracker toolbar button and popup view model.
+    /// Null until <see cref="InitializeAsync"/> has initialized the usage tracker.
+    /// </summary>
+    internal UsageTrackerViewModel? UsageTracker
+    {
+        get => this.usageTracker;
+        private set => this.SetProperty(ref this.usageTracker, value);
+    }
+
+    /// <summary>
     /// Returns an <see cref="AgentTabInfo"/> for every open agent-session tab that is in the
     /// <see cref="AgentTabState.Ready"/> state, across all workspace panes.
     /// </summary>
@@ -532,6 +566,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await this.InitializeWebHostAsync();
         await this.InitializeScheduledToolsAsync();
         await this.InitializeAutoResumeAsync();
+        await this.InitializeUsageTrackerAsync();
     }
 
     /// <summary>
@@ -622,6 +657,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.autoResumeLeases.Add(lease);
             }
         }
+    }
+
+    private async Task InitializeUsageTrackerAsync()
+    {
+        if (this.entityBroker is not { } broker)
+        {
+            return;
+        }
+
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var metrics = new Models.UsageMetrics(foregroundScheduler);
+        var vm = new UsageTrackerViewModel(metrics);
+        this.UsageTracker = vm;
+
+        var providers = new List<Services.UsageProviders.IUsageProvider>
+        {
+            new Services.UsageProviders.GitHubCopilotUsageProvider(new HttpClient()),
+            new Services.UsageProviders.GitHubActionsUsageProvider(new HttpClient()),
+        };
+        this.usageMetricsService = new Services.UsageMetricsService(
+            dataAccessLayer,
+            metrics,
+            providers,
+            TimeProvider.System);
+        await this.usageMetricsService.StartAsync(CancellationToken.None);
     }
 
     private async Task<IReadOnlyList<string>> ResolveHostNameComponentsAsync(EntityId hostEntityId)
@@ -727,6 +788,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var layout = this.dockFactory.CreateLayout();
         this.dockFactory.InitLayout(layout);
         this.Layout = layout;
+
+        this.WorkspacePanes.CollectionChanged += (_, _) => this.RefreshWorkspacePaneAltShortcutLabels();
+        this.RefreshWorkspacePaneAltShortcutLabels();
 
         // Monitor workspace dock for closes
         var workspacesDock = FindDocumentDock(layout);
@@ -1681,6 +1745,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.SelectedWorkspacePane = this.WorkspacePanes[index];
 
+        var paneDoc = this.dockFactory.GetPaneDocument(this.SelectedWorkspacePane.Id);
+        if (paneDoc is not null)
+        {
+            this.dockFactory.SetActiveDockable(paneDoc);
+        }
+
         var notifTab = this.SelectedWorkspacePane.SelectedTab
             ?? this.SelectedWorkspacePane.Tabs.FirstOrDefault();
         if (notifTab is not null)
@@ -1962,12 +2032,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Wire up accelerator-key callbacks so Alt+1–0 and IsAltHeld work when this tab's WebView has focus.
         if (tab is WebViewModel webVm)
         {
-            webVm.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            webVm.AltKeyStateChanged += (_, held) =>
+            {
+                this.IsAltHeld = held;
+                if (!held) this.IsShiftHeld = false;
+            };
             webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
         }
         else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
         {
-            agentTab.AltKeyStateChanged += (_, held) => this.IsAltHeld = held;
+            agentTab.AltKeyStateChanged += (_, held) =>
+            {
+                this.IsAltHeld = held;
+                if (!held) this.IsShiftHeld = false;
+            };
             agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
         }
 
@@ -2186,12 +2264,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         NotifyCollectionChangedEventHandler handler = (_, e) =>
         {
             this.SyncPaneTabsFromDockChange(workspacePane, documentDock, e);
-            RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
+            this.RefreshGlobalAltShortcutLabels();
         };
         collection.CollectionChanged += handler;
         this.innerDockSubscriptions[workspacePane.Id] = handler;
 
-        RefreshTabAltShortcutLabels(workspacePane, this.dockFactory.GetDocumentForTab);
+        this.RefreshGlobalAltShortcutLabels();
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
@@ -2405,15 +2483,118 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    private void PropagateIsAltHeldToTabHeaders(bool value)
+    internal static void RefreshWorkspacePaneAltShortcutLabels(
+        IReadOnlyList<WorkspacePaneViewModel> workspacePanes,
+        Func<string, WorkspacePaneDocument?> getPaneDocument)
     {
+        for (var i = 0; i < workspacePanes.Count; i++)
+        {
+            var paneDoc = getPaneDocument(workspacePanes[i].Id);
+            if (paneDoc is not null)
+            {
+                paneDoc.EffectiveTabHeader.AltShortcutLabel = i switch
+                {
+                    < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
+                    9 => "0",
+                    _ => null,
+                };
+            }
+        }
+    }
+
+    private void RefreshWorkspacePaneAltShortcutLabels()
+        => RefreshWorkspacePaneAltShortcutLabels(this.WorkspacePanes, this.dockFactory.GetPaneDocument);
+
+    private void RefreshGlobalAltShortcutLabels()
+    {
+        var activePanes = this.WorkspacePanes
+            .Where(p => !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal) 
+                     && p.ContentLayout is not null)
+            .ToList();
+        
+        var nonDefaultPanes = activePanes
+            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal))
+            .ToList();
+        
+        if (nonDefaultPanes.Count == 0 && activePanes.Count == 1)
+        {
+            RefreshTabAltShortcutLabels(activePanes[0], this.dockFactory.GetDocumentForTab);
+            return;
+        }
+        
+        if (nonDefaultPanes.Count == 1)
+        {
+            RefreshTabAltShortcutLabels(nonDefaultPanes[0], this.dockFactory.GetDocumentForTab);
+            return;
+        }
+        
+        var allTabs = ComputeGlobalTabOrder();
+        for (var i = 0; i < allTabs.Count; i++)
+        {
+            var doc = allTabs[i];
+            doc.EffectiveTabHeader.AltShortcutLabel = i switch
+            {
+                < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
+                9 => "0",
+                _ => null,
+            };
+        }
+    }
+
+    private List<WorkspaceDocument> ComputeGlobalTabOrder()
+    {
+        var allDocuments = new List<WorkspaceDocument>();
+        
+        foreach (var pane in this.WorkspacePanes)
+        {
+            if (string.Equals(pane.Id, "default-workspace", StringComparison.Ordinal))
+                continue;
+            
+            if (pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
+                continue;
+            
+            if (pane.ContentLayout is null) continue;
+            
+            var dock = FindDocumentDock(pane.ContentLayout);
+            if (dock?.VisibleDockables is null) continue;
+            
+            // Collect documents in the order they appear in the dock, but only include
+            // documents that correspond to a tab in the pane's Tabs collection. This filters
+            // out any placeholder or orphaned documents that may exist in the dock.
+            foreach (var dockable in dock.VisibleDockables)
+            {
+                if (dockable is WorkspaceDocument doc 
+                    && doc.Context is WorkspaceTabViewModel tab
+                    && pane.Tabs.Contains(tab))
+                {
+                    allDocuments.Add(doc);
+                }
+            }
+        }
+        
+        return allDocuments;
+    }
+
+    private void PropagateBadgeVisibility(bool isAltHeld, bool isShiftHeld)
+    {
+        // Content tabs: badge visible when Alt held WITHOUT Shift.
+        var contentBadge = isAltHeld && !isShiftHeld;
         foreach (var pane in this.WorkspacePanes)
         {
             foreach (var tab in pane.Tabs)
             {
                 if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                    doc.EffectiveTabHeader.IsAltHeld = value;
+                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = contentBadge;
             }
+        }
+
+        // Workspace pane tabs: badge visible when Alt+Shift both held.
+        var paneBadge = isAltHeld && isShiftHeld;
+        foreach (var pane in this.WorkspacePanes)
+        {
+            var paneDoc = this.dockFactory.GetPaneDocument(pane.Id);
+            if (paneDoc is not null)
+                paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible = paneBadge;
         }
     }
 
@@ -3855,6 +4036,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.scheduledToolsPause?.Dispose();
         this.scheduledToolsRunning?.Dispose();
         this.runningAgentBrain?.Dispose();
+        this.usageTracker?.Dispose();
+
+        if (this.usageMetricsService is not null)
+        {
+            await this.usageMetricsService.DisposeAsync();
+        }
 
         if (this.devTunnelHostService is not null)
         {

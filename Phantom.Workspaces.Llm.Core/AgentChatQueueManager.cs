@@ -124,6 +124,11 @@ public sealed class AgentChatQueueManager
         while (true)
         {
             var expected = queue.Queue.Items;
+            if (!expected.Contains(item))
+            {
+                return false;
+            }
+
             if (queue.Queue.TryRemove(ref expected, item))
             {
                 return true;
@@ -146,6 +151,11 @@ public sealed class AgentChatQueueManager
         while (true)
         {
             var expected = queue.Queue.Items;
+            if (!expected.Contains(item))
+            {
+                return false;
+            }
+
             if (this.TryUpdateQueueItem(queue.Queue, ref expected, item, text))
             {
                 return true;
@@ -164,6 +174,11 @@ public sealed class AgentChatQueueManager
         while (true)
         {
             var expected = queue.Queue.Items;
+            if (!expected.Contains(item))
+            {
+                return false;
+            }
+
             if (this.TryRemoveQueueItemContent(queue.Queue, ref expected, item, contentIndex))
             {
                 return true;

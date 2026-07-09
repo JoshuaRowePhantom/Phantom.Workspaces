@@ -360,4 +360,90 @@ public sealed class SharedStylesTests
             return ex.Types.Where(static t => t is not null)!;
         }
     }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_HiddenByDefault()
+    {
+        var sharedStyles = LoadSharedStyles();
+
+        var shortcutButton = new Button();
+        shortcutButton.Classes.Add("workspace-entity-shortcut-button");
+
+        var entityCard = new Border();
+        entityCard.Classes.Add("entity-card");
+        entityCard.Child = shortcutButton;
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(entityCard);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.0, shortcutButton.Opacity);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_VisibleOnPointerOver()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:pointerover Button.workspace-entity-shortcut-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:pointerover Button.workspace-entity-shortcut-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_VisibleOnFocusWithin()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:focus-within Button.workspace-entity-shortcut-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:focus-within Button.workspace-entity-shortcut-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_HaveOpacityTransition()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        var selectorStart = content.IndexOf("Button.workspace-entity-shortcut-button", StringComparison.Ordinal);
+        Assert.True(selectorStart >= 0, "Button.workspace-entity-shortcut-button style must exist.");
+
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        Assert.True(selectorEnd > selectorStart, "Button.workspace-entity-shortcut-button style must be closed.");
+
+        var styleBlock = content[selectorStart..selectorEnd];
+        Assert.Contains("DoubleTransition", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
+    }
 }

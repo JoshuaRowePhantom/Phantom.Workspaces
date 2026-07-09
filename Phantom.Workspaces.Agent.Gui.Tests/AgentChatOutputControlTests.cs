@@ -478,7 +478,6 @@ public sealed class AgentChatOutputControlTests
         Assert.True(browser.PostedMessages.Count > 0, "Expected incremental update messages.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollsToBottom_AfterInitialContentLoad()
     {
@@ -519,7 +518,6 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'scroll' command to be posted after the initial content load.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()
     {
@@ -542,7 +540,6 @@ public sealed class AgentChatOutputControlTests
         Assert.True(viewModel.AutoScrollEnabled, "AutoScrollEnabled must be true after OnBrowserReady.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_DoesNotDoubleScroll_WhenSettingAutoScrollEnabled()
     {
@@ -583,7 +580,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, scrollCount);
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollIsPostedAfterAllBatchMessages()
     {

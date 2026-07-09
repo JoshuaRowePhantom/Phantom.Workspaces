@@ -449,6 +449,120 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
         });
 
+    [Fact]
+    public Task ChatOutput_StreamingTokens_Batched()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var web = new ControllableWebViewControl();
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            web.Ready += (_, _) => ready.TrySetResult();
+            var window = CreateOffscreenWindow(web);
+            try
+            {
+                window.Show();
+                web.HtmlShell = ShellHtml;
+                await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                
+                for (int i = 0; i < 10; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"msg-{i}", $"token{i}")));
+                    await Task.Delay(5);
+                }
+
+                await Task.Delay(50);
+
+                var lastElementText = await EvalAsync(web, "document.getElementById('msg-9-c0')?.textContent || 'not-found'");
+                Assert.Contains("token9", lastElementText, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatOutput_LongChat_RenderLatencyStable()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                for (int i = 0; i < 100; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"history-{i}", $"Historical message {i}")));
+                }
+
+                await Task.Delay(500);
+
+                var startTime = DateTime.UtcNow;
+                
+                for (int i = 0; i < 50; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"stream-{i}", $"Streaming token {i}")));
+                }
+
+                var lastElementText = string.Empty;
+                var attempts = 0;
+                while (attempts < 100 && !lastElementText.Contains("Streaming token 49"))
+                {
+                    lastElementText = await EvalAsync(web, "document.getElementById('stream-49-c0')?.textContent || ''");
+                    if (!lastElementText.Contains("Streaming token 49"))
+                    {
+                        await Task.Delay(10);
+                    }
+                    attempts++;
+                }
+
+                var elapsed = DateTime.UtcNow - startTime;
+                
+                Assert.Contains("Streaming token 49", lastElementText, StringComparison.Ordinal);
+                Assert.True(elapsed.TotalMilliseconds < 2000, $"Render took {elapsed.TotalMilliseconds}ms, expected < 2000ms");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatOutput_RenderGating_NoDroppedUpdates()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                for (int i = 0; i < 20; i++)
+                {
+                    web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                        "chat-history",
+                        "append",
+                        Message($"rapid-{i}", $"Token {i}")));
+                    await Task.Delay(1);
+                }
+
+                await Task.Delay(500);
+
+                for (int i = 0; i < 20; i++)
+                {
+                    var elementText = await EvalAsync(web, $"document.getElementById('rapid-{i}-c0')?.textContent || 'missing'");
+                    Assert.Contains($"Token {i}", elementText, StringComparison.Ordinal);
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static string LoadShellHtml()
     {
         var assembly = typeof(ChatOutputBrowserCommands).Assembly;

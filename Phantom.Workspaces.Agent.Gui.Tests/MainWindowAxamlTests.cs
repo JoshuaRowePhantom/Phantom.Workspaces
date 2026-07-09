@@ -92,7 +92,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Content=\"{Binding SelectedEditorDetailContent}\"",
+            "ItemsSource=\"{Binding DetailContentSlots}\"",
             editorControlContent,
             StringComparison.Ordinal);
 

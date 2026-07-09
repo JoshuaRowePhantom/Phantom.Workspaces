@@ -11,8 +11,9 @@ public sealed class GitDiffViewModel : ViewModelBase
     public required int LinesAdded { get; init; }
     public required int LinesRemoved { get; init; }
     public required IReadOnlyList<GitDiffHunk> Hunks { get; init; }
+    public required bool SideBySide { get; init; }
 
-    public static GitDiffViewModel FromPatchEntry(PatchEntryChanges entry, int contextLines)
+    public static GitDiffViewModel FromPatchEntry(PatchEntryChanges entry, int contextLines, bool sideBySide)
     {
         var hunks = ParseHunks(entry.Patch);
         return new GitDiffViewModel
@@ -21,6 +22,7 @@ public sealed class GitDiffViewModel : ViewModelBase
             LinesAdded = entry.LinesAdded,
             LinesRemoved = entry.LinesDeleted,
             Hunks = hunks,
+            SideBySide = sideBySide,
         };
     }
 

@@ -37,7 +37,7 @@ internal record Hyperlink(string Uri);
 /// <see cref="System.IO.Stream"/>, feeds them into VtNetCore's VT emulator, and draws the cell
 /// grid via <see cref="DrawingContext"/>. Translates Avalonia key and text events into standard
 /// VT input sequences written back to the stream. Maps its pixel size to columns/rows and calls
-/// the session's resize delegate (debounced by 50 ms).
+/// the session's resize delegate (debounced to avoid excessive resize events).
 /// </summary>
 public partial class TerminalControl : Control
 {
@@ -52,6 +52,14 @@ public partial class TerminalControl : Control
         get => GetValue(SessionProperty);
         set => SetValue(SessionProperty, value);
     }
+
+    // ── Events ────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Raised when a URL is detected under a Ctrl+left-click gesture.
+    /// The event argument is the detected URL string.
+    /// </summary>
+    public event EventHandler<string>? NavigationRequested;
 
     // ── VtNetCore state ───────────────────────────────────────────────────────────────────────
 
@@ -89,9 +97,15 @@ public partial class TerminalControl : Control
     private double _cellWidth;
     private double _cellHeight;
 
+    // Exposed for tests.
+    internal double CellWidth => _cellWidth;
+    internal double CellHeight => _cellHeight;
+
     // ── Resize debounce ───────────────────────────────────────────────────────────────────────
 
-    private CancellationTokenSource? _resizeCts;
+    internal TimeSpan ResizeDebounceDelay { get; set; } = TimeSpan.FromMilliseconds(50);
+
+    private DispatcherTimer? _resizeTimer;
     private bool _isDragging;
 
     // Test infrastructure - allows tests to override pointer position
@@ -137,14 +151,21 @@ public partial class TerminalControl : Control
 
     private void DetachSession()
     {
-        _resizeCts?.Cancel();
-        _resizeCts?.Dispose();
-        _resizeCts = null;
+        _resizeTimer?.Stop();
+        _resizeTimer = null;
         
         _ = _sessionLifetime?.DisposeAsync();
         _sessionLifetime = null;
         _vtc = null;
         _dataConsumer = null;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+
+        _resizeTimer?.Stop();
+        _resizeTimer = null;
     }
 
     private async Task ReadLoopAsync(TerminalSessionViewModel session, CancellationToken ct)
@@ -216,18 +237,26 @@ public partial class TerminalControl : Control
         ScheduleResize();
     }
 
-    private void MeasureCells()
+    internal void MeasureCells()
     {
+        var typeface = new Typeface(MonoFamily);
+
         var tf = new FormattedText(
             "M",
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface(MonoFamily),
+            typeface,
             TermFontSize,
             Brushes.White);
 
-        _cellWidth = tf.Width;
-        _cellHeight = tf.Height;
+        // Snap to whole pixels so col * _cellWidth always lands on an integer boundary —
+        // fractional widths accumulate sub-pixel error that breaks box-drawing characters.
+        _cellWidth = Math.Ceiling(tf.Width);
+
+        // Derive height from glyph metrics (ascent + descent only, no line gap / leading),
+        // then round up to a whole pixel so rows tile without vertical gaps.
+        var m = typeface.GlyphTypeface.Metrics;
+        _cellHeight = Math.Ceiling((Math.Abs(m.Ascent) + Math.Abs(m.Descent)) * TermFontSize / m.DesignEmHeight);
     }
 
     private int ComputeColumns() =>
@@ -238,14 +267,14 @@ public partial class TerminalControl : Control
 
     private void ScheduleResize()
     {
-        _resizeCts?.Cancel();
-        _resizeCts = new CancellationTokenSource();
-        var token = _resizeCts.Token;
-        _ = Task.Delay(50, token).ContinueWith(
-            _ => Dispatcher.UIThread.Post(ApplyResize),
-            CancellationToken.None,
-            TaskContinuationOptions.NotOnCanceled,
-            TaskScheduler.Default);
+        _resizeTimer?.Stop();
+        _resizeTimer = new DispatcherTimer(ResizeDebounceDelay, DispatcherPriority.Normal, Dispatcher.UIThread, (_, _) =>
+        {
+            _resizeTimer?.Stop();
+            _resizeTimer = null;
+            ApplyResize();
+        });
+        _resizeTimer.Start();
     }
 
     private void ApplyResize()
@@ -844,17 +873,7 @@ public partial class TerminalControl : Control
         if (match.Success)
         {
             var url = match.Value;
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = url,
-                    UseShellExecute = true
-                });
-            }
-            catch
-            {
-            }
+            NavigationRequested?.Invoke(this, url);
         }
     }
 
