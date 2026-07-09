@@ -1,0 +1,110 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:CompileBindings="False">
+    <Styles.Resources>
+        <!-- Usage progress bar colors -->
+        <SolidColorBrush x:Key="Theme.UsageProgressBar.Used.Background">#FFDD00</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.UsageProgressBar.Remaining.Background">#90EE90</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.UsageProgressBar.Text.Foreground">Black</SolidColorBrush>
+        <SolidColorBrush x:Key="Theme.UsageProgressBar.Null.Background">#808080</SolidColorBrush>
+    </Styles.Resources>
+
+    <!-- Usage progress bar style with yellow used, green remaining, black text overlay -->
+    <Style Selector="ProgressBar.usage-progress-bar">
+        <Setter Property="Height" Value="12" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Panel>
+                    <Border x:Name="PART_Indicator" IsVisible="False" />
+                    <Grid x:Name="BarContainer" ClipToBounds="True">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="UsedPortion" 
+                                Grid.Column="0"
+                                Background="#FFDD00"
+                                CornerRadius="6,0,0,6" />
+                        <Border x:Name="RemainingPortion" 
+                                Grid.Column="1"
+                                Background="#90EE90"
+                                CornerRadius="0,6,6,0" />
+                    </Grid>
+                    <TextBlock x:Name="PercentageText"
+                               Text="50%"
+                               Foreground="Black"
+                               FontSize="10"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Panel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
+    <!-- Null data style: grey bar with "—" text -->
+    <Style Selector="ProgressBar.usage-progress-bar.null-data /template/ Border#UsedPortion">
+        <Setter Property="Background" Value="#808080" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    
+    <Style Selector="ProgressBar.usage-progress-bar.null-data /template/ Border#RemainingPortion">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
+    
+    <Style Selector="ProgressBar.usage-progress-bar.null-data /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="—" />
+    </Style>
+
+    <!-- Update text to show percentage based on value -->
+    <Style Selector="ProgressBar.usage-progress-bar[Value=0]:not(.null-data) /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="0%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=10] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="10%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=20] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="20%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=30] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="30%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=40] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="40%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=50] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="50%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=60] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="60%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=70] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="70%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=80] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="80%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=90] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="90%" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=100] /template/ TextBlock#PercentageText">
+        <Setter Property="Text" Value="100%" />
+    </Style>
+
+    <!-- Adjust column widths based on Value -->
+    <Style Selector="ProgressBar.usage-progress-bar[Value=0]:not(.null-data) /template/ Grid#BarContainer > Border#UsedPortion">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=0]:not(.null-data) /template/ Grid#BarContainer > Border#RemainingPortion">
+        <Setter Property="Grid.ColumnSpan" Value="2" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    
+    <Style Selector="ProgressBar.usage-progress-bar[Value=100] /template/ Grid#BarContainer > Border#UsedPortion">
+        <Setter Property="Grid.ColumnSpan" Value="2" />
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="ProgressBar.usage-progress-bar[Value=100] /template/ Grid#BarContainer > Border#RemainingPortion">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
+</Styles>
