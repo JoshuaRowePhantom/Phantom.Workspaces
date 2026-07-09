@@ -10,7 +10,7 @@
         <Grid RowDefinitions="Auto,*">
             <Border Grid.Row="0"
                     Padding="12,8">
-                <TextBlock Text="Running agents"
+                <TextBlock Text="Running sub-agents"
                            FontWeight="SemiBold" />
             </Border>
 
@@ -30,9 +30,7 @@
                 <ItemsControl ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:RunningAgentRowViewModel">
-                            <Border Classes="interactive-row"
-                                    Padding="8,6" Margin="4,2">
-                                <Button Command="{Binding ActivateCommand}"
+                            <Button Command="{Binding ActivateCommand}"
                                         HorizontalAlignment="Stretch"
                                         HorizontalContentAlignment="Left"
                                         Background="Transparent"
@@ -74,7 +72,6 @@
                                         </StackPanel>
                                     </StackPanel>
                                 </Button>
-                            </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>

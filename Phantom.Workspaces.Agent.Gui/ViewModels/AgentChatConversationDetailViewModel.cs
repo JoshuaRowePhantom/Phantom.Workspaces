@@ -10,7 +10,7 @@ public sealed class AgentChatConversationDetailViewModel : ViewModelBase, IDispo
 
     public AgentViewModel Agent { get; }
 
-    public InputQueueViewModel InputQueue => this.Agent.InputQueue;
+    public InputQueueViewModel? InputQueue => this.Agent.InputQueue;
 
     public AgentChatStatusLineViewModel StatusLine { get; }
 

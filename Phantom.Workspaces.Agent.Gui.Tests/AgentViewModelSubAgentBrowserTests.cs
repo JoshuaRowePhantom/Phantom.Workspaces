@@ -269,6 +269,70 @@ public sealed class AgentViewModelSubAgentBrowserTests
         Assert.Equal("Sub-agents (2)", subAgentsNode.Name);
     }
 
+    // ── §796 Input queue disabled for sub-agents ──────────────────────────────
+
+    [Fact]
+    public async Task SubAgentView_FactoryPathSubAgent_AcceptsUserInput_False()
+    {
+        // Factory-path sub-agents use IHostedAgentChatClient → AcceptsUserInput is false.
+        var chat = await CreateChatAsync();
+        await AddSubAgentAsync(chat, "sub1", "Sub Agent");
+
+        var subAgentEntry = chat.SubAgents.Single(s => s.AgentId == "sub1");
+        var subAgentChat = (AgentChat)subAgentEntry;
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", loggerFactory);
+
+        Assert.False(subAgentViewModel.AcceptsUserInput);
+    }
+
+    [Fact]
+    public async Task SubAgentView_InputQueue_IsNull_WhenAcceptsUserInput_False()
+    {
+        // When AcceptsUserInput is false, InputQueue should not be created.
+        var chat = await CreateChatAsync();
+        await AddSubAgentAsync(chat, "sub1", "Sub Agent");
+
+        var subAgentEntry = chat.SubAgents.Single(s => s.AgentId == "sub1");
+        var subAgentChat = (AgentChat)subAgentEntry;
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", loggerFactory);
+
+        Assert.Null(subAgentViewModel.InputQueue);
+    }
+
+    [Fact]
+    public async Task QueueComposerControl_Hidden_WhenFactoryPathSubAgentSelected()
+    {
+        // Selecting a factory-path sub-agent in the nav tree should create a view with InputQueue = null.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+
+        await AddSubAgentAsync(chat, "sub1", "Sub Agent");
+
+        // Navigate to the sub-agent.
+        viewModel.NavigateToAgentHandler!.Invoke("sub1");
+
+        var slot = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "sub1");
+        Assert.Null(slot.SubAgentViewModel.InputQueue);
+        Assert.False(slot.SubAgentViewModel.AcceptsUserInput);
+    }
+
+    [Fact]
+    public async Task ParentView_InputQueue_IsNotNull_WhenAcceptsUserInput_True()
+    {
+        // Root/parent agents should have InputQueue created.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+
+        Assert.True(viewModel.AcceptsUserInput);
+        Assert.NotNull(viewModel.InputQueue);
+    }
+
     // Helpers ───────────────────────────────────────────────────────────────
 
     private static AgentDefinition CreateAgentDefinition()

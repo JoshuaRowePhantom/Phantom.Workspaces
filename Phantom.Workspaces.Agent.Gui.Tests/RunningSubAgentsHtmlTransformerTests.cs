@@ -237,6 +237,94 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         Assert.Contains("nested-agent", rendered, StringComparison.Ordinal);
     }
 
+    // ── Issue #798: Header, borders, hierarchy, completion state ─────────────
+
+    [Fact]
+    public void RunningSubAgentsPanel_Header_ShowsRunningSubAgentsLabel()
+    {
+        var agent = new StubSubAgent("a1", "Test Agent", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.Contains("<h4 class=\"running-subagents-header\">[Running sub-agents]</h4>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_Row_HasNoBoxBorder()
+    {
+        var agent = new StubSubAgent("a1", "Test Agent", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        // Verify no Border wrapper elements are present in the HTML
+        Assert.DoesNotContain("Border", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("interactive-row", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_NestedSubAgent_IndentedByDepth()
+    {
+        var childAgent = new StubSubAgent("a2", "Child Agent", AgentChatCompletionState.Running);
+        var parentAgent = new StubSubAgent("a1", "Parent Agent", AgentChatCompletionState.Running, subAgents: [childAgent]);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([parentAgent], []);
+
+        Assert.Contains("data-depth=\"1\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_StoppedSubAgent_RemovedImmediately_OnCompletionStateChange()
+    {
+        var agent = new StubSubAgent("a1", "Test Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        sink.Clear();
+
+        // Change completion state - this should trigger immediate re-render without needing ActivityChanged
+        agent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        // Verify panel was cleared immediately on CompletionStateChanged
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Content == string.Empty);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_AllSubAgentsStopped_ContainerHidden_NotLeftBlank()
+    {
+        var agent = new StubSubAgent("a1", "Test Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        sink.Clear();
+
+        agent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        // Verify that when all agents stop, content is replaced with empty string (hiding the container)
+        Assert.Contains(sink.Operations, op =>
+            op.Content == string.Empty &&
+            op.Location == ChatOutputUpdateLocation.Replace);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_DepthTwo_NestedSubAgent_MoreIndentedThanDepthOne()
+    {
+        var grandchildAgent = new StubSubAgent("a3", "Grandchild Agent", AgentChatCompletionState.Running);
+        var childAgent = new StubSubAgent("a2", "Child Agent", AgentChatCompletionState.Running, subAgents: [grandchildAgent]);
+        var parentAgent = new StubSubAgent("a1", "Parent Agent", AgentChatCompletionState.Running, subAgents: [childAgent]);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([parentAgent], []);
+
+        // Verify depth-1 and depth-2 attributes are present
+        Assert.Contains("data-depth=\"1\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-depth=\"2\"", html, StringComparison.Ordinal);
+
+        // Verify the grandchild (depth 2) appears after the child (depth 1)
+        var depth1Index = html.IndexOf("data-depth=\"1\"", StringComparison.Ordinal);
+        var depth2Index = html.IndexOf("data-depth=\"2\"", StringComparison.Ordinal);
+        Assert.True(depth2Index > depth1Index, "Depth-2 agent should appear after depth-1 agent in HTML");
+    }
 
 
     private static int CountOccurrences(string text, string substring)
@@ -296,8 +384,13 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         public IReadOnlyList<IRunningSubAgentDisplay> SubAgents => this.subAgents;
 
         public event EventHandler? ActivityChanged;
+        public event EventHandler? CompletionStateChanged;
 
-        public void SetCompletionState(AgentChatCompletionState state) => this.completionState = state;
+        public void SetCompletionState(AgentChatCompletionState state)
+        {
+            this.completionState = state;
+            this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
 
         public void RaiseActivityChanged() => this.ActivityChanged?.Invoke(this, EventArgs.Empty);
     }

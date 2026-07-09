@@ -15,4 +15,5 @@ public interface IRunningSubAgentDisplay
     IReadOnlyList<SubAgentActivityLine> RecentActivity { get; }
     IReadOnlyList<IRunningSubAgentDisplay> SubAgents { get; }
     event EventHandler? ActivityChanged;
+    event EventHandler? CompletionStateChanged;
 }
