@@ -156,7 +156,13 @@ public sealed class UsageMetricsServiceTests
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
-        var usageMetrics = new UsageMetrics();
+        var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            mutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
         var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
@@ -167,10 +173,7 @@ public sealed class UsageMetricsServiceTests
             NullLogger<UsageMetricsService>.Instance);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
-        await firstCallCompleted.Task;
-
-        // Give MutateAsync time to complete
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await mutationCompleted.Task;
 
         // Account was added after provider returned non-empty metrics
         Assert.Equal(1, provider.CallCount);
@@ -316,7 +319,13 @@ public sealed class UsageMetricsServiceTests
             CreateUserAccountEntity("https://different.com", "user2"), // No matching provider
         ]);
 
-        var usageMetrics = new UsageMetrics();
+        var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            mutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
         var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
@@ -327,10 +336,7 @@ public sealed class UsageMetricsServiceTests
             NullLogger<UsageMetricsService>.Instance);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
-        await firstCallCompleted.Task;
-
-        // Give MutateAsync time to complete
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await mutationCompleted.Task;
 
         // Only the account with a matching provider was processed
         Assert.Equal(1, provider.CallCount);
@@ -502,7 +508,13 @@ public sealed class UsageMetricsServiceTests
             CreateUserAccountEntity("https://example2.com", "user2"),
         ]);
 
-        var usageMetrics = new UsageMetrics();
+        var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            mutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
         var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
@@ -513,10 +525,7 @@ public sealed class UsageMetricsServiceTests
             NullLogger<UsageMetricsService>.Instance);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
-        await Task.WhenAll(provider1Completed.Task, provider2Completed.Task);
-
-        // Give MutateAsync time to complete
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await mutationCompleted.Task;
 
         // Despite provider1 throwing, provider2 was still called and added
         Assert.Equal(1, provider1.CallCount);
@@ -560,8 +569,8 @@ public sealed class UsageMetricsServiceTests
         // Dispose should cancel the loop
         await service.DisposeAsync();
 
-        // Wait a bit to ensure no more calls happen
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        // Advance time to verify no new calls are made after disposal
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
 
         Assert.Equal(1, provider.CallCount); // Still 1, no additional calls
     }
