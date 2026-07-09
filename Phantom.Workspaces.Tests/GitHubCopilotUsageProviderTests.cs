@@ -151,4 +151,134 @@ public sealed class GitHubCopilotUsageProviderTests
         Assert.Equal("github.com", provider.ProviderUri.Host);
         Assert.Equal("https", provider.ProviderUri.Scheme);
     }
+
+    [Fact]
+    public async Task GetMetricsAsync_FractionUsed_CorrectForIncluded()
+    {
+        const string json = """
+            {
+              "seat_breakdown": {
+                "active_this_cycle": 100,
+                "total": 200
+              },
+              "total_billed_amount": 0
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        var included = metrics[0];
+        Assert.Equal(0.5, included.FractionUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_AcquiresToken_BeforeRequest()
+    {
+        var tokenAcquired = false;
+        var requestSent = false;
+
+        var handler = new TokenOrderTrackingHandler(() =>
+        {
+            tokenAcquired = true;
+            Assert.False(requestSent, "Token should be acquired before sending request");
+        },
+        () =>
+        {
+            requestSent = true;
+            Assert.True(tokenAcquired, "Token should be acquired before sending request");
+        });
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () =>
+            {
+                tokenAcquired = true;
+                return "token";
+            });
+
+        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        Assert.True(tokenAcquired);
+        Assert.True(requestSent);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_SetsCorrectHeaders()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new RequestCapturingHandler(req => capturedRequest = req);
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "test-token");
+
+        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
+        Assert.Equal("test-token", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.Contains(capturedRequest.Headers.Accept, h => h.MediaType == "application/vnd.github+json");
+        Assert.True(capturedRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var apiVersionValues));
+        Assert.Contains("2022-11-28", apiVersionValues!);
+        Assert.True(capturedRequest.Headers.TryGetValues("User-Agent", out var userAgentValues));
+        Assert.Contains("phantom-workspaces", userAgentValues!);
+    }
+
+    private sealed class TokenOrderTrackingHandler : HttpMessageHandler
+    {
+        private readonly Action onTokenAcquired;
+        private readonly Action onRequestSent;
+
+        public TokenOrderTrackingHandler(Action onTokenAcquired, Action onRequestSent)
+        {
+            this.onTokenAcquired = onTokenAcquired;
+            this.onRequestSent = onRequestSent;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            this.onRequestSent();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
+                      "total_billed_amount": 0
+                    }
+                    """),
+            });
+        }
+    }
+
+    private sealed class RequestCapturingHandler : HttpMessageHandler
+    {
+        private readonly Action<HttpRequestMessage> onRequest;
+
+        public RequestCapturingHandler(Action<HttpRequestMessage> onRequest)
+        {
+            this.onRequest = onRequest;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            this.onRequest(request);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
+                      "total_billed_amount": 0
+                    }
+                    """),
+            });
+        }
+    }
 }
