@@ -28,8 +28,10 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         this.CommitList = new GitWorktreeCommitListViewModel();
         this.FileList = new GitWorktreeFileListViewModel();
         this.FileDiffs = new ObservableCollection<GitDiffViewModel>();
+        this.BranchNames = new ObservableCollection<string>();
 
         this.targetBranch = GetDefaultTargetBranch(entityViewModel, repositoryPath);
+        LoadBranchNames(repositoryPath, this.BranchNames);
 
         if (repositoryPath is not null)
         {
@@ -39,6 +41,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         this.FileList.SelectedFiles.CollectionChanged += this.OnSelectedFilesChanged;
+        this.CommitList.SelectedCommits.CollectionChanged += this.OnSelectedCommitsChanged;
 
         Lifetime.Run(this.RefreshAsync);
     }
@@ -52,27 +55,83 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (this.SetProperty(ref this.targetBranch, value))
             {
+                this.RaisePropertyChanged(nameof(this.CommitListHeader));
                 Lifetime.Run(this.RefreshAsync);
             }
+        }
+    }
+
+    public string CommitListHeader => $"Commits not in {this.targetBranch}";
+
+    public string FileListHeader
+    {
+        get
+        {
+            var selectedCommits = this.CommitList.SelectedCommits;
+            if (selectedCommits.Count == 0)
+            {
+                return "Files changed";
+            }
+
+            if (selectedCommits.Count == 1)
+            {
+                var commit = selectedCommits[0];
+                if (!commit.IsUnstaged && !commit.IsStaged)
+                {
+                    return $"Files changed in {commit.ShortOid}";
+                }
+            }
+
+            return "Files changed in selected commits";
         }
     }
 
     public bool SideBySide
     {
         get => this.sideBySide;
-        set => this.SetProperty(ref this.sideBySide, value);
+        set
+        {
+            if (this.SetProperty(ref this.sideBySide, value))
+            {
+                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+            }
+        }
     }
 
     public bool FullFile
     {
         get => this.fullFile;
-        set => this.SetProperty(ref this.fullFile, value);
+        set
+        {
+            if (this.SetProperty(ref this.fullFile, value))
+            {
+                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+            }
+        }
     }
 
     public int ContextLines
     {
         get => this.contextLines;
-        set => this.SetProperty(ref this.contextLines, value);
+        set
+        {
+            if (this.SetProperty(ref this.contextLines, value))
+            {
+                var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+                    ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+                    : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+                Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
+            }
+        }
     }
 
     public bool IsRefreshing
@@ -86,6 +145,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     public GitWorktreeFileListViewModel FileList { get; }
 
     public ObservableCollection<GitDiffViewModel> FileDiffs { get; }
+
+    public ObservableCollection<string> BranchNames { get; }
 
     public async Task RefreshAsync(CancellationToken ct = default)
     {
@@ -127,6 +188,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
         var newDiffs = new List<GitDiffViewModel>();
 
+        var effectiveContextLines = this.fullFile ? int.MaxValue / 2 : this.contextLines;
+
         try
         {
             using var repo = new Repository(this.RepositoryPath);
@@ -145,8 +208,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                             repo.Head.Tip?.Tree,
                             DiffTargets.WorkingDirectory,
                             new[] { fileEntry.RelativePath },
-                            null,
-                            new CompareOptions { ContextLines = this.contextLines });
+                            new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
+                            new CompareOptions { ContextLines = effectiveContextLines });
                     }
                     else if (commit.IsStaged)
                     {
@@ -154,8 +217,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                             repo.Head.Tip?.Tree,
                             DiffTargets.Index,
                             new[] { fileEntry.RelativePath },
-                            null,
-                            new CompareOptions { ContextLines = this.contextLines });
+                            new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
+                            new CompareOptions { ContextLines = effectiveContextLines });
                     }
                     else
                     {
@@ -166,8 +229,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                                 parent.Tree,
                                 c.Tree,
                                 new[] { fileEntry.RelativePath },
-                                new ExplicitPathsOptions(),
-                                new CompareOptions { ContextLines = this.contextLines });
+                                new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
+                                new CompareOptions { ContextLines = effectiveContextLines });
                         }
                     }
 
@@ -175,7 +238,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                     {
                         foreach (var entry in patch)
                         {
-                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, this.contextLines));
+                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, effectiveContextLines, this.sideBySide));
                         }
                     }
                 }
@@ -215,9 +278,25 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         Lifetime.Run(ct => this.RebuildFileDiffsAsync(selectedCommits, ct));
     }
 
+    private void OnSelectedCommitsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        this.RaisePropertyChanged(nameof(this.FileListHeader));
+
+        var selectedCommits = this.CommitList.SelectedCommits.Count > 0
+            ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
+            : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+
+        Lifetime.Run(async ct =>
+        {
+            await this.FileList.RefreshAsync(this.RepositoryPath, selectedCommits, ct);
+            await this.RebuildFileDiffsAsync(selectedCommits, ct);
+        });
+    }
+
     public override async ValueTask DisposeAsync()
     {
         this.FileList.SelectedFiles.CollectionChanged -= this.OnSelectedFilesChanged;
+        this.CommitList.SelectedCommits.CollectionChanged -= this.OnSelectedCommitsChanged;
 
         this.refreshCts?.Cancel();
         this.refreshCts?.Dispose();
@@ -284,5 +363,28 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         return "main";
+    }
+
+    private static void LoadBranchNames(string? repositoryPath, ObservableCollection<string> branchNames)
+    {
+        if (repositoryPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            foreach (var branch in repo.Branches)
+            {
+                branchNames.Add(branch.FriendlyName);
+            }
+        }
+        catch (RepositoryNotFoundException)
+        {
+        }
+        catch (LibGit2SharpException)
+        {
+        }
     }
 }

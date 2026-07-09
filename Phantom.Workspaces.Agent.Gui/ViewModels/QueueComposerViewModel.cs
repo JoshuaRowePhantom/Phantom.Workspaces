@@ -79,7 +79,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public string? NormalModeHint =>
         !this.isFormattedMode && this.IsDefaultComposer
-            ? "Enter · send  ·  Shift+Enter · multi-line  ·  Ctrl+Q · enqueue  ·  Ctrl+Shift+Q · new queue"
+            ? "Enter · send  ·  Shift+Enter · multi-line  ·  Ctrl+Q · enqueue  ·  Ctrl+Shift+Q · new queue  ·  Ctrl+Break · interrupt  ·  Pause · toggle hold  ·  Shift+Pause · hold all"
             : null;
 
     public string? ActiveHint => this.FormattedModeHint ?? this.NormalModeHint;

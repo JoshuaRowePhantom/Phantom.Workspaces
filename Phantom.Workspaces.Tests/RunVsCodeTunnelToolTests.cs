@@ -449,4 +449,27 @@ public sealed class RunVsCodeTunnelToolTests
 
         Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_TimeoutException_ReturnsFailureWithTimeoutMessage()
+    {
+        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, ct) =>
+            {
+                if (args.Contains("install"))
+                {
+                    throw new TimeoutException("Process timed out");
+                }
+                return Task.FromResult(("", 1));
+            },
+            logger: testLogger);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("timed out", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
 }

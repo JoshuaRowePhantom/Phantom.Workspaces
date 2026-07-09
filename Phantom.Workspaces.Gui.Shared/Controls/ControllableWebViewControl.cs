@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Threading;
 
 namespace Phantom.Workspaces.Gui.Shared.Controls;
 
@@ -23,8 +24,13 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
 
     private readonly List<string> startupScripts = [];
     private readonly Queue<string> pendingMessages = new();
+    private readonly List<string> autoBatchMessages = [];
     private List<string>? batchMessages;
     private bool isShellLoaded;
+    private DispatcherTimer? autoFlushTimer;
+    private int pendingGeneration = 1;
+    private int lastAckedGeneration;
+    private bool waitingForAck;
 
     public ControllableWebViewControl()
     {
@@ -37,6 +43,18 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
 
     /// <summary>Raised when the page posts a message back to the host. Carries the raw message body.</summary>
     public event EventHandler<string>? JavaScriptMessageReceived;
+
+    /// <summary>
+    /// Enables render-completion gating: batches are tagged with generation numbers and subsequent
+    /// batches are held until the page acknowledges completion via requestAnimationFrame callback.
+    /// Default is false (timer-based batching only).
+    /// </summary>
+    public bool EnableRenderCompletionGating { get; set; }
+
+    /// <summary>
+    /// Timer interval (in milliseconds) for automatic batch flush. Default is 16ms (~60fps).
+    /// </summary>
+    public int BatchFlushIntervalMs { get; set; } = 16;
 
     /// <summary>
     /// The static HTML shell to load into the page. Assigning a new value reloads the shell and
@@ -68,6 +86,7 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
     /// Messages sent before the shell is ready are queued and flushed once it loads, preserving order.
     /// During a batch (between <see cref="BeginBatch"/> and <see cref="EndBatch"/>), messages are
     /// accumulated and flushed as a single <c>InvokeScript</c> call by <see cref="EndBatch"/>.
+    /// Outside an explicit batch, messages are accumulated and flushed via timer (~16ms by default).
     /// </summary>
     public void PostMessageToJavaScript(string message)
     {
@@ -84,7 +103,16 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
             return;
         }
 
-        this.DeliverMessage(message);
+        this.autoBatchMessages.Add(message);
+
+        if (this.autoFlushTimer == null)
+        {
+            this.autoFlushTimer = new DispatcherTimer(
+                TimeSpan.FromMilliseconds(this.BatchFlushIntervalMs),
+                DispatcherPriority.Background,
+                (_, _) => this.FlushPendingBatch());
+            this.autoFlushTimer.Start();
+        }
     }
 
     /// <inheritdoc/>
@@ -99,12 +127,50 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
         if (this.batchMessages is not { Count: > 0 } messages)
         {
             this.batchMessages = null;
+            this.FlushPendingBatch();
             return;
         }
 
         this.batchMessages = null;
+        this.DeliverBatch(messages);
+    }
 
-        var sb = new StringBuilder("([");
+    private void FlushPendingBatch()
+    {
+        if (this.autoFlushTimer != null)
+        {
+            this.autoFlushTimer.Stop();
+            this.autoFlushTimer = null;
+        }
+
+        if (this.autoBatchMessages.Count == 0)
+        {
+            return;
+        }
+
+        if (this.EnableRenderCompletionGating && this.waitingForAck)
+        {
+            return;
+        }
+
+        var messages = this.autoBatchMessages.ToArray();
+        this.autoBatchMessages.Clear();
+        this.DeliverBatch(messages);
+    }
+
+    private void DeliverBatch(IReadOnlyList<string> messages)
+    {
+        var sb = new StringBuilder();
+
+        if (this.EnableRenderCompletionGating)
+        {
+            sb.Append($"(function(){{var gen={this.pendingGeneration};var msgs=[");
+        }
+        else
+        {
+            sb.Append("([");
+        }
+
         for (var i = 0; i < messages.Count; i++)
         {
             if (i > 0)
@@ -115,7 +181,18 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
             sb.Append(EncodeJavaScriptString(messages[i]));
         }
 
-        sb.Append($"]).forEach(function(m){{window.{HostBridgeObjectName} && window.{HostBridgeObjectName}.receiveMessage(m);}});");
+        if (this.EnableRenderCompletionGating)
+        {
+            sb.Append($"];msgs.forEach(function(m){{window.{HostBridgeObjectName} && window.{HostBridgeObjectName}.receiveMessage(m);}});");
+            sb.Append($"requestAnimationFrame(function(){{window.chrome.webview.postMessage(JSON.stringify({{type:'renderComplete',generation:gen}}));}});}}());");
+            this.pendingGeneration++;
+            this.waitingForAck = true;
+        }
+        else
+        {
+            sb.Append($"]).forEach(function(m){{window.{HostBridgeObjectName} && window.{HostBridgeObjectName}.receiveMessage(m);}});");
+        }
+
         _ = this.InvokeScript(sb.ToString());
     }
 
@@ -154,7 +231,34 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
     private void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs e)
     {
         if (e.Body is { } body)
+        {
+            if (this.EnableRenderCompletionGating && body.Contains("\"type\":\"renderComplete\"", StringComparison.Ordinal))
+            {
+                this.HandleRenderComplete(body);
+            }
+
             this.JavaScriptMessageReceived?.Invoke(this, body);
+        }
+    }
+
+    private void HandleRenderComplete(string body)
+    {
+        var genStart = body.IndexOf("\"generation\":", StringComparison.Ordinal);
+        if (genStart >= 0)
+        {
+            genStart += "\"generation\":".Length;
+            var genEnd = body.IndexOfAny([',', '}'], genStart);
+            if (genEnd > genStart && int.TryParse(body.AsSpan(genStart, genEnd - genStart), out var generation))
+            {
+                this.lastAckedGeneration = generation;
+                this.waitingForAck = false;
+
+                if (this.autoBatchMessages.Count > 0)
+                {
+                    this.FlushPendingBatch();
+                }
+            }
+        }
     }
 
     private void DeliverMessage(string message)

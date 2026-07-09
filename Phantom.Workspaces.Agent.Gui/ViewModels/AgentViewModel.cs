@@ -7,6 +7,7 @@ using System.Threading;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
@@ -26,6 +27,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly DiagnosticInspectorViewModel diagnosticsDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
+    private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
+    private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
+    private readonly AgentEditorNavigationItemViewModel toolsNavItem;
+    private readonly AgentEditorNavigationItemViewModel backgroundTasksNavItem;
+    private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
+    private readonly AgentEditorNavigationItemViewModel diagnosticsNavItem;
+    private readonly ToolsCollectionTransformer toolsTransformer;
+    private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
@@ -68,6 +77,84 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
         }
         ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
+
+        // Create detail content slots.
+        this.detailContentSlots.Add(new DetailContentSlot(this.conversationDetail) { IsVisible = true });
+        this.detailContentSlots.Add(new DetailContentSlot(this.chatDetailsDetail));
+        this.detailContentSlots.Add(new DetailContentSlot(this.toolsDetail));
+        this.detailContentSlots.Add(new DetailContentSlot(this.backgroundTasksDetail));
+        this.detailContentSlots.Add(new DetailContentSlot(this.subAgentsContainerDetail));
+        this.detailContentSlots.Add(new DetailContentSlot(this.diagnosticsDetail));
+        this.DetailContentSlots = new ReadOnlyObservableCollection<DetailContentSlot>(this.detailContentSlots);
+
+        // Build fixed navigation items once.
+        this.chatDetailsNavItem = new AgentEditorNavigationItemViewModel(
+            "chat-details",
+            "Chat details",
+            null,
+            "Session information",
+            null,
+            this.chatDetailsDetail,
+            []);
+
+        this.toolsNavItem = new AgentEditorNavigationItemViewModel(
+            "chat-tools",
+            "Tools",
+            null,
+            "Loaded tools",
+            null,
+            this.toolsDetail,
+            [],
+            isExpanded: true);
+
+        this.backgroundTasksNavItem = new AgentEditorNavigationItemViewModel(
+            "chat-background-tasks",
+            "Background tasks",
+            null,
+            "Planned background work",
+            null,
+            this.backgroundTasksDetail,
+            []);
+
+        this.subAgentsNavItem = new AgentEditorNavigationItemViewModel(
+            "chat-sub-agents",
+            "Sub-agents",
+            null,
+            "Sub-agents",
+            null,
+            this.subAgentsContainerDetail,
+            []);
+
+        this.diagnosticsNavItem = new AgentEditorNavigationItemViewModel(
+            "chat-diagnostics",
+            "Diagnostics",
+            null,
+            "Diagnostic information",
+            null,
+            this.diagnosticsDetail,
+            []);
+
+        var root = new AgentEditorNavigationItemViewModel(
+            "chat",
+            this.DisplayName,
+            null,
+            null,
+            null,
+            this.conversationDetail,
+            [this.chatDetailsNavItem, this.toolsNavItem, this.backgroundTasksNavItem, this.subAgentsNavItem, this.diagnosticsNavItem],
+            isExpanded: false);
+
+        this.EditorItems.Add(root);
+        this.SelectedEditorItem = root;
+
+        // Set up tools transformer.
+        this.toolsTransformer = new ToolsCollectionTransformer(this.Tools, this.toolsNavItem.Children, this.toolsDetail);
+
+        // Set up sub-agents transformer.
+        this.subAgentsTransformer = new SubAgentsCollectionTransformer(
+            this.subAgentsContainerDetail.Slots,
+            this.subAgentsNavItem.Children,
+            this.subAgentsNavItem);
 
         // Seed slots for any sub-agents already present (e.g. restored from persistence).
         foreach (var subAgent in agentChat.SubAgents)
@@ -154,6 +241,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
 
+    public ReadOnlyObservableCollection<DetailContentSlot> DetailContentSlots { get; }
+
     public bool IsChatRunning => this.RunningItems.Count > 0;
 
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
@@ -187,7 +276,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 }
             }
 
-            this.RaisePropertyChanged(nameof(this.SelectedEditorDetailContent));
+            // Update detail content slot visibility.
+            var selected = value?.DetailContent;
+            foreach (var slot in this.detailContentSlots)
+            {
+                slot.IsVisible = ReferenceEquals(slot.Content, selected);
+            }
         }
     }
 
@@ -366,8 +460,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             this.Tools.Add(this.CreateToolViewModel(tool));
         }
-
-        this.BuildEditorTree();
     }
 
     private AgentChatToolViewModel CreateToolViewModel(AgentChatToolItem tool)
@@ -382,88 +474,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             tool.Children.Select(this.CreateToolViewModel).ToArray(),
             enabled => this.agentChat.SetToolEnabledAsync(tool.Id, enabled));
 
-    private void BuildEditorTree()
-    {
-        var selectedId = this.SelectedEditorItem?.Id;
-        this.EditorItems.Clear();
-
-        var toolNavigationItems = BuildToolNavigationItems(this.Tools);
-
-        // Build sub-agent children (one per cached slot), all sharing the container as DetailContent.
-        var subAgentCount = this.subAgentsContainerDetail.Slots.Count;
-        var subAgentLabel = subAgentCount > 0
-            ? $"Sub-agents ({subAgentCount})"
-            : "Sub-agents";
-        var subAgentChildren = this.subAgentsContainerDetail.Slots
-            .Select(slot => new AgentEditorNavigationItemViewModel(
-                $"sub-agent-{slot.AgentId}",
-                slot.SubAgentViewModel.DisplayName,
-                null,
-                null,
-                null,
-                this.subAgentsContainerDetail,
-                []))
-            .ToArray();
-
-        var root = new AgentEditorNavigationItemViewModel(
-            "chat",
-            this.DisplayName,
-            null,
-            null,
-            null,
-            this.conversationDetail,
-            [
-                new AgentEditorNavigationItemViewModel("chat-details", "Chat details", null, "Session information", null, this.chatDetailsDetail, []),
-                new AgentEditorNavigationItemViewModel("chat-tools", "Tools", null, "Loaded tools", null, this.toolsDetail, toolNavigationItems, isExpanded: true),
-                new AgentEditorNavigationItemViewModel("chat-background-tasks", "Background tasks", null, "Planned background work", null, this.backgroundTasksDetail, []),
-                new AgentEditorNavigationItemViewModel("chat-sub-agents", subAgentLabel, null, "Sub-agents", null, this.subAgentsContainerDetail, subAgentChildren),
-                new AgentEditorNavigationItemViewModel("chat-diagnostics", "Diagnostics", null, "Diagnostic information", null, this.diagnosticsDetail, []),
-            ],
-            isExpanded: false);
-
-        this.toolsDetail.SetToolNavigationItems(toolNavigationItems);
-        this.EditorItems.Add(root);
-        this.SelectedEditorItem = FindNavigationItem(root, selectedId) ?? root;
-    }
-
-    private IReadOnlyList<AgentEditorNavigationItemViewModel> BuildToolNavigationItems(IEnumerable<AgentChatToolViewModel> tools)
-        => tools.Select(t => BuildToolNavigationItem(t, isTopLevel: true)).ToArray();
-
-    private AgentEditorNavigationItemViewModel BuildToolNavigationItem(AgentChatToolViewModel tool, bool isTopLevel = false)
-        => new(
-            tool.Id,
-            tool.Name,
-            tool.Id,
-            tool.Summary,
-            tool,
-            this.toolsDetail,
-            tool.Children.Select(c => BuildToolNavigationItem(c, isTopLevel: false)).ToArray(),
-            isExpanded: !isTopLevel);
-
-    private static AgentEditorNavigationItemViewModel? FindNavigationItem(AgentEditorNavigationItemViewModel root, string? id)
-    {
-        if (string.IsNullOrWhiteSpace(id))
-        {
-            return null;
-        }
-
-        if (string.Equals(root.Id, id, StringComparison.OrdinalIgnoreCase))
-        {
-            return root;
-        }
-
-        foreach (var child in root.Children)
-        {
-            var match = FindNavigationItem(child, id);
-            if (match is not null)
-            {
-                return match;
-            }
-        }
-
-        return null;
-    }
-
     public async ValueTask DisposeAsync()
     {
         await this.DisposeViewResourcesAsync();
@@ -472,6 +482,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public async ValueTask DisposeViewResourcesAsync()
     {
+        this.toolsTransformer.Dispose();
+        this.subAgentsTransformer.Dispose();
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
         this.diagnosticsDetail.Dispose();
@@ -521,8 +533,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.AddSubAgentSlot(subAgent);
             }
         }
-
-        this.BuildEditorTree();
     }
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
@@ -577,5 +587,84 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.RaisePropertyChanged(nameof(this.TotalInputTokenCount));
         this.RaisePropertyChanged(nameof(this.TotalOutputTokenCount));
+    }
+
+    private sealed class ToolsCollectionTransformer : CollectionTransformer<AgentChatToolViewModel, AgentEditorNavigationItemViewModel>
+    {
+        private readonly AgentChatToolsDetailViewModel toolsDetail;
+
+        public ToolsCollectionTransformer(
+            IReadOnlyList<AgentChatToolViewModel> source,
+            IList<AgentEditorNavigationItemViewModel> target,
+            AgentChatToolsDetailViewModel toolsDetail)
+            : base(source, target)
+        {
+            this.toolsDetail = toolsDetail;
+            this.ApplyInitialTransform();
+            this.toolsDetail.SetToolNavigationItems((ObservableCollection<AgentEditorNavigationItemViewModel>)target);
+        }
+
+        protected override AgentEditorNavigationItemViewModel Create(AgentChatToolViewModel tool)
+            => this.BuildToolNavigationItem(tool, isTopLevel: true);
+
+        private AgentEditorNavigationItemViewModel BuildToolNavigationItem(AgentChatToolViewModel tool, bool isTopLevel = false)
+            => new(
+                tool.Id,
+                tool.Name,
+                tool.Id,
+                tool.Summary,
+                tool,
+                this.toolsDetail,
+                tool.Children.Select(c => this.BuildToolNavigationItem(c, isTopLevel: false)).ToArray(),
+                isExpanded: !isTopLevel);
+    }
+
+    private sealed class SubAgentsCollectionTransformer : CollectionTransformer<SubAgentSlotViewModel, AgentEditorNavigationItemViewModel>
+    {
+        private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
+
+        public SubAgentsCollectionTransformer(
+            IReadOnlyList<SubAgentSlotViewModel> source,
+            IList<AgentEditorNavigationItemViewModel> target,
+            AgentEditorNavigationItemViewModel subAgentsNavItem)
+            : base(source, target)
+        {
+            this.subAgentsNavItem = subAgentsNavItem;
+            this.ApplyInitialTransform();
+            this.UpdateSubAgentsLabel();
+        }
+
+        protected override AgentEditorNavigationItemViewModel Create(SubAgentSlotViewModel slot)
+        {
+            var subRoot = slot.SubAgentViewModel.EditorItems.FirstOrDefault();
+            return new AgentEditorNavigationItemViewModel(
+                $"sub-agent-{slot.AgentId}",
+                slot.SubAgentViewModel.DisplayName,
+                null,
+                null,
+                null,
+                this.subAgentsNavItem.DetailContent,
+                subRoot?.Children.ToArray() ?? []);
+        }
+
+        protected override void OnInsert(int index, AgentEditorNavigationItemViewModel target)
+        {
+            this.UpdateSubAgentsLabel();
+            if (this.Target.Count == 1)
+            {
+                this.subAgentsNavItem.IsExpanded = true;
+            }
+        }
+
+        protected override void OnRemoveAt(int index, AgentEditorNavigationItemViewModel target)
+        {
+            this.UpdateSubAgentsLabel();
+        }
+
+        private void UpdateSubAgentsLabel()
+        {
+            var count = this.Target.Count;
+            this.subAgentsNavItem.Name = count > 0 ? $"Sub-agents ({count})" : "Sub-agents";
+        }
     }
 }

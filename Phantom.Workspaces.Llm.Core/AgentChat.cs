@@ -376,6 +376,11 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
+    internal void RaiseToolsChanged()
+    {
+        this.ToolsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public async Task SetToolEnabledAsync(
         string toolId,
         bool enabled,

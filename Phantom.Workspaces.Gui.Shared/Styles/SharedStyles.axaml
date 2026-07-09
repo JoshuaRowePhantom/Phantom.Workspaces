@@ -563,6 +563,18 @@
         <Setter Property="VerticalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-entity-shortcut-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card:focus-within Button.workspace-entity-shortcut-button">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="Button.workspace-entity-badge-button">
         <Setter Property="MinWidth" Value="0" />

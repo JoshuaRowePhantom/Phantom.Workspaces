@@ -107,4 +107,27 @@ public sealed class VsCodeCliLocatorTests
         Assert.False(psi.UseShellExecute);
         Assert.True(psi.CreateNoWindow);
     }
+
+    [Fact]
+    public void BuildRunProcessParameters_TimeoutProvided_SetsTimeoutField()
+    {
+        var timeout = TimeSpan.FromMinutes(5);
+        var parameters = VsCodeCliLocator.BuildRunProcessParameters(
+            "code.cmd",
+            "tunnel status",
+            timeout);
+
+        Assert.Equal(timeout, parameters.Timeout);
+    }
+
+    [Fact]
+    public void BuildRunProcessParameters_NoTimeoutProvided_TimeoutIsNull()
+    {
+        var parameters = VsCodeCliLocator.BuildRunProcessParameters(
+            "code.cmd",
+            "tunnel status",
+            timeout: null);
+
+        Assert.Null(parameters.Timeout);
+    }
 }

@@ -33,12 +33,6 @@ public sealed class EntityRepository
 
     public IDataAccessLayer DataAccessLayer { get; }
 
-    public static EntityRepository Create(
-        RepositorySource repositorySource)
-    {
-        return CreateAsync(repositorySource).GetAwaiter().GetResult();
-    }
-
     public static async Task<EntityRepository> CreateAsync(
         RepositorySource repositorySource,
         string? userComputerProfileOverride = null)
@@ -60,6 +54,13 @@ public sealed class EntityRepository
         }
         if (!isWebSource)
         {
+            // For MongoDB data access layers, ensure indexes and migrate schema before any reads
+            if (underlyingDataAccessLayer is MongoDbEntityDataAccessLayer mongoDbDataAccessLayer)
+            {
+                await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
+                await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
+            }
+
             await EnsureSeedDataIfNeededAsync(innerDataAccessLayer).ConfigureAwait(false);
         }
 

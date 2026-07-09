@@ -58,6 +58,7 @@
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"
                                   VerticalAlignment="Center"
+                                  ToolTip.Tip="Toggle auto-scroll (Scroll Lock)"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <Button Classes="agent-chat-status-line-reasoning-toggle"
@@ -213,6 +214,11 @@
                 <ContentControl Content="{Binding Browser}"
                                 IsVisible="{Binding IsShowingBrowser}"/>
                 <ItemsControl ItemsSource="{Binding Slots}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Panel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="vm:SubAgentSlotViewModel">
                             <controls:AgentChatEditorControl DataContext="{Binding SubAgentViewModel}"
@@ -300,8 +306,21 @@
                           Grid.Column="1"
                           Click="OnTreeCollapseToggleClicked"
                           Content="◀"/>
-            <ContentControl Grid.Column="2"
-                            Content="{Binding SelectedEditorDetailContent}"/>
+            <Panel Grid.Column="2">
+                <ItemsControl ItemsSource="{Binding DetailContentSlots}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <Panel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:DetailContentSlot">
+                            <ContentControl Content="{Binding Content}"
+                                            IsVisible="{Binding IsVisible}"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Panel>
         </Grid>
     </Border>
 </UserControl>
