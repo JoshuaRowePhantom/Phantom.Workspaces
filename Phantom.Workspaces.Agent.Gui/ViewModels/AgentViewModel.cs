@@ -29,6 +29,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
+    private readonly TaskScheduler foregroundScheduler;
     private bool isReasoningVisible;
     private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
@@ -36,11 +37,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName, ObservableLoggerFactory loggerFactory)
+    public AgentViewModel(AgentChat agentChat, string displayName, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
+        this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
         this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
@@ -566,7 +568,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgentChat.DisplayName, this.loggerFactory);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgentChat.DisplayName, this.loggerFactory, this.foregroundScheduler);
         this.subAgentViewModels.Add(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel);
@@ -574,39 +576,29 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlotLazy(SubAgent stub)
     {
-        // Capture the synchronization context from the calling thread (UI thread)
-        var syncContext = SynchronizationContext.Current;
-        
-        _ = Task.Run(async () =>
-        {
-            try
+        // Start async lease acquisition and schedule UI update when complete
+        var acquisitionTask = stub.AcquireLeaseAsync();
+        acquisitionTask.ContinueWith(
+            task =>
             {
-                var lease = await stub.AcquireLeaseAsync();
-                // Hold the lease for the lifetime of the slot
-                lock (this.subAgentLeases)
+                if (task.IsCompletedSuccessfully)
                 {
-                    this.subAgentLeases.Add(lease);
-                }
-                // Post back to the captured synchronization context (or UI thread)
-                if (syncContext is not null)
-                {
-                    syncContext.Post(_ => this.AddSubAgentSlotEager(stub, lease.AgentChat), null);
-                }
-                else if (Dispatcher.UIThread is not null)
-                {
-                    Dispatcher.UIThread.Post(() => this.AddSubAgentSlotEager(stub, lease.AgentChat));
-                }
-                else
-                {
-                    // Fallback for unit tests: call directly (risky but better than nothing)
+                    var lease = task.Result;
+                    // Hold the lease for the lifetime of the slot
+                    lock (this.subAgentLeases)
+                    {
+                        this.subAgentLeases.Add(lease);
+                    }
                     this.AddSubAgentSlotEager(stub, lease.AgentChat);
                 }
-            }
-            catch (Exception ex)
-            {
-                this.logger.LogError(ex, "Failed to acquire lease for restored sub-agent {AgentId}", stub.SessionId.Value);
-            }
-        });
+                else if (task.IsFaulted)
+                {
+                    this.logger.LogError(task.Exception, "Failed to acquire lease for restored sub-agent {AgentId}", stub.SessionId.Value);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            this.foregroundScheduler);
     }
 
     private void NavigateToSubAgent(string agentId)

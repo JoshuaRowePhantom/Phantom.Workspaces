@@ -178,8 +178,8 @@ public sealed class AgentViewModelSubAgentBrowserTests
 
     // ── §14 Restored sub-agents ───────────────────────────────────────────
 
-#pragma warning disable xUnit1051 // Methods using CancellationToken in tests
-    [Fact(Skip = "Lazy loading async tests have synchronization issues in test environment - works in production")]
+#pragma warning disable xUnit1051 // CancellationToken parameter - not needed for deterministic tests
+    [Fact]
     public async Task SubAgentsGroup_AppearsInEditorTree_WhenRestoredSubAgentsExist()
     {
         // Arrange: create a parent with a sub-agent, persist, and restore.
@@ -197,20 +197,20 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
         var scheduler = new CapturingTaskScheduler();
         await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
 
-        // Act: Wait for lazy slot creation to complete (poll with timeout).
-        await WaitForConditionAsync(() => viewModel.EditorItems.Count > 0, TimeSpan.FromSeconds(2));
+        // Act: Drain the scheduler to trigger lazy loading, then wait for async completion.
+        scheduler.Drain();
+        await Task.Delay(500); // Wait for AcquireLeaseAsync to complete (async I/O)
 
         // Assert: The sub-agents group node should appear.
         var root = Assert.Single(viewModel.EditorItems);
         Assert.Contains(root.Children, c => c.Id == "chat-sub-agents");
     }
 
-    [Fact(Skip = "Lazy loading async tests have synchronization issues in test environment - works in production")]
+    [Fact]
     public async Task SubAgentSlot_CreatedForRestoredSubAgent_AfterLeaseAcquired()
     {
         // Arrange: create and restore a parent with a sub-agent.
@@ -227,20 +227,20 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
         var scheduler = new CapturingTaskScheduler();
         await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
 
-        // Act: Wait for lease acquisition to complete (poll with timeout).
-        await WaitForConditionAsync(() => viewModel.SubAgentsContainer.Slots.Count > 0, TimeSpan.FromSeconds(2));
+        // Act: Drain the scheduler to trigger lazy loading, then wait for async completion.
+        scheduler.Drain();
+        await Task.Delay(500); // Wait for AcquireLeaseAsync to complete (async I/O)
 
         // Assert: The slot should be created.
         var slot = Assert.Single(viewModel.SubAgentsContainer.Slots);
         Assert.Equal("agent-1", slot.AgentId);
     }
 
-    [Fact(Skip = "Lazy loading async tests have synchronization issues in test environment - works in production")]
+    [Fact]
     public async Task SubAgentSlot_NotCreatedImmediately_ForRestoredSubAgent_BeforeLeaseAcquired()
     {
         // Arrange: create and restore a parent with a sub-agent.
@@ -257,17 +257,19 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
         var scheduler = new CapturingTaskScheduler();
         await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
 
-        // Act: Check immediately (before lease acquisition).
+        // Act: Check immediately (before draining the scheduler).
         // Assert: No slot should exist yet.
         Assert.Empty(viewModel.SubAgentsContainer.Slots);
+        
+        // Drain the scheduler to allow disposal to complete without hanging.
+        scheduler.Drain();
     }
 
-    [Fact(Skip = "Lazy loading async tests have synchronization issues in test environment - works in production")]
+    [Fact]
     public async Task SubAgentsGroup_Count_IncludesRestoredSubAgents()
     {
         // Arrange: create and restore a parent with two sub-agents.
@@ -285,19 +287,13 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var services = new AgentServices { RunningAgentChatFactory = factory };
         var scheduler = new CapturingTaskScheduler();
         await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
 
-        // Act: Wait for lazy loading to complete (poll with timeout).
-        await WaitForConditionAsync(() => 
-        {
-            var root = viewModel.EditorItems.FirstOrDefault();
-            if (root is null) return false;
-            var subAgentsNode = root.Children.FirstOrDefault(c => c.Id == "chat-sub-agents");
-            return subAgentsNode?.Name == "Sub-agents (2)";
-        }, TimeSpan.FromSeconds(2));
+        // Act: Drain the scheduler to trigger lazy loading, then wait for async completion.
+        scheduler.Drain();
+        await Task.Delay(500); // Wait for AcquireLeaseAsync to complete (async I/O)
 
         // Assert: The count should reflect restored sub-agents.
         var root = Assert.Single(viewModel.EditorItems);
@@ -307,19 +303,6 @@ public sealed class AgentViewModelSubAgentBrowserTests
 #pragma warning restore xUnit1051
 
     // Helpers ───────────────────────────────────────────────────────────────
-
-    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
-    {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        while (!condition() && stopwatch.Elapsed < timeout)
-        {
-            await Task.Delay(50);
-        }
-        if (!condition())
-        {
-            throw new TimeoutException($"Condition not met within {timeout.TotalSeconds} seconds");
-        }
-    }
 
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
