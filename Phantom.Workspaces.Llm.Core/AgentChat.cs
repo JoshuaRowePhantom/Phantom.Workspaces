@@ -1470,6 +1470,104 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
+    private async Task RunHostedProcessLoopAsync(
+        CancellationToken cancellationToken)
+    {
+        var currentSession = this.GetSession();
+        AgentChatRunningItem? runningItem = null;
+        PartialResponseConflator? partialResponses = null;
+        try
+        {
+            runningItem = this.CreateRunningItem([
+                new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Timestamp = DateTimeOffset.UtcNow,
+                }]);
+
+            partialResponses = new PartialResponseConflator(
+                this,
+                runningItem);
+
+            lock (this.steeringLock)
+            {
+                this.activeConflator = partialResponses;
+            }
+
+            var providerEnumerator = this.StartRun(
+                    [],
+                    currentSession,
+                    cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+
+            try
+            {
+                while (await providerEnumerator.MoveNextAsync())
+                {
+                    this.AccumulateUsage(providerEnumerator.Current);
+                    partialResponses.Notify(providerEnumerator.Current);
+                }
+            }
+            finally
+            {
+                await DisposeProviderEnumeratorAsync(providerEnumerator);
+            }
+
+            await partialResponses.DrainAsync();
+            this.SetCompletionState(AgentChatCompletionState.Succeeded);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (runningItem is not null)
+            {
+                var errorItems = runningItem.Items
+                    .ToArray()
+                    .Concat([
+                        new AgentChatHistoryItem
+                        {
+                            Role = AgentChatHistoryItem.DiagnosticChatRole,
+                            Contents = [new ErrorContent($"Hosted sub-agent error: {ex.Message}")],
+                            Timestamp = DateTimeOffset.UtcNow,
+                        },
+                    ])
+                    .ToArray();
+
+                this.UpdateRunningItem(runningItem, errorItems);
+            }
+
+            this.SetCompletionState(AgentChatCompletionState.Failed);
+        }
+        finally
+        {
+            if (partialResponses is not null)
+            {
+                await DrainQuietlyAsync(partialResponses);
+            }
+
+            lock (this.steeringLock)
+            {
+                if (ReferenceEquals(this.activeConflator, partialResponses))
+                {
+                    this.activeConflator = null;
+                }
+            }
+
+            if (runningItem is not null)
+            {
+                this.CompleteRunningItem(runningItem);
+            }
+
+            lock (this.processingStateLock)
+            {
+                this.isBusy = false;
+                this.processingStarted = false;
+            }
+        }
+    }
+
     /// <summary>
     /// Cleans up a run's provider enumerator and cancellation source in the background. The in-flight
     /// read (if any) is awaited first so the enumerator is never disposed while a <c>MoveNextAsync</c>
@@ -1677,8 +1775,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             // the exclusive scheduler, which serializes the loop's running-item lifecycle operations
             // (create/update/complete) with the conflator's running-item population so the
             // collections are never mutated concurrently.
+            var loopTask = this.acceptsUserInput
+                ? this.RunProcessLoopAsync(this.cts.Token)
+                : this.RunHostedProcessLoopAsync(this.cts.Token);
+
             this.processTask = Task.Factory.StartNew(
-                () => this.RunProcessLoopAsync(this.cts.Token),
+                () => loopTask,
                 this.cts.Token,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler).Unwrap();
