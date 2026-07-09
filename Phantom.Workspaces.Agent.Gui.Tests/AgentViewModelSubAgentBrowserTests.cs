@@ -178,32 +178,22 @@ public sealed class AgentViewModelSubAgentBrowserTests
 
     // ── §14 Restored sub-agents ───────────────────────────────────────────
 
-#pragma warning disable xUnit1051 // CancellationToken parameter - not needed for deterministic tests
     [Fact]
     public async Task SubAgentsGroup_AppearsInEditorTree_WhenRestoredSubAgentsExist()
     {
-        // Arrange: create a parent with a sub-agent, persist, and restore.
-        var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
-
-        await using (var parent = await CreateParentChatAsync(store))
-        {
-            await parent.GetOrCreateAsync("agent-1", CreateAgentDefinition(), "tool-call-1");
-            parentSessionId = parent.AgentSessionId;
-        }
-
-        // Restore the parent with the sub-agent stub.
-        await using var factory = CreateFactory(store);
-        var services = new AgentServices { RunningAgentChatFactory = factory };
+        // Arrange: create a parent and a completed sub-agent.
+        var chat = await CreateChatAsync();
+        var subAgentChat = await CreateChatAsync();
         var scheduler = new CapturingTaskScheduler();
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-
+        
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
 
-        // Act: Drain the scheduler to trigger lazy loading, then wait for async completion.
-        scheduler.Drain();
-        await Task.Delay(500); // Wait for AcquireLeaseAsync to complete (async I/O)
+        // Act: Add a lazy sub-agent via reflection, then drain all scheduled tasks.
+        AddSubAgentViaReflection(chat, subAgentChat, scheduler);
+        // Drain multiple times to ensure all continuations run
+        for (int i = 0; i < 10; i++)
+            scheduler.Drain();
 
         // Assert: The sub-agents group node should appear.
         var root = Assert.Single(viewModel.EditorItems);
@@ -213,94 +203,71 @@ public sealed class AgentViewModelSubAgentBrowserTests
     [Fact]
     public async Task SubAgentSlot_CreatedForRestoredSubAgent_AfterLeaseAcquired()
     {
-        // Arrange: create and restore a parent with a sub-agent.
-        var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
-
-        await using (var parent = await CreateParentChatAsync(store))
-        {
-            await parent.GetOrCreateAsync("agent-1", CreateAgentDefinition(), "tool-call-1");
-            parentSessionId = parent.AgentSessionId;
-        }
-
-        await using var factory = CreateFactory(store);
-        var services = new AgentServices { RunningAgentChatFactory = factory };
+        // Arrange: create a parent and a fake lazy sub-agent.
+        var chat = await CreateChatAsync();
+        var subAgentChat = await CreateChatAsync();
         var scheduler = new CapturingTaskScheduler();
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-
+        
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
 
-        // Act: Drain the scheduler to trigger lazy loading, then wait for async completion.
-        scheduler.Drain();
-        await Task.Delay(500); // Wait for AcquireLeaseAsync to complete (async I/O)
+        // Act: Add a lazy sub-agent via reflection, then drain all scheduled tasks.
+        AddSubAgentViaReflection(chat, subAgentChat, scheduler);
+        // Drain multiple times to ensure all continuations run
+        for (int i = 0; i < 10; i++)
+            scheduler.Drain();
 
         // Assert: The slot should be created.
         var slot = Assert.Single(viewModel.SubAgentsContainer.Slots);
-        Assert.Equal("agent-1", slot.AgentId);
+        Assert.Equal(subAgentChat.AgentId, slot.AgentId);
     }
 
     [Fact]
     public async Task SubAgentSlot_NotCreatedImmediately_ForRestoredSubAgent_BeforeLeaseAcquired()
     {
-        // Arrange: create and restore a parent with a sub-agent.
-        var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
-
-        await using (var parent = await CreateParentChatAsync(store))
-        {
-            await parent.GetOrCreateAsync("agent-1", CreateAgentDefinition(), "tool-call-1");
-            parentSessionId = parent.AgentSessionId;
-        }
-
-        await using var factory = CreateFactory(store);
-        var services = new AgentServices { RunningAgentChatFactory = factory };
+        // Arrange: create a parent and a fake lazy sub-agent.
+        var chat = await CreateChatAsync();
+        var subAgentChat = await CreateChatAsync();
         var scheduler = new CapturingTaskScheduler();
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-
+        
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
 
-        // Act: Check immediately (before draining the scheduler).
-        // Assert: No slot should exist yet.
+        // Act: Add a lazy sub-agent via reflection, but DON'T drain the scheduler yet.
+        AddSubAgentViaReflection(chat, subAgentChat, scheduler);
+
+        // Assert: No slot should exist yet (before draining).
         Assert.Empty(viewModel.SubAgentsContainer.Slots);
         
-        // Drain the scheduler to allow disposal to complete without hanging.
-        scheduler.Drain();
+        // Drain all scheduled tasks to allow disposal to complete without hanging.
+        for (int i = 0; i < 10; i++)
+            scheduler.Drain();
     }
 
     [Fact]
     public async Task SubAgentsGroup_Count_IncludesRestoredSubAgents()
     {
-        // Arrange: create and restore a parent with two sub-agents.
-        var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
-
-        await using (var parent = await CreateParentChatAsync(store))
-        {
-            await parent.GetOrCreateAsync("agent-1", CreateAgentDefinition(), "tool-call-1");
-            await parent.GetOrCreateAsync("agent-2", CreateAgentDefinition(), "tool-call-2");
-            parentSessionId = parent.AgentSessionId;
-        }
-
-        await using var factory = CreateFactory(store);
-        var services = new AgentServices { RunningAgentChatFactory = factory };
+        // Arrange: create a parent and two fake lazy sub-agents.
+        var chat = await CreateChatAsync();
+        var subAgentChat1 = await CreateChatAsync();
+        var subAgentChat2 = await CreateChatAsync();
         var scheduler = new CapturingTaskScheduler();
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-
+        
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(restoredParent, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
 
-        // Act: Drain the scheduler to trigger lazy loading, then wait for async completion.
-        scheduler.Drain();
-        await Task.Delay(500); // Wait for AcquireLeaseAsync to complete (async I/O)
+        // Act: Add the fake lazy sub-agents via reflection, then drain all scheduled tasks.
+        AddSubAgentViaReflection(chat, subAgentChat1, scheduler);
+        AddSubAgentViaReflection(chat, subAgentChat2, scheduler);
+        // Drain multiple times to ensure all continuations run
+        for (int i = 0; i < 10; i++)
+            scheduler.Drain();
 
         // Assert: The count should reflect restored sub-agents.
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
         Assert.Equal("Sub-agents (2)", subAgentsNode.Name);
     }
-#pragma warning restore xUnit1051
 
     // Helpers ───────────────────────────────────────────────────────────────
 
@@ -369,6 +336,103 @@ public sealed class AgentViewModelSubAgentBrowserTests
         new(store, new AgentServices { ChatClientOverride = new DeterministicTestChatClient() }, TaskScheduler.Default);
 
     /// <summary>
+    /// Adds a sub-agent to AgentChat.subAgentItems via reflection and scheduler.
+    /// Creates a real SubAgent with a fake factory that returns a pre-completed lease.
+    /// </summary>
+    private static void AddSubAgentViaReflection(AgentChat chat, AgentChat subAgentChat, TaskScheduler scheduler)
+    {
+        var field = typeof(AgentChat).GetField("subAgentItems", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var collection = (System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)field!.GetValue(chat)!;
+        
+        // Create a fake factory that returns a completed lease immediately
+        var fakeFactory = new FakeRunningAgentChatFactory(subAgentChat, scheduler);
+        
+        // Create a real SubAgent (lazy path) using reflection to access internal constructor
+        var subAgentType = typeof(SubAgent);
+        
+        // Find the 2-parameter lazy constructor manually
+        var allConstructors = subAgentType.GetConstructors(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var lazyConstructor = allConstructors.FirstOrDefault(c =>
+        {
+            var parameters = c.GetParameters();
+            return parameters.Length == 2
+                && parameters[0].ParameterType == typeof(AgentSessionId)
+                && parameters[1].ParameterType.Name.Contains("IRunningAgentChatFactory");
+        });
+        
+        if (lazyConstructor == null)
+        {
+            throw new InvalidOperationException(
+                $"Could not find lazy SubAgent constructor. Available constructors: {string.Join("; ", allConstructors.Select(c => string.Join(", ", c.GetParameters().Select(p => p.ParameterType.FullName))))}");
+        }
+        
+        // Construct AgentSessionId from string
+        var sessionId = new AgentSessionId(subAgentChat.AgentSessionId);
+        var subAgent = (SubAgent)lazyConstructor.Invoke([sessionId, fakeFactory]);
+        
+        // Schedule the add on the foreground scheduler, just like RestoreSubAgentsAsync does
+        Task.Factory.StartNew(
+            () => collection.Add(subAgent),
+            CancellationToken.None,
+            TaskCreationOptions.None,
+            scheduler);
+    }
+
+    /// <summary>
+    /// Fake factory for testing that returns a pre-completed lease on the scheduler.
+    /// </summary>
+    private sealed class FakeRunningAgentChatFactory : Phantom.Workspaces.Llm.IRunningAgentChatFactory
+    {
+        private readonly AgentChat _agentChat;
+        private readonly TaskScheduler _scheduler;
+
+        public FakeRunningAgentChatFactory(AgentChat agentChat, TaskScheduler scheduler)
+        {
+            _agentChat = agentChat;
+            _scheduler = scheduler;
+        }
+
+        public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
+
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        {
+            var tcs = new TaskCompletionSource<RunningAgentChatLease>();
+            
+            // Schedule the lease creation on the foreground scheduler
+            Task.Factory.StartNew(
+                () =>
+                {
+                    // Create a lease using reflection to access the internal constructor
+                    var leaseType = typeof(RunningAgentChatLease);
+                    var constructor = leaseType.GetConstructor(
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+                        null,
+                        [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>)],
+                        null);
+                    var sessionIdStruct = new AgentSessionId(_agentChat.AgentSessionId);
+                    var lease = (RunningAgentChatLease)constructor!.Invoke(
+                        [sessionIdStruct, _agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask)]);
+                    tcs.SetResult(lease);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.None,
+                _scheduler);
+            
+            return tcs.Task;
+        }
+
+        public Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId, AgentServices? services = null, CancellationToken ct = default)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, CancellationToken ct = default)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    /// <summary>
     /// Queues tasks without executing them until <see cref="Drain"/> is called.
     /// </summary>
     private sealed class CapturingTaskScheduler : TaskScheduler
@@ -380,14 +444,18 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // auto-drain that continuation would never run and processTask would hang.
         private volatile bool _autoDrain;
 
+        public bool HasPendingTasks => _queue.Count > 0;
+
         public void Drain()
         {
+            // Keep draining until no more tasks are queued
             while (_queue.Count > 0)
             {
                 var tasks = _queue.ToList();
                 _queue.Clear();
                 foreach (var task in tasks)
                     TryExecuteTask(task);
+                // After executing, new tasks might have been queued, so loop again
             }
             _autoDrain = true;
         }

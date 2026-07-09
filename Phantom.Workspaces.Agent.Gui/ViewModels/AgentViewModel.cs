@@ -74,6 +74,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
         }
         ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
+        ((INotifyCollectionChanged)this.subAgentsContainerDetail.Slots).CollectionChanged += this.OnSubAgentSlotsCollectionChanged;
 
         // Seed slots for any sub-agents already present (e.g. restored from persistence).
         foreach (var subAgent in agentChat.SubAgents)
@@ -534,6 +535,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             }
         }
 
+        this.BuildEditorTree();
+    }
+
+    private void OnSubAgentSlotsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        // When slots are added/removed (e.g. after async lease acquisition), rebuild the navigation tree
         this.BuildEditorTree();
     }
 
