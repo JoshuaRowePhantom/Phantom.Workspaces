@@ -25,6 +25,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     private readonly IReadOnlyList<IRunningSubAgentDisplay> subAgents;
     private readonly IReadOnlyList<IRunningSubAgent> ancestors;
     private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> activityHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
+    private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> completionStateHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
     private bool hasContent;
 
     public RunningSubAgentsHtmlTransformer(
@@ -58,6 +59,9 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     private void OnActivityChanged(object? sender, EventArgs e)
         => this.FullRender();
 
+    private void OnCompletionStateChanged(object? sender, EventArgs e)
+        => this.FullRender();
+
     private void SyncActivitySubscriptions()
     {
         var toRemove = this.activityHandlers.Keys.Where(k => !this.subAgents.Contains(k)).ToList();
@@ -65,6 +69,12 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         {
             agent.ActivityChanged -= this.activityHandlers[agent];
             this.activityHandlers.Remove(agent);
+            
+            if (this.completionStateHandlers.TryGetValue(agent, out var completionHandler))
+            {
+                agent.CompletionStateChanged -= completionHandler;
+                this.completionStateHandlers.Remove(agent);
+            }
         }
 
         foreach (var agent in this.subAgents)
@@ -74,9 +84,13 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
                 continue;
             }
 
-            EventHandler handler = this.OnActivityChanged;
-            agent.ActivityChanged += handler;
-            this.activityHandlers[agent] = handler;
+            EventHandler activityHandler = this.OnActivityChanged;
+            agent.ActivityChanged += activityHandler;
+            this.activityHandlers[agent] = activityHandler;
+            
+            EventHandler completionHandler = this.OnCompletionStateChanged;
+            agent.CompletionStateChanged += completionHandler;
+            this.completionStateHandlers[agent] = completionHandler;
         }
     }
 
@@ -110,6 +124,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     {
         var sb = new StringBuilder();
         sb.Append("<div class=\"running-subagents-panel\" id=\"").Append(ContainerId).Append("\">");
+        sb.Append("<h4 class=\"running-subagents-header\">[Running sub-agents]</h4>");
 
         AppendBreadcrumb(sb, ancestors);
 
@@ -220,7 +235,13 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         {
             agent.ActivityChanged -= handler;
         }
+        
+        foreach (var (agent, handler) in this.completionStateHandlers)
+        {
+            agent.CompletionStateChanged -= handler;
+        }
 
         this.activityHandlers.Clear();
+        this.completionStateHandlers.Clear();
     }
 }

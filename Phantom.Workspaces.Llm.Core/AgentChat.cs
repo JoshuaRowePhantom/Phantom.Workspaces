@@ -166,6 +166,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        if (resolvedClient is SubAgentChatClient sac)
        {
            this.subAgentChatClientSource = sac;
+           sac.CompletionStateChanged += (_, _) => this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
        }
 
        var useProvidedChatClientAsIs= this.request.OverrideUseProvidedChatClientAsIs
@@ -300,6 +301,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
+    
+    /// <summary>
+    /// Fired when the completion state of this agent changes.
+    /// Only relevant for sub-agents; root agents always remain in <see cref="AgentChatCompletionState.Running"/> state.
+    /// </summary>
+    public event EventHandler? CompletionStateChanged;
 
     /// <summary>Completed conversation turns, in order.</summary>
     public AgentChatHistoryCollection History => this.history;
