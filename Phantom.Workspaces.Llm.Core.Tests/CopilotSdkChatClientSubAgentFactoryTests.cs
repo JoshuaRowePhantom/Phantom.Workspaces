@@ -350,11 +350,11 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         public List<AgentChat> AddedChats { get; } = new();
 
-        SubAgent ISubAgentTable.Add(AgentChat agentChat)
+        Task<SubAgent> ISubAgentTable.Add(AgentChat agentChat)
         {
             AddedChats.Add(agentChat);
             var sessionId = new AgentSessionId(agentChat.AgentSessionId);
-            return new SubAgent(sessionId, agentChat, null);
+            return Task.FromResult(new SubAgent(sessionId, agentChat, null));
         }
     }
 

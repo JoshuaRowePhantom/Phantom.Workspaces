@@ -278,4 +278,175 @@ public sealed class AgentChatHostedSubAgentTests
         }
         return text;
     }
+
+    [Fact]
+    public async Task RestoreSubAgentsAsync_WithPersistedChildren_PopulatesSubAgents()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "parent-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        // Create parent and persist parent→child link directly
+        var parentSessionId = Guid.NewGuid().ToString("n");
+        var childSessionId = Guid.NewGuid().ToString("n");
+        
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+
+        // Create a parent instance that will restore subagents
+        await using var restoredParent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = parentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "restored-parent",
+            AgentSessionId = parentSessionId,
+            AgentServices = new AgentServices
+            {
+                RunningAgentChatFactory = factory,
+                ChatClientOverride = new DeterministicTestChatClient()
+            },
+        });
+
+        // Wait for the SubAgents collection to be populated
+        await WaitForSubAgentCountAsync(restoredParent, 1, CancellationToken.None);
+
+        // Assert: SubAgents should be populated with a stub
+        Assert.Single(restoredParent.SubAgents);
+        var restoredChild = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
+        Assert.Equal(childSessionId, restoredChild.SessionId.Value);
+    }
+
+    private static async Task WaitForSubAgentCountAsync(
+        AgentChat chat,
+        int expectedCount,
+        CancellationToken cancellationToken)
+    {
+        var collection = (System.Collections.Specialized.INotifyCollectionChanged)chat.SubAgents;
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (chat.SubAgents.Count >= expectedCount)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        collection.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            if (chat.SubAgents.Count >= expectedCount)
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            collection.CollectionChanged -= OnCollectionChanged;
+        }
+    }
+
+
+    [Fact]
+    public async Task RestoreSubAgentsAsync_NoFactory_LogsWarning()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+
+        // Create and persist a child agent link manually
+        var parentSessionId = "parent-session-id";
+        var childSessionId = "child-session-id";
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+
+        var loggerFactory = Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+        var testLoggerFactory = new TestLoggerFactory();
+
+        var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "parent-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        // Create parent without RunningAgentChatFactory
+        await using var restoredParent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = parentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "restored-parent",
+            AgentSessionId = parentSessionId,
+            AgentServices = new AgentServices
+            {
+                // No RunningAgentChatFactory provided
+                LoggerFactory = testLoggerFactory,
+                ChatClientOverride = new DeterministicTestChatClient()
+            },
+        });
+
+        // Assert: A warning should have been logged
+        var warnings = testLoggerFactory.GetLogs(Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Contains(warnings, w => w.Contains("subagent") && w.Contains("IRunningAgentChatFactory"));
+    }
+
+    private sealed class TestLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
+    {
+        private readonly List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> _logs = new();
+
+        public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider) { }
+
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new TestLogger(_logs);
+
+        public void Dispose() { }
+
+        public List<string> GetLogs(Microsoft.Extensions.Logging.LogLevel level) =>
+            _logs.Where(l => l.Level == level).Select(l => l.Message).ToList();
+
+        private sealed class TestLogger : Microsoft.Extensions.Logging.ILogger
+        {
+            private readonly List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> _logs;
+
+            public TestLogger(List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> logs)
+            {
+                _logs = logs;
+            }
+
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                Microsoft.Extensions.Logging.LogLevel logLevel,
+                Microsoft.Extensions.Logging.EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                _logs.Add((logLevel, formatter(state, exception)));
+            }
+        }
+    }
 }

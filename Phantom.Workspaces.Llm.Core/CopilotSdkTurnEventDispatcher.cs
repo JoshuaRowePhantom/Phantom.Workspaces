@@ -291,7 +291,7 @@ internal sealed class CopilotSdkTurnEventDispatcher : ISubAgentChat
                 "Sub-agent AgentChat does not expose ICopilotSubAgentReceiver. " +
                 "Ensure the AgentDefinition uses the 'github-copilot-subagent' provider.");
 
-        this.subAgentTable!.Add(agentChat);
+        await this.subAgentTable!.Add(agentChat);
         this.factoryReceivers[agentId] = (lease, receiver);
     }
 

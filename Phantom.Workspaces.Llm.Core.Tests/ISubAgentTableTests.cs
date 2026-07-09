@@ -99,7 +99,7 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat();
         await using var child = CreateChildChat();
 
-        var subAgent = ((ISubAgentTable)parent).Add(child);
+        var subAgent = await ((ISubAgentTable)parent).Add(child);
 
         Assert.NotNull(subAgent);
     }
@@ -110,7 +110,7 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat();
         await using var child = CreateChildChat();
 
-        var subAgent = ((ISubAgentTable)parent).Add(child);
+        var subAgent = await ((ISubAgentTable)parent).Add(child);
 
         Assert.Equal(child.AgentSessionId, subAgent.SessionId.Value);
     }
@@ -121,7 +121,7 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat();
         await using var child = CreateChildChat();
 
-        var subAgent = ((ISubAgentTable)parent).Add(child);
+        var subAgent = await ((ISubAgentTable)parent).Add(child);
 
         Assert.Same(child, subAgent.AgentChat);
     }
@@ -133,7 +133,7 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat(foregroundScheduler: scheduler);
         await using var child = CreateChildChat();
 
-        var subAgent = ((ISubAgentTable)parent).Add(child);
+        var subAgent = await ((ISubAgentTable)parent).Add(child);
         scheduler.Drain();
 
         Assert.Contains(subAgent, parent.SubAgents);
@@ -146,7 +146,7 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat(foregroundScheduler: scheduler);
         await using var child = CreateChildChat();
 
-        var subAgent = ((ISubAgentTable)parent).Add(child);
+        var subAgent = await ((ISubAgentTable)parent).Add(child);
         scheduler.Drain();
 
         Assert.Single(parent.SubAgents);
@@ -164,7 +164,7 @@ public sealed class ISubAgentTableTests
         scheduler.Drain();
 
         // Mutation must be queued on the foreground scheduler, not applied inline.
-        ((ISubAgentTable)parent).Add(child);
+        _ = ((ISubAgentTable)parent).Add(child);
         Assert.Equal(1, scheduler.QueuedCount);
         Assert.Empty(parent.SubAgents);
 
@@ -188,7 +188,7 @@ public sealed class ISubAgentTableTests
             collectionChangedFired = true;
         };
 
-        ((ISubAgentTable)parent).Add(child);
+        _ = ((ISubAgentTable)parent).Add(child);
 
         // Before draining the scheduler, CollectionChanged must not have fired.
         Assert.False(collectionChangedFired);
@@ -205,9 +205,9 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat();
         await using var child = CreateChildChat();
 
-        ((ISubAgentTable)parent).Add(child);
+        await ((ISubAgentTable)parent).Add(child);
 
-        Assert.Throws<InvalidOperationException>(() => ((ISubAgentTable)parent).Add(child));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await ((ISubAgentTable)parent).Add(child));
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public sealed class ISubAgentTableTests
         var factoryServices = new AgentServices { RunningAgentChatFactory = factory };
         await using var parent = CreateParentChat(services: factoryServices);
 
-        var subAgent = ((ISubAgentTable)parent).Add(childChat);
+        var subAgent = await ((ISubAgentTable)parent).Add(childChat);
 
         await using var lease = await subAgent.AcquireLeaseAsync();
 
@@ -256,7 +256,7 @@ public sealed class ISubAgentTableTests
         await using var parent = CreateParentChat(store: store);
         await using var child = CreateChildChat();
 
-        ((ISubAgentTable)parent).Add(child);
+        await ((ISubAgentTable)parent).Add(child);
 
         var childIds = await store.ReadSubAgentChildIdsAsync(parent.AgentSessionId);
         var childId = Assert.Single(childIds);

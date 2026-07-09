@@ -829,7 +829,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     /// <inheritdoc/>
-    SubAgent ISubAgentTable.Add(AgentChat agentChat)
+    async Task<SubAgent> ISubAgentTable.Add(AgentChat agentChat)
     {
         var sessionId = new AgentSessionId(agentChat.AgentSessionId);
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
@@ -852,7 +852,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
 
-        _ = this.request.ConfiguredStore.AddSubAgentLinkAsync(this.agentSessionId, agentChat.AgentSessionId);
+        await this.request.ConfiguredStore.AddSubAgentLinkAsync(this.agentSessionId, agentChat.AgentSessionId);
 
         return subAgent;
     }
@@ -881,14 +881,21 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
     {
+        var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
+            this.agentSessionId, cancellationToken);
+
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
         if (factory is null)
         {
+            if (childIds.Count > 0)
+            {
+                var logger = this.request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>();
+                logger?.LogWarning(
+                    "Cannot restore {Count} subagent(s): IRunningAgentChatFactory unavailable",
+                    childIds.Count);
+            }
             return;
         }
-
-        var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
-            this.agentSessionId, cancellationToken);
 
         foreach (var childId in childIds)
         {
