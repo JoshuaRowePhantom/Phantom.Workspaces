@@ -52,10 +52,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
-        this.InputQueue = new InputQueueViewModel(
-            this.agentChat,
-            this.agentChat.DefaultInputQueue,
-            this.agentChat.InputQueueManager);
+        this.InputQueue = agentChat.AcceptsUserInput
+            ? new InputQueueViewModel(
+                this.agentChat,
+                this.agentChat.DefaultInputQueue,
+                this.agentChat.InputQueueManager)
+            : null;
         this.EditorItems = [];
 
         this.NavigateToAgentHandler = this.NavigateToSubAgent;
@@ -142,7 +144,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public ICommand RequestOpenLogWindowCommand { get; }
 
-    public InputQueueViewModel InputQueue { get; }
+    public InputQueueViewModel? InputQueue { get; }
 
     public DiagnosticInspectorViewModel DiagnosticsInspector => this.diagnosticsDetail;
 
@@ -226,7 +228,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             if (this.SetProperty(ref this.showChatInputHelpText, value))
             {
-                this.InputQueue.DefaultComposer.ShowChatInputHelpText = value;
+                if (this.InputQueue is not null)
+                {
+                    this.InputQueue.DefaultComposer.ShowChatInputHelpText = value;
+                }
             }
         }
     }
@@ -247,6 +252,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void ConfigureSlashCommands(Func<SlashCommandContext> contextFactory)
     {
         ArgumentNullException.ThrowIfNull(contextFactory);
+
+        if (this.InputQueue is null)
+        {
+            return;
+        }
 
         this.InputQueue.DefaultComposer.SlashCommandInterceptorAsync = text =>
             this.RunSlashCommandAsync(contextFactory, text);
@@ -472,7 +482,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public async ValueTask DisposeViewResourcesAsync()
     {
-        this.InputQueue.Dispose();
+        this.InputQueue?.Dispose();
         this.conversationDetail.Dispose();
         this.diagnosticsDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
@@ -527,7 +537,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
-        var subAgentChat = (AgentChat)subAgent;
+        AgentChat? subAgentChat = subAgent switch
+        {
+            AgentChat direct  => direct,
+            SubAgent  wrapper => wrapper.AgentChat,
+            _                 => null
+        };
+        if (subAgentChat is null) return;
+
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);

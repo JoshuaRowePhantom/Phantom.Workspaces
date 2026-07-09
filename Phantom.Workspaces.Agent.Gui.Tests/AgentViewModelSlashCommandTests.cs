@@ -26,7 +26,7 @@ public sealed class AgentViewModelSlashCommandTests
         ((SlashCommandRegistry)chat.SlashCommands).Register(fakeHandler);
 
         // Act — invoke the completions provider directly with the fake command name.
-        var provider = viewModel.InputQueue.DefaultComposer.SlashCompletionsProviderAsync!;
+        var provider = viewModel.InputQueue!.DefaultComposer.SlashCompletionsProviderAsync!;
         var completions = await provider("fake-cmd", string.Empty, CancellationToken.None);
 
         // Assert — results must be alphabetically sorted by Label, case-insensitively.
