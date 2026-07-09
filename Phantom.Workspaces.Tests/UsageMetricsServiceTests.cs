@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Models;
 using Phantom.Workspaces.Services;
@@ -80,12 +81,6 @@ public sealed class UsageMetricsServiceTests
             => throw new NotSupportedException();
     }
 
-    /// <summary>Fake TimeProvider with manual timing control.</summary>
-    private sealed class ManualTimeProvider : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow;
-    }
-
     private static QueryEntitySnapshot CreateUserAccountEntity(string provider, string userName)
     {
         using var doc = JsonDocument.Parse($$"""
@@ -124,7 +119,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -162,7 +157,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -189,7 +184,6 @@ public sealed class UsageMetricsServiceTests
     {
         var providerUri = new Uri("https://example.com");
         var firstCall = true;
-        var firstCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new FakeUsageProvider(
             providerUri,
@@ -198,7 +192,6 @@ public sealed class UsageMetricsServiceTests
                 if (firstCall)
                 {
                     firstCall = false;
-                    firstCallCompleted.TrySetResult();
                     return Task.FromResult<IReadOnlyList<UsageMetric>>(
                     [
                         new UsageMetric { Title = "API Calls" }
@@ -212,8 +205,19 @@ public sealed class UsageMetricsServiceTests
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
-        var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var mutationCount = 0;
+        var firstMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            if (Interlocked.Increment(ref mutationCount) == 1)
+                firstMutationCompleted.TrySetResult();
+            else
+                secondMutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -223,19 +227,13 @@ public sealed class UsageMetricsServiceTests
             NullLogger<UsageMetricsService>.Instance);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
-        await firstCallCompleted.Task;
-
-        // Give MutateAsync time to complete
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await firstMutationCompleted.Task;
 
         // First refresh: account added
         Assert.Single(usageMetrics.Accounts);
 
-        // Wait for second refresh to complete (with timeout for safety)
-        await secondCallCompleted.Task.WaitAsync(TimeSpan.FromSeconds(65), TestContext.Current.CancellationToken);
-
-        // Give MutateAsync time to complete the removal
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await secondMutationCompleted.Task;
 
         Assert.Equal(2, provider.CallCount);
         Assert.Empty(usageMetrics.Accounts);
@@ -246,7 +244,6 @@ public sealed class UsageMetricsServiceTests
     {
         var providerUri = new Uri("https://example.com");
         var firstCall = true;
-        var firstCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new FakeUsageProvider(
             providerUri,
@@ -255,7 +252,6 @@ public sealed class UsageMetricsServiceTests
                 if (firstCall)
                 {
                     firstCall = false;
-                    firstCallCompleted.TrySetResult();
                     return Task.FromResult<IReadOnlyList<UsageMetric>>(
                     [
                         new UsageMetric { Title = "API Calls" }
@@ -269,8 +265,14 @@ public sealed class UsageMetricsServiceTests
             CreateUserAccountEntity("https://example.com", "user1"),
         ]);
 
-        var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var firstMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            firstMutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -280,19 +282,14 @@ public sealed class UsageMetricsServiceTests
             NullLogger<UsageMetricsService>.Instance);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
-        await firstCallCompleted.Task;
-
-        // Give MutateAsync time to complete
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await firstMutationCompleted.Task;
 
         // First refresh: account added
         Assert.Single(usageMetrics.Accounts);
 
-        // Wait for second refresh (with timeout for safety)
-        await secondCallCompleted.Task.WaitAsync(TimeSpan.FromSeconds(65), TestContext.Current.CancellationToken);
-
-        // Give some time for any potential (failed) mutation
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await secondCallCompleted.Task;
+        // Second call threw - no mutation, account unchanged
 
         Assert.Equal(2, provider.CallCount);
         Assert.Single(usageMetrics.Accounts); // Account still present
@@ -320,7 +317,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -359,7 +356,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -402,7 +399,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -416,8 +413,8 @@ public sealed class UsageMetricsServiceTests
 
         Assert.Equal(1, provider.CallCount);
 
-        // Wait for 60 seconds to elapse (the real delay will happen)
-        await secondCallCompleted.Task.WaitAsync(TimeSpan.FromSeconds(65), TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await secondCallCompleted.Task;
 
         Assert.Equal(2, provider.CallCount);
     }
@@ -443,15 +440,17 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         // Use a custom scheduler to verify marshalling
+        var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var foregroundTaskIds = new List<int>();
         var foregroundScheduler = new ActionBlockScheduler(task =>
         {
             foregroundTaskIds.Add(Environment.CurrentManagedThreadId);
             task();
+            mutationCompleted.TrySetResult();
         });
 
         var usageMetrics = new UsageMetrics(foregroundScheduler);
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -462,9 +461,7 @@ public sealed class UsageMetricsServiceTests
 
         await service.StartAsync(TestContext.Current.CancellationToken);
         await firstCallCompleted.Task;
-
-        // Give MutateAsync time to complete
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await mutationCompleted.Task;
 
         // Verify the mutation ran on the foreground scheduler
         Assert.NotEmpty(foregroundTaskIds);
@@ -506,7 +503,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -546,7 +543,7 @@ public sealed class UsageMetricsServiceTests
         ]);
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         var service = new UsageMetricsService(
             dal,
@@ -581,7 +578,7 @@ public sealed class UsageMetricsServiceTests
         var dal = new FakeDataAccessLayer(Array.Empty<QueryEntitySnapshot>());
 
         var usageMetrics = new UsageMetrics();
-        var timeProvider = new ManualTimeProvider();
+        var timeProvider = new FakeTimeProvider();
 
         await using var service = new UsageMetricsService(
             dal,
@@ -591,13 +588,20 @@ public sealed class UsageMetricsServiceTests
             NullLogger<UsageMetricsService>.Instance);
 
         await service.StartAsync(TestContext.Current.CancellationToken);
-        
-        // Give it a moment to complete discovery
-        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         // No accounts discovered, so provider never called
         Assert.Equal(0, provider.CallCount);
         Assert.Empty(usageMetrics.Accounts);
+    }
+
+    /// <summary>
+    /// A TaskScheduler that executes tasks synchronously, immediately on the queuing thread.
+    /// </summary>
+    private sealed class SynchronousTaskScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task> GetScheduledTasks() => Enumerable.Empty<Task>();
+        protected override void QueueTask(Task task) => TryExecuteTask(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => TryExecuteTask(task);
     }
 
     /// <summary>
