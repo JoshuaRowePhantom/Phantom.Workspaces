@@ -26,7 +26,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
     private readonly Func<string?> tokenResolver;
     private readonly ILogger<GitHubCopilotUsageProvider> logger;
 
-    public Uri ProviderUri { get; } = new Uri("https://github.com");
+    public Uri ProviderUri { get; } = new Uri("https://github.com/copilot");
 
     public GitHubCopilotUsageProvider(
         HttpClient httpClient,
