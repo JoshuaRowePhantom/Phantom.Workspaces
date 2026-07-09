@@ -54,6 +54,13 @@ public sealed class EntityRepository
         }
         if (!isWebSource)
         {
+            // For MongoDB data access layers, ensure indexes and migrate schema before any reads
+            if (underlyingDataAccessLayer is MongoDbEntityDataAccessLayer mongoDbDataAccessLayer)
+            {
+                await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
+                await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
+            }
+
             await EnsureSeedDataIfNeededAsync(innerDataAccessLayer).ConfigureAwait(false);
         }
 

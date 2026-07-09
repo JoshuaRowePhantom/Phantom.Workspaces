@@ -368,6 +368,59 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
         Assert.Empty(Assert.Single(result.Batches).Entities);
     }
 
+    [Fact]
+    public async Task MigrateAsync_ThenGetAsync_WithLegacyCurrentFields_Succeeds()
+    {
+        await _fixture.ResetCollectionAsync();
+        
+        // Insert a document with legacy schema (missing name-parent-prefixes and participant-ids)
+        var entityId = new EntityId("f1234567-89ab-cdef-0123-456789abcdef");
+        var collection = _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities");
+        var document = new BsonDocument
+        {
+            { "_id", new ObjectId() },
+            { "entity-id", entityId.ToString() },
+            { "concurrency-tag", "legacy-tag" },
+            { "current", new BsonDocument
+                {
+                    { "data", new BsonDocument
+                        {
+                            { "entity-id", entityId.ToString() },
+                            { "type-names", new BsonArray { "entity" } },
+                            { "names", new BsonArray { new BsonArray { "test", "legacy" } } }
+                        }
+                    },
+                    { "type-names", new BsonArray { "entity" } },
+                    { "names", new BsonArray { new BsonArray { "test", "legacy" } } }, // Legacy field
+                    { "is-deleted", false },
+                    { "modified-time-utc", DateTime.UtcNow },
+                    { "modified-version", "1" }
+                }
+            }
+        };
+        await collection.InsertOneAsync(document);
+
+        // Call MigrateAsync to backfill new fields and remove old ones
+        var mongoDataAccessLayer = new MongoDbEntityDataAccessLayer(_fixture.Database, MongoDbTestDatabaseFixture.EntityCollectionName);
+        await mongoDataAccessLayer.MigrateAsync();
+
+        // Now GetAsync should succeed and the document should have the new fields
+        var getResult = await mongoDataAccessLayer.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityId = entityId }],
+        });
+
+        var snapshot = Assert.Single(Assert.Single(getResult.Batches).Entities);
+        Assert.Equal(entityId, snapshot.EntityId);
+        
+        // Verify the migrated document no longer has the legacy "names" field in current
+        var migratedDoc = await collection.Find(new BsonDocument("entity-id", entityId.ToString())).FirstOrDefaultAsync();
+        Assert.NotNull(migratedDoc);
+        var currentBson = migratedDoc["current"].AsBsonDocument;
+        Assert.False(currentBson.Contains("names"), "Legacy 'names' field should be removed");
+        Assert.True(currentBson.Contains("name-parent-prefixes"), "New 'name-parent-prefixes' field should exist");
+    }
+
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
         return new MongoDbEntityDataAccessLayer(_fixture.Database, MongoDbTestDatabaseFixture.EntityCollectionName);
