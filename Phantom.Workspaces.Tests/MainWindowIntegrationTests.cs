@@ -2974,6 +2974,25 @@ public sealed class MainWindowIntegrationTests
         return tcs.Task;
     }
 
+    private static async Task WaitForDocumentTabStripAsync(Window window, Type expectedDataContextType, int timeoutMs = 10_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            var tabStrip = window.GetVisualDescendants()
+                .OfType<DocumentTabStrip>()
+                .FirstOrDefault(ts => ts.DataContext?.GetType() == expectedDataContextType);
+            if (tabStrip != null)
+            {
+                var items = tabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+                if (items.Count > 0)
+                    return;
+            }
+            await Task.Delay(50);
+        }
+        throw new TimeoutException($"DocumentTabStrip with {expectedDataContextType.Name} DataContext and inflated items not found within {timeoutMs}ms");
+    }
+
     private static async Task CloseWindowAsync(Window window)
     {
         window.Close();
@@ -3097,14 +3116,14 @@ public sealed class MainWindowIntegrationTests
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
-        var tab = new WebViewModel("https://example.com") { Id = "header-tmpl-test", Title = "Header Test" };
+        var tab = new ShellTabViewModel(new FakeShellSession()) { Id = "header-tmpl-test", Title = "Header Test" };
         await viewModel.OpenTabAsync(tab);
 
         var window = new MainWindow(viewModel);
         window.Show();
         try
         {
-            await WaitForLayoutAsync(window);
+            await WaitForDocumentTabStripAsync(window, typeof(WorkspaceContentDock));
 
             // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
             var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
