@@ -817,6 +817,189 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Empty(prNode.Children);
     }
 
+    [PhantomAvaloniaFact]
+    public async Task ViewHierarchyAssembler_Roots_SortedByDisplayName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        var charlieId = await SeedNoteAsync(dataAccessLayer, "charlie", "Charlie");
+        var alphaId = await SeedNoteAsync(dataAccessLayer, "alpha", "Alpha");
+        var bravoId = await SeedNoteAsync(dataAccessLayer, "bravo", "Bravo");
+
+        var roots = (await broker.GetEntitiesAsync([charlieId, alphaId, bravoId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var sortedNames = hierarchy.Select(n => n.Entity!.Snapshot.Data!.Value.GetProperty("display-name").GetProperty("default").GetString()!).ToArray();
+        Assert.Equal(["Alpha", "Bravo", "Charlie"], sortedNames);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task ViewHierarchyAssembler_Roots_SortIsCaseInsensitive()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        var gammaId = await SeedNoteAsync(dataAccessLayer, "gamma", "gamma");
+        var BetaId = await SeedNoteAsync(dataAccessLayer, "Beta", "Beta");
+        var alphaId = await SeedNoteAsync(dataAccessLayer, "alpha", "alpha");
+
+        var roots = (await broker.GetEntitiesAsync([gammaId, BetaId, alphaId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var sortedNames = hierarchy.Select(n => n.Entity!.Snapshot.Data!.Value.GetProperty("display-name").GetProperty("default").GetString()!).ToArray();
+        Assert.Equal(["alpha", "Beta", "gamma"], sortedNames);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task ViewHierarchyAssembler_Roots_FallsBackToNameSegments_WhenNoDisplayName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        var zId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "note"], "names": [["notes","z"]], "content": { "mime-type": "text/plain", "content": { "text": "z" } } }""");
+        var aId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "note"], "names": [["notes","a"]], "content": { "mime-type": "text/plain", "content": { "text": "a" } } }""");
+
+        var roots = (await broker.GetEntitiesAsync([zId, aId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var sortedIds = hierarchy.Select(n => n.Entity!.EntityId).ToArray();
+        Assert.Equal([aId, zId], sortedIds);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task ViewHierarchyAssembler_TraversedChildren_SortedByDisplayName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","task"]],
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"], "relationship-role-names": ["entities"], "max-depth": 1 }
+              ]
+            }
+            """);
+
+        var taskId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "task"], "names": [["tasks","t"]], "display-name": { "default": "Task" } }""");
+        var zId = await SeedNoteAsync(dataAccessLayer, "z", "Zebra");
+        var aId = await SeedNoteAsync(dataAccessLayer, "a", "Apple");
+        var mId = await SeedNoteAsync(dataAccessLayer, "m", "Mango");
+
+        await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "related","relationship"],
+              "names": [["relationships","r-task-notes"]],
+              "participants": { "entities": ["{{taskId.Value}}", "{{zId.Value}}", "{{aId.Value}}", "{{mId.Value}}"] }
+            }
+            """);
+
+        var roots = (await broker.GetEntitiesAsync([taskId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var taskNode = Assert.Single(hierarchy);
+        var childNames = taskNode.Children.Select(c => c.Entity!.Snapshot.Data!.Value.GetProperty("display-name").GetProperty("default").GetString()!).ToArray();
+        Assert.Equal(["Apple", "Mango", "Zebra"], childNames);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task ViewHierarchyAssembler_GroupByParent_ChildrenSortedByDisplayName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","pull-request"]],
+              "group-by-parent": { 
+                "source": "field",
+                "field-path": ["repository"],
+                "parent-entity-type-names": ["repository"]
+              }
+            }
+            """);
+
+        var repoId = await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "external", "repository", "git-repository", "github-repository"],
+              "names": [["github-repositories", "owner", "test-repo"]],
+              "display-name": { "default": "Test Repo" }
+            }
+            """);
+
+        var prZ = await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request"],
+              "names": [["pull-requests", "pr-z"]],
+              "display-name": { "default": "Zulu PR" },
+              "repository": "{{repoId.Value}}"
+            }
+            """);
+
+        var prA = await SeedAsync(dataAccessLayer, $$"""
+            {
+              "entity-types": ["entity", "task", "external", "pull-request", "git-pull-request"],
+              "names": [["pull-requests", "pr-a"]],
+              "display-name": { "default": "Alpha PR" },
+              "repository": "{{repoId.Value}}"
+            }
+            """);
+
+        var leaves = (await broker.GetEntitiesAsync([prZ, prA], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(leaves, ct);
+
+        var repoNode = Assert.Single(hierarchy);
+        Assert.Equal(repoId, repoNode.Entity!.EntityId);
+        var childNames = repoNode.Children.Select(c => c.Entity!.Snapshot.Data!.Value.GetProperty("display-name").GetProperty("default").GetString()!).ToArray();
+        Assert.Equal(["Alpha PR", "Zulu PR"], childNames);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task ViewHierarchyAssembler_AncestorGroups_SortedByDisplayName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        await SeedAsync(dataAccessLayer, """
+            {
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views","workspace"]],
+              "traverse-relationships": [
+                { "relationship-type": "ancestor", "entity-type-names": ["workspace"], "name-prefix-length": 2 }
+              ]
+            }
+            """);
+
+        var rootId = await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "workspace"], "names": [["workspaces","root"]], "display-name": { "default": "Root" }, "regions": [] }""");
+        await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "workspace"], "names": [["workspaces","zoo","item"]], "display-name": { "default": "Zoo Item" }, "regions": [] }""");
+        await SeedAsync(dataAccessLayer, """{ "entity-types": ["entity", "workspace"], "names": [["workspaces","apple","item"]], "display-name": { "default": "Apple Item" }, "regions": [] }""");
+
+        var roots = (await broker.GetEntitiesAsync([rootId], ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(roots, ct);
+
+        var rootNode = Assert.Single(hierarchy);
+        var groupNames = rootNode.Children
+            .Where(c => c.IsAncestorGroup)
+            .Select(c => c.DisplayName!)
+            .ToArray();
+        
+        // Should contain at least our two test groups, sorted
+        Assert.Contains("apple", groupNames);
+        Assert.Contains("zoo", groupNames);
+        var appleIndex = Array.IndexOf(groupNames, "apple");
+        var zooIndex = Array.IndexOf(groupNames, "zoo");
+        Assert.True(appleIndex < zooIndex, "apple should come before zoo");
+    }
+
     private static SubscribedEntityViewModel MakeSyntheticEntity(EntityId entityId, string[] nameParts)
     {
         var json = $$"""

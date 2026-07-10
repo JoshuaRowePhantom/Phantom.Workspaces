@@ -199,11 +199,27 @@ public sealed class ViewHierarchyAssembler
                 }
             }
 
+            // Sort all children of the root node (including nested children within parent nodes)
+            var sortedRootChildren = rootNode.Children.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase).ToList();
+            rootNode.Children.Clear();
+            rootNode.Children.AddRange(sortedRootChildren);
+
+            // Sort children within each parent node
+            foreach (var child in rootNode.Children)
+            {
+                if (child.Children.Count > 0)
+                {
+                    var sortedChildren = child.Children.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase).ToList();
+                    child.Children.Clear();
+                    child.Children.AddRange(sortedChildren);
+                }
+            }
+
             rootNode.IsExpanded = await this.IsExpandedByDefaultAsync(root, cancellationToken).ConfigureAwait(false);
             rootNodes.Add(rootNode);
         }
 
-        return rootNodes;
+        return rootNodes.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>
@@ -248,7 +264,18 @@ public sealed class ViewHierarchyAssembler
             parentNode.Children.Add(new ViewHierarchyNode(leaf));
         }
 
-        return result;
+        // Sort root/parent nodes and their children
+        foreach (var parentNode in result)
+        {
+            if (parentNode.Children.Count > 0)
+            {
+                var sortedChildren = parentNode.Children.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase).ToList();
+                parentNode.Children.Clear();
+                parentNode.Children.AddRange(sortedChildren);
+            }
+        }
+
+        return result.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>
@@ -379,19 +406,20 @@ public sealed class ViewHierarchyAssembler
         }
 
         var groupedChildIds = grouped.Values.SelectMany(static g => g.ChildIds).ToHashSet();
+        var ungroupedNodes = new List<ViewHierarchyNode>();
+        var ancestorGroupNodes = new List<ViewHierarchyNode>();
 
         foreach (var entity in entities)
         {
             if (!groupedChildIds.Contains(entity.EntityId))
             {
-                rootNode.Children.Add(new ViewHierarchyNode(entity));
+                ungroupedNodes.Add(new ViewHierarchyNode(entity));
             }
         }
 
         foreach (var (_, (prefix, childIds)) in grouped)
         {
             var groupNode = new ViewHierarchyNode(prefix, prefix[^1]);
-            rootNode.Children.Add(groupNode);
             foreach (var childId in childIds)
             {
                 if (entitiesById.TryGetValue(childId, out var childEntity))
@@ -399,7 +427,18 @@ public sealed class ViewHierarchyAssembler
                     groupNode.Children.Add(new ViewHierarchyNode(childEntity));
                 }
             }
+
+            // Sort children within the group
+            var sortedChildren = groupNode.Children.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase).ToList();
+            groupNode.Children.Clear();
+            groupNode.Children.AddRange(sortedChildren);
+
+            ancestorGroupNodes.Add(groupNode);
         }
+
+        // Add ungrouped nodes sorted, then ancestor groups sorted
+        rootNode.Children.AddRange(ungroupedNodes.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase));
+        rootNode.Children.AddRange(ancestorGroupNodes.OrderBy(GetSortKey, StringComparer.OrdinalIgnoreCase));
     }
 
     private async Task<IReadOnlyList<SubscribedEntityViewModel>> QueryEntitiesByTypeAsync(
@@ -554,6 +593,60 @@ public sealed class ViewHierarchyAssembler
         return array.EnumerateArray()
             .Where(item => item.ValueKind == JsonValueKind.String)
             .Select(item => item.GetString()!)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Extracts a sort key from a view hierarchy node for alphabetical ordering.
+    /// For ancestor groups, returns the DisplayName. For entity nodes, returns display-name.default
+    /// from the entity's data, falling back to joined primary name segments when display-name is absent.
+    /// </summary>
+    private static string GetSortKey(ViewHierarchyNode node)
+    {
+        if (node.IsAncestorGroup)
+        {
+            return node.DisplayName ?? string.Empty;
+        }
+
+        var data = node.Entity?.Snapshot.Data;
+        if (data is { } d && d.ValueKind == JsonValueKind.Object
+            && d.TryGetProperty("display-name", out var dn)
+            && dn.ValueKind == JsonValueKind.Object
+            && dn.TryGetProperty("default", out var def)
+            && def.ValueKind == JsonValueKind.String)
+        {
+            return def.GetString() ?? string.Empty;
+        }
+
+        // Fallback: join primary name segments
+        return node.Entity is { } e ? string.Join(" / ", ReadPrimaryNameSegments(e)) : string.Empty;
+    }
+
+    /// <summary>
+    /// Reads the first name from the entity's names array and returns its segments.
+    /// Returns an empty array if names are missing or malformed.
+    /// </summary>
+    private static string[] ReadPrimaryNameSegments(SubscribedEntityViewModel entity)
+    {
+        if (entity.Snapshot.Data is not { } data || data.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        if (!data.TryGetProperty("names", out var names) || names.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var first = names.EnumerateArray().FirstOrDefault();
+        if (first.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return first.EnumerateArray()
+            .Where(static e => e.ValueKind == JsonValueKind.String)
+            .Select(static e => e.GetString()!)
             .ToArray();
     }
 }
