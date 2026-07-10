@@ -31,6 +31,13 @@
       "type": "string",
       "description": "The branch this worktree's changes are compared against in the review view (e.g. 'main', 'develop')."
     },
+    "computer-user-profile-id": {
+      "$ref": "core.json#/$defs/entity-id",
+      "x-entity-types": [
+        "user-computer-profile"
+      ],
+      "description": "Entity ID of the user-computer-profile this worktree is hosted on"
+    },
     "git": {
       "$ref": "git.json#/$defs/git"
     }
