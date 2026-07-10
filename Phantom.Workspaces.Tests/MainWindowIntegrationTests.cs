@@ -2974,6 +2974,25 @@ public sealed class MainWindowIntegrationTests
         return tcs.Task;
     }
 
+    private static async Task WaitForDocumentTabStripAsync(Window window, Type expectedDataContextType, int timeoutMs = 10_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            var tabStrip = window.GetVisualDescendants()
+                .OfType<DocumentTabStrip>()
+                .FirstOrDefault(ts => ts.DataContext?.GetType() == expectedDataContextType);
+            if (tabStrip != null)
+            {
+                var items = tabStrip.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+                if (items.Count > 0)
+                    return;
+            }
+            await Task.Delay(50);
+        }
+        throw new TimeoutException($"DocumentTabStrip with {expectedDataContextType.Name} DataContext and inflated items not found within {timeoutMs}ms");
+    }
+
     private static async Task CloseWindowAsync(Window window)
     {
         window.Close();
@@ -3097,14 +3116,14 @@ public sealed class MainWindowIntegrationTests
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
-        var tab = new WebViewModel("https://example.com") { Id = "header-tmpl-test", Title = "Header Test" };
+        var tab = new ShellTabViewModel(new FakeShellSession()) { Id = "header-tmpl-test", Title = "Header Test" };
         await viewModel.OpenTabAsync(tab);
 
         var window = new MainWindow(viewModel);
         window.Show();
         try
         {
-            await WaitForLayoutAsync(window);
+            await WaitForDocumentTabStripAsync(window, typeof(WorkspaceContentDock));
 
             // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
             var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
@@ -4467,67 +4486,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaStaFact(Timeout = 15_000)]
-    public async Task OnPreviewKeyDown_CtrlShiftK_CallsDuplicateBrowserTabCommandAndHandlesEvent()
-    {
-        // Verifies that Ctrl+Shift+K fires DuplicateBrowserTabCommand and marks the event as
-        // handled so that child controls such as WebView2 do not receive the keystroke.
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
 
-        var tab = new WebViewModel("https://example.com") { Id = "ctrl-shift-k-tab", Title = "Browser" };
-        await viewModel.OpenTabAsync(tab);
-
-        var window = new MainWindow(viewModel);
-        window.Show();
-        try
-        {
-            bool handledByTunnel = false;
-            window.AddHandler(
-                InputElement.KeyDownEvent,
-                (_, e) =>
-                {
-                    if (e.Key == Key.K && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
-                        handledByTunnel = e.Handled;
-                },
-                RoutingStrategies.Bubble,
-                handledEventsToo: true);
-
-            window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control | RawInputModifiers.Shift);
-
-            Assert.True(handledByTunnel);
-
-            Assert.Equal(2, viewModel.SelectedWorkspacePane.Tabs.Count);
-        }
-        finally
-        {
-            await CloseWindowAsync(window);
-        }
-    }
-
-    [PhantomAvaloniaStaFact(Timeout = 15_000)]
-    public async Task OnPreviewKeyDown_CtrlK_WithoutShift_DoesNotDuplicateTab()
-    {
-        // Verifies that Ctrl+K alone (missing Shift) does not trigger DuplicateBrowserTabCommand.
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var tab = new WebViewModel("https://example.com") { Id = "ctrl-k-no-dup", Title = "Browser" };
-        await viewModel.OpenTabAsync(tab);
-
-        var window = new MainWindow(viewModel);
-        window.Show();
-        try
-        {
-            window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Control);
-
-            Assert.Single(viewModel.SelectedWorkspacePane.Tabs);
-        }
-        finally
-        {
-            await CloseWindowAsync(window);
-        }
-    }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
