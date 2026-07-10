@@ -7353,5 +7353,132 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    // ── Tab close MRU navigation tests (#828) ──────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTab_ActiveTab_NavigatesToMostRecentlyUsedTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "mru-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "mru-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "mru-c", Title = "Tab C" };
+
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        // Navigate to tabA to make it MRU (OpenTabAsync on existing tab pushes to history)
+        await viewModel.OpenTabAsync(tabA);
+
+        // Navigate back to tabC
+        await viewModel.OpenTabAsync(tabC);
+
+        // Close the active tab (tabC) — should navigate to the MRU tab (tabA)
+        viewModel.CloseTab(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("mru-a", documentDock!.ActiveDockable?.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTab_NonActiveTab_DoesNotChangeActiveTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "mru-non-active-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "mru-non-active-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "mru-non-active-c", Title = "Tab C" };
+
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        // Set tabB as active
+        await viewModel.OpenTabAsync(tabB);
+
+        // Close a non-active tab (tabA)
+        viewModel.CloseTab(tabA);
+
+        // Active tab should still be tabB
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("mru-non-active-b", documentDock!.ActiveDockable?.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTab_LastTabInPane_NoNavigation()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://example.com") { Id = "mru-last", Title = "Last Tab" };
+        await viewModel.OpenTabAsync(tab);
+
+        // Close the only tab — should not crash or navigate anywhere
+        viewModel.CloseTab(tab);
+
+        Assert.Empty(viewModel.SelectedWorkspacePane!.Tabs);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTabById_ActiveTab_NavigatesToMostRecentlyUsedTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "mru-byid-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "mru-byid-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "mru-byid-c", Title = "Tab C" };
+
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        // Navigate to tabA to make it MRU
+        await viewModel.OpenTabAsync(tabA);
+
+        // Navigate back to tabC
+        await viewModel.OpenTabAsync(tabC);
+
+        // Close the active tab by ID (tabC) — should navigate to the MRU tab (tabA)
+        viewModel.CloseTabById("mru-byid-c");
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("mru-byid-a", documentDock!.ActiveDockable?.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task OnDockableTabClosed_ActiveTab_NavigatesToMostRecentlyUsedTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "mru-dockable-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "mru-dockable-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "mru-dockable-c", Title = "Tab C" };
+
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        // Navigate to tabA to make it MRU
+        await viewModel.OpenTabAsync(tabA);
+
+        // Navigate back to tabC
+        await viewModel.OpenTabAsync(tabC);
+
+        // Close the active tab via dock framework (tabC) — should navigate to the MRU tab (tabA)
+        viewModel.OnDockableTabClosed(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("mru-dockable-a", documentDock!.ActiveDockable?.Id);
+    }
+
 }
 
