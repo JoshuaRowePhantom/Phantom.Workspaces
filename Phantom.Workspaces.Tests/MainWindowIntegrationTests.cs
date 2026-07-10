@@ -2974,6 +2974,36 @@ public sealed class MainWindowIntegrationTests
         return tcs.Task;
     }
 
+    private static Task WaitForDocumentTabStripAsync(Window window)
+    {
+        // Wait not just for a DocumentTabStrip to appear, but for one with WorkspaceContentDock DataContext.
+        // The docking library may create the visual element before assigning the correct DataContext.
+        if (window.GetVisualDescendants().OfType<DocumentTabStrip>()
+            .Any(ts => ts.DataContext is WorkspaceContentDock))
+            return Task.CompletedTask;
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            if (!window.GetVisualDescendants().OfType<DocumentTabStrip>()
+                .Any(ts => ts.DataContext is WorkspaceContentDock))
+                return;
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult();
+        };
+        window.LayoutUpdated += handler;
+        // TOCTOU: re-check after subscribing in case the strip with correct DataContext appeared
+        // between the initial check and the subscribe
+        if (window.GetVisualDescendants().OfType<DocumentTabStrip>()
+            .Any(ts => ts.DataContext is WorkspaceContentDock))
+        {
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult();
+        }
+        return tcs.Task;
+    }
+
     private static async Task WaitForDocumentTabStripAsync(Window window, Type expectedDataContextType, int timeoutMs = 10_000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -3123,7 +3153,7 @@ public sealed class MainWindowIntegrationTests
         window.Show();
         try
         {
-            await WaitForDocumentTabStripAsync(window, typeof(WorkspaceContentDock));
+            await WaitForDocumentTabStripAsync(window);
 
             // The content-level DocumentTabStrip is nested inside the workspace-level DockControl.
             var tabStrips = window.GetVisualDescendants().OfType<DocumentTabStrip>().ToList();
